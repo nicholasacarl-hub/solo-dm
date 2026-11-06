@@ -1,0 +1,16 @@
+node_modules
+dist
+dist-ssr
+coverage
+*.local
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+.DS_Store
+.vite
+# never commit purchased / imported sourcebook content
+imports/
+private/
+test-results/
+playwright-report/

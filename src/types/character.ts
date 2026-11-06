@@ -1,0 +1,389 @@
+/**
+ * Character model for the 2024 fifth-edition rules (SRD 5.2.1).
+ *
+ * The app — never the language model — owns this state. The DM changes it only
+ * through tools (see src/dm/tools), and every change is shown to the player.
+ */
+
+export type Ability = 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
+
+export const ABILITIES: readonly Ability[] = ['str', 'dex', 'con', 'int', 'wis', 'cha'];
+
+export const ABILITY_NAMES: Record<Ability, string> = {
+  str: 'Strength',
+  dex: 'Dexterity',
+  con: 'Constitution',
+  int: 'Intelligence',
+  wis: 'Wisdom',
+  cha: 'Charisma',
+};
+
+export type AbilityScores = Record<Ability, number>;
+
+export type Skill =
+  | 'acrobatics'
+  | 'animal-handling'
+  | 'arcana'
+  | 'athletics'
+  | 'deception'
+  | 'history'
+  | 'insight'
+  | 'intimidation'
+  | 'investigation'
+  | 'medicine'
+  | 'nature'
+  | 'perception'
+  | 'performance'
+  | 'persuasion'
+  | 'religion'
+  | 'sleight-of-hand'
+  | 'stealth'
+  | 'survival';
+
+export const SKILLS: readonly Skill[] = [
+  'acrobatics',
+  'animal-handling',
+  'arcana',
+  'athletics',
+  'deception',
+  'history',
+  'insight',
+  'intimidation',
+  'investigation',
+  'medicine',
+  'nature',
+  'perception',
+  'performance',
+  'persuasion',
+  'religion',
+  'sleight-of-hand',
+  'stealth',
+  'survival',
+];
+
+export const SKILL_ABILITY: Record<Skill, Ability> = {
+  acrobatics: 'dex',
+  'animal-handling': 'wis',
+  arcana: 'int',
+  athletics: 'str',
+  deception: 'cha',
+  history: 'int',
+  insight: 'wis',
+  intimidation: 'cha',
+  investigation: 'int',
+  medicine: 'wis',
+  nature: 'int',
+  perception: 'wis',
+  performance: 'cha',
+  persuasion: 'cha',
+  religion: 'int',
+  'sleight-of-hand': 'dex',
+  stealth: 'dex',
+  survival: 'wis',
+};
+
+export const SKILL_NAMES: Record<Skill, string> = {
+  acrobatics: 'Acrobatics',
+  'animal-handling': 'Animal Handling',
+  arcana: 'Arcana',
+  athletics: 'Athletics',
+  deception: 'Deception',
+  history: 'History',
+  insight: 'Insight',
+  intimidation: 'Intimidation',
+  investigation: 'Investigation',
+  medicine: 'Medicine',
+  nature: 'Nature',
+  perception: 'Perception',
+  performance: 'Performance',
+  persuasion: 'Persuasion',
+  religion: 'Religion',
+  'sleight-of-hand': 'Sleight of Hand',
+  stealth: 'Stealth',
+  survival: 'Survival',
+};
+
+/** 0 = none, 0.5 = half proficiency (e.g. Jack of All Trades), 1 = proficient, 2 = expertise. */
+export type ProficiencyLevel = 0 | 0.5 | 1 | 2;
+
+export type HitDie = 6 | 8 | 10 | 12;
+
+/** How a class contributes to spell slots (2024 multiclass rules). */
+export type CasterType = 'full' | 'half' | 'third' | 'pact' | 'none';
+
+export interface ClassLevel {
+  /** Compendium id such as "srd:class:wizard", or a homebrew / imported id. */
+  classId: string;
+  /** Display name, e.g. "Wizard". */
+  name: string;
+  /** Levels taken in this class (1–20). */
+  level: number;
+  hitDie: HitDie;
+  subclass?: string;
+  casterType: CasterType;
+  spellcastingAbility?: Ability;
+}
+
+export interface HitPoints {
+  max: number;
+  current: number;
+  temp: number;
+}
+
+export interface HitDiceEntry {
+  die: HitDie;
+  total: number;
+  spent: number;
+}
+
+export interface SlotTrack {
+  max: number;
+  used: number;
+}
+
+export type SpellSlotLevel = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+
+export type SpellSlots = Partial<Record<SpellSlotLevel, SlotTrack>>;
+
+export interface PactMagic {
+  slotLevel: SpellSlotLevel;
+  slots: SlotTrack;
+}
+
+export interface KnownSpell {
+  /** Compendium id when known (e.g. "srd:spell:fireball"), otherwise a generated id. */
+  id: string;
+  name: string;
+  /** 0 = cantrip. */
+  level: number;
+  prepared: boolean;
+  /** Always prepared (subclass spells, feat spells...). */
+  alwaysPrepared?: boolean;
+  /** Where the spell comes from: "Wizard", "Magic Initiate (Cleric)", "Homebrew". */
+  source?: string;
+  ritual?: boolean;
+  concentration?: boolean;
+  homebrewId?: string;
+  notes?: string;
+}
+
+export interface Spellcasting {
+  /** Primary spellcasting ability (used for save DC / attack in the sheet). */
+  ability: Ability;
+  slots: SpellSlots;
+  pact?: PactMagic;
+  spells: KnownSpell[];
+  /** Name of the spell currently being concentrated on, if any. */
+  concentratingOn?: string | null;
+}
+
+export type RechargeOn = 'short' | 'long' | 'dawn' | 'turn' | 'none';
+
+export interface FeatureUses {
+  max: number;
+  used: number;
+  recharge: RechargeOn;
+}
+
+export type FeatureSource =
+  | 'class'
+  | 'subclass'
+  | 'species'
+  | 'background'
+  | 'feat'
+  | 'boon'
+  | 'item'
+  | 'homebrew'
+  | 'other';
+
+export interface Feature {
+  id: string;
+  name: string;
+  source: FeatureSource;
+  /** Human label such as "Fighter 2" or "Alert (Origin feat)". */
+  sourceName?: string;
+  /** Short rules text (markdown). */
+  description: string;
+  uses?: FeatureUses;
+  homebrewId?: string;
+}
+
+export type ItemCategory =
+  | 'weapon'
+  | 'armor'
+  | 'shield'
+  | 'gear'
+  | 'tool'
+  | 'consumable'
+  | 'treasure'
+  | 'magic-item'
+  | 'other';
+
+export interface InventoryItem {
+  id: string;
+  name: string;
+  quantity: number;
+  /** Weight in pounds per unit. */
+  weight?: number;
+  equipped?: boolean;
+  attuned?: boolean;
+  magic?: boolean;
+  category?: ItemCategory;
+  description?: string;
+  charges?: SlotTrack;
+  compendiumId?: string;
+  homebrewId?: string;
+}
+
+export interface Currency {
+  cp: number;
+  sp: number;
+  ep: number;
+  gp: number;
+  pp: number;
+}
+
+export interface Attack {
+  id: string;
+  name: string;
+  /** Ability used for attack and damage rolls; 'finesse' uses the higher of STR/DEX; 'spell' uses the spellcasting ability. */
+  ability: Ability | 'finesse' | 'spell';
+  proficient: boolean;
+  /** Damage dice plus any flat bonus beyond the ability modifier, e.g. "1d8" or "2d6+1". */
+  damage: string;
+  damageType: string;
+  /** Additional attack-roll bonus (e.g. +1 weapon). */
+  attackBonusExtra?: number;
+  /** When false the ability modifier is NOT added to damage (e.g. off-hand attacks). Default true. */
+  addAbilityToDamage?: boolean;
+  /** "5 ft." or "80/320 ft." */
+  range?: string;
+  properties?: string[];
+  /** 2024 weapon mastery property, e.g. "Vex". */
+  mastery?: string;
+  notes?: string;
+}
+
+export type ConditionId =
+  | 'blinded'
+  | 'charmed'
+  | 'deafened'
+  | 'exhaustion'
+  | 'frightened'
+  | 'grappled'
+  | 'incapacitated'
+  | 'invisible'
+  | 'paralyzed'
+  | 'petrified'
+  | 'poisoned'
+  | 'prone'
+  | 'restrained'
+  | 'stunned'
+  | 'unconscious';
+
+export const CONDITION_IDS: readonly ConditionId[] = [
+  'blinded',
+  'charmed',
+  'deafened',
+  'exhaustion',
+  'frightened',
+  'grappled',
+  'incapacitated',
+  'invisible',
+  'paralyzed',
+  'petrified',
+  'poisoned',
+  'prone',
+  'restrained',
+  'stunned',
+  'unconscious',
+];
+
+export interface ActiveCondition {
+  /** A standard condition id, or a homebrew condition name. */
+  id: ConditionId | (string & {});
+  /** Exhaustion level (combatants only — characters use Character.exhaustion). */
+  level?: number;
+  source?: string;
+  /** Free text: "1 minute", "until the end of your next turn", "until cured". */
+  duration?: string;
+}
+
+export interface DeathSaves {
+  successes: number;
+  failures: number;
+  stable: boolean;
+  dead: boolean;
+}
+
+export interface Personality {
+  traits?: string;
+  ideals?: string;
+  bonds?: string;
+  flaws?: string;
+  appearance?: string;
+  backstory?: string;
+}
+
+export type CreatureSize = 'Tiny' | 'Small' | 'Medium' | 'Large' | 'Huge' | 'Gargantuan';
+
+export interface Character {
+  id: string;
+  campaignId: string;
+  name: string;
+  pronouns?: string;
+  /** Display string, e.g. "Elf (Wood Elf lineage)". */
+  species: string;
+  speciesId?: string;
+  background: string;
+  backgroundId?: string;
+  /** First entry is the starting class. */
+  classes: ClassLevel[];
+  alignment?: string;
+  xp: number;
+  abilityScores: AbilityScores;
+  /** Abilities with saving-throw proficiency. */
+  savingThrows: Ability[];
+  skills: Partial<Record<Skill, ProficiencyLevel>>;
+  tools: string[];
+  languages: string[];
+  /** e.g. ["Simple weapons", "Martial weapons"]. */
+  weaponProficiencies: string[];
+  /** e.g. ["Light armor", "Medium armor", "Shields"]. */
+  armorTraining: string[];
+  /** 2024 Weapon Mastery: weapons whose mastery property the character can use. */
+  weaponMasteries?: string[];
+  armorClass: number;
+  /** Human-readable note such as "Chain mail 16 + Shield 2". */
+  acFormula?: string;
+  /** Walking speed in feet (before exhaustion penalties). */
+  speed: number;
+  otherSpeeds?: Partial<Record<'fly' | 'swim' | 'climb' | 'burrow', number>>;
+  size: CreatureSize;
+  /** Extra initiative bonus beyond DEX (e.g. Alert adds the proficiency bonus). */
+  initiativeBonusExtra?: number;
+  /** Extra passive Perception bonus (e.g. Observant-style features). */
+  passivePerceptionExtra?: number;
+  /** Darkvision range in feet; 0 or undefined = none. */
+  darkvision?: number;
+  hp: HitPoints;
+  hitDice: HitDiceEntry[];
+  deathSaves: DeathSaves;
+  /** Active conditions. Exhaustion is tracked in `exhaustion`, not here. */
+  conditions: ActiveCondition[];
+  /** Exhaustion level 0–6 (2024: −2 per level to d20 tests, −5 ft speed per level, death at 6). */
+  exhaustion: number;
+  heroicInspiration: boolean;
+  spellcasting?: Spellcasting;
+  features: Feature[];
+  attacks: Attack[];
+  inventory: InventoryItem[];
+  currency: Currency;
+  personality: Personality;
+  /** Player's free-form notes. */
+  notes: string;
+  /** Emoji or data URL. */
+  portrait?: string;
+  createdAt: number;
+  updatedAt: number;
+}

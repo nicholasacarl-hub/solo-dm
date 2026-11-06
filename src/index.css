@@ -1,0 +1,213 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/typography';
+
+/* Theme switching via <html data-theme="dark|light"> (set by applyTheme in settingsStore). */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/*
+ * Visual direction: "candlelit table". Dark mode is ink-blue night with ember accents;
+ * light mode is warm vellum. Accents carry meaning: ember = primary actions, crimson = harm,
+ * verdant = healing/success, arcane violet = magic & homebrew, gold = treasure/XP.
+ */
+:root {
+  --bg: #f3ede1;
+  --surface: #fbf8f1;
+  --surface-2: #efe6d5;
+  --surface-3: #e5d9c3;
+  --border: #d6c8ae;
+  --text: #2a2419;
+  --muted: #6b604f;
+  --faint: #978b77;
+  --accent: #a8561b;
+  --accent-hover: #8f4814;
+  --accent-ink: #fffaf2;
+  --accent-soft: #f1dcc3;
+  --danger: #b4232c;
+  --danger-soft: #f6d6d3;
+  --success: #2f7d4a;
+  --success-soft: #d5ecd9;
+  --arcane: #6a4fc9;
+  --arcane-soft: #e3dcf7;
+  --gold: #9a6f08;
+  --gold-soft: #f3e3b5;
+  --info: #2d6a9f;
+  --info-soft: #d6e5f3;
+  --ring: #a8561b66;
+  --shadow: 0 1px 2px #2a24190f, 0 4px 16px #2a24190d;
+  color-scheme: light;
+}
+
+[data-theme='dark'] {
+  --bg: #0f1115;
+  --surface: #161a21;
+  --surface-2: #1d222b;
+  --surface-3: #262c37;
+  --border: #2c333f;
+  --text: #e9e4d8;
+  --muted: #a49e91;
+  --faint: #6f6b62;
+  --accent: #e8a33d;
+  --accent-hover: #f2b55a;
+  --accent-ink: #1a1206;
+  --accent-soft: #3a2a12;
+  --danger: #ef5b5b;
+  --danger-soft: #3a1717;
+  --success: #4fbf72;
+  --success-soft: #15301f;
+  --arcane: #a590ff;
+  --arcane-soft: #262044;
+  --gold: #e3b341;
+  --gold-soft: #3a2f12;
+  --info: #63a4e8;
+  --info-soft: #14283d;
+  --ring: #e8a33d66;
+  --shadow: 0 1px 2px #0006, 0 8px 24px #0005;
+  color-scheme: dark;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-success: var(--success);
+  --color-success-soft: var(--success-soft);
+  --color-arcane: var(--arcane);
+  --color-arcane-soft: var(--arcane-soft);
+  --color-gold: var(--gold);
+  --color-gold-soft: var(--gold-soft);
+  --color-info: var(--info);
+  --color-info-soft: var(--info-soft);
+  --color-ring: var(--ring);
+  --shadow-card: var(--shadow);
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-serif: 'Spectral', ui-serif, Georgia, serif;
+  --font-display: 'Cinzel', 'Spectral', ui-serif, serif;
+  --font-mono: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  ::selection {
+    background: var(--accent-soft);
+  }
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+  /* Narration text sizes, driven by <html data-text-size>. */
+  :root {
+    --narration-size: 1.0625rem;
+  }
+  :root[data-text-size='sm'] {
+    --narration-size: 0.9375rem;
+  }
+  :root[data-text-size='lg'] {
+    --narration-size: 1.1875rem;
+  }
+}
+
+@layer components {
+  /* DM narration prose. */
+  .narration {
+    font-size: var(--narration-size);
+    line-height: 1.7;
+  }
+  .narration-serif {
+    font-family: var(--font-serif);
+  }
+  .narration p {
+    margin: 0 0 0.85em;
+  }
+  .narration p:last-child {
+    margin-bottom: 0;
+  }
+  .narration strong {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .narration em {
+    color: var(--text);
+  }
+  .narration blockquote {
+    border-left: 3px solid var(--accent);
+    padding-left: 0.9em;
+    margin: 0.6em 0;
+    color: var(--muted);
+    font-style: italic;
+  }
+  .narration ul,
+  .narration ol {
+    padding-left: 1.3em;
+    margin: 0.4em 0 0.85em;
+  }
+  .narration ul {
+    list-style: disc;
+  }
+  .narration ol {
+    list-style: decimal;
+  }
+  .narration h1,
+  .narration h2,
+  .narration h3 {
+    font-family: var(--font-display);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    margin: 0.9em 0 0.4em;
+  }
+  .narration table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    margin: 0.6em 0;
+  }
+  .narration th,
+  .narration td {
+    border: 1px solid var(--border);
+    padding: 0.35em 0.6em;
+    text-align: left;
+  }
+  .narration code {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    background: var(--surface-2);
+    padding: 0.1em 0.35em;
+    border-radius: 0.3em;
+  }
+  /* Thin scrollbars inside panels. */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--surface-3) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
