@@ -12,6 +12,7 @@ import type { BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages
 import type {
   Campaign,
   Character,
+  Clock,
   CombatState,
   HomebrewEntry,
   InteractionRequest,
@@ -46,6 +47,7 @@ export interface DmStatus {
 
 export type JournalUpsert = Partial<Omit<JournalEntry, 'campaignId'>> & Pick<JournalEntry, 'kind' | 'name'>;
 export type QuestUpsert = Partial<Omit<Quest, 'campaignId'>> & Pick<Quest, 'title'>;
+export type ClockUpsert = Partial<Omit<Clock, 'campaignId'>> & Pick<Clock, 'name'>;
 
 export interface GameStoreState {
   campaignId: string | null;
@@ -62,6 +64,7 @@ export interface GameStoreState {
   combat: CombatState | null;
   journal: JournalEntry[];
   quests: Quest[];
+  clocks: Clock[];
   /** Homebrew for this campaign plus shared (campaignId null) homebrew. */
   homebrew: HomebrewEntry[];
   dm: DmStatus;
@@ -119,6 +122,9 @@ export interface GameStoreActions {
   /** Insert or update a quest matched by case-insensitive title. */
   upsertQuest(quest: QuestUpsert): Promise<Quest>;
   deleteQuest(id: string): Promise<void>;
+  /** Insert or update a clock matched by case-insensitive name (filled is clamped to 0..segments). */
+  upsertClock(clock: ClockUpsert): Promise<Clock>;
+  deleteClock(id: string): Promise<void>;
 
   saveHomebrew(entry: HomebrewEntry): Promise<HomebrewEntry>;
   deleteHomebrew(id: string): Promise<void>;
@@ -158,6 +164,7 @@ export const useGame = create<GameStore>()(() => ({
   combat: null,
   journal: [],
   quests: [],
+  clocks: [],
   homebrew: [],
   dm: initialDmStatus,
   interaction: null,
@@ -183,6 +190,8 @@ export const useGame = create<GameStore>()(() => ({
   deleteJournal: notImplemented,
   upsertQuest: notImplemented,
   deleteQuest: notImplemented,
+  upsertClock: notImplemented,
+  deleteClock: notImplemented,
   saveHomebrew: notImplemented,
   deleteHomebrew: notImplemented,
   addUsage: notImplemented,

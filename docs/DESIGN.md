@@ -103,8 +103,32 @@ tool_result so Claude can correct itself.
 | `update_journal` | Upsert NPCs, locations, factions, lore, secrets (DM-only when `secret`). |
 | `update_quest` | Upsert quests and objectives. |
 | `search_memory` | Search journal, quests and earlier session recaps. |
-| `set_scene` | Location, time of day, weather, in-world date, mood (shown in the scene header). |
-| `consult_oracle` | Yes/no oracle with likelihood for questions the DM genuinely can't answer from the fiction. |
+| `set_scene` | Location, time of day, weather, in-world date, mood (shown in the scene header). With `new_scene: true` the app runs a **scene check** against the tension dial (d10 ≤ tension → altered if odd, interrupted if even) and returns a twist to build on; `tension_change` nudges the dial (+1 when things slip out of the hero's control, −1 when they take charge). |
+| `update_clocks` | Upsert progress clocks: threats/fronts that advance off-screen, countdowns, long projects. Filling a clock triggers its consequence. Secret clocks are hidden from the player. |
+| `consult_oracle` | Yes/no oracle with likelihood for questions the DM genuinely can't answer from the fiction. The DM sets the likelihood before rolling. |
+
+Rulings: when the DM makes a call the rules don't settle, it records it with `update_journal`
+(kind `ruling`) so later calls stay consistent; rulings appear in the Journal as house rules.
+
+### Grounding each turn
+
+The `<game_state>` block appended to each player message contains: the character status line,
+the scene, the combat summary (if any), open clocks, and **entity cards** — short journal entries
+for any known NPC / place / faction / item whose name (or tag alias) appears in the player's message
+or in the DM's previous narration. This is cheap retrieval that prevents contradictions.
+
+### Player-side controls that talk to the DM
+
+- **OOC:** messages starting with `OOC:` (or sent with the OOC toggle) are answered out of character
+  and don't advance the story.
+- **X-card:** a always-available button that tells the DM to steer away from the current content,
+  without discussion, and adds the topic to the campaign's veils if the player wants.
+- **Veto homebrew:** homebrew cards in the log have a Veto action; the DM is notified next turn and
+  retires or reworks it.
+- **Manual edits:** when the player edits the sheet, quests or journal by hand, a DM notice is queued
+  and delivered as a `role: "system"` note with the next player message.
+- **Behind the screen:** secret DM rolls are logged; the player can reveal them per roll or for the
+  whole session (trust, auditable fairness).
 
 Narration may end with a fenced block that the UI renders as tappable suggestions:
 

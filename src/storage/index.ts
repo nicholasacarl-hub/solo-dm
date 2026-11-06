@@ -9,6 +9,7 @@ import type {
   Campaign,
   CampaignSettings,
   Character,
+  Clock,
   CombatState,
   CompendiumEntry,
   GithubSyncSettings,
@@ -69,6 +70,7 @@ export interface CampaignRecords {
   combat: CombatState | null;
   journal: JournalEntry[];
   quests: Quest[];
+  clocks: Clock[];
   /** Campaign homebrew plus shared homebrew. */
   homebrew: HomebrewEntry[];
 }
@@ -87,6 +89,8 @@ export const putJournal: (entries: JournalEntry[]) => Promise<void> = todo;
 export const deleteJournalEntry: (id: string) => Promise<void> = todo;
 export const putQuest: (q: Quest) => Promise<void> = todo;
 export const deleteQuestRecord: (id: string) => Promise<void> = todo;
+export const putClock: (c: Clock) => Promise<void> = todo;
+export const deleteClockRecord: (id: string) => Promise<void> = todo;
 
 // ---------------------------------------------------------------------------
 // Homebrew & library (imported sourcebooks)
@@ -124,6 +128,7 @@ export interface CampaignBundle {
   combat: CombatState | null;
   journal: JournalEntry[];
   quests: Quest[];
+  clocks: Clock[];
   /** Campaign-scoped homebrew only. */
   homebrew: HomebrewEntry[];
 }

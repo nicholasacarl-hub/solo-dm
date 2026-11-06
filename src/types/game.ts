@@ -156,6 +156,12 @@ export interface Campaign {
   coverEmoji?: string;
   /** Accent color for the save-slot card (CSS color). */
   coverColor?: string;
+  /**
+   * Solo-play tension dial, 1 (calm) to 9 (chaos). At the start of each new scene the app rolls a
+   * d10: at or under the tension the scene is altered (odd roll) or interrupted (even roll).
+   * The DM nudges it up when things slip out of the hero's control and down when they take charge.
+   */
+  tension: number;
   usage: UsageTotals;
   createdAt: number;
   updatedAt: number;
@@ -190,7 +196,8 @@ export interface Session {
 // Journal & quests (the DM's long-term memory)
 // ---------------------------------------------------------------------------
 
-export type JournalKind = 'npc' | 'location' | 'faction' | 'item' | 'lore' | 'event' | 'note';
+/** 'ruling' records a rules call the DM made, so later calls stay consistent (house rules). */
+export type JournalKind = 'npc' | 'location' | 'faction' | 'item' | 'lore' | 'event' | 'ruling' | 'note';
 
 export interface JournalEntry {
   id: string;
@@ -231,6 +238,27 @@ export interface Quest {
   objectives: QuestObjective[];
   /** DM-only notes. */
   secretNotes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * A progress clock (a "front" or countdown): a threat or project that advances, often off-screen.
+ * When filled, its consequence happens.
+ */
+export interface Clock {
+  id: string;
+  campaignId: string;
+  name: string;
+  /** What happens when the clock fills. */
+  consequence?: string;
+  segments: number;
+  filled: number;
+  kind: 'threat' | 'progress' | 'countdown';
+  /** DM-only (hidden from the player unless they reveal spoilers). */
+  secret: boolean;
+  /** True once the clock has filled and its consequence has landed, or it was abandoned. */
+  resolved: boolean;
   createdAt: number;
   updatedAt: number;
 }

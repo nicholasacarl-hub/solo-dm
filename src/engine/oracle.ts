@@ -51,3 +51,18 @@ export function consultOracle(_question: string, _likelihood: Likelihood, _rng?:
 export function randomTwist(_rng?: Rng): string {
   throw new Error('not implemented');
 }
+
+export type SceneCheckOutcome = 'expected' | 'altered' | 'interrupted';
+
+export interface SceneCheckResult {
+  roll: number;
+  tension: number;
+  outcome: SceneCheckOutcome;
+  /** For altered / interrupted scenes: a twist prompt to build the change around. */
+  twist?: string;
+}
+
+/** Roll a d10 against the tension dial (1–9): <= tension and odd = altered, <= tension and even = interrupted. */
+export function sceneCheck(_tension: number, _rng?: Rng): SceneCheckResult {
+  throw new Error('not implemented');
+}
