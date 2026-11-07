@@ -1,14 +1,15 @@
 /**
- * The AI Dungeon Master. CONTRACT — implemented by the DM module. The UI imports only from '@/dm'.
+ * The AI Dungeon Master. The UI imports only from '@/dm'.
  *
  * The DM reads and writes game state exclusively through the game store (useGame) and reads
- * settings via getSettings(). Status for the UI is published on useGame().dm.
+ * settings via getSettings() (both behind ./deps so tests can replace them). Status for the UI is
+ * published on useGame().dm.
  */
 import type { UsageTotals } from '@/types';
-
-const todo = (): never => {
-  throw new Error('dm: not implemented');
-};
+import { estimateCostUsd as estimate } from './cost';
+import { deps } from './deps';
+import { describeKeyCheckError } from './errors';
+import { DmSessionController } from './session';
 
 export interface DmController {
   /**
@@ -30,19 +31,40 @@ export interface DmController {
   isBusy(): boolean;
 }
 
+const controller = new DmSessionController();
+
 export const dm: DmController = {
-  beginOrResume: todo,
-  sendPlayerMessage: todo,
-  regenerate: todo,
-  retry: todo,
-  cancel: todo,
-  endSession: todo,
-  isBusy: todo,
+  beginOrResume: () => controller.beginOrResume(),
+  sendPlayerMessage: (text) => controller.sendPlayerMessage(text),
+  regenerate: () => controller.regenerate(),
+  retry: () => controller.retry(),
+  cancel: () => controller.cancel(),
+  endSession: () => controller.endSession(),
+  isBusy: () => controller.isBusy(),
 };
 
 /** Verify an API key with a tiny request. */
-export const testApiKey: (apiKey: string) => Promise<{ ok: true } | { ok: false; error: string }> = todo;
+export const testApiKey = async (apiKey: string): Promise<{ ok: true } | { ok: false; error: string }> => {
+  const key = apiKey.trim();
+  if (!key) return { ok: false, error: 'Enter an API key first.' };
+  try {
+    await deps().keyClient(key).models.list({ limit: 1 });
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: describeKeyCheckError(err) };
+  }
+};
 
 /** Estimated USD cost of some usage at a model's published prices. */
-export const estimateCostUsd: (usage: Omit<UsageTotals, 'estimatedCostUsd' | 'requests'>, model: string) => number =
-  todo;
+export const estimateCostUsd: (usage: Omit<UsageTotals, 'estimatedCostUsd' | 'requests'>, model: string) => number = (
+  usage,
+  model,
+) => estimate(usage, model);
+
+export { DmSessionController } from './session';
+export { buildSystemPrompt, DM_INSTRUCTIONS, type PromptInput } from './prompts';
+export { buildGameState } from './state';
+export { DM_TOOLS, READ_ONLY_TOOLS, TOOL_SCHEMAS, type ToolName } from './tools/definitions';
+export { parseChoices, isOoc } from './narration';
+export { setDmDeps, resetDmDeps, type DmDeps } from './deps';
+export { MOCK_MODEL } from './mock';

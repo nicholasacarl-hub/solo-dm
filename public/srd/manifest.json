@@ -1,0 +1,31 @@
+{
+  "version": "5.2.1",
+  "generatedAt": "2026-11-07",
+  "counts": {
+    "background": 4,
+    "class": 12,
+    "condition": 15,
+    "feat": 17,
+    "item": 157,
+    "magic-item": 258,
+    "monster": 330,
+    "rule": 708,
+    "species": 9,
+    "spell": 339,
+    "subclass": 12
+  },
+  "attribution": "This work includes material from the System Reference Document 5.2.1 (\"SRD 5.2.1\") by Wizards of the Coast LLC, available at https://www.dndbeyond.com/srd. The SRD 5.2.1 is licensed under the Creative Commons Attribution 4.0 International License, available at https://creativecommons.org/licenses/by/4.0/legalcode.",
+  "sources": [
+    {
+      "name": "your5e/5e-srd-markdown",
+      "url": "https://github.com/your5e/5e-srd-markdown",
+      "commit": "f1f5060fd975aa2ffc3e4b336560ded479934d80"
+    },
+    {
+      "name": "open5e/open5e-api",
+      "url": "https://github.com/open5e/open5e-api",
+      "commit": "bdcddf2b5f7995c42ac89722d8da563346b6744a"
+    }
+  ],
+  "modifications": "Converted to JSON, split into entries, summaries added."
+}

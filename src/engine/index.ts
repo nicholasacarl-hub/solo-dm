@@ -7,3 +7,4 @@ export * from './combat';
 export * from './oracle';
 export * from './conditions';
 export * from './summary';
+export * from './classData';
