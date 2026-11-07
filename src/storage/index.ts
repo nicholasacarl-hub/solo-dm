@@ -160,3 +160,23 @@ export const pullCampaignFromGithub: (save: RemoteSave, settings: GithubSyncSett
  * A campaign deleted on this device after syncing is not pulled back unless it changes on GitHub.
  */
 export const syncWithGithub: (settings: GithubSyncSettings) => Promise<SyncReport> = github.syncWithGithub;
+
+// ---------------------------------------------------------------------------
+// One tab at a time per campaign (CONTRACT — implemented by the storage module)
+// ---------------------------------------------------------------------------
+
+export interface CampaignLock {
+  release(): void;
+  /** Resolves if another tab takes the campaign over (steal). */
+  lost: Promise<void>;
+}
+
+/**
+ * Hold an exclusive per-campaign lock (Web Locks API) while the campaign is open at the table.
+ * Resolves null when another tab already holds it (unless steal: true, which takes it over).
+ * Where Web Locks are unavailable, resolves a lock that never conflicts.
+ */
+export const acquireCampaignLock: (campaignId: string, opts?: { steal?: boolean }) => Promise<CampaignLock | null> =
+  async () => {
+    throw new Error('storage: acquireCampaignLock not implemented');
+  };

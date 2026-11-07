@@ -188,6 +188,29 @@ export interface FeatureUses {
    * (2024: e.g. Channel Divinity and Wild Shape regain one use on a Short Rest).
    */
   shortRestRegain?: number;
+  /** How `max` grows as the hero levels (recomputed on level-up). */
+  scale?: FeatureScale;
+}
+
+/**
+ * How a feature's maximum uses grow: equal to the proficiency bonus; a multiple of a class's level
+ * (Lay on Hands = 5 × Paladin level); or read from a per-level table (Rage, Channel Divinity...).
+ */
+export type FeatureScale =
+  | { by: 'proficiency-bonus' }
+  | { by: 'class-level'; className: string; multiplier?: number }
+  | { by: 'table'; className: string; /** index 0 = class level 1 */ values: number[] };
+
+/** A bonus added to some skill checks: a flat number and/or an ability modifier (with a minimum). */
+export interface SkillBonus {
+  skills: Skill[];
+  /** Add this ability's modifier (e.g. Thaumaturge: WIS to Arcana and Religion). */
+  ability?: Ability;
+  flat?: number;
+  /** Minimum total bonus, e.g. 1 for "minimum of +1". */
+  minimum?: number;
+  /** Where it comes from, e.g. "Thaumaturge (Divine Order)". */
+  source: string;
 }
 
 export type FeatureSource =
@@ -266,6 +289,11 @@ export interface Attack {
   properties?: string[];
   /** 2024 weapon mastery property, e.g. "Vex". */
   mastery?: string;
+  /**
+   * Damage dice that grow with level: 'cantrip' = the cantrip's dice multiply at character levels
+   * 5, 11 and 17; 'martial-arts' = the Monk's Martial Arts die (d6 → d8 at Monk 5, d10 at 11, d12 at 17).
+   */
+  scaling?: 'cantrip' | 'martial-arts';
   notes?: string;
 }
 
@@ -379,6 +407,8 @@ export interface Character {
   damageVulnerabilities?: string[];
   /** Conditions the character can't be given, e.g. ["Poisoned"]. */
   conditionImmunities?: string[];
+  /** Extra bonuses to particular skill checks (Thaumaturge, Magician...). */
+  skillBonuses?: SkillBonus[];
   hp: HitPoints;
   hitDice: HitDiceEntry[];
   deathSaves: DeathSaves;

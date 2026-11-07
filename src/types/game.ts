@@ -162,6 +162,11 @@ export interface Campaign {
    * The DM nudges it up when things slip out of the hero's control and down when they take charge.
    */
   tension: number;
+  /**
+   * Notes for the DM about player-side changes (sheet edits, vetoes, library edits) not yet
+   * delivered; persisted so a reload or leaving the table doesn't lose them.
+   */
+  pendingDmNotices?: string[];
   usage: UsageTotals;
   createdAt: number;
   updatedAt: number;
@@ -190,6 +195,18 @@ export interface Session {
   usage: UsageTotals;
   /** Input tokens of the most recent request (≈ current context size). */
   contextTokens: number;
+  /**
+   * Results of tools that already ran in the current, unfinished tool batch (persisted as each tool
+   * finishes, cleared once the batch's tool_result message is appended). After a reload these are
+   * returned as the real results instead of "interrupted", so finished effects aren't applied twice.
+   */
+  pendingToolResults?: PendingToolResult[] | null;
+}
+
+export interface PendingToolResult {
+  toolUseId: string;
+  content: string;
+  isError?: boolean;
 }
 
 // ---------------------------------------------------------------------------

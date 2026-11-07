@@ -911,3 +911,14 @@ onCampaignChange((change) => {
   if (change.type === 'deleted') state.unloadCampaign();
   else void state.reload();
 });
+
+/**
+ * Queue a DM notice for any campaign: delivered through the loaded store when that campaign is open
+ * at the table, otherwise persisted on the campaign record for its next turn.
+ * CONTRACT — implemented by the state module.
+ */
+export async function queueCampaignNotice(campaignId: string, text: string): Promise<void> {
+  void campaignId;
+  void text;
+  throw new Error('gameStore: queueCampaignNotice not implemented');
+}
