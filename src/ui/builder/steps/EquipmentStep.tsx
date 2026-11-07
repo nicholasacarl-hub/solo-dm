@@ -62,7 +62,7 @@ export function EquipmentStep({ draft, setDraft, ctx, onDmDecide, built }: StepP
           <SubHeading hint={`${draft.weaponMasteries.length}/${mastery.count}`}>Weapon Mastery</SubHeading>
           <p className="text-sm text-muted">Choose {mastery.count} kinds of weapons whose mastery property you can use. Weapons in your pack are marked.</p>
           <div className="flex flex-wrap gap-1.5">
-            {mastery.candidates.map((w) => {
+            {[...mastery.candidates].sort((a, b) => Number(packed.has(nameKey(b.name))) - Number(packed.has(nameKey(a.name)))).map((w) => {
               const chosen = draft.weaponMasteries.includes(w.name);
               return (
                 <ToggleChip

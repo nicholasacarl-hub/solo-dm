@@ -230,6 +230,23 @@ describe('endSession', () => {
     expect(textOfUser(h.client.requests[1].messages.at(-1) as BetaMessageParam, 1)).toBe(WRAP_UP_REQUEST);
   });
 
+  it('finds the recap even when it comes before the last tool call', async () => {
+    const h = setupHarness({
+      withSession: true,
+      steps: [
+        end('Hello.'),
+        makeMessage(
+          [textBlock('## Recap\nYou slept.\n\n## DM Notes\nWolves at dawn.'), toolUseBlock('toolu_q', 'update_quest', { title: 'Survive', status: 'completed' })],
+          'tool_use',
+        ),
+        end('All saved.'),
+      ],
+    });
+    await h.controller.sendPlayerMessage('Hi.');
+    await h.controller.endSession();
+    expect(h.s().sessions[0]).toMatchObject({ recap: 'You slept.', dmNotes: 'Wolves at dawn.\n\nAll saved.' });
+  });
+
   it('uses the whole text as the recap when the headings are missing', async () => {
     const h = setupHarness({ withSession: true, steps: [end('Hello.'), end('You survived the night.')] });
     await h.controller.sendPlayerMessage('Hi.');

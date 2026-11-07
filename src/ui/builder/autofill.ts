@@ -320,15 +320,19 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
   }
   const scores = finalAbilityScores(next, picks(next, ctx.data).background);
   const magicInitiate = { ...next.magicInitiate };
+  // Don't spend Magic Initiate picks on spells the character already knows.
+  const known = new Set([...next.cantrips, ...next.spellbook, ...next.prepared]);
   for (const { list } of magicInitiateSources(next, ctx.data)) {
     const current = magicInitiate[list];
-    const cantripIds = spellsForClass(ctx.spells, list, 0).map((s) => s.id);
-    const levelOneIds = spellsForClass(ctx.spells, list, 1).map((s) => s.id);
+    const cantripIds = spellsForClass(ctx.spells, list, 0).map((s) => s.id).filter((id) => !known.has(id) || current?.cantrips.includes(id));
+    const levelOneIds = spellsForClass(ctx.spells, list, 1).map((s) => s.id).filter((id) => !known.has(id) || current?.spell === id);
     const mental: Ability[] = ['int', 'wis', 'cha'];
     const ability = current?.ability && mental.includes(current.ability) ? current.ability : [...mental].sort((a, b) => scores[b] - scores[a])[0];
     const cantrips = topUp((current?.cantrips ?? []).filter((id) => cantripIds.includes(id)), shuffle(cantripIds, rng), Math.min(2, cantripIds.length));
     const spell = current?.spell && levelOneIds.includes(current.spell) ? current.spell : (shuffle(levelOneIds, rng)[0] ?? null);
     magicInitiate[list] = { ability, cantrips, spell };
+    cantrips.forEach((id) => known.add(id));
+    if (spell) known.add(spell);
   }
   return { ...next, magicInitiate };
 }

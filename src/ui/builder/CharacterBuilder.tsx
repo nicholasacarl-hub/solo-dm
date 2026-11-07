@@ -221,9 +221,11 @@ export function CharacterBuilder({ campaign, data, spells, characterId, onSave }
           <Button variant="ghost" onClick={() => prev && goTo(prev)} disabled={!prev} icon={<ArrowLeft className="size-4" aria-hidden />}>
             Back
           </Button>
-          <Button variant="secondary" className={cn('lg:hidden', step === 'review' && 'hidden')} onClick={() => setPreviewOpen(true)} icon={<Eye className="size-4" aria-hidden />}>
+{step !== 'review' && (
+                      <Button variant="secondary" className="lg:hidden" onClick={() => setPreviewOpen(true)} icon={<Eye className="size-4" aria-hidden />}>
             <span className="tabular-nums">{stats ? `HP ${stats.hp} · AC ${stats.ac}` : 'Preview'}</span>
           </Button>
+          )}
           <div className="ml-auto flex items-center gap-2">
             {step === 'review' ? (
               <Button variant="primary" loading={saving} onClick={() => void save()} title={allIssues.length ? 'Some choices are still open' : undefined}>

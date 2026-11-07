@@ -18,6 +18,7 @@ function SpellChoiceList({
   max,
   onChange,
   onInfo,
+  taken,
 }: {
   label: string;
   options: SpellInfo[];
@@ -25,6 +26,8 @@ function SpellChoiceList({
   max: number;
   onChange: (next: string[]) => void;
   onInfo: (spell: SpellInfo) => void;
+  /** Spells already known from another source (shown, but not selectable). */
+  taken?: Set<string>;
 }) {
   const [filter, setFilter] = useState('');
   const filterId = useId();
@@ -48,7 +51,8 @@ function SpellChoiceList({
         <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2" aria-label={label}>
           {shown.map((spell) => {
             const checked = valid.includes(spell.id);
-            const disabled = !checked && full;
+            const known = !checked && Boolean(taken?.has(spell.id));
+            const disabled = !checked && (full || known);
             return (
               <li
                 key={spell.id}
@@ -73,7 +77,11 @@ function SpellChoiceList({
                     </Badge>
                   )}
                   {spell.ritual && <Badge className="px-1.5">R</Badge>}
-                  {spell.school && <span className="hidden truncate text-xs text-faint capitalize sm:inline">{spell.school}</span>}
+                  {known ? (
+                    <span className="truncate text-xs text-faint">already known</span>
+                  ) : (
+                    spell.school && <span className="hidden truncate text-xs text-faint capitalize sm:inline">{spell.school}</span>
+                  )}
                 </label>
                 <button
                   type="button"
@@ -130,6 +138,13 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
     );
   }
 
+  const initiateIdsOf = (list: string): string[] => {
+    const choice = draft.magicInitiate[list];
+    return [...(choice?.cantrips ?? []), ...(choice?.spell ? [choice.spell] : [])];
+  };
+  const initiateIds = new Set(plan.magicInitiate.flatMap((m) => initiateIdsOf(m.list)));
+  const classIds = [...draft.cantrips, ...draft.spellbook, ...draft.prepared];
+  const takenFor = (list: string) => new Set([...classIds, ...plan.magicInitiate.filter((m) => m.list !== list).flatMap((m) => initiateIdsOf(m.list))]);
   const cantripOptions = classSpellOptions(draft, ctx, 0);
   const levelOneOptions = classSpellOptions(draft, ctx, 1);
   const spellbookSpells = levelOneOptions.filter((s) => draft.spellbook.includes(s.id));
@@ -154,6 +169,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
               max={plan.cantrips}
               onChange={(cantrips) => setDraft((d) => ({ ...d, cantrips }))}
               onInfo={setInfo}
+              taken={initiateIds}
             />
           )}
           {plan.spellbook > 0 ? (
@@ -165,6 +181,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
                 max={plan.spellbook}
                 onChange={(spellbook) => setDraft((d) => ({ ...d, spellbook, prepared: d.prepared.filter((id) => spellbook.includes(id)) }))}
                 onInfo={setInfo}
+                taken={initiateIds}
               />
               <SpellChoiceList
                 label="Prepared from your spellbook"
@@ -184,6 +201,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
                 max={plan.prepared}
                 onChange={(prepared) => setDraft((d) => ({ ...d, prepared }))}
                 onInfo={setInfo}
+                taken={initiateIds}
               />
             )
           )}
@@ -219,6 +237,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
               max={2}
               onChange={(cantrips) => update({ cantrips })}
               onInfo={setInfo}
+              taken={takenFor(list)}
             />
             <SpellChoiceList
               label={`${list} level 1 spell`}
@@ -227,6 +246,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
               max={1}
               onChange={(ids) => update({ spell: ids[0] ?? null })}
               onInfo={setInfo}
+              taken={takenFor(list)}
             />
           </section>
         );

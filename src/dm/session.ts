@@ -418,7 +418,8 @@ export class DmSessionController {
   private async finishEnding(signal: AbortSignal): Promise<void> {
     const result = await this.loop(signal, 'ending', 'The DM is writing the session recap…');
     if (result.outcome === 'cancelled' || signal.aborted) return;
-    const { recap, dmNotes } = parseWrapUp(result.finalText);
+    // All of the DM's text since the wrap-up request: the recap may come before its last tool calls.
+    const { recap, dmNotes } = parseWrapUp(lastDmNarration(this.d.store().transcript) || result.finalText);
     await this.closeSession(recap || NO_RECAP, dmNotes);
   }
 
