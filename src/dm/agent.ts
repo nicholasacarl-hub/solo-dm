@@ -190,8 +190,6 @@ export async function answerUnfinishedToolCalls(d: DmDeps): Promise<void> {
 // Usage
 // ---------------------------------------------------------------------------
 
-const softLimitWarned = new Set<string>();
-
 /**
  * Suggest wrapping up once the context passes the soft limit, or sooner when the model bills long
  * prompts at a higher rate (Claude Haiku 5.5 above 100K tokens) — once per session.
@@ -201,8 +199,7 @@ async function warnIfSessionLong(d: DmDeps, contextTokens: number, softLimit: nu
   const session = store.activeSession;
   const pricier = longContextThreshold(model);
   const limit = pricier !== null ? Math.min(softLimit, pricier) : softLimit;
-  if (!session || contextTokens <= limit || softLimitWarned.has(session.id)) return;
-  softLimitWarned.add(session.id);
+  if (!session || contextTokens <= limit) return;
   const already = store.log.some((e) => e.kind === 'system' && e.sessionId === session.id && e.text.startsWith(SOFT_LIMIT_PREFIX));
   if (already) return;
   const k = Math.round(contextTokens / 1000);

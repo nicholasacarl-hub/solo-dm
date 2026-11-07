@@ -132,7 +132,7 @@ export async function startCombatTool(input: ToolInput<'start_combat'>, ctx: Too
 
   const taken = new Set([nameKey(character.name)]);
   const others: Combatant[] = [];
-  const lines: string[] = [`${character.name}: initiative ${heroRoll.result.total}`];
+  const lines: string[] = [`${character.name}: initiative ${heroRoll.result.total}`, ...heroRoll.notes];
   for (const spec of input.combatants) {
     const group = await buildGroup(ctx, spec, taken, campaign);
     others.push(...group.combatants);

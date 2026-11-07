@@ -124,7 +124,7 @@ function ItemRow({ item, editable, onEdit, catalog }: { item: InventoryItem; edi
             aria-pressed={Boolean(item.attuned)}
             aria-label={item.attuned ? `End attunement to ${item.name}` : `Attune to ${item.name}`}
             title={item.attuned ? 'End attunement' : 'Attune'}
-            onClick={() => onEdit((c) => itemAttuneChange(c, item.id, !item.attuned))}
+            onClick={() => onEdit((c) => itemAttuneChange(c, item.id, !item.attuned, catalog))}
             className={cn('grid size-8 shrink-0 place-items-center rounded-lg', item.attuned ? 'bg-arcane-soft text-arcane' : 'text-faint hover:bg-surface-2 hover:text-text')}
           >
             <Sparkles className="size-4" aria-hidden />

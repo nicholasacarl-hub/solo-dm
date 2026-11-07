@@ -1,5 +1,5 @@
 import './testing/setup';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { manualD20Result, manualRollResult, rollD20Test, rollDice } from '@/engine';
@@ -288,6 +288,7 @@ describe('RollPromptDialog — Heroic Inspiration', () => {
     expect(screen.getByText('Heroic Inspiration: rerolled from 7. The new roll stands.')).toBeInTheDocument();
     // One reroll, and the first roll can't be taken back.
     expect(screen.queryByRole('button', { name: REROLL })).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Continue' })).toHaveFocus());
     expect(onResolve).not.toHaveBeenCalled();
 
     // The roll tool reads the sheet as soon as it has the result: Inspiration must already be spent.

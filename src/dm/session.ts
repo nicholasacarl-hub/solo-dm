@@ -118,6 +118,9 @@ const BUSY = 'The DM is still working on the last turn. Wait for it to finish, o
 
 const IDLE: Partial<DmStatus> = { phase: 'idle', activity: null, error: null, retryable: false };
 
+/** How long a new request waits for a stopped run to unwind before reporting BUSY. */
+const SETTLE_TIMEOUT_MS = 10_000;
+
 type GameStoreLog = ReturnType<DmDeps['store']>['log'];
 
 // ---------------------------------------------------------------------------
@@ -207,9 +210,19 @@ export class DmSessionController {
     }
   }
 
-  /** Wait for a run the player stopped to finish unwinding (it saves what it streamed first). */
+  /**
+   * Wait for a run the player stopped to finish unwinding (it saves what it streamed first). Bounded,
+   * in case the run waits on something that can't be aborted: the caller then reports BUSY as before.
+   */
   private async settleStopped(): Promise<void> {
-    while (this.busy && this.current?.controller.signal.aborted) await this.current.done;
+    const deadline = Date.now() + SETTLE_TIMEOUT_MS;
+    while (this.busy && this.current?.controller.signal.aborted) {
+      const left = deadline - Date.now();
+      if (left <= 0) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([this.current.done, new Promise<void>((resolve) => (timer = setTimeout(resolve, left)))]);
+      clearTimeout(timer);
+    }
   }
 
   /** Log the failure (with Retry) and return the status to publish once the run has unwound. */

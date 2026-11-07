@@ -190,5 +190,11 @@ chrome (emoji are fine for campaign covers and portraits).
 - Bundled rules: SRD 5.2.1, CC-BY-4.0. The attribution statement (in `SRD_ATTRIBUTION`) appears in
   the Library, the README, and ATTRIBUTION.md. Our JSON is a modified (converted) form of the SRD.
 - Describe the app as "compatible with fifth edition"; never use Wizards' trademarks in branding.
-- Imported content is stored only in IndexedDB on the player's device and excluded from exports by
-  default. GitHub sync refuses public repositories.
+- Imported content is stored only in IndexedDB on the player's device. Passages the DM looks up from
+  imported books are wrapped in `<imported-content>` markers in tool results, and exports / GitHub
+  saves redact them (src/lib/importedContent.ts); the DM's own narration may still paraphrase them.
+  GitHub sync refuses public and internal repositories.
+- One tab at a time per campaign: the play screen holds a Web Lock; a second tab offers "Use this tab
+  instead".
+- Production builds ship a Content Security Policy: the page talks only to itself,
+  api.anthropic.com and api.github.com.

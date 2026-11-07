@@ -2,7 +2,7 @@
   "name": "solo-dm",
   "private": true,
   "version": "0.1.0",
-  "description": "A solo tabletop RPG companion where Claude is your Dungeon Master. Compatible with fifth edition (2024 rules, SRD 5.2.1).",
+  "description": "A solo tabletop RPG companion where Claude runs the game as your game master. Compatible with fifth edition (2024 rules, SRD 5.2.1).",
   "type": "module",
   "license": "MIT",
   "engines": {

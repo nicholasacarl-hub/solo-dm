@@ -449,6 +449,20 @@ describe('agent loop: stop reasons and errors', () => {
 });
 
 describe('agent loop: usage', () => {
+  it('suggests wrapping up once a Haiku 5.5 session passes its 100K long-context price threshold', async () => {
+    const usage = { input_tokens: 1_000, output_tokens: 100, cache_read_input_tokens: 105_000 };
+    const h = setupHarness({
+      withSession: true,
+      settings: { model: 'claude-haiku-5-5', sessionSoftLimitTokens: 150_000 },
+      steps: [makeMessage([textBlock('One.')], 'end_turn', { model: 'claude-haiku-5-5', usage })],
+    });
+    await h.controller.sendPlayerMessage('Go on.');
+    const note = h.s().log.find((e) => e.kind === 'system' && e.text.startsWith(SOFT_LIMIT_PREFIX));
+    expect(note && 'text' in note ? note.text : '').toContain('Claude Haiku 5.5 bills prompts over 100k tokens at a higher rate');
+    // Priced at the long-context card: $0.50 in, $2.50 out, $0.05 cache reads.
+    expect(h.s().campaign?.usage.estimatedCostUsd).toBeCloseTo((1_000 * 0.5 + 100 * 2.5 + 105_000 * 0.05) / 1e6, 12);
+  });
+
   it('adds usage with the cache-write TTL split, tracks context size, and warns once past the soft limit', async () => {
     const usage = {
       input_tokens: 1000,

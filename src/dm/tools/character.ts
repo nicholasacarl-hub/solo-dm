@@ -235,7 +235,8 @@ function statSteps(input: ToolInput<'update_character'>): ((c: Character) => Eng
  */
 export function changeAbilityScore(c: Character, ability: Ability, change: number, max = 20): EngineResult {
   const before = c.abilityScores[ability];
-  const target = Math.max(1, change > 0 ? Math.min(max, before + change) : before + change);
+  // An increase never lowers a score that is already above the cap (e.g. set by a magic item).
+  const target = change > 0 ? Math.max(before, Math.min(max, before + change)) : Math.max(1, before + change);
   const name = ABILITY_NAMES[ability];
   if (target === before) {
     return { character: c, events: [{ type: 'warning', message: `${name} is already ${before}${change > 0 ? ` (the most it can reach here is ${max})` : ''}.` }] };

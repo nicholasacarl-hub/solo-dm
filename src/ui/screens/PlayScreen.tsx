@@ -9,9 +9,8 @@ import { AppWindow, BookX } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { dm } from '@/dm';
 import { useGame, whenPersisted } from '@/state/gameStore';
-import type { CampaignLock } from '@/storage';
+import { acquireCampaignLock, type CampaignLock } from '@/storage';
 import { Button, EmptyState, Spinner } from '@/ui/components/ui';
-import { holdCampaign } from '@/ui/play/campaignLock';
 import { runDm, waitForDmIdle } from '@/ui/play/dmStatus';
 import { errorMessage } from '@/ui/play/format';
 import { PlayTable } from '@/ui/play/PlayTable';
@@ -49,28 +48,32 @@ async function whenDmIdle(timeoutMs: number, isCancelled: () => boolean): Promis
   return !isCancelled();
 }
 
-/** Call dm.beginOrResume() once per loaded campaign (StrictMode-safe), after any in-flight DM work. */
-function useBeginOrResume(campaignId: string | null): void {
+/**
+ * Call dm.beginOrResume() once per arrival at the table (StrictMode-safe), after any in-flight DM
+ * work. `arrival` names one: the campaign id, plus a counter that moves when this tab takes the
+ * campaign back from another tab (which may have ended or started a session meanwhile).
+ */
+function useBeginOrResume(arrival: string | null): void {
   const begunFor = useRef<string | null>(null);
   useEffect(() => {
-    if (!campaignId || begunFor.current === campaignId) return;
+    if (!arrival || begunFor.current === arrival) return;
     let cancelled = false;
     void (async () => {
-      if (!(await whenDmIdle(30_000, () => cancelled)) || begunFor.current === campaignId) return;
+      if (!(await whenDmIdle(30_000, () => cancelled)) || begunFor.current === arrival) return;
       // Marked only when the call is made, so a cancelled wait (unmount, reload) can try again.
-      begunFor.current = campaignId;
+      begunFor.current = arrival;
       try {
         await dm.beginOrResume();
       } catch (err) {
         // Let a later render try again (e.g. the campaign was mid-reload), unless we've left.
-        if (begunFor.current === campaignId) begunFor.current = null;
+        if (begunFor.current === arrival) begunFor.current = null;
         if (!cancelled) await runDm(() => Promise.reject(err));
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [campaignId]);
+  }, [arrival]);
 }
 
 /** Used when locking itself fails: playing on beats locking the player out of their campaign. */
@@ -111,12 +114,12 @@ export function PlayScreen() {
     const steal = takeOverId.current === id;
     takeOverId.current = null;
     // Claim the campaign before reading it: a second tab must never load it, start the DM or write.
-    const hold = holdCampaign(id, { steal });
-    hold.lock
-      .catch((err: unknown) => {
-        console.error('[PlayScreen] Could not claim the campaign for this tab:', err);
-        return UNLOCKED;
-      })
+    // (Holders in one tab share the lock, so a StrictMode remount doesn't lock itself out.)
+    const claim = acquireCampaignLock(id, steal ? { steal: true } : undefined).catch((err: unknown) => {
+      console.error('[PlayScreen] Could not claim the campaign for this tab:', err);
+      return UNLOCKED;
+    });
+    claim
       .then((lock) => {
         if (!active) return;
         if (!lock) {
@@ -148,13 +151,13 @@ export function PlayScreen() {
       stopDm();
       useGame.getState().unloadCampaign();
       // Let go once this tab's last writes are saved, so a tab that takes over reads all of them.
-      void whenPersisted(id).finally(() => hold.release());
+      void Promise.all([claim, whenPersisted(id)]).then(([lock]) => lock?.release());
     };
   }, [id, attempt]);
 
   const state = access && access.id === id ? access.state : 'waiting';
   const loaded = Boolean(id) && state === 'held' && readyId === id && loadedId === id && !loading;
-  useBeginOrResume(loaded && hasCharacter ? (id ?? null) : null);
+  useBeginOrResume(loaded && hasCharacter && id ? `${id}#${attempt}` : null);
 
   const error =
     failure && failure.id === id ? failure.message : id && storeCampaignId === id && !loading ? loadError : null;

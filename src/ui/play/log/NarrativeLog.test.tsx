@@ -6,7 +6,7 @@ import { dm } from '@/dm';
 import { useGame } from '@/state/gameStore';
 import { useSettings } from '@/state/settingsStore';
 import { sampleLog } from '@/test/fixtures';
-import type { LogEntry } from '@/types';
+import type { LogEntry, TranscriptMessage } from '@/types';
 import { usePlayView } from '../playView';
 import { sampleHomebrew } from '../testing/fakeGame';
 import { resetDmMock } from '../testing/dmMock';
@@ -263,6 +263,60 @@ describe('NarrativeLog', () => {
     });
     expect(announcer).toHaveTextContent('The DM: The fog parts.');
     expect(screen.getByText('parts').closest('article')).not.toHaveAttribute('aria-busy');
+  });
+
+  it("shows the DM's note under a reply the player stopped as a marker on that reply", () => {
+    const stopped: LogEntry = { ...meta, id: 'cut', seq: 91, kind: 'dm', text: 'A hooded figure waits beyond, a kn' };
+    const note: LogEntry = {
+      ...meta,
+      id: 'stop-note',
+      seq: 92,
+      kind: 'system',
+      level: 'info',
+      text: 'Stopped. The DM will know its reply was cut off here.',
+    };
+    const { log } = renderLog([stopped, note]);
+    const marker = within(log).getByText('Stopped. The DM will know its reply was cut off here.');
+    expect(marker.closest('[data-kind="system"]')).toHaveClass('mt-2');
+    expect(marker.closest('p')).not.toHaveClass('justify-center');
+  });
+
+  it("marks narration the DM never saw, and the player's words it hasn't answered", () => {
+    const at = (createdAt: number) => ({ ...meta, createdAt });
+    const transcriptMessage = (role: 'user' | 'assistant', createdAt: number, n: number): TranscriptMessage => ({
+      id: `m-${n}`,
+      sessionId: 'sess-1',
+      seq: n,
+      createdAt,
+      param: { role, content: [{ type: 'text', text: role }] },
+    });
+    const log: LogEntry[] = [
+      { ...at(110), id: 'open', seq: 1, kind: 'dm', text: 'Fog rolls off the water.' },
+      { ...at(200), id: 'p-1', seq: 2, kind: 'player', text: 'I open the door.' },
+      // Streamed, then the request failed (or the page reloaded) before the reply was saved.
+      {
+        ...at(310),
+        id: 'partial',
+        seq: 3,
+        kind: 'dm',
+        text: 'A hooded figure waits beyond',
+        streaming: true,
+        choices: ['Draw steel'],
+      },
+    ];
+    const transcript = [transcriptMessage('user', 100, 1), transcriptMessage('assistant', 150, 2), transcriptMessage('user', 200, 3)];
+    seedGame({ log, transcript });
+    render(<NarrativeLog />);
+
+    expect(screen.getByText(/Cut off\. The DM never saw this text/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Cut off/)).toHaveLength(1);
+    expect(screen.getByText('A hooded figure waits beyond').closest('article')).not.toHaveAttribute('aria-busy');
+    expect(screen.queryByRole('group', { name: 'Suggested actions' })).not.toBeInTheDocument();
+    expect(screen.getByText('Not answered yet. It goes to the DM with your next message.')).toBeInTheDocument();
+
+    // While the DM works on it, nothing is missed yet.
+    act(() => useGame.setState({ dm: { phase: 'thinking', activity: null, error: null, retryable: false } }));
+    expect(screen.queryByText(/Not answered yet/)).not.toBeInTheDocument();
   });
 
   it('is a log region that does not live-announce its contents', () => {

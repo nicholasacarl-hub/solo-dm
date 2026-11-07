@@ -98,6 +98,18 @@ describe('buildSystemPrompt', () => {
       '[X-card]',
       '<ooc>',
       'choices',
+      // A trigger for one of the hero's Reactions pauses the enemy turn for the player's decision.
+      'stop before you apply the result',
+      'Opportunity Attack',
+      'Shield',
+      // Heroic Inspiration can actually be spent, and a rules reroll isn't a retcon.
+      'heroic_inspiration: false and request_player_roll again with the same parameters',
+      'is not a retcon',
+      // Level-up choices can be recorded.
+      'ability_scores for an Ability Score Improvement',
+      // Attacks that aren't on the sheet.
+      'a spell the hero knows (a spell attack), or another weapon together with `ability`',
+      '<unanswered_turn>',
     ]) {
       expect(DM_INSTRUCTIONS, phrase).toContain(phrase);
     }

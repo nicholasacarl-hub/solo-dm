@@ -7,7 +7,7 @@ import {
   applyDamage,
   applyHealing,
   changeExhaustion,
-  computeArmorClass,
+  syncArmorClass,
   conditionName,
   ordinal,
   recordDeathSave,
@@ -179,11 +179,15 @@ export function featureUseChange(c: Character, featureId: string, spend: boolean
 // Inventory & coins
 // ---------------------------------------------------------------------------
 
+/**
+ * Keep AC in step with gear: armor and shields, and also items such as a Ring or Cloak of Protection
+ * or Bracers of Defense. syncArmorClass keeps an AC set by hand (Mage Armor...) and falls back to the
+ * SRD armor table when the catalog hasn't loaded.
+ */
 function withAc(before: Character, after: Character, catalog: EquipmentOption[] | null): { character: Character; acNote: string } {
-  if (!catalog) return { character: after, acNote: '' };
-  const { ac, formula } = computeArmorClass(after, catalog);
-  if (ac === before.armorClass) return { character: { ...after, acFormula: formula }, acNote: '' };
-  return { character: { ...after, armorClass: ac, acFormula: formula }, acNote: ` (AC ${before.armorClass} → ${ac})` };
+  const { character } = syncArmorClass(before, after, catalog ?? []);
+  if (character.armorClass === before.armorClass) return { character, acNote: '' };
+  return { character, acNote: ` (AC ${before.armorClass} → ${character.armorClass})` };
 }
 
 function mapItem(c: Character, itemId: string, patch: Partial<InventoryItem>): Character {
@@ -211,21 +215,26 @@ export function itemEquipChange(c: Character, itemId: string, equipped: boolean,
   if (equipped && (item.category === 'armor' || item.category === 'shield')) {
     next = { ...next, inventory: next.inventory.map((i) => (i.id !== itemId && i.category === item.category && i.equipped ? { ...i, equipped: false } : i)) };
   }
-  const affectsAc = item.category === 'armor' || item.category === 'shield';
-  const { character, acNote } = affectsAc ? withAc(c, next, catalog) : { character: next, acNote: '' };
+  const { character, acNote } = withAc(c, next, catalog);
   return { character, notice: `Player ${equipped ? 'equipped' : 'unequipped'} ${item.name}${acNote}` };
 }
 
 export const MAX_ATTUNED = 3;
 
-export function itemAttuneChange(c: Character, itemId: string, attuned: boolean): SheetChange {
+export function itemAttuneChange(
+  c: Character,
+  itemId: string,
+  attuned: boolean,
+  catalog: EquipmentOption[] | null = null,
+): SheetChange {
   const item = c.inventory.find((i) => i.id === itemId);
   if (!item || Boolean(item.attuned) === attuned) return unchanged(c);
   const count = c.inventory.filter((i) => i.attuned).length;
   if (attuned && count >= MAX_ATTUNED) return unchanged(c, `You can be attuned to at most ${MAX_ATTUNED} magic items.`);
+  const { character, acNote } = withAc(c, mapItem(c, itemId, { attuned }), catalog);
   return {
-    character: mapItem(c, itemId, { attuned }),
-    notice: attuned ? `Player attuned to ${item.name}` : `Player ended attunement to ${item.name}`,
+    character,
+    notice: `${attuned ? `Player attuned to ${item.name}` : `Player ended attunement to ${item.name}`}${acNote}`,
   };
 }
 

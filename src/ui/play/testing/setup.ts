@@ -4,7 +4,6 @@
  */
 import { afterEach } from 'vitest';
 import { cleanup } from '@testing-library/react';
-import { forgetCampaignHolds } from '../campaignLock';
 import { usePlayView } from '../playView';
 import { resetMediaQueryCache } from '../useMediaQuery';
 
@@ -49,7 +48,6 @@ afterEach(() => {
   cleanup();
   setMatchMedia(() => false);
   usePlayView.getState().reset();
-  forgetCampaignHolds();
 });
 
 setMatchMedia(() => false);

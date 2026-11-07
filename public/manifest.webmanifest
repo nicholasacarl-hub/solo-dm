@@ -1,7 +1,7 @@
 {
   "name": "Solo DM",
   "short_name": "Solo DM",
-  "description": "A solo tabletop RPG where Claude is your Dungeon Master. Compatible with fifth edition (SRD 5.2.1).",
+  "description": "A solo tabletop RPG where Claude runs the game. Compatible with fifth edition (SRD 5.2.1).",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

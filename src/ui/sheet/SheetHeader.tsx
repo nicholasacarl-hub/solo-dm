@@ -4,6 +4,7 @@ import { cn } from '@/lib/cn';
 import { useGame } from '@/state/gameStore';
 import type { Character } from '@/types';
 import { Badge, Button } from '@/ui/components/ui';
+import { portraitDisplay } from '@/ui/components/portrait';
 
 /** "Wizard 3 (Evoker) / Fighter 1". */
 export function classSummary(c: Character): string {
@@ -12,10 +13,15 @@ export function classSummary(c: Character): string {
 
 export function Portrait({ portrait, size = 'md', className }: { portrait?: string; size?: 'sm' | 'md' | 'lg'; className?: string }) {
   const dims = size === 'lg' ? 'size-16 text-4xl' : size === 'sm' ? 'size-9 text-xl' : 'size-12 text-3xl';
-  const isImage = portrait && /^(data:image\/|https?:)/.test(portrait);
+  // Only emoji or images embedded in the save: never a remote URL (it would leak the player's IP).
+  const shown = portraitDisplay(portrait);
   return (
     <div aria-hidden className={cn('grid shrink-0 place-items-center overflow-hidden rounded-2xl border border-border bg-surface-2', dims, className)}>
-      {isImage ? <img src={portrait} alt="" className="size-full object-cover" /> : <span className="leading-none">{portrait || '🧑'}</span>}
+      {shown?.kind === 'image' ? (
+        <img src={shown.src} alt="" className="size-full object-cover" />
+      ) : (
+        <span className="leading-none">{shown?.kind === 'text' ? shown.text : '🧑'}</span>
+      )}
     </div>
   );
 }

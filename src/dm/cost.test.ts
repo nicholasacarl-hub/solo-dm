@@ -51,4 +51,37 @@ describe('usageDelta', () => {
   it('measures context as uncached + cache read + cache write input tokens', () => {
     expect(contextTokensOf(makeUsage({ input_tokens: 5, cache_read_input_tokens: 100, cache_creation_input_tokens: 20 }))).toBe(125);
   });
+
+  it("prices a Haiku 5.5 request over 100K prompt tokens at the long-context card", () => {
+    // 2,000 uncached + 110,000 cache read + 1,000 5-minute writes = 113,000 prompt tokens > 100K.
+    const long = makeUsage({ input_tokens: 2_000, output_tokens: 1_000, cache_read_input_tokens: 110_000, cache_creation_input_tokens: 1_000 });
+    expect(usageDelta(long, 'claude-haiku-5-5', '5m').estimatedCostUsd).toBeCloseTo((2_000 * 0.5 + 1_000 * 2.5 + 110_000 * 0.05 + 1_000 * 0.625) / 1e6, 12);
+    // At or under 100K the base card applies.
+    const short = makeUsage({ input_tokens: 2_000, output_tokens: 1_000, cache_read_input_tokens: 98_000 });
+    expect(usageDelta(short, 'claude-haiku-5-5', '5m').estimatedCostUsd).toBeCloseTo((2_000 * 0.1 + 1_000 * 0.5 + 98_000 * 0.01) / 1e6, 12);
+  });
+
+  it("prices a turn a server-side fallback served at the fallback model's rates", () => {
+    const u = makeUsage({ input_tokens: 1_000, output_tokens: 1_000 });
+    // Claude Opus 5 ($5 / $25), not the Opus 5.5 picked in Settings ($4 / $20).
+    expect(usageDelta(u, 'claude-opus-5', '5m', 'claude-opus-5-5').estimatedCostUsd).toBeCloseTo((1_000 * 5 + 1_000 * 25) / 1e6, 12);
+    // An unknown model is priced at the requested model.
+    expect(usageDelta(u, 'claude-future-9', '5m', 'claude-sonnet-5-5').estimatedCostUsd).toBeCloseTo((1_000 * 2 + 1_000 * 10) / 1e6, 12);
+  });
+
+  it('sums usage.iterations, each attempt at its own model, when the API reports them', () => {
+    const u = makeUsage({
+      input_tokens: 500,
+      output_tokens: 300,
+      iterations: [
+        // The requested model declined mid-stream (billed at normal rates)…
+        { type: 'message', model: null, input_tokens: 1_000, output_tokens: 200, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: null },
+        // …and the fallback model served the turn.
+        { type: 'fallback_message', model: 'claude-opus-4-8', input_tokens: 500, output_tokens: 300, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: null },
+      ],
+    });
+    const delta = usageDelta(u, 'claude-opus-4-8', '5m', 'claude-opus-5-5');
+    expect(delta).toMatchObject({ requests: 1, inputTokens: 1_500, outputTokens: 500 });
+    expect(delta.estimatedCostUsd).toBeCloseTo((1_000 * 4 + 200 * 20 + 500 * 5 + 300 * 25) / 1e6, 12);
+  });
 });

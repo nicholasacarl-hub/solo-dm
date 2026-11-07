@@ -74,8 +74,6 @@ describe('PlayScreen', () => {
     expect(spies.loadCampaign).toHaveBeenCalledWith('camp-1');
     await waitFor(() => expect(dm.beginOrResume).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('log', { name: 'Story so far' })).toBeInTheDocument();
-    // StrictMode's remount reuses the claim instead of racing its own release.
-    expect(acquire).toHaveBeenCalledTimes(1);
   });
 
   it('titles the tab with the campaign and session', async () => {
@@ -168,7 +166,8 @@ describe('PlayScreen — one tab at a time', () => {
 
   it('stays out of a campaign another tab has open: no load, no DM, a way to take it over', async () => {
     const spies = seedUnloaded();
-    acquire.mockResolvedValueOnce(null);
+    // Another tab holds it: asking gets nothing, taking it over (steal) gets the lock.
+    acquire.mockImplementation(async (_id, opts) => (opts?.steal ? fakeLock().lock : null));
     renderAt('/play/camp-1');
 
     expect(await screen.findByRole('heading', { name: 'This campaign is open in another tab' })).toBeInTheDocument();
@@ -187,7 +186,8 @@ describe('PlayScreen — one tab at a time', () => {
   it('stops the DM and steps back when another tab takes the campaign over', async () => {
     const spies = seedUnloaded();
     const taken = fakeLock();
-    acquire.mockResolvedValueOnce(taken.lock);
+    // Every holder in this tab shares the one lock (StrictMode mounts twice).
+    acquire.mockResolvedValue(taken.lock);
     renderAt('/play/camp-1');
     await screen.findByRole('heading', { name: 'The Drowned Lantern' });
     vi.mocked(dm.isBusy).mockReturnValue(true);
@@ -197,7 +197,14 @@ describe('PlayScreen — one tab at a time', () => {
     expect(dm.cancel).toHaveBeenCalled();
     expect(spies.unloadCampaign).toHaveBeenCalled();
     expect(screen.queryByRole('log', { name: 'Story so far' })).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Use this tab instead' })).toBeInTheDocument();
+
+    // Taking it back reloads the campaign and lets the DM pick up whatever the other tab left.
+    vi.mocked(dm.isBusy).mockReturnValue(false);
+    acquire.mockResolvedValue(fakeLock().lock);
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Use this tab instead' }));
+    expect(await screen.findByRole('heading', { name: 'The Drowned Lantern' })).toBeInTheDocument();
+    expect(acquire).toHaveBeenLastCalledWith('camp-1', { steal: true });
+    await waitFor(() => expect(dm.beginOrResume).toHaveBeenCalledTimes(2));
   });
 
   it('still opens the campaign if locking itself fails', async () => {

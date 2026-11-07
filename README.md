@@ -1,6 +1,6 @@
 # Solo DM
 
-**A solo tabletop RPG where Claude is your Dungeon Master.** Compatible with fifth edition
+**A solo tabletop RPG where Claude runs the game.** Compatible with fifth edition
 (the 2024 rules, via SRD 5.2.1).
 
 Solo DM runs entirely in your browser. Claude narrates, plays every NPC, and makes the rulings; the app keeps the books: your character sheet, dice, initiative, quests, NPCs and clocks. Claude can only change your sheet through actions you see in the log, and it never invents a die roll.

@@ -11,6 +11,7 @@ import {
   saveLibrarySource,
   type CampaignBundle,
 } from '@/storage';
+import { characterStatusLine } from '@/engine';
 import { wrapImported } from '@/lib/importedContent';
 import type { LogEntry, TranscriptMessage } from '@/types';
 import { db } from './db';
@@ -241,6 +242,71 @@ describe('parseCampaignBundle', () => {
     expect(() => parseCampaignBundle({ ...data, sessions: 'none' })).toThrow(/sessions/);
     const { settings: _s, ...noSettings } = campaign;
     expect(() => parseCampaignBundle({ ...data, campaign: noSettings })).toThrow(/campaign\.settings/);
+  });
+
+  it('fills everything the rules engine reads from a character, so play works after the import', () => {
+    const data = valid();
+    const character = data.character as Record<string, unknown>;
+    const {
+      deathSaves: _d,
+      currency: _c,
+      skills: _s,
+      personality: _p,
+      speed: _sp,
+      armorClass: _ac,
+      hitDice: _hd,
+      ...slim
+    } = character;
+    const classes = [{ name: 'Wizard', level: 3 }, { name: 'Blood Hunter', level: 1, hitDie: 7 }];
+
+    const c = parseCampaignBundle({ ...data, character: { ...slim, classes, size: 'medium' } }).character;
+
+    expect(c?.deathSaves).toEqual({ successes: 0, failures: 0, stable: false, dead: false });
+    expect(c?.currency).toEqual({ cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 });
+    expect(c?.skills).toEqual({});
+    expect(c?.personality).toEqual({});
+    expect(c).toMatchObject({ speed: 30, size: 'Medium', armorClass: 10 });
+    expect(c?.classes).toEqual([
+      { name: 'Wizard', level: 3, classId: 'srd:class:wizard', hitDie: 6, casterType: 'full' },
+      { name: 'Blood Hunter', level: 1, classId: 'class:blood-hunter', hitDie: 8, casterType: 'none' },
+    ]);
+    expect(c?.hitDice).toEqual([
+      { die: 6, total: 3, spent: 0 },
+      { die: 8, total: 1, spent: 0 },
+    ]);
+    expect(() => characterStatusLine(c!)).not.toThrow();
+
+    // A spellcaster without a spellcasting ability gets its class's.
+    const { ability: _a, ...spellcasting } = character.spellcasting as Record<string, unknown>;
+    const caster = parseCampaignBundle({
+      ...data,
+      character: { ...character, classes: [{ name: 'Cleric', level: 1, spellcastingAbility: 'wis' }], spellcasting },
+    }).character;
+    expect(caster?.spellcasting?.ability).toBe('wis');
+  });
+
+  it('drops display-log entries that lack what their kind needs, and fills the rest', () => {
+    const data = valid();
+    const log = data.log as Record<string, unknown>[];
+    const { roll: _roll, ...rollWithoutResult } = log.find((e) => e.kind === 'roll') ?? {};
+
+    const bundle = parseCampaignBundle({
+      ...data,
+      log: [
+        ...log,
+        { ...rollWithoutResult, id: 'broken-roll', seq: 50 },
+        { ...log[0], id: 'odd-session', seq: 51, event: 'paused' },
+        { id: 'loose-tool', seq: 52, kind: 'tool', createdAt: 1, summary: 'HP 5 → 3', icon: '' },
+        { id: 'plain-error', seq: 53, kind: 'error', createdAt: 1, text: 'Network error' },
+      ],
+    });
+
+    const ids = bundle.log.map((e) => e.id);
+    expect(ids).not.toContain('broken-roll');
+    expect(ids).not.toContain('odd-session');
+    expect(bundle.log).toHaveLength(log.length + 2);
+    expect(bundle.log.find((e) => e.id === 'loose-tool')).toMatchObject({ tool: '', icon: 'info', summary: 'HP 5 → 3', sessionId: null });
+    expect(bundle.log.find((e) => e.id === 'plain-error')).toMatchObject({ retryable: false });
   });
 
   it('is lenient: keeps unknown fields and fills missing optional ones', () => {

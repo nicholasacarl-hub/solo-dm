@@ -23,8 +23,8 @@ vibe-coding session.
   combat tracker and spell list as well as SRD ones.
 - **Spell effects**: concentration tracking on combatants, durations that tick down by round, and
   spell-based AC (Mage Armor, Shield of Faith).
-- **Monk / class extras**: Martial Arts damage, Unarmored Movement, class resource tables (Ki/Focus,
-  Rage, Sorcery Points) surfaced as feature uses automatically.
+- **Class extras**: Unarmored Movement, lineage spells gained at levels 3 and 5, and replacing
+  "Action Surge (two uses)" / "Indomitable" entries in place at Fighter 13 and 17.
 - **Level-up choices**: guided ASI/feat, subclass and spell selection in the level-up dialog, using the
   class tables already in `public/srd/builder.json`.
 

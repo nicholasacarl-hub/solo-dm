@@ -294,6 +294,11 @@ describe('update_character: ability scores and proficiencies (Ability Score Impr
     const capped = await h.run('update_character', { ability_scores: [{ ability: 'int', change: 2 }] });
     expect(h.s().character?.abilityScores.int).toBe(20);
     expect(capped.content).toContain('capped at 20');
+
+    await h.s().updateCharacter((c) => ({ ...c, abilityScores: { ...c.abilityScores, str: 21 } }));
+    const above = await h.run('update_character', { ability_scores: [{ ability: 'str', change: 1 }] });
+    expect(h.s().character?.abilityScores.str).toBe(21);
+    expect(above.content).toContain('Warning: Strength is already 21');
   });
 
   it('recomputes AC when a score it depends on changes, unless the AC was set by hand', async () => {

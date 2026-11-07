@@ -205,8 +205,9 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
           }}
         >
           <Note>
-            Imports stay on this device and are left out of exported save files. Only import content you own, such as
-            books you’ve bought or your own notes.
+            Imports stay on this device. Passages the DM looks up from them are removed from exported saves and
+            GitHub backups, though the DM’s own narration may paraphrase what it read. Only import content you own,
+            such as books you’ve bought or your own notes.
           </Note>
 
           <SegmentedField

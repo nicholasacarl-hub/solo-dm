@@ -93,7 +93,8 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
     onResolve({ result: final, manual: isManual });
   };
 
-  // Focus the main control once the modal is showing (the dialog opens after children mount).
+  // Focus the main control once the modal is showing (the dialog opens after children mount), and
+  // again after a reroll (its button goes away).
   useEffect(() => {
     if (stage === 'rolling') return;
     const id = window.setTimeout(
@@ -101,7 +102,7 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
       0,
     );
     return () => window.clearTimeout(id);
-  }, [stage, physical]);
+  }, [stage, physical, replaced]);
 
   // Land the dice after the tumble.
   useEffect(() => {

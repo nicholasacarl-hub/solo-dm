@@ -225,6 +225,8 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
       ...(needsSubclass && subclass ? { subclass } : {}),
       hpMethod: hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll',
       newFeatures: features,
+      // Lets level-up recompute AC (Unarmored Defense, Draconic Resilience...) against real armor stats.
+      ...(builder.data ? { equipment: builder.data.equipment } : {}),
     };
     const outcome: { result: LevelUpResult | null; uses: string[] } = { result: null, uses: [] };
     const saved = await edit((c) => {
