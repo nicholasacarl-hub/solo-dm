@@ -16,6 +16,13 @@ import { truncate } from '../narration';
 import type { ToolInput } from './definitions';
 import { defined, fail, logTool, ok, requireCampaign, ToolInputError, type ToolContext, type ToolOutcome } from './context';
 
+/** Looking these up can spoil a surprise ("Mimic"), so their log lines stay behind the DM screen. */
+const SPOILER_KINDS: ReadonlySet<ContentKind> = new Set<ContentKind>(['monster', 'magic-item', 'item', 'boon', 'other']);
+
+function isSpoiler(entries: readonly CompendiumEntry[], kinds?: readonly string[]): boolean {
+  return entries.some((e) => SPOILER_KINDS.has(e.kind) || e.sourceId === HOMEBREW_SOURCE_ID) || (kinds ?? []).some((k) => SPOILER_KINDS.has(k as ContentKind));
+}
+
 /** Total characters of rules text returned per call, and per entry. */
 export const RULES_OUTPUT_LIMIT = 6000;
 export const RULES_HIT_LIMIT = 1800;
@@ -78,6 +85,7 @@ export async function lookupRulesTool(input: ToolInput<'lookup_rules'>, ctx: Too
   });
   await logTool(ctx, 'lookup_rules', 'rules', `Rules: ${truncate(input.query, 70)}`, {
     detail: hits.length ? hits.map((h) => `${h.entry.name} (${h.entry.sourceName})`).join('\n') : 'No results',
+    secret: isSpoiler(hits.map((h) => h.entry), input.kinds),
   });
   if (hits.length === 0) {
     return ok(`No rules matched "${input.query}". Try different keywords, or rule fairly from the 2024 rules and record it as a ruling.`);
@@ -96,7 +104,7 @@ export async function getEntryTool(input: ToolInput<'get_entry'>, ctx: ToolConte
     const names = near.map((h) => `${h.entry.name} (${h.entry.kind})`).join(', ');
     return ok(`No entry named "${input.name}"${kind ? ` (${kind})` : ''}.${names ? ` Closest matches: ${names}.` : ''}`);
   }
-  await logTool(ctx, 'get_entry', 'rules', `Looked up: ${found.name}`);
+  await logTool(ctx, 'get_entry', 'rules', `Looked up: ${found.name}`, { secret: isSpoiler([found]) });
   const body = [`# ${entryHeading(found)}`, found.summary ?? '', clip(found.text, RULES_OUTPUT_LIMIT)].filter(Boolean);
   const hb = found as Partial<HomebrewEntry>;
   if (hb.balanceNotes) body.push(`Balance notes: ${hb.balanceNotes}`);

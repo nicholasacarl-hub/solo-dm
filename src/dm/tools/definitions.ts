@@ -522,10 +522,8 @@ export function toolActivity(name: string, input?: unknown): string {
       return 'The dust settles…';
     case 'lookup_rules':
       return 'Consulting the rules…';
-    case 'get_entry': {
-      const entry = field(input, 'name');
-      return entry ? `Looking up ${entry}…` : 'Looking something up…';
-    }
+    case 'get_entry':
+      return 'Consulting the rules…';
     case 'get_character_sheet':
       return 'Reading your character sheet…';
     case 'create_homebrew':

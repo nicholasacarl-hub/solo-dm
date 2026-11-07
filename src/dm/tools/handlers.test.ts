@@ -247,7 +247,12 @@ describe('rules and homebrew', () => {
   it('gets one entry by name, and not from a disabled source', async () => {
     const h = setup();
     expect((await h.run('get_entry', { name: 'fireball' })).content).toContain('8d6 Fire damage');
+    expect(toolLines(h.s().log).at(-1)).toMatchObject({ summary: 'Looked up: Fireball' });
+    expect(toolLines(h.s().log).at(-1)?.secret).toBeUndefined();
     expect((await h.run('get_entry', { name: 'Forbidden Fire' })).content).toMatch(/^No entry named/);
+    // Monster lookups could spoil a surprise: they stay behind the DM screen.
+    await h.run('get_entry', { name: 'Bandit', kind: 'monster' });
+    expect(toolLines(h.s().log).at(-1)).toMatchObject({ summary: 'Looked up: Bandit', secret: true });
   });
 
   it('refuses homebrew when the campaign disables it', async () => {
