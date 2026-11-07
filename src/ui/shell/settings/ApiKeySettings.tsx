@@ -19,10 +19,11 @@ async function checkKey(apiKey: string): Promise<{ ok: true } | { ok: false; err
 }
 
 export function ApiKeySettings({ autoFocus = false }: { autoFocus?: boolean }) {
-  const { apiKey, rememberApiKey, setApiKey, clearApiKey, update } = useSettings(
+  const { apiKey, rememberApiKey, mockMode, setApiKey, clearApiKey, update } = useSettings(
     useShallow((s) => ({
       apiKey: s.apiKey,
       rememberApiKey: s.rememberApiKey,
+      mockMode: s.mockMode,
       setApiKey: s.setApiKey,
       clearApiKey: s.clearApiKey,
       update: s.update,
@@ -97,8 +98,16 @@ export function ApiKeySettings({ autoFocus = false }: { autoFocus?: boolean }) {
           )}
           {test.status === 'ok' && (
             <StatusLine tone="success" icon={<CheckCircle2 className="size-4" aria-hidden />}>
-              Your key works. You’re ready to play.
+              {mockMode ? 'Your key works.' : 'Your key works. You’re ready to play.'}
             </StatusLine>
+          )}
+          {test.status === 'ok' && mockMode && (
+            <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl bg-gold-soft px-3 py-2 text-sm text-text">
+              <span className="min-w-0 flex-1">The offline demo DM is still on, so Claude won’t be used yet.</span>
+              <Button size="sm" variant="primary" onClick={() => update({ mockMode: false })}>
+                Turn off the demo and play with Claude
+              </Button>
+            </div>
           )}
           {test.status === 'error' && (
             <StatusLine tone="danger" icon={<TriangleAlert className="size-4" aria-hidden />}>

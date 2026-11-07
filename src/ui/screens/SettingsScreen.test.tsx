@@ -52,6 +52,19 @@ describe('SettingsScreen', () => {
     expect(await screen.findByText('Your key works. You’re ready to play.')).toBeInTheDocument();
   });
 
+  it('offers to turn off the demo DM once a key works', async () => {
+    vi.mocked(testApiKey).mockResolvedValue({ ok: true });
+    useSettings.getState().update({ mockMode: true });
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.type(screen.getByLabelText('Anthropic API key'), 'sk-ant-test-123');
+    await user.click(screen.getByRole('button', { name: 'Test' }));
+    await user.click(await screen.findByRole('button', { name: 'Turn off the demo and play with Claude' }));
+    expect(useSettings.getState().mockMode).toBe(false);
+    expect(screen.queryByRole('button', { name: 'Turn off the demo and play with Claude' })).not.toBeInTheDocument();
+  });
+
   it('shows the error when Anthropic rejects the key', async () => {
     vi.mocked(testApiKey).mockResolvedValue({ ok: false, error: 'That API key was rejected (401).' });
     const user = userEvent.setup();
