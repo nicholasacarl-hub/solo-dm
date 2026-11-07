@@ -5,6 +5,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { Link, useBlocker, useNavigate } from 'react-router';
 import { ArrowLeft, ArrowRight, Check, Dices, RefreshCw } from 'lucide-react';
+import { defaultArtStyle } from '@/images';
 import { createCampaign, type NewCampaignInput } from '@/storage';
 import type { CampaignSettings } from '@/types';
 import { cn } from '@/lib/cn';
@@ -21,12 +22,14 @@ import {
   HOMEBREW_OPTIONS,
   ROLL_MODE_OPTIONS,
   RULES_FIDELITY_OPTIONS,
+  TRANSFORMATION_SHORT,
   coverTint,
   defaultCampaignSettings,
   suggestCampaignName,
   toneLabel,
   tonePreset,
   toneText,
+  transformationsMode,
 } from '@/ui/shell/campaignOptions';
 import { randomPremise } from '@/ui/shell/premises';
 import { errorMessage, plural } from '@/ui/shell/format';
@@ -69,6 +72,7 @@ export function validatePremiseStep(draft: CampaignDraft): CampaignDraftErrors {
 
 export function toCampaignInput(draft: CampaignDraft): NewCampaignInput {
   const s = draft.settings;
+  const tone = s.tone.trim();
   return {
     name: draft.name.trim(),
     premise: draft.premise.trim(),
@@ -76,9 +80,12 @@ export function toCampaignInput(draft: CampaignDraft): NewCampaignInput {
     coverColor: draft.coverColor,
     settings: {
       ...s,
-      tone: s.tone.trim(),
+      tone,
       setting: s.setting.trim(),
       playerNotes: s.playerNotes?.trim() || undefined,
+      transformations: transformationsMode(s),
+      // Fixed at creation (from the tone unless the player chose one), so every picture matches.
+      artStyle: s.artStyle?.trim() || defaultArtStyle(tone),
     },
   };
 }
@@ -503,6 +510,8 @@ function CoverPicker({
 const labelOf = <T extends string>(options: readonly { value: T; label: string }[], value: T) =>
   options.find((o) => o.value === value)?.label ?? value;
 
+const capitalize = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
+
 function ReadySummary({ draft }: { draft: CampaignDraft }) {
   const s = draft.settings;
   const rows: [string, string][] = [
@@ -516,6 +525,7 @@ function ReadySummary({ draft }: { draft: CampaignDraft }) {
       'Rolls',
       `${labelOf(ROLL_MODE_OPTIONS, s.playerRollMode)} · DM rolls ${s.showDmRolls ? 'shown' : 'hidden'} · ${s.milestoneLeveling ? 'milestones' : 'XP'}`,
     ],
+    ['Transformations', capitalize(TRANSFORMATION_SHORT[transformationsMode(s)])],
     ['Safety', `${plural(s.lines.length, 'line')}, ${plural(s.veils.length, 'veil')}`],
   ];
   return (

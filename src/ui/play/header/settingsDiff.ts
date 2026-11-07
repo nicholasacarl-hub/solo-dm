@@ -66,6 +66,18 @@ export function describeSettingsChanges(before: CampaignSettings, after: Campaig
   return lines;
 }
 
+/**
+ * Changes that need no DM notice from here but still count as changes: the transformations rule
+ * (the DM harness tells the DM about it itself, see src/dm/modes.ts) and the art style (only
+ * pictures use it).
+ */
+export function quietSettingsChanges(before: CampaignSettings, after: CampaignSettings): ('transformations' | 'art style')[] {
+  const changes: ('transformations' | 'art style')[] = [];
+  if ((before.transformations ?? 'offered') !== (after.transformations ?? 'offered')) changes.push('transformations');
+  if ((before.artStyle ?? '').trim() !== (after.artStyle ?? '').trim()) changes.push('art style');
+  return changes;
+}
+
 /** The DM notice for a set of changes. */
 export function settingsChangeNotice(changes: string[]): string {
   return `The player changed the table rules: ${changes.join('; ')}. Follow the new rules from now on.`;

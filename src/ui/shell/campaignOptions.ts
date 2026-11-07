@@ -10,7 +10,9 @@ import {
   type NarrationLength,
   type PlayerRollMode,
   type RulesFidelity,
+  type TransformationsMode,
 } from '@/types';
+import { ART_STYLE_PRESETS, toneArtStylePreset, type ArtStylePreset } from '@/images';
 
 export interface ChoiceOption<T extends string> {
   value: T;
@@ -55,6 +57,35 @@ export const LEVELING_OPTIONS: readonly ChoiceOption<LevelingChoice>[] = [
   { value: 'milestone', label: 'Milestones', description: 'Level up when the story reaches a milestone.' },
   { value: 'xp', label: 'Experience points', description: 'Earn XP and level up at the rules’ thresholds.' },
 ];
+
+export const TRANSFORMATION_OPTIONS: readonly ChoiceOption<TransformationsMode>[] = [
+  { value: 'off', label: 'Off', description: 'Your hero stays as you built them and changes only by leveling up.' },
+  {
+    value: 'offered',
+    label: 'Offered — you always choose',
+    description: 'Bargains, blessings and curses may tempt you, but nothing changes unless you choose it in the story.',
+  },
+  {
+    value: 'consequences',
+    label: 'Consequences can stick',
+    description:
+      'Choices you make knowingly can change your hero even if you’d rather they didn’t. There’s always a way to resist, reverse or cure it.',
+  },
+];
+
+/** Campaigns made before transformations existed have no setting: they are 'offered'. */
+export const DEFAULT_TRANSFORMATIONS: TransformationsMode = 'offered';
+
+export function transformationsMode(settings: Pick<CampaignSettings, 'transformations'>): TransformationsMode {
+  return settings.transformations ?? DEFAULT_TRANSFORMATIONS;
+}
+
+/** Short summary labels ("Transformations: offered"). */
+export const TRANSFORMATION_SHORT: Record<TransformationsMode, string> = {
+  off: 'off',
+  offered: 'offered (you choose)',
+  consequences: 'consequences can stick',
+};
 
 export type DmRollsChoice = 'hidden' | 'shown';
 export const DM_ROLLS_OPTIONS: readonly ChoiceOption<DmRollsChoice>[] = [
@@ -101,6 +132,29 @@ export function tonePreset(id: TonePresetId): TonePreset {
 /** Short label for summaries: the preset label, or the custom text. */
 export function toneLabel(tone: string): string {
   return findTonePreset(tone)?.label ?? tone.trim();
+}
+
+// ---------------------------------------------------------------------------
+// Art style (illustrations)
+// ---------------------------------------------------------------------------
+
+/** For each style, the alternatives that sit well beside it (a cosmic horror table isn't offered "storybook"). */
+const ART_STYLE_ALTERNATIVES: Record<string, readonly string[]> = {
+  painterly: ['heroic', 'storybook', 'ink', 'gritty'],
+  heroic: ['painterly', 'adventure', 'storybook', 'ink'],
+  gritty: ['ink', 'painterly', 'eerie', 'courtly'],
+  storybook: ['painterly', 'ink', 'adventure', 'heroic'],
+  eerie: ['ink', 'gritty', 'painterly', 'courtly'],
+  adventure: ['heroic', 'painterly', 'storybook', 'ink'],
+  courtly: ['painterly', 'ink', 'gritty', 'heroic'],
+  ink: ['painterly', 'gritty', 'storybook', 'eerie'],
+};
+
+/** A few art styles to suggest for a tone: the one that suits it first, then alternatives that fit beside it. */
+export function artStyleSuggestions(tone: string): ArtStylePreset[] {
+  const match = toneArtStylePreset(tone);
+  const alternatives = (ART_STYLE_ALTERNATIVES[match.id] ?? []).flatMap((id) => ART_STYLE_PRESETS.filter((p) => p.id === id));
+  return [match, ...alternatives];
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +234,8 @@ export function defaultCampaignSettings(): CampaignSettings {
     lines: [],
     veils: [],
     playerNotes: '',
+    transformations: DEFAULT_TRANSFORMATIONS,
+    // artStyle stays unset in the wizard (it follows the tone); creating the campaign fills it in.
   };
 }
 

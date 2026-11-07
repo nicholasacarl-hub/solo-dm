@@ -158,12 +158,10 @@ export function toolResultMessage(results: BetaToolResultBlockParam[]): BetaMess
   return { role: 'user', content: results };
 }
 
-/** Text of the system notes that follow the latest turn start (to re-queue if that turn is dropped). */
-export function noticesAfterLastTurn(messages: readonly TranscriptMessage[]): string[] {
-  const start = lastTurnStartIndex(messages);
-  if (start < 0) return [];
+/** Text of the system notes in `messages`, in order. */
+export function systemNotes(messages: readonly TranscriptMessage[]): string[] {
   const notes: string[] = [];
-  for (const m of messages.slice(start + 1)) {
+  for (const m of messages) {
     if (m.param.role !== 'system') continue;
     const content = m.param.content;
     if (typeof content === 'string') notes.push(content);
@@ -172,4 +170,11 @@ export function noticesAfterLastTurn(messages: readonly TranscriptMessage[]): st
     }
   }
   return notes;
+}
+
+/** Text of the system notes that follow the latest turn start (to re-queue if that turn is dropped). */
+export function noticesAfterLastTurn(messages: readonly TranscriptMessage[]): string[] {
+  const start = lastTurnStartIndex(messages);
+  if (start < 0) return [];
+  return systemNotes(messages.slice(start + 1));
 }

@@ -27,7 +27,7 @@ import {
   type InteractionRequest,
   type InteractionResponse,
 } from '@/types';
-import { setDmDeps } from '../deps';
+import { setDmDeps, type DmImages } from '../deps';
 import { DmSessionController } from '../session';
 import { createFakeRulesIndex, SAMPLE_RULES } from './fakeData';
 import { autoRespond, createFakeGameStore, type FakeGameStore } from './fakeStore';
@@ -44,7 +44,12 @@ export interface HarnessOptions {
   state?: Partial<GameStoreState>;
   /** Imported books switched on in the Library (default: none). */
   libraryImports?: { id: string; name: string }[];
+  /** Illustrations (default: no OpenAI key, so unavailable). */
+  images?: Partial<DmImages>;
 }
+
+/** What the images module says when no OpenAI key is set (the harness default). */
+export const NO_IMAGE_KEY = 'add an OpenAI API key in Settings → Illustrations to have pictures painted';
 
 export interface Harness {
   store: FakeGameStore;
@@ -85,6 +90,11 @@ export function setupHarness(opts: HarnessOptions = {}): Harness {
     rulesIndex: async () => index,
     invalidateRulesIndex: invalidate,
     libraryImports: async () => opts.libraryImports ?? [],
+    images: {
+      available: () => ({ ok: false, reason: NO_IMAGE_KEY }),
+      request: async () => ({ ok: false, reason: NO_IMAGE_KEY }),
+      ...opts.images,
+    },
     rng: undefined,
     now: () => 1_700_000_000_000,
     newId: () => `id-${++ids}`,

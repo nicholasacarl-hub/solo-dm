@@ -1,16 +1,17 @@
 import { useState, type ComponentType } from 'react';
-import { FlaskConical, History, Hourglass, NotebookPen, ScrollText } from 'lucide-react';
+import { FlaskConical, History, Hourglass, Images, NotebookPen, ScrollText } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { Switch } from '@/ui/components/ui';
 import { TabStrip, type TabStripItem } from './components/TabStrip';
 import { ChronicleTab } from './journal/ChronicleTab';
 import { ClocksTab } from './journal/ClocksTab';
+import { GalleryTab } from './journal/GalleryTab';
 import { HomebrewTab } from './journal/HomebrewTab';
 import { JournalTab } from './journal/JournalTab';
 import { QuestsTab } from './journal/QuestsTab';
 import { usePlayView } from './playView';
 
-export type JournalPanelTab = 'quests' | 'journal' | 'clocks' | 'homebrew' | 'chronicle';
+export type JournalPanelTab = 'quests' | 'journal' | 'clocks' | 'homebrew' | 'chronicle' | 'gallery';
 
 const TABS: TabStripItem<JournalPanelTab>[] = [
   { value: 'quests', label: 'Quests', icon: <ScrollText className="size-4" aria-hidden /> },
@@ -18,6 +19,7 @@ const TABS: TabStripItem<JournalPanelTab>[] = [
   { value: 'clocks', label: 'Clocks', icon: <Hourglass className="size-4" aria-hidden /> },
   { value: 'homebrew', label: 'Homebrew', icon: <FlaskConical className="size-4" aria-hidden /> },
   { value: 'chronicle', label: 'Chronicle', icon: <History className="size-4" aria-hidden /> },
+  { value: 'gallery', label: 'Gallery', icon: <Images className="size-4" aria-hidden /> },
 ];
 
 const PANELS: Record<JournalPanelTab, ComponentType> = {
@@ -26,9 +28,10 @@ const PANELS: Record<JournalPanelTab, ComponentType> = {
   clocks: ClocksTab,
   homebrew: HomebrewTab,
   chronicle: ChronicleTab,
+  gallery: GalleryTab,
 };
 
-/** The campaign's memory as the player sees it: quests, journal, clocks, homebrew, recaps. */
+/** The campaign's memory as the player sees it: quests, journal, clocks, homebrew, recaps, pictures. */
 export function JournalPanel({ className, compact = false }: { className?: string; compact?: boolean }) {
   const [tab, setTab] = useState<JournalPanelTab>('quests');
   const showSpoilers = usePlayView((s) => s.showSpoilers);

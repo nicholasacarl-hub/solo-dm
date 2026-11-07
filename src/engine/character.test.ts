@@ -8,6 +8,7 @@ import {
   addSpell,
   applyDamage,
   applyHealing,
+  changeAbilityScore,
   changeCurrency,
   changeExhaustion,
   clearTempHp,
@@ -327,6 +328,35 @@ describe('features', () => {
     const spent = setHeroicInspiration(mira(), false);
     expect(spent.character.heroicInspiration).toBe(false);
     expect(setHeroicInspiration(spent.character, true).character.heroicInspiration).toBe(true);
+  });
+});
+
+describe('changeAbilityScore (SRD 5.2.1 Ability Score Improvement; Hit Points: Constitution changes)', () => {
+  it('raises a score up to the cap and a Constitution modifier change moves HP as though from level 1', () => {
+    // Wizard 3: CON 13 (+1) → 15 (+2): +1 HP per level = +3.
+    const r = changeAbilityScore(mira(), 'con', 2);
+    expect(r.character.abilityScores.con).toBe(15);
+    expect(r.character.hp).toMatchObject({ max: 20, current: 15 });
+    expect(r.events.map((e) => e.message)).toEqual(['Constitution 13 → 15', 'HP maximum 17 → 20 (Constitution modifier +1 per level)']);
+    const capped = changeAbilityScore(mira({ abilityScores: { ...mira().abilityScores, int: 19 } }), 'int', 2);
+    expect(capped.character.abilityScores.int).toBe(20);
+    expect(capped.events.some((e) => e.type === 'warning' && e.message === 'Intelligence is capped at 20.')).toBe(true);
+  });
+
+  it('never lowers a score above the cap with an increase, and stays within 1–30', () => {
+    const strong = mira({ abilityScores: { ...mira().abilityScores, str: 21 } });
+    expect(changeAbilityScore(strong, 'str', 1).events[0]).toEqual({ type: 'warning', message: 'Strength is already 21 (the most it can reach here is 20).' });
+    expect(changeAbilityScore(strong, 'str', 12, 30).character.abilityScores.str).toBe(30);
+    expect(changeAbilityScore(strong, 'str', 5, 99).character.abilityScores.str).toBe(26);
+    expect(changeAbilityScore(mira(), 'str', -10).character.abilityScores.str).toBe(1);
+  });
+
+  it('lowers HP with Constitution but never below 1, and leaves a downed hero at 0', () => {
+    const r = changeAbilityScore(mira({ hp: { max: 17, current: 2, temp: 0 } }), 'con', -4);
+    // CON 13 (+1) → 9 (−1): −2 per level = −6.
+    expect(r.character.hp).toMatchObject({ max: 11, current: 1 });
+    const down = changeAbilityScore(mira({ hp: { max: 17, current: 0, temp: 0 } }), 'con', -4);
+    expect(down.character.hp.current).toBe(0);
   });
 });
 

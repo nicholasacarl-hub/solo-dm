@@ -19,6 +19,7 @@ vi.mock('@/storage', async (importOriginal) => ({
   acquireCampaignLock: vi.fn(),
 }));
 vi.mock('@/engine', () => import('./testing/engineMock'));
+vi.mock('@/images', () => import('./testing/imagesMock'));
 vi.mock('@/data', () => ({ useRulesIndex: () => null }));
 vi.mock('@/ui/sheet/CharacterSheet', () => ({ CharacterSheet: () => <p>Character sheet</p> }));
 vi.mock('@/ui/sheet/ShortRestDialog', () => ({ ShortRestDialog: () => null }));

@@ -112,12 +112,30 @@ function mergeObjectives(
 }
 
 function questSummary(prev: Quest | undefined, saved: Quest, added: string[], completed: string[]): string {
-  if (!prev) return saved.status === 'rumor' ? `Rumor: ${saved.title}` : `New quest: ${saved.title}`;
+  if (!prev) {
+    if (saved.status === 'rumor') return `Rumor: ${saved.title}`;
+    return saved.ambition ? `New ambition: ${saved.title}` : `New quest: ${saved.title}`;
+  }
   const parts: string[] = [];
+  if (Boolean(prev.ambition) !== Boolean(saved.ambition)) parts.push(saved.ambition ? 'now an ambition' : 'no longer an ambition');
   if (prev.status !== saved.status) parts.push(saved.status);
   if (completed.length) parts.push(`done: ${completed.join('; ')}`);
   if (added.length) parts.push(`new objective${added.length > 1 ? 's' : ''}: ${added.join('; ')}`);
-  return `Quest: ${saved.title}${parts.length ? ` — ${parts.join(' · ')}` : ' updated'}`;
+  return `${saved.ambition ? 'Ambition' : 'Quest'}: ${saved.title}${parts.length ? ` — ${parts.join(' · ')}` : ' updated'}`;
+}
+
+const AMBITION_CLOCKS =
+  'Track it with a progress clock (update_clocks, kind "progress", 6–12 segments by its scale) that advances only for accomplishments the hero earns in the fiction and goes back for setbacks — usually paired with a threat clock for the opposition it stirs up. A declaration alone is not progress.';
+const AMBITION_OBJECTIVES =
+  "Ambition objectives are only for concrete steps the hero has identified themselves — never a checklist of your own.";
+
+/** Reminders that keep an ambition earned rather than checked off. */
+function ambitionNotes(prev: Quest | undefined, saved: Quest, added: string[]): string[] {
+  if (!saved.ambition) return [];
+  const notes: string[] = [];
+  if (!prev?.ambition) notes.push(AMBITION_CLOCKS);
+  if (added.length) notes.push(AMBITION_OBJECTIVES);
+  return notes;
 }
 
 export async function updateQuestTool(input: ToolInput<'update_quest'>, ctx: ToolContext): Promise<ToolOutcome> {
@@ -130,14 +148,16 @@ export async function updateQuestTool(input: ToolInput<'update_quest'>, ctx: Too
     status: input.status ?? prev?.status ?? 'active',
     summary: input.summary ?? prev?.summary ?? '',
     objectives: merged.objectives,
-    ...defined({ giver: input.giver, reward: input.reward, secretNotes: input.secret_notes }),
+    ...defined({ giver: input.giver, reward: input.reward, secretNotes: input.secret_notes, ambition: input.ambition }),
   };
   const saved = await store.upsertQuest(upsert);
   const summary = questSummary(prev, saved, merged.added, merged.completed);
   await logTool(ctx, 'update_quest', 'quest', summary, { detail: saved.summary || undefined, refId: saved.id });
 
   const open = saved.objectives.filter((o) => !o.done).map((o) => o.text);
-  return ok(`${summary}. Status: ${saved.status}. Open objectives: ${open.length ? open.join('; ') : 'none'}.`);
+  const lines = [`${summary}. Status: ${saved.status}. Open objectives: ${open.length ? open.join('; ') : 'none'}.`];
+  lines.push(...ambitionNotes(prev, saved, merged.added));
+  return ok(lines.join('\n'));
 }
 
 // ---------------------------------------------------------------------------
@@ -298,7 +318,7 @@ function memoryDocs(ctx: ToolContext): MemoryDoc[] {
     const objectives = q.objectives.map((o) => `${o.done ? '[x]' : '[ ]'} ${o.text}`).join('; ');
     docs.push({
       title: q.title,
-      label: `Quest, ${q.status}`,
+      label: `${q.ambition ? 'Ambition' : 'Quest'}, ${q.status}`,
       text: [q.summary, q.giver && `Giver: ${q.giver}`, q.reward && `Reward: ${q.reward}`, objectives, q.secretNotes && `DM notes: ${q.secretNotes}`]
         .filter(Boolean)
         .join('\n'),

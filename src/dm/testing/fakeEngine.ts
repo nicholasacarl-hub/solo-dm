@@ -27,6 +27,18 @@ export type EngineResult = Engine.EngineResult;
 export type Likelihood = Engine.Likelihood;
 export type DiceTerm = Engine.DiceTerm;
 
+// Transformations and ability score changes run the real engine: pure, and deterministic given ids.
+export { changeAbilityScore } from '@/engine/character';
+export {
+  activeTransformations,
+  advanceTransformation,
+  beginTransformation,
+  endTransformation,
+  findTransformation,
+  transformationFeatures,
+  transformationGrants,
+} from '@/engine/transform';
+
 // ---------------------------------------------------------------------------
 // Dice (queued values; default = the die's midpoint rounded up)
 // ---------------------------------------------------------------------------

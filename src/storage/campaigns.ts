@@ -4,11 +4,12 @@
 import { useLiveQuery } from 'dexie-react-hooks';
 import type { Campaign, Character, UsageTotals } from '@/types';
 import { newId } from '@/lib/id';
-import { db } from './db';
+import { campaignAndImageTables, db } from './db';
 import { deleteCampaignData, readCampaignData, writeCampaignData } from './campaignData';
 import { assertCampaignNotOpenElsewhere } from './campaignLock';
 import { emitCampaignChange } from './events';
-import { remapCampaignData } from './remap';
+import { copyImages, deleteCampaignImages, imagesToCopy } from './images';
+import { IdMap, remapCampaignData } from './remap';
 import { markCampaignDeleted } from './syncState';
 import type { CampaignSummary, NewCampaignInput } from './types';
 
@@ -82,15 +83,25 @@ export async function createCampaign(input: NewCampaignInput): Promise<Campaign>
 export async function deleteCampaign(id: string): Promise<void> {
   // Never pull a campaign out from under the table of another tab.
   await assertCampaignNotOpenElsewhere(id);
-  await deleteCampaignData(id);
+  // Its illustrations go with it (they live only on this device, outside the save itself).
+  await db.transaction('rw', campaignAndImageTables(), async () => {
+    await deleteCampaignData(id);
+    await deleteCampaignImages(id);
+  });
   markCampaignDeleted(id);
   emitCampaignChange({ type: 'deleted', campaignId: id });
 }
 
+/** A deep copy with fresh ids, illustrations included (so deleting either one leaves the other whole). */
 export async function duplicateCampaign(id: string, newName?: string): Promise<Campaign> {
-  const data = await readCampaignData(id);
-  if (!data) throw new Error('That campaign no longer exists, so it could not be duplicated.');
-  const copy = remapCampaignData(data, { name: newName?.trim() || `${data.campaign.name} (copy)` });
-  await writeCampaignData(copy);
-  return copy.campaign;
+  return db.transaction('rw', campaignAndImageTables(), async () => {
+    const data = await readCampaignData(id);
+    if (!data) throw new Error('That campaign no longer exists, so it could not be duplicated.');
+    const imageIds = new IdMap();
+    const copy = remapCampaignData(data, { name: newName?.trim() || `${data.campaign.name} (copy)`, imageIds });
+    const pictures = await imagesToCopy(data.log, (oldId) => imageIds.get(oldId), id);
+    await writeCampaignData(copy);
+    await copyImages(pictures, copy.campaign.id);
+    return copy.campaign;
+  });
 }

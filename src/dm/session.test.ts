@@ -19,7 +19,7 @@ import { makeMessage, textBlock, thinkingBlock, toolUseBlock } from './scripted'
 import { canRegenerate } from './index';
 import { WRAP_UP_REQUEST } from './session';
 import { fakeDice } from './testing/fakeEngine';
-import { answerRolls, setupHarness } from './testing/harness';
+import { answerRolls, NO_IMAGE_KEY, setupHarness } from './testing/harness';
 
 beforeEach(() => fakeDice.reset());
 afterEach(() => resetDmDeps());
@@ -457,3 +457,78 @@ describe('unanswered turns', () => {
     expect(h.s().log.some((e) => e.kind === 'dm')).toBe(true);
   });
 });
+
+describe('setting changes reach the DM mid-session as one-line notes', () => {
+  const systemNotes = (h: ReturnType<typeof setupHarness>) =>
+    h.s().transcript.filter((m) => m.param.role === 'system').map((m) => JSON.stringify(m.param));
+
+  it('tells the DM once when illustrations become available, with the prompt and tools frozen', async () => {
+    let keyed = false;
+    const h = setupHarness({
+      images: { available: () => (keyed ? { ok: true } : { ok: false, reason: NO_IMAGE_KEY }) },
+      steps: [end('The docks.'), end('Fog rolls in.'), end('Gulls cry.')],
+    });
+    await h.controller.beginOrResume();
+    expect(h.s().activeSession?.systemPrompt).toContain('## Illustrations: Not set up');
+    // In Settings → Illustrations the player adds an OpenAI key and picks key moments.
+    keyed = true;
+    h.settings.images = { ...h.settings.images, openaiApiKey: 'sk-openai-test', frequency: 'moments' };
+    await h.controller.sendPlayerMessage('I look around.');
+    await h.controller.sendPlayerMessage('I wait for the tide.');
+
+    expectAppendOnly(h.client.requests);
+    expect(JSON.stringify(h.client.requests[0].tools)).toMatch(/"name":"transform_character".*"name":"show_image"/);
+    const notes = systemNotes(h);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('Setting update — Illustrations: Key moments.');
+    expect(notes[0]).toContain('at most about once per scene');
+    expect(h.s().activeSession?.systemPrompt).toContain('## Illustrations: Not set up');
+  });
+
+  it('tells the DM when the transformations rule changes (the full guidance only after Off)', async () => {
+    const h = setupHarness({ campaignSettings: { transformations: 'off' }, steps: [end('Hello.'), end('Onward.'), end('Again.')] });
+    await h.controller.beginOrResume();
+    const setRule = (transformations: 'off' | 'offered' | 'consequences') =>
+      h.s().updateCampaign((c) => ({ ...c, settings: { ...c.settings, transformations } }));
+
+    await setRule('consequences');
+    await h.controller.sendPlayerMessage('I go on.');
+    const [first] = systemNotes(h);
+    expect(first).toContain('Setting update — Transformations: Consequences.');
+    expect(first).toContain('Telegraph the danger clearly');
+    expect(first).toContain('No quota');
+
+    await setRule('offered');
+    await h.controller.sendPlayerMessage('I go on again.');
+    const second = systemNotes(h)[1];
+    expect(second).toContain('Setting update — Transformations: Offered.');
+    expect(second).not.toContain('No quota');
+    expectAppendOnly(h.client.requests);
+  });
+
+  it('re-sends a note from a set-aside turn only once, as it stands now', async () => {
+    let keyed = false;
+    const h = setupHarness({
+      images: { available: () => (keyed ? { ok: true } : { ok: false, reason: NO_IMAGE_KEY }) },
+      steps: [end('The docks.'), makeMessage([], 'refusal', { stopDetails: refusal }), end('A better idea.')],
+    });
+    await h.controller.beginOrResume();
+    keyed = true;
+    await h.controller.sendPlayerMessage('Something refused.');
+    expect(systemNotes(h)).toHaveLength(1);
+    await h.controller.sendPlayerMessage('Something else.');
+    const notes = systemNotes(h);
+    expect(notes).toHaveLength(1);
+    expect(notes[0].match(/Setting update — Illustrations: On request\./g)).toHaveLength(1);
+    expect(h.s().pendingDmNotices).toEqual([]);
+  });
+
+  it('sends nothing for a session whose prompt predates these sections', async () => {
+    const h = setupHarness({ withSession: true, steps: [end('Fine.')], images: { available: () => ({ ok: true }) } });
+    h.settings.images = { ...h.settings.images, frequency: 'moments' };
+    await h.s().updateCampaign((c) => ({ ...c, settings: { ...c.settings, transformations: 'consequences' } }));
+    await h.controller.sendPlayerMessage('Hello.');
+    expect(h.s().transcript.map((m) => m.param.role)).toEqual(['user', 'assistant']);
+  });
+});
+

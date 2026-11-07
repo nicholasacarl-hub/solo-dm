@@ -63,7 +63,8 @@ export function DangerZone() {
         <div>
           <p className="text-sm font-medium">Delete all local data</p>
           <p className="text-xs text-muted">
-            Every campaign, import, homebrew entry and setting in this browser. Export anything you want to keep first.
+            Every campaign, picture, import, homebrew entry and setting in this browser. Export anything you want to keep
+            first.
           </p>
         </div>
         <Button variant="danger" icon={<Trash2 className="size-4" aria-hidden />} onClick={() => setDialog('delete')}>
@@ -150,8 +151,9 @@ function DeleteEverythingDialog({ open, onClose }: { open: boolean; onClose: () 
     >
       <div className="flex flex-col gap-4 text-sm">
         <p>
-          This permanently removes all campaigns, characters, imported books, homebrew, your API key and settings from
-          this browser. Saves already exported or synced to GitHub are not affected.
+          This permanently removes all campaigns, characters, pictures, imported books, homebrew, your API keys and
+          settings from this browser. Saves already exported or synced to GitHub are not affected (they never held the
+          pictures).
         </p>
         <Field label={`Type ${CONFIRM_WORD} to confirm`} htmlFor={`${id}-confirm`}>
           <Input

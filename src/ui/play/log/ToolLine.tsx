@@ -6,10 +6,12 @@ import {
   BookOpen,
   ChevronDown,
   Coins,
+  Dna,
   EyeOff,
   FlaskConical,
   HeartCrack,
   HeartPulse,
+  ImageIcon,
   Info,
   MapPin,
   Moon,
@@ -47,8 +49,8 @@ const ICONS: Record<ToolActivityIcon, { Icon: LucideIcon; tone: string }> = {
   homebrew: { Icon: FlaskConical, tone: 'text-arcane' },
   oracle: { Icon: Orbit, tone: 'text-arcane' },
   info: { Icon: Info, tone: 'text-muted' },
-  transform: { Icon: Sparkles, tone: 'text-arcane' },
-  image: { Icon: Info, tone: 'text-muted' },
+  transform: { Icon: Dna, tone: 'text-arcane' },
+  image: { Icon: ImageIcon, tone: 'text-info' },
 };
 
 /** A compact "something changed" line: icon, one-line summary, optional expandable detail. */
@@ -74,6 +76,8 @@ export function ToolLine({ entry }: { entry: ToolLogEntry }) {
       </div>
     );
   }
+
+  if (entry.icon === 'transform') return <TransformationLine entry={entry} />;
 
   return (
     <div className="flex items-start gap-2.5 text-sm">
@@ -102,6 +106,53 @@ export function ToolLine({ entry }: { entry: ToolLogEntry }) {
         )}
       </div>
     </div>
+  );
+}
+
+/** "Transformation: Moonblood begins" under the "Transformation" heading reads "Moonblood begins". */
+function withoutEyebrow(summary: string): string {
+  return summary.replace(/^\s*transformation\s*:\s*/i, '') || summary;
+}
+
+/**
+ * A transformation taking hold, advancing or ending: a turning point for the hero, so it gets an
+ * arcane card with what changed shown, not a one-line note that is easy to scroll past.
+ */
+function TransformationLine({ entry }: { entry: ToolLogEntry }) {
+  const [open, setOpen] = useState(true);
+  const detailId = useId();
+  const titleId = useId();
+  return (
+    <section aria-labelledby={titleId} className="rounded-2xl border border-arcane/40 bg-arcane-soft/60 px-4 py-3">
+      <div className="flex items-start gap-3">
+        <span className="grid size-9 shrink-0 place-items-center rounded-full border border-arcane/40 bg-surface text-arcane">
+          <Dna className="size-5" aria-hidden />
+        </span>
+        <div className="min-w-0 flex-1">
+          <h3 id={titleId} className="font-display text-[0.6875rem] font-semibold tracking-[0.16em] text-arcane uppercase">
+            Transformation
+          </h3>
+          <p className="mt-0.5 text-[0.9375rem] leading-snug font-medium text-text">{withoutEyebrow(entry.summary)}</p>
+          {entry.detail && (
+            <button
+              type="button"
+              aria-expanded={open}
+              aria-controls={detailId}
+              onClick={() => setOpen((v) => !v)}
+              className="mt-1 -ml-1 inline-flex items-center gap-0.5 rounded-md px-1 text-xs font-medium text-arcane hover:bg-surface/60"
+            >
+              {open ? 'Hide what changed' : 'What changed'}
+              <ChevronDown className={cn('size-3.5 transition-transform', open && 'rotate-180')} aria-hidden />
+            </button>
+          )}
+        </div>
+      </div>
+      {entry.detail && open && (
+        <div id={detailId} className="mt-2.5 rounded-xl border border-arcane/25 bg-surface px-3 py-2">
+          <Markdown>{entry.detail}</Markdown>
+        </div>
+      )}
+    </section>
   );
 }
 

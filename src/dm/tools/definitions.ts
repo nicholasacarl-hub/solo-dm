@@ -10,13 +10,16 @@
 import type { BetaTool } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { z } from 'zod';
 import type { Likelihood } from '@/engine';
+import type { ImageAspect } from '@/images';
 import {
   ABILITIES,
   CONTENT_KINDS,
   SKILLS,
   type AdvantageState,
   type CombatSide,
+  type CreatureSize,
   type FeatureSource,
+  type ImageSubject,
   type ItemCategory,
   type JournalKind,
   type PlayerRollType,
@@ -75,6 +78,9 @@ export const JOURNAL_KINDS = [
   'note',
 ] as const satisfies readonly JournalKind[];
 const QUEST_STATUSES = ['rumor', 'active', 'completed', 'failed', 'abandoned'] as const satisfies readonly QuestStatus[];
+const SIZES = ['Tiny', 'Small', 'Medium', 'Large', 'Huge', 'Gargantuan'] as const satisfies readonly CreatureSize[];
+const IMAGE_SUBJECTS = ['scene', 'character', 'npc', 'creature', 'item', 'battle'] as const satisfies readonly ImageSubject[];
+const IMAGE_ASPECTS = ['landscape', 'portrait', 'square'] as const satisfies readonly ImageAspect[];
 export const LIKELIHOODS = [
   'nearly-impossible',
   'very-unlikely',
@@ -110,6 +116,46 @@ const combatantSpec = z.strictObject({
   surprised: z.boolean().optional().describe('Surprised creatures roll initiative with Disadvantage.'),
   notes: str(400).optional(),
 });
+
+const damageTypes = z.array(str(30)).max(13);
+const otherSpeed = int(5, 120).optional();
+
+/** The mechanical side of a transformation or one of its stages (transform_character). */
+const transformationChanges = {
+  features_add: z
+    .array(
+      z.strictObject({
+        name: str(80),
+        description: str(2000).describe('Rules text: what it does, and its limits or price.'),
+        uses_max: int(1, 20).optional(),
+        recharge: z.enum(RECHARGES).optional(),
+      }),
+    )
+    .max(6)
+    .optional()
+    .describe('Powers and drawbacks, added to the sheet as transformation features. Reusing the name of one of its own features rewrites that feature.'),
+  defenses_add: z
+    .strictObject({
+      resistances: damageTypes.optional().describe('Damage types, e.g. ["Necrotic"].'),
+      immunities: damageTypes.optional(),
+      vulnerabilities: damageTypes.optional(),
+      condition_immunities: z.array(str(30)).max(15).optional().describe('Conditions, e.g. ["Poisoned"].'),
+    })
+    .optional()
+    .describe('Defenses it grants. Ones the hero already has are kept as they are.'),
+  darkvision: int(10, 300).optional().describe('Darkvision range in feet (a longer one the hero already has is kept).'),
+  other_speeds: z
+    .strictObject({ fly: otherSpeed, swim: otherSpeed, climb: otherSpeed, burrow: otherSpeed })
+    .optional()
+    .describe('Speeds in feet (a faster one the hero already has is kept).'),
+  speed_change: int(-30, 30).optional().describe('Change to walking speed in feet, e.g. 10 or -10.'),
+  size: z.enum(SIZES).optional(),
+  ability_changes: z
+    .array(z.strictObject({ ability: abilityEnum, change: int(-6, 6) }))
+    .max(6)
+    .optional()
+    .describe('Ability score changes (scores stay within 1–30; a Constitution change also changes the HP maximum).'),
+};
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -291,6 +337,25 @@ export const TOOL_SCHEMAS = {
       .describe('Class features gained at this level (look them up with get_entry if unsure).'),
   }),
 
+  transform_character: z.strictObject({
+    action: z.enum(['begin', 'advance', 'end']),
+    name: str(80).describe('The transformation, e.g. "Vampirism" or "Lycanthropy" (advance and end match it by name).'),
+    summary: str(400).optional().describe('begin (required), advance (optional): one or two sentences — what the hero is becoming, and what it costs.'),
+    origin: z
+      .enum(['accepted', 'imposed'])
+      .optional()
+      .describe('begin (required): "accepted" = the player chose it in the fiction; "imposed" = the consequence of a knowing choice (Consequences campaigns only).'),
+    player_chose_it: z
+      .boolean()
+      .optional()
+      .describe('true only when the player has explicitly chosen this change in the fiction. Required for origin "accepted", and to advance a stage in Offered campaigns.'),
+    stage: str(80).optional().describe('begin: the first stage, if it unfolds in stages; advance (required): the new stage, e.g. "Stage 2: the hunger".'),
+    how_it_ends: str(300).optional().describe('How it could end: a cure, a ritual, a price. Required for imposed transformations.'),
+    ...transformationChanges,
+    features_remove: z.array(str(80)).max(6).optional().describe("advance: this transformation's own features the new stage takes away."),
+    reason: str(200).describe('What happened in the fiction, shown in the log: "Bitten by Count Varo", "Drank from the Moonwell".'),
+  }),
+
   start_combat: z.strictObject({
     encounter_name: str(80).optional(),
     combatants: z.array(combatantSpec).min(1).max(12).describe('Everyone except the hero, who is added automatically.'),
@@ -377,6 +442,10 @@ export const TOOL_SCHEMAS = {
       .optional()
       .describe('Objectives to add or update, matched by text.'),
     secret_notes: str(2000).optional().describe('DM-only notes (hidden from the player).'),
+    ambition: z
+      .boolean()
+      .optional()
+      .describe('true for an ambition: a goal the player set for the hero themselves (found a guild, take the throne). Not a checklist — track its progress on a progress clock.'),
   }),
 
   update_clocks: z.strictObject({
@@ -413,6 +482,21 @@ export const TOOL_SCHEMAS = {
     tension_change: int(-1, 1).optional().describe('+1 when the last scene slipped out of the hero\'s control, −1 when they took charge.'),
   }),
 
+  show_image: z.strictObject({
+    subject: z
+      .enum(IMAGE_SUBJECTS)
+      .describe('scene = a place; character = the hero; npc = another person; creature; item; battle = a fight (painted atmospherically, never as a tactical map).'),
+    title: str(80).describe('A short caption shown with the picture, e.g. "The drowned bell tower".'),
+    prompt: str(1500).describe(
+      "A vivid, specific visual description: who and what is in frame, the setting, light, mood and composition. No text, captions, labels, maps or interface elements. The app adds the campaign's art style, and the hero's look from the sheet when they're in frame.",
+    ),
+    aspect: z.enum(IMAGE_ASPECTS).optional().describe('landscape (scenes, battles), portrait (people, creatures) or square (items). Default: by subject.'),
+    hero_in_frame: z
+      .boolean()
+      .optional()
+      .describe('Whether the hero is in the picture. Default: yes for character and battle, otherwise when the title or prompt names them.'),
+  }),
+
   consult_oracle: z.strictObject({
     question: str(200).describe('A yes/no question about the world.'),
     likelihood: z.enum(LIKELIHOODS),
@@ -433,11 +517,13 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   request_player_roll:
     "Ask the player to roll for their hero: ability checks, skill checks, saving throws, attack rolls, damage, death saving throws (and initiative outside start_combat). The app applies the sheet's modifiers and the hero's own conditions, armor and traits (e.g. Disadvantage while Poisoned, an automatic failure for a Paralyzed hero's Dexterity save, Halfling Luck, a Champion's wider critical range — the result says what it applied), rolls per the player's roll mode — instantly, after they tap Roll, or from their physical dice — and returns the total and, with `dc`, success or failure. Call it only when the outcome is uncertain and failure matters; decide the DC and the stakes first and put the stakes in `reason`. For attacks set `dc` to the target's AC (a natural 20 is a Critical Hit, a natural 1 always misses); `attack_name` can be a sheet attack, a spell the hero knows, or another weapon with `ability`. Don't use it for NPC or monster rolls (roll_dice), and don't roll initiative when a fight starts — start_combat does that.",
   update_character:
-    "Change the hero's character sheet: HP (damage, healing, temporary HP), conditions, exhaustion, spell slots, concentration, limited-use features, inventory, money, XP, Heroic Inspiration, spells, ability scores (Ability Score Improvements, feats), skill / saving throw / tool proficiencies, languages, AC and speed. Batch several sections in one call. Amounts must come from rolls (roll_dice / request_player_roll results) or fixed rules values — never invented. Returns what changed, warnings (no slot left, not enough gold, item not found) and the hero's new status. Don't use it for NPCs or monsters (update_combat), rests (take_rest) or leveling up (level_up).",
+    "Change the hero's character sheet: HP (damage, healing, temporary HP), conditions, exhaustion, spell slots, concentration, limited-use features, inventory, money, XP, Heroic Inspiration, spells, ability scores (Ability Score Improvements, feats), skill / saving throw / tool proficiencies, languages, AC and speed. Batch several sections in one call. Amounts must come from rolls (roll_dice / request_player_roll results) or fixed rules values — never invented. Returns what changed, warnings (no slot left, not enough gold, item not found) and the hero's new status. Don't use it for NPCs or monsters (update_combat), rests (take_rest), leveling up (level_up) or transformations (transform_character).",
   take_rest:
     "The hero takes a Short Rest (1 hour: may spend Hit Dice to heal; short-rest features recharge) or a Long Rest (8 hours: all HP, spent Hit Dice and spell slots return; one Exhaustion level is removed). For a short rest the player chooses which Hit Dice to spend unless their dice roll automatically. Use only when the hero actually rests and the time passes; never during combat. Narrate any interruption yourself — don't call this if the rest is interrupted early.",
   level_up:
     "Advance the hero one level in a class (for multiclassing, a new class with its hit_die). Applies HP (fixed average by default), Hit Dice, proficiency bonus, spell slots and the class features you list, and returns reminders of choices the player must make (subclass, feats, new spells). Use at story milestones in milestone campaigns, or once the hero has enough XP in XP campaigns. One level per call; then tell the player what improved and ask about their choices.",
+  transform_character:
+    "Begin, advance or end a transformation — a lasting, story-driven change to who the hero is (vampirism, lycanthropy, a fey mark, a celestial blessing). One call applies the whole change atomically: transformation features, damage resistances, immunities and vulnerabilities, condition immunities, Darkvision and other speeds, walking speed, size and ability scores, recorded on the sheet with its stage and how it could end. `begin` with origin \"accepted\" only after the player has explicitly chosen it in the fiction (player_chose_it: true); origin \"imposed\" only when the campaign's transformations rule is Consequences, after clear warnings, and always with how_it_ends. Give it real costs as well as powers, balanced like homebrew against SRD comparables. `advance` moves it to a new stage and adds traits (features_remove takes its own away); in Offered campaigns only when the player chose it. `end` (a cure, a reversal, a bargain fulfilled) removes everything it granted. Refused when the transformations rule doesn't allow the change. Not for temporary effects (spells, conditions: update_character), ordinary boons or magic items (create_homebrew, update_character), or leveling (level_up).",
   start_combat:
     'Start an encounter when a fight actually begins. Adds the hero automatically, adds each group of combatants ("Goblin" with count 3 becomes Goblin 1–3), rolls NPC initiative, has the player roll the hero\'s initiative, and returns the turn order. Use real values (AC, HP, initiative bonus) from the stat block — get_entry it if unsure. Don\'t use it for a single blow that settles a scene without a fight. Only one combat can be active.',
   update_combat:
@@ -451,19 +537,21 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   get_character_sheet:
     "Get the hero's full current character sheet: abilities, saves, skills, attacks, spells and slots, features and their uses, inventory, money, personality and backstory. The per-turn status line is usually enough; use this for detail — e.g. to check an item or spell the player says they have.",
   create_homebrew:
-    "Save new or modified rules content you are introducing — a spell, magic item, monster, boon, feat, condition or rule change — before it affects play, so the player can read it in their compendium and veto it. Balance it against named SRD comparables of similar level, rarity or CR and explain why in balance_notes. Only within the campaign's homebrew-freedom setting (refused when homebrew is off). Don't use it for ordinary story facts (update_journal) or for official rules, which are already in the compendium.",
+    "Save new or modified rules content you are introducing — a spell, magic item, monster, boon, feat, condition or rule change — before it affects play, so the player can read it in their compendium and veto it. Improvise freely whenever the story calls for something made for this moment (a unique reward, a monster variant, a fey bargain, a strange boon). Balance it against named SRD comparables of similar level, rarity or CR and explain why in balance_notes. Only within the campaign's homebrew-freedom setting (refused when homebrew is off). Don't use it for ordinary story facts (update_journal) or for official rules, which are already in the compendium.",
   update_homebrew:
     "Revise or retire homebrew this campaign created — after a player veto, a balance problem, or a story change. Explain why in `reason` (the player sees it). Retire with status 'retired' instead of deleting.",
   update_journal:
     "Record or update the campaign's memory: NPCs, locations, factions, items, lore, events, rulings and notes. Call it when a new named NPC, place, faction or notable item appears, when something important about one changes (an NPC dies, a place is cleared), and whenever you make a rules ruling (kind 'ruling') so you stay consistent. Entries are matched by kind + name. Mark anything the hero hasn't learned with secret: true. Don't use it for quests (update_quest) or threats on a timer (update_clocks).",
   update_quest:
-    "Create or update a quest the hero knows about — a rumor, an active quest and its objectives, completion or failure. Matched by title. Add objectives as the hero learns them and mark them done; set status 'completed', 'failed' or 'abandoned' when it ends. Keep your private plans in secret_notes.",
+    "Create or update a quest the hero knows about — a rumor, an active quest and its objectives, completion or failure. Matched by title. Add objectives as the hero learns them and mark them done; set status 'completed', 'failed' or 'abandoned' when it ends. Keep your private plans in secret_notes. For an ambition — a big goal the player set for the hero (found a guild, take the throne) — set ambition: true, add objectives only for concrete steps the hero has identified themselves (never a checklist of your own), and track its progress on a progress clock.",
   update_clocks:
-    'Create or advance progress clocks: fronts and threats that advance off-screen, countdowns, and long projects. A new clock needs `segments` (4, 6 or 8 is typical) and a `consequence`. Advance threats when time passes, the hero fails or ignores them, or a complication fits. When a clock fills, its consequence happens: narrate it, then mark the clock resolved. Secret clocks are hidden from the player.',
+    "Create or advance progress clocks: fronts and threats that advance off-screen, countdowns, long projects, and an ambition's progress (6–12 segments by its scale; advance it only for accomplishments the hero earned, and back for setbacks). A new clock needs `segments` (4, 6 or 8 is typical) and a `consequence`. Advance threats when time passes, the hero fails or ignores them, or a complication fits. When a clock fills, its consequence happens: narrate it, then mark the clock resolved. Secret clocks are hidden from the player.",
   search_memory:
     "Search the campaign's memory: journal entries, quests, earlier session recaps and your private notes. Use before reintroducing an NPC, place or thread from an earlier session, or when the player mentions something you don't see in context. Not for rules (lookup_rules).",
   set_scene:
     "Update the scene header the player sees: location, region, time of day, in-world date, weather, mood (omit fields that didn't change). With new_scene: true the app runs a scene check against the tension dial and may return 'altered' or 'interrupted' plus a twist to build the scene around. tension_change is applied first: +1 when the last scene slipped out of the hero's control, −1 when they took charge. Call it when the hero arrives somewhere new, time skips, or conditions change.",
+  show_image:
+    "Have an illustration painted for the story log: you write the picture, the player's OpenAI image model paints it. Returns at once and the picture appears in the log when it's ready — keep narrating, and don't describe the picture or wait for it. Use it only as the illustrations rule allows (the campaign notes, or a later app note): when the player asks to see something, and — with key moments on — at most about once per scene for a key moment (arriving somewhere new, a big reveal, a fight about to start). Never for routine beats. If illustrations aren't available the result says why; don't mention pictures unless the player asked for one.",
   consult_oracle:
     "Ask the yes/no oracle when you genuinely don't know how the world would answer and neither the fiction nor the rules decide it (Is anyone home? Did the bridge hold?). Set the likelihood honestly before asking. The answer is yes or no, sometimes with 'and' (stronger) or 'but' (a complication), and doubles add a random twist. Honor it. Don't use it for choices you should make as DM, questions a check should resolve, or to dodge hard calls.",
 };
@@ -475,6 +563,7 @@ export const TOOL_ORDER: readonly ToolName[] = [
   'update_character',
   'take_rest',
   'level_up',
+  'transform_character',
   'start_combat',
   'update_combat',
   'end_combat',
@@ -488,6 +577,7 @@ export const TOOL_ORDER: readonly ToolName[] = [
   'update_clocks',
   'search_memory',
   'set_scene',
+  'show_image',
   'consult_oracle',
 ];
 
@@ -546,6 +636,8 @@ export function toolActivity(name: string, input?: unknown): string {
       return 'Resting…';
     case 'level_up':
       return 'Leveling up…';
+    case 'transform_character':
+      return 'The change takes hold…';
     case 'start_combat':
       return 'Rolling initiative…';
     case 'update_combat':
@@ -572,6 +664,8 @@ export function toolActivity(name: string, input?: unknown): string {
       return 'Remembering…';
     case 'set_scene':
       return 'Setting the scene…';
+    case 'show_image':
+      return 'Sketching the picture…';
     case 'consult_oracle':
       return 'Consulting the oracle…';
     default:

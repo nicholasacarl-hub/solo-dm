@@ -109,20 +109,52 @@ tool_result so Claude can correct itself.
 | `update_character` | Batched sheet changes: HP (damage/healing/temp), conditions, exhaustion, slots, feature uses, inventory, currency, XP, inspiration, features, spells, concentration, AC/speed. Returns a summary and warnings. |
 | `take_rest` | Short rest (player chooses hit dice in a dialog) or long rest. |
 | `level_up` | Apply a level (HP, hit dice, slots, proficiency, new features) and return reminders for choices. |
+| `transform_character` | Begin, advance or end a **transformation** (vampirism, lycanthropy, a fey mark...): features, defenses, senses, speeds, size and ability changes applied atomically and recorded with what they granted, so ending one undoes exactly that. Enforces the campaign's transformations rule (see below). |
 | `start_combat` / `update_combat` / `end_combat` | Initiative tracker: add combatants (auto-numbered), roll NPC initiative, request the player's, advance turns, damage/heal/conditions on NPCs, end with a summary. |
 | `lookup_rules` | Search SRD 5.2.1 + enabled imports + homebrew. |
 | `get_entry` | Full text of one spell / monster / item / feature by name. |
 | `get_character_sheet` | Full current sheet. |
 | `create_homebrew` / `update_homebrew` | Create or modify homebrew (refused when the campaign disables homebrew). |
 | `update_journal` | Upsert NPCs, locations, factions, lore, secrets (DM-only when `secret`). |
-| `update_quest` | Upsert quests and objectives. |
+| `update_quest` | Upsert quests and objectives. `ambition: true` marks a goal the player set for the hero (found a guild, take the throne): no DM-invented checklist, progress on a progress clock. |
 | `search_memory` | Search journal, quests and earlier session recaps. |
 | `set_scene` | Location, time of day, weather, in-world date, mood (shown in the scene header). With `new_scene: true` the app runs a **scene check** against the tension dial (d10 ≤ tension → altered if odd, interrupted if even) and returns a twist to build on; `tension_change` nudges the dial (+1 when things slip out of the hero's control, −1 when they take charge). |
 | `update_clocks` | Upsert progress clocks: threats/fronts that advance off-screen, countdowns, long projects. Filling a clock triggers its consequence. Secret clocks are hidden from the player. |
+| `show_image` | Ask for an illustration (scene, hero, NPC, creature, item, battle). Returns at once; the picture is painted in the background with the player's OpenAI key and appears in the log. Allowed only as the illustrations setting says. |
 | `consult_oracle` | Yes/no oracle with likelihood for questions the DM genuinely can't answer from the fiction. The DM sets the likelihood before rolling. |
 
 Rulings: when the DM makes a call the rules don't settle, it records it with `update_journal`
 (kind `ruling`) so later calls stay consistent; rulings appear in the Journal as house rules.
+
+### Story systems: homebrew, transformations, ambitions, illustrations
+
+- **Homebrew on the fly.** The prompt encourages the DM to improvise rewards, monster variants,
+  bargains, boons and curses whenever the story calls for them, within the campaign's homebrew
+  freedom, balanced against named SRD comparables and saved with `create_homebrew`.
+- **Transformations** are lasting, story-driven changes to who the hero is. The campaign's
+  transformations rule (Table rules) decides what's allowed: *Off* (the hero stays as built; an
+  active one can still be ended), *Offered* (the default: temptations and bargains, but nothing
+  begins or advances unless the player chooses it, `origin: "accepted"` with `player_chose_it`), or
+  *Consequences* (the player's knowing choices can also impose one, `origin: "imposed"`, always
+  telegraphed and always with a way back in `how_it_ends`). There is no quota: never shoehorned in,
+  never withheld when the player pursues one. Each brings costs as well as powers and may unfold in
+  stages. The engine (src/engine/transform.ts) records what each one granted, so ending it removes
+  only that, even when two transformations grant the same defense.
+- **Ambitions and an indifferent world.** The player may take the story anywhere. A goal the player
+  commits to (found a thieves' guild, take the throne) becomes an ambition: no checklist the DM
+  invented, progress only for what the hero earns, tracked on a 6–12 segment progress clock that can
+  go back, usually paired with a threat clock. Mistakes can close the door. NPCs and factions pursue
+  their own interests.
+- **Illustrations** (src/images) are optional and use the player's own OpenAI key. Settings →
+  Illustrations picks when the DM may paint (*Off*, *When I ask*, *Key moments*: at most about one
+  per scene), the model and the quality. The DM writes the description; the app adds the campaign's
+  art style, the hero's look from the sheet when they're in frame, and guardrails (no text, maps or
+  UI). A pending card appears in the log at once and turns into the picture; at most two paint at a
+  time. Pictures live in IndexedDB on this device only: exports and GitHub saves keep the log entry
+  but never the picture or prompt. The sheet's Paint portrait and the Gallery tab use the same store.
+- **Settings that change mid-session.** The frozen system prompt renders the current transformations
+  rule and illustrations mode. When either changes, the next turn's system note carries a one-line
+  "Setting update — …" with the new guidance (src/dm/modes.ts); nothing earlier is edited.
 
 ### Grounding each turn
 
@@ -190,7 +222,8 @@ Screens (hash routing, so GitHub Pages refreshes work):
 - `#/library` **Library** — Browse SRD (by kind, search), My imports (paste/upload, enable/disable,
   delete), Homebrew (all campaigns; edit/retire), and the SRD attribution.
 - `#/settings` **Settings** — API key (test button, remember toggle, link to console.anthropic.com),
-  model, effort, thinking display, cache TTL, session soft limit, theme, narration font & size, dice
+  model, effort, thinking display, cache TTL, session soft limit, illustrations (OpenAI key, when the
+  DM may paint, model, quality, pictures stored on this device), theme, narration font & size, dice
   animations, demo mode, GitHub cloud saves (token, owner/repo, test, sync now), danger zone.
 
 Visual system (see src/index.css): dark "candlelit table" (ink-blue night, ember accent) and light
@@ -211,4 +244,4 @@ chrome (emoji are fine for campaign covers and portraits).
 - One tab at a time per campaign: the play screen holds a Web Lock; a second tab offers "Use this tab
   instead".
 - Production builds ship a Content Security Policy: the page talks only to itself,
-  api.anthropic.com and api.github.com.
+  api.anthropic.com, api.github.com and api.openai.com (illustrations, only with the player's key).

@@ -6,7 +6,7 @@
  * leaves the browser except through an explicit export the player chooses.
  *
  * Each export below is typed with its contract signature; the implementations live next to this
- * file (campaigns, records, library, backup, githubSync).
+ * file (campaigns, records, library, backup, githubSync, images).
  */
 import type {
   Campaign,
@@ -21,6 +21,7 @@ import type {
   LogEntry,
   Quest,
   Session,
+  StoredImage,
   TranscriptMessage,
 } from '@/types';
 import * as backup from './backup';
@@ -29,6 +30,8 @@ import * as lock from './campaignLock';
 import type { CampaignLock } from './campaignLock';
 import * as database from './db';
 import * as github from './githubSync';
+import * as images from './images';
+import type { ImageLogPatch, ImageStats, ImageUrlState, StoredImageMeta } from './images';
 import * as library from './library';
 import * as records from './records';
 import type {
@@ -61,9 +64,9 @@ export const useCampaignList: () => CampaignSummary[] | undefined = campaigns.us
 export const getCampaign: (id: string) => Promise<Campaign | undefined> = campaigns.getCampaign;
 /** New save slot: status 'setup', no character or session yet, tension 5, zero usage. */
 export const createCampaign: (input: NewCampaignInput) => Promise<Campaign> = campaigns.createCampaign;
-/** Deletes the campaign and everything belonging to it (character, sessions, transcript, log, journal...). */
+/** Deletes the campaign and everything belonging to it (character, sessions, transcript, log, journal, images...). */
 export const deleteCampaign: (id: string) => Promise<void> = campaigns.deleteCampaign;
-/** Deep copy with new ids ("<name> (copy)"), e.g. to branch a campaign before a risky choice. */
+/** Deep copy with new ids ("<name> (copy)"), illustrations included, e.g. to branch a campaign before a risky choice. */
 export const duplicateCampaign: (id: string, newName?: string) => Promise<Campaign> = campaigns.duplicateCampaign;
 /**
  * Ask the browser not to evict saved games under storage pressure (call after the first campaign is
@@ -197,30 +200,35 @@ export const isCampaignOpenElsewhere: (campaignId: string) => Promise<boolean> =
 export const OPEN_ELSEWHERE_ERROR: string = lock.OPEN_ELSEWHERE_ERROR;
 
 // ---------------------------------------------------------------------------
-// Illustrations (CONTRACT — implemented by the images engineer). Stored in their own IndexedDB table;
-// never in exports or GitHub saves. Deleting a campaign deletes its images.
+// Illustrations. Stored in their own IndexedDB tables, only on this device: never in exports or
+// GitHub saves (the story log's image entries travel without their pictures). Deleting a campaign
+// deletes its images; duplicating one copies them; a campaign replaced by an import or a pull keeps them.
 // ---------------------------------------------------------------------------
 
-export type StoredImageMeta = Omit<import('@/types').StoredImage, 'blob'>;
+export type { ImageLogPatch, ImageStats, ImageUrlState, StoredImageMeta } from './images';
 
-export const saveImage: (image: import('@/types').StoredImage) => Promise<void> = async () => {
-  throw new Error('storage: saveImage not implemented');
-};
-export const getImage: (id: string) => Promise<import('@/types').StoredImage | undefined> = async () => {
-  throw new Error('storage: getImage not implemented');
-};
+/** Save a picture. Rejects when its campaign no longer exists (with IMAGE_CAMPAIGN_MISSING). */
+export const saveImage: (image: StoredImage) => Promise<void> = images.saveImage;
+export const getImage: (id: string) => Promise<StoredImage | undefined> = images.getImage;
 /** Newest first. */
-export const listImages: (campaignId: string) => Promise<StoredImageMeta[]> = async () => {
-  throw new Error('storage: listImages not implemented');
-};
-export const deleteImage: (id: string) => Promise<void> = async () => {
-  throw new Error('storage: deleteImage not implemented');
-};
+export const listImages: (campaignId: string) => Promise<StoredImageMeta[]> = images.listImages;
+export const deleteImage: (id: string) => Promise<void> = images.deleteImage;
 /** React hook: live list of a campaign's images (metadata only), newest first. */
-export const useImageList: (campaignId: string | null) => StoredImageMeta[] | undefined = () => {
-  throw new Error('storage: useImageList not implemented');
-};
-/** React hook: an object URL for a stored image (revoked on unmount), or null while loading/missing. */
-export const useImageUrl: (imageId: string | null) => string | null = () => {
-  throw new Error('storage: useImageUrl not implemented');
-};
+export const useImageList: (campaignId: string | null) => StoredImageMeta[] | undefined = images.useImageList;
+/**
+ * React hook: an object URL for a stored image (revoked on unmount), or null while loading/missing.
+ * Live: a picture saved after mounting appears as soon as it lands.
+ */
+export const useImageUrl: (imageId: string | null) => string | null = images.useImageUrl;
+/** useImageUrl that tells loading from missing ('missing' = not on this device, e.g. a save made elsewhere). */
+export const useImageUrlState: (imageId: string | null) => ImageUrlState = images.useImageUrlState;
+/** How many pictures this device holds and their size, in total and per campaign. */
+export const getImageStats: () => Promise<ImageStats> = images.getImageStats;
+export const useImageStats: () => ImageStats | undefined = images.useImageStats;
+/**
+ * Set an image log entry's status (and error) directly in storage, bumping its campaign's updatedAt:
+ * for pictures that finish after the player left the table. Resolves false when the entry is gone.
+ */
+export const markImageLogEntry: (entryId: string, patch: ImageLogPatch) => Promise<boolean> = images.markImageLogEntry;
+/** The error saveImage gives when the picture's campaign no longer exists. */
+export const IMAGE_CAMPAIGN_MISSING: string = images.IMAGE_CAMPAIGN_MISSING;

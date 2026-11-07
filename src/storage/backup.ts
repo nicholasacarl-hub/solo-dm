@@ -1,18 +1,21 @@
 /**
  * Save files: export a campaign to a JSON bundle, validate one, and import it back.
  * Bundles hold one campaign and what it owns — never the imported library, never shared homebrew,
- * and never text from the player's imported books (the DM's rules lookups are redacted in exports).
+ * never text from the player's imported books (the DM's rules lookups are redacted in exports), and
+ * never illustrations (they stay on this device; the story log's image entries travel without them,
+ * and a device that doesn't have the picture says so).
  */
 import { z } from 'zod';
 import { findSrdClass } from '@/engine/classData';
 import { slugify } from '@/lib/id';
 import { hasImported, redactImported } from '@/lib/importedContent';
 import type { Campaign, HitDiceEntry, HitDie } from '@/types';
-import { campaignTables, db } from './db';
+import { campaignAndImageTables, db } from './db';
 import { deleteCampaignData, normalizeCampaignData, readCampaignData, writeCampaignData } from './campaignData';
 import { isCampaignOpenElsewhere, OPEN_ELSEWHERE_ERROR } from './campaignLock';
 import { emitCampaignChange } from './events';
-import { remapCampaignData } from './remap';
+import { copyImages, imagesToCopy } from './images';
+import { IdMap, remapCampaignData } from './remap';
 import type { CampaignBundle, CampaignData } from './types';
 
 export const BUNDLE_FORMAT = 'solo-dm-campaign';
@@ -130,6 +133,9 @@ const settingsSchema = z.looseObject({
   enabledSources: strings,
   lines: strings,
   veils: strings,
+  // Missing means 'offered'; anything unreadable is treated as missing.
+  transformations: z.enum(['off', 'offered', 'consequences']).optional().catch(undefined),
+  artStyle: z.string().optional().catch(undefined),
 });
 
 const campaignSchema = z.looseObject({
@@ -180,6 +186,31 @@ function hitDiceFromClasses(classes: { level: number; hitDie: HitDie }[]): HitDi
 }
 
 const coin = z.number().default(0);
+
+/** An array whose unreadable items are left out, instead of failing the whole file. */
+function keepReadable<T extends z.ZodType>(item: T) {
+  return z.array(z.unknown()).transform((items) =>
+    items.flatMap((value) => {
+      const parsed = item.safeParse(value);
+      return parsed.success ? [parsed.data] : [];
+    }),
+  );
+}
+
+const transformationSchema = z.looseObject({
+  id,
+  name: z.string(),
+  summary: z.string().default(''),
+  stage: z.string().optional().catch(undefined),
+  origin: z.enum(['accepted', 'imposed']).catch('accepted'),
+  status: z.enum(['active', 'ended']).catch('active'),
+  howItEnds: z.string().optional().catch(undefined),
+  featureIds: z.array(z.string()).default([]).catch([]),
+  startedSession: z.number().default(0),
+  endedSession: z.number().optional().catch(undefined),
+  createdAt: timestamp.default(0),
+  updatedAt: timestamp.default(0),
+});
 
 const characterSchema = z
   .looseObject({
@@ -233,6 +264,7 @@ const characterSchema = z
     heroicInspiration: z.boolean().default(false),
     personality: z.looseObject({}).default(() => ({})),
     notes: z.string().default(''),
+    transformations: keepReadable(transformationSchema).optional().catch(undefined),
     createdAt: timestamp.default(0),
     updatedAt: timestamp.default(0),
   })
@@ -275,9 +307,13 @@ const logSchema = z.looseObject({
   campaignId: z.string().optional(),
   sessionId: id.nullable().default(null),
   seq: z.number(),
-  kind: z.enum(['player', 'dm', 'roll', 'tool', 'system', 'session', 'recap', 'error']),
+  // Kinds this version doesn't know (from a newer app) are left out, like entries that can't be shown.
+  kind: z.string(),
   createdAt: timestamp,
 });
+
+/** A picture that was still being painted when the game was saved will never finish on this device. */
+const UNFINISHED_PICTURE = 'This picture wasn’t finished when the game was saved.';
 
 /** What each kind of display-log entry needs to be shown (defaults fill what can be guessed). */
 const logKindSchemas = {
@@ -304,11 +340,25 @@ const logKindSchemas = {
   session: z.looseObject({ event: z.enum(['start', 'end']), sessionNumber: z.number() }),
   recap: z.looseObject({ sessionNumber: z.number().default(0), text: z.string() }),
   error: z.looseObject({ text: z.string(), retryable: z.boolean().default(false) }),
+  image: z
+    .looseObject({
+      imageId: id,
+      title: z.string().default(''),
+      subject: z.enum(['scene', 'character', 'npc', 'creature', 'item', 'battle']).catch('scene'),
+      status: z.enum(['pending', 'ready', 'failed']).catch('failed'),
+      error: z.string().optional().catch(undefined),
+    })
+    .transform((entry) => (entry.status === 'pending' ? { ...entry, status: 'failed' as const, error: UNFINISHED_PICTURE } : entry)),
 } as const;
 
-/** Display-log entries lacking what their kind needs can't be shown, so they are left out. */
+function isKnownKind(kind: string): kind is keyof typeof logKindSchemas {
+  return Object.hasOwn(logKindSchemas, kind);
+}
+
+/** Display-log entries lacking what their kind needs (or of a kind this version doesn't know) are left out. */
 function showableLogEntries(entries: z.infer<typeof logSchema>[]): unknown[] {
   return entries.flatMap((entry) => {
+    if (!isKnownKind(entry.kind)) return [];
     const parsed = logKindSchemas[entry.kind].safeParse(entry);
     return parsed.success ? [parsed.data] : [];
   });
@@ -335,6 +385,7 @@ const questSchema = z.looseObject({
   status: z.enum(['rumor', 'active', 'completed', 'failed', 'abandoned']).catch('active'),
   summary: z.string().default(''),
   objectives: z.array(z.looseObject({ id, text: z.string(), done: z.boolean().default(false) })).default([]),
+  ambition: z.boolean().optional().catch(undefined),
   createdAt: timestamp.default(0),
   updatedAt: timestamp.default(0),
 });
@@ -485,17 +536,22 @@ export async function importBundle(
   const data = normalizeCampaignData(bundleData(bundle));
   // Checked before the transaction (it can't wait on anything but the database).
   const openElsewhere = await isCampaignOpenElsewhere(data.campaign.id);
-  const { campaign, replaced } = await db.transaction('rw', campaignTables(), async () => {
+  const { campaign, replaced } = await db.transaction('rw', campaignAndImageTables(), async () => {
     const existing = await db.campaigns.get(data.campaign.id);
     const foreign = await collidesWithOtherCampaigns(data);
     if (foreign && onForeignIds === 'fail') {
       throw new Error('This save shares record ids with another campaign on this device. Import it from a file as a copy instead.');
     }
     if ((existing !== undefined && mode === 'copy') || foreign) {
-      const remapped = remapCampaignData(data, { name: `${data.campaign.name} (copy)` });
+      const imageIds = new IdMap();
+      const remapped = remapCampaignData(data, { name: `${data.campaign.name} (copy)`, imageIds });
+      // Pictures the story shows that are on this device come along under the copy's own ids.
+      const pictures = await imagesToCopy(data.log, (oldId) => imageIds.get(oldId));
       await writeCampaignData(remapped);
+      await copyImages(pictures, remapped.campaign.id);
       return { campaign: remapped.campaign, replaced: false };
     }
+    // A replaced campaign keeps its pictures: they were never part of the save.
     // Replacing a campaign that is being played in another tab would be overwritten by that tab.
     if (existing && openElsewhere) throw new Error(OPEN_ELSEWHERE_ERROR);
     if (existing) await deleteCampaignData(existing.id);

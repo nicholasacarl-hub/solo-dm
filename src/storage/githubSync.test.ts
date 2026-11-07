@@ -7,9 +7,11 @@ import {
   deleteCampaign,
   exportCampaignBundle,
   getCampaign,
+  getImage,
   listRemoteSaves,
   pullCampaignFromGithub,
   pushCampaignToGithub,
+  saveImage,
   syncWithGithub,
   testGithubConnection,
 } from '@/storage';
@@ -259,6 +261,46 @@ describe('pushCampaignToGithub', () => {
     expect(uploaded).toContain('toolu_1');
     expect(uploaded).not.toContain('COPYRIGHTED TEXT');
     expect(uploaded).toContain('was left out of this copy');
+  });
+});
+
+describe('GitHub saves and illustrations', () => {
+  it('never uploads pictures or their prompts, and a pull keeps the pictures on this device', async () => {
+    await seedCampaign('a');
+    await db.log.put({
+      id: 'a-log-img',
+      campaignId: 'a-camp',
+      sessionId: 'a-sess-2',
+      seq: 100,
+      createdAt: 7,
+      kind: 'image',
+      imageId: 'img-1',
+      title: 'The lighthouse',
+      subject: 'scene',
+      status: 'ready',
+    });
+    await saveImage({
+      id: 'img-1',
+      campaignId: 'a-camp',
+      sessionId: 'a-sess-2',
+      title: 'The lighthouse',
+      subject: 'scene',
+      prompt: 'SECRET PAINTING PROMPT',
+      model: 'gpt-image-2.5-flare',
+      mime: 'image/webp',
+      blob: new Blob([new Uint8Array([1, 2, 3])], { type: 'image/webp' }),
+      createdAt: 7,
+    });
+
+    await pushCampaignToGithub('a-camp', settings());
+    const uploaded = github.files.get('saves/a-camp.solodm.json')?.text ?? '';
+    expect(uploaded).toContain('"imageId": "img-1"');
+    expect(uploaded).not.toContain('SECRET PAINTING PROMPT');
+    expect(uploaded).not.toContain('"images"');
+
+    const [save] = await listRemoteSaves(settings());
+    await pullCampaignFromGithub(save, settings());
+    expect(await getImage('img-1')).toBeDefined();
   });
 });
 

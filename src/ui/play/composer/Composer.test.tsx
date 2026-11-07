@@ -1,23 +1,31 @@
 import '../testing/setup';
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dm } from '@/dm';
 import { useGame } from '@/state/gameStore';
 import { resetDmMock } from '../testing/dmMock';
 import { resetEngineMock } from '../testing/engineMock';
+import { resetImagesMock, withImages } from '../testing/imagesMock';
 import { seedGame } from '../testing/seed';
 import { setMatchMedia, TOUCH } from '../testing/setup';
 import { Composer } from './Composer';
+import { SHOW_SCENE_MESSAGE } from './QuickActions';
 
 vi.mock('@/dm', () => import('../testing/dmMock'));
 vi.mock('@/engine', () => import('../testing/engineMock'));
+vi.mock('@/images', () => import('../testing/imagesMock'));
 vi.mock('@/ui/sheet/LevelUpDialog', () => ({ LevelUpDialog: () => null }));
 
 function setup() {
   const user = userEvent.setup();
   const spies = seedGame();
-  render(<Composer />);
+  render(
+    <MemoryRouter>
+      <Composer />
+    </MemoryRouter>,
+  );
   const box = screen.getByRole('textbox', { name: 'What do you do?' });
   return { user, spies, box };
 }
@@ -25,6 +33,7 @@ function setup() {
 beforeEach(() => {
   resetDmMock();
   resetEngineMock();
+  resetImagesMock();
 });
 
 describe('Composer', () => {
@@ -195,5 +204,51 @@ describe('Composer', () => {
     await user.keyboard('{Escape}');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Quick actions' })).toHaveFocus();
+  });
+
+  it('asks the DM to show the scene when pictures can be made', async () => {
+    withImages();
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: 'Quick actions' }));
+    const item = screen.getByRole('menuitem', { name: /Show me the scene/ });
+    expect(item).toHaveTextContent('OOC');
+    await user.click(item);
+    expect(dm.sendPlayerMessage).toHaveBeenCalledWith(SHOW_SCENE_MESSAGE);
+    expect(SHOW_SCENE_MESSAGE).toBe('OOC: Please show me an image of the current scene.');
+  });
+
+  it('does not ask for the scene while the DM is busy', async () => {
+    withImages();
+    const { user } = setup();
+    act(() => useGame.setState({ dm: { phase: 'streaming', activity: null, error: null, retryable: false } }));
+    await user.click(screen.getByRole('button', { name: 'Quick actions' }));
+    expect(screen.getByRole('menuitem', { name: /Show me the scene/ })).toBeDisabled();
+  });
+
+  it('explains how to turn illustrations on instead of asking when they are off', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: 'Quick actions' }));
+    const item = screen.getByRole('menuitem', { name: /Show me the scene/ });
+    expect(item).toHaveTextContent('Set up');
+    await user.click(item);
+
+    const dialog = screen.getByRole('dialog', { name: 'Turn on illustrations' });
+    expect(dialog).toHaveAccessibleDescription('Illustrations need your own OpenAI API key, added in Settings.');
+    expect(within(dialog).getByText(/a few cents/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('link', { name: 'Open Settings' })).toHaveAttribute('href', '/settings#settings-section-images');
+    expect(dm.sendPlayerMessage).not.toHaveBeenCalled();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Not now' }));
+    expect(screen.queryByRole('dialog', { name: 'Turn on illustrations' })).not.toBeInTheDocument();
+  });
+
+  it('says when illustrations are switched off rather than missing a key', async () => {
+    withImages('off');
+    const { user } = setup();
+    await user.click(screen.getByRole('button', { name: 'Quick actions' }));
+    await user.click(screen.getByRole('menuitem', { name: /Show me the scene/ }));
+    expect(screen.getByRole('dialog', { name: 'Turn on illustrations' })).toHaveAccessibleDescription(
+      'Illustrations are turned off in Settings.',
+    );
   });
 });

@@ -392,7 +392,7 @@ export interface Character {
   acFormula?: string;
   /** Walking speed in feet (before exhaustion penalties). */
   speed: number;
-  otherSpeeds?: Partial<Record<'fly' | 'swim' | 'climb' | 'burrow', number>>;
+  otherSpeeds?: Partial<Record<OtherSpeed, number>>;
   size: CreatureSize;
   /** Extra initiative bonus beyond DEX (e.g. Alert adds the proficiency bonus). */
   initiativeBonusExtra?: number;
@@ -410,7 +410,7 @@ export interface Character {
   conditionImmunities?: string[];
   /** Extra bonuses to particular skill checks (Thaumaturge, Magician...). */
   skillBonuses?: SkillBonus[];
-  /** Lasting changes the story made to the hero (vampirism, ceremorphosis, a celestial blessing...). */
+  /** Lasting changes the story made to the hero (vampirism, lycanthropy, a celestial blessing...). */
   transformations?: Transformation[];
   hp: HitPoints;
   hitDice: HitDiceEntry[];
@@ -434,18 +434,53 @@ export interface Character {
   updatedAt: number;
 }
 
+/** Movement other than walking. */
+export type OtherSpeed = 'fly' | 'swim' | 'climb' | 'burrow';
+
+/** The defenses a transformation can grant (damage types, or conditions for conditionImmunities). */
+export type TransformationDefenseKind = 'resistances' | 'immunities' | 'vulnerabilities' | 'conditionImmunities';
+
+/** Entries a transformation gives, and the ones it actually put on the sheet (the hero lacked them). */
+export interface GrantedEntries {
+  granted: string[];
+  added: string[];
+}
+
+/** A range or speed a transformation gives, and the hero's own value before any transformation. */
+export interface GrantedNumber {
+  value: number;
+  natural: number;
+}
+
 /**
- * A lasting, story-driven change to the hero (Baldur's Gate 3 style): accepted as a bargain or
- * temptation, or imposed as the consequence of choices the player made knowingly (only when the
- * campaign allows it). Its mechanics live in features (source 'transformation'), defenses, senses and
- * ability scores on the character; this record tracks the story side and what to undo when it ends.
+ * What a transformation changed on the sheet, stored with it so that its end undoes exactly that
+ * (and never the hero's own traits). Written only by the engine (src/engine/transform.ts); anything
+ * that edits a transformation by hand must keep it.
+ */
+export interface TransformationGrants {
+  defenses?: Partial<Record<TransformationDefenseKind, GrantedEntries>>;
+  darkvision?: GrantedNumber;
+  otherSpeeds?: Partial<Record<OtherSpeed, GrantedNumber>>;
+  /** Walking speed change actually applied, in feet. */
+  speed?: number;
+  /** The size it sets, the hero's own size, and when it was set (the latest grant wins). */
+  size?: { size: CreatureSize; natural: CreatureSize; at: number };
+  /** Ability score changes actually applied (after the 1–30 limits). */
+  abilities?: Partial<Record<Ability, number>>;
+}
+
+/**
+ * A lasting, story-driven change to the hero: accepted as a bargain or temptation, or imposed as the
+ * consequence of choices the player made knowingly (only when the campaign allows it). Its mechanics
+ * live in features (source 'transformation'), defenses, senses and ability scores on the character;
+ * this record tracks the story side and exactly what to undo when it ends.
  */
 export interface Transformation {
   id: string;
   name: string;
   /** One or two sentences: what the hero is becoming, and what it costs. */
   summary: string;
-  /** Free-text stage, e.g. "Partial ceremorphosis" or "Stage 2 of 3". */
+  /** Free-text stage, e.g. "The hunger wakes" or "Stage 2 of 3". */
   stage?: string;
   /** 'accepted' = the player chose it; 'imposed' = a consequence of their choices. */
   origin: 'accepted' | 'imposed';
@@ -454,6 +489,8 @@ export interface Transformation {
   howItEnds?: string;
   /** Ids of the features this transformation added (removed when it ends). */
   featureIds: string[];
+  /** Everything else it changed on the sheet (missing in records that changed nothing else). */
+  grants?: TransformationGrants;
   startedSession: number;
   endedSession?: number;
   createdAt: number;

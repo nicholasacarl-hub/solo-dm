@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sampleSettings } from '@/test/fixtures';
-import { describeSettingsChanges, settingsChangeNotice } from './settingsDiff';
+import { describeSettingsChanges, quietSettingsChanges, settingsChangeNotice } from './settingsDiff';
 
 describe('describeSettingsChanges', () => {
   it('is empty when nothing changed', () => {
@@ -49,5 +49,17 @@ describe('describeSettingsChanges', () => {
     expect(settingsChangeNotice(['difficulty: standard → hard'])).toBe(
       'The player changed the table rules: difficulty: standard → hard. Follow the new rules from now on.',
     );
+  });
+});
+
+describe('quietSettingsChanges', () => {
+  it('counts the transformations rule (missing = offered) and the art style, which need no notice here', () => {
+    const before = sampleSettings();
+    expect(quietSettingsChanges(before, { ...before, transformations: 'offered' })).toEqual([]);
+    expect(quietSettingsChanges(before, { ...before, transformations: 'consequences', artStyle: 'Ink and watercolor' })).toEqual([
+      'transformations',
+      'art style',
+    ]);
+    expect(describeSettingsChanges(before, { ...before, transformations: 'off', artStyle: 'Woodcut' })).toEqual([]);
   });
 });

@@ -9,8 +9,10 @@ import { getCharacterSheetTool, levelUpTool, takeRestTool, updateCharacterTool }
 import { endCombatTool, startCombatTool, updateCombatTool } from './combat';
 import { ToolInputError, type ToolContext, type ToolOutcome } from './context';
 import { isToolName, TOOL_SCHEMAS, type ToolInput, type ToolName } from './definitions';
+import { showImageTool } from './images';
 import { requestPlayerRoll, rollDiceTool } from './rolls';
 import { createHomebrewTool, getEntryTool, lookupRulesTool, updateHomebrewTool } from './rules';
+import { transformCharacterTool } from './transform';
 import {
   consultOracleTool,
   searchMemoryTool,
@@ -28,6 +30,7 @@ const HANDLERS: { [N in ToolName]: Handler<N> } = {
   update_character: updateCharacterTool,
   take_rest: takeRestTool,
   level_up: levelUpTool,
+  transform_character: transformCharacterTool,
   start_combat: startCombatTool,
   update_combat: updateCombatTool,
   end_combat: endCombatTool,
@@ -41,6 +44,7 @@ const HANDLERS: { [N in ToolName]: Handler<N> } = {
   update_clocks: updateClocksTool,
   search_memory: searchMemoryTool,
   set_scene: setSceneTool,
+  show_image: showImageTool,
   consult_oracle: consultOracleTool,
 };
 

@@ -6,18 +6,19 @@
  *
  * Rules follow SRD 5.2.1 "Damage and Healing" and the Rules Glossary.
  */
-import type {
-  Ability,
-  ActiveCondition,
-  Character,
-  Currency,
-  EquipmentOption,
-  Feature,
-  FeatureUses,
-  GameEvent,
-  InventoryItem,
-  KnownSpell,
-  Spellcasting,
+import {
+  ABILITY_NAMES,
+  type Ability,
+  type ActiveCondition,
+  type Character,
+  type Currency,
+  type EquipmentOption,
+  type Feature,
+  type FeatureUses,
+  type GameEvent,
+  type InventoryItem,
+  type KnownSpell,
+  type Spellcasting,
 } from '@/types';
 import { nameKey, newId } from '@/lib/id';
 import { CONDITIONS, INCAPACITATING_CONDITIONS, conditionKey, conditionName, matchStandardCondition } from './conditions';
@@ -539,6 +540,45 @@ export function removeFeature(c: Character, name: string): EngineResult {
     character: touch({ ...c, features: c.features.filter((f) => f.id !== feature.id) }),
     events: [gameEvent('feature-used', `Removed feature: ${feature.name}`)],
   };
+}
+
+// ---------------------------------------------------------------------------
+// Ability scores
+// ---------------------------------------------------------------------------
+
+/** The highest an ability score can ever be (SRD 5.2.1 "Ability Scores and Modifiers": 1 to 30). */
+export const ABILITY_SCORE_LIMIT = 30;
+
+/**
+ * Change one ability score by `change`, never above `max` (20 for Ability Score Improvements and
+ * feats, SRD 5.2.1; up to 30 for Epic Boons and transformations) nor below 1. An increase never
+ * lowers a score already above the cap (e.g. set by a magic item). A Constitution modifier change
+ * also changes the HP maximum as though the new modifier had applied from level 1 (SRD 5.2.1 "Hit
+ * Points") — current HP moves with it, and a hero at 0 HP stays at 0.
+ */
+export function changeAbilityScore(c: Character, ability: Ability, change: number, max = 20): EngineResult {
+  const before = c.abilityScores[ability];
+  const cap = clamp(toInt(max, 20), 1, ABILITY_SCORE_LIMIT);
+  const delta = toInt(change);
+  const target = delta > 0 ? Math.max(before, Math.min(cap, before + delta)) : Math.max(1, before + delta);
+  const name = ABILITY_NAMES[ability];
+  if (target === before) {
+    return unchanged(c, `${name} is already ${before}${delta > 0 ? ` (the most it can reach here is ${cap})` : ''}.`);
+  }
+  const events: GameEvent[] = [gameEvent('combat', `${name} ${before} → ${target}`)];
+  if (delta > 0 && before + delta > cap) events.push(warning(`${name} is capped at ${cap}.`));
+  let character: Character = { ...c, abilityScores: { ...c.abilityScores, [ability]: target } };
+  if (ability === 'con') {
+    const perLevel = abilityModifier(target) - abilityModifier(before);
+    const hpChange = perLevel * characterLevel(c);
+    if (hpChange !== 0) {
+      const maxHp = Math.max(1, c.hp.max + hpChange);
+      const current = c.hp.current > 0 ? Math.min(maxHp, Math.max(1, c.hp.current + hpChange)) : 0;
+      character = { ...character, hp: { ...c.hp, max: maxHp, current } };
+      events.push(gameEvent('hp-changed', `HP maximum ${c.hp.max} → ${maxHp} (Constitution modifier ${perLevel > 0 ? '+' : ''}${perLevel} per level)`));
+    }
+  }
+  return { character: touch(character), events };
 }
 
 /** Gain or spend Heroic Inspiration. You can never have more than one (SRD 5.2.1). */

@@ -18,7 +18,10 @@ Solo DM runs entirely in your browser. Claude narrates, plays every NPC, and mak
 - **Solo-play tools**: a yes/no oracle, a tension dial that can twist scenes, an X-card, and out-of-character questions (`OOC: …`).
 - **Rules lookups**: the DM searches the bundled SRD 5.2.1 and anything you've imported.
 - **Import your own books**: paste text, upload a PDF that has selectable text, or photograph pages (Claude transcribes them). Imports stay on your device.
-- **Homebrew with guardrails**: Claude can invent or modify spells, items, monsters and boons, within the homebrew freedom you set for the campaign. It balances them against named SRD comparisons and saves them to your compendium, where you can view, edit or veto them.
+- **Homebrew with guardrails**: Claude improvises spells, items, monster variants, bargains and boons whenever the story calls for them, within the homebrew freedom you set for the campaign. It balances them against named SRD comparisons and saves them to your compendium, where you can view, edit or veto them.
+- **Transformations**: lasting changes to who your hero is (vampirism, lycanthropy, a fey mark, a celestial blessing), with real costs as well as powers. They come from the story, never from a quota: offered as temptations you can refuse, or, if you allow it in the campaign's table rules, brought on by choices you made knowingly. You can also switch them off. Each one shows on your sheet with its stage and how it could end.
+- **Your story, your goals**: take the campaign anywhere. If you decide to found a thieves' guild or take the throne, it becomes an ambition with a progress clock. Progress comes only from what your hero actually achieves, and the world doesn't hand anyone a crown.
+- **Illustrations (optional)**: Claude describes the scene, and OpenAI paints it with your own OpenAI key. Ask for one ("show me the harbor", the Show me the scene button, Paint portrait on your sheet), or let the DM illustrate key moments. Pictures stay on your device and are collected in the Gallery tab.
 - **Optional cloud saves** to a private GitHub repo of yours, so the same campaigns open on any device.
 - **Demo mode**: try the whole table with an offline scripted DM, no API key needed.
 
@@ -31,6 +34,8 @@ An **Anthropic API key** from [console.anthropic.com](https://console.anthropic.
 - **Caching**: prompt caching keeps long sessions affordable. Each session re-reads your campaign context at a steep discount.
 - **Tip**: give the key a monthly spend limit in the Console.
 
+**Optional, for illustrations:** an **OpenAI API key** from [platform.openai.com](https://platform.openai.com/api-keys), entered in **Settings → Illustrations**. OpenAI bills it separately, usually a few cents a picture at medium quality. Like your Anthropic key, it's stored only in your browser and sent only to OpenAI's API.
+
 ## How it works
 
 ```
@@ -38,7 +43,7 @@ You type → Claude (streaming, with tools) → tools run in the app → state u
 ```
 
 - **Sessions**: a campaign is played in sessions. Within a session, the conversation with Claude is *append-only*: the system prompt is frozen, and new state arrives as a short `<game_state>` block with each of your messages. Ending a session asks the DM for a recap and private notes. Those become the "chronicle" that starts the next session.
-- **Tools**: the DM acts through about 20 tools. It can roll dice, ask you to roll, update your sheet, run combat, look up rules, write homebrew, keep the journal and quests, set the scene, and consult the oracle. See [docs/DESIGN.md](docs/DESIGN.md).
+- **Tools**: the DM acts through 21 tools. It can roll dice, ask you to roll, update your sheet, transform your hero, run combat, look up rules, write homebrew, keep the journal and quests, set the scene, ask for an illustration, and consult the oracle. See [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Run it locally
 

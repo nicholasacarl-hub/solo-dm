@@ -13,7 +13,8 @@ import {
   sampleQuests,
   sampleSession,
 } from '@/test/fixtures';
-import type { HomebrewEntry } from '@/types';
+import type { HomebrewEntry, Quest, TransformationsMode } from '@/types';
+import type { IllustrationMode } from './modes';
 import { buildSystemPrompt, DM_INSTRUCTIONS, type PromptInput } from './prompts';
 
 function homebrew(name: string, status: 'active' | 'retired', campaignId: string | null = 'camp-1'): HomebrewEntry {
@@ -120,7 +121,7 @@ describe('buildSystemPrompt', () => {
     expect(text).toContain('- Name: The Drowned Lantern');
     expect(text).toContain('This is session 3.');
     expect(text).toContain('Balanced — use the rules as written');
-    expect(text).toContain('Moderate — you may create new spells');
+    expect(text).toContain('Moderate — improvise new spells, magic items, monsters, boons and minor rules whenever the story calls for them');
     expect(text).toContain('Standard — about 120–180 words per response.');
     expect(text).toContain('Tap to roll');
     expect(text).toContain('Leveling: milestone');
@@ -188,5 +189,166 @@ describe('buildSystemPrompt', () => {
     expect(text).toContain('The player has not made a character yet.');
     expect(text).toContain('## Quests\nNone yet.');
     expect(text).toContain('Start two or three for the threats in play.');
+  });
+});
+
+/** The text of one `## ` section of a prompt (up to the next `## ` or `# ` heading). */
+function section(text: string, heading: string): string {
+  const start = text.indexOf(`\n${heading}`);
+  if (start < 0) return '';
+  const rest = text.slice(start + 1);
+  const next = rest.slice(heading.length).search(/\n#{1,2} /);
+  return next < 0 ? rest : rest.slice(0, heading.length + next);
+}
+
+function withModes(transformations: TransformationsMode | undefined, illustrations?: IllustrationMode): string {
+  const base = sampleCampaign();
+  return buildSystemPrompt(input({ campaign: { ...base, settings: { ...base.settings, transformations } }, illustrations }));
+}
+
+describe('homebrew on the fly', () => {
+  it('encourages improvising homebrew within the campaign setting, balanced, announced and saved', () => {
+    const homebrew = section(DM_INSTRUCTIONS, '## Homebrew');
+    for (const phrase of [
+      'Improvise homebrew whenever the story calls for it, within the homebrew-freedom table rule',
+      'a fey bargain with teeth',
+      "Don't wait for a gap in the rules",
+      'named SRD comparables',
+      'create_homebrew',
+      'announce it to the player before it affects a roll',
+      'If the player vetoes something, retire or rework it without argument.',
+    ]) {
+      expect(homebrew, phrase).toContain(phrase);
+    }
+  });
+});
+
+describe('transformations, driven by the campaign setting', () => {
+  it('a missing setting means Offered: offered only, no quota, costs, stages, a way it could end', () => {
+    const text = section(withModes(undefined), '## Transformations');
+    expect(text.startsWith('## Transformations: Offered\n')).toBe(true);
+    for (const phrase of [
+      'temptations, bargains, rewards or curses-with-a-choice',
+      'nothing changes unless the player chooses it in the fiction',
+      'player_chose_it: true',
+      'No quota: the fiction decides how often',
+      "Never shoehorn one in where it doesn't fit or make it routine",
+      'never withhold one the player actively pursues and earns',
+      'real costs and drawbacks along with its powers',
+      'balanced like homebrew against named SRD comparables',
+      'unfold in stages',
+      "Respect the player's attachment to the hero they built",
+      'how_it_ends',
+      'transform_character',
+    ]) {
+      expect(text, phrase).toContain(phrase);
+    }
+    expect(text).not.toContain('imposed');
+    expect(withModes('offered')).toBe(withModes(undefined));
+  });
+
+  it('Consequences adds imposed transformations, telegraphed, with a path back', () => {
+    const text = section(withModes('consequences'), '## Transformations');
+    expect(text.startsWith('## Transformations: Consequences\n')).toBe(true);
+    for (const phrase of [
+      "the player's knowing choices can also transform the hero even if they'd rather not",
+      'bitten by a vampire lord after ignoring the warnings',
+      'origin "imposed"',
+      'Telegraph the danger clearly before it lands',
+      'always leave a story path to resist, reverse or cure it',
+      'No quota',
+    ]) {
+      expect(text, phrase).toContain(phrase);
+    }
+  });
+
+  it('Off keeps the hero as built, without the rest of the guidance', () => {
+    const text = section(withModes('off'), '## Transformations');
+    expect(text).toContain('## Transformations: Off\nThe hero stays as built and changes only through normal leveling.');
+    expect(text).toContain('Never begin or advance a transformation');
+    expect(text).not.toContain('No quota');
+  });
+});
+
+describe('illustrations, driven by the setting and the OpenAI key', () => {
+  it('renders the guidance for each mode', () => {
+    const off = section(withModes('offered', 'off'), '## Illustrations');
+    expect(off).toContain('## Illustrations: Off\n');
+    expect(off).toContain('Never call show_image.');
+    const unavailable = section(withModes('offered'), '## Illustrations');
+    expect(unavailable).toContain('## Illustrations: Not set up\n');
+    expect(unavailable).toContain('Never call show_image or bring up pictures');
+    expect(unavailable).toContain('add an OpenAI API key in Settings → Illustrations');
+    const request = section(withModes('offered', 'request'), '## Illustrations');
+    expect(request).toContain('## Illustrations: On request\nCall show_image only when the player asks to see something');
+    expect(request).toContain('never on your own initiative');
+    expect(request).toContain("keep narrating, and don't describe the picture or wait for it");
+    const moments = section(withModes('offered', 'moments'), '## Illustrations');
+    for (const phrase of ['a key moment', 'arriving somewhere new, a big reveal, a fight about to start', 'at most about once per scene', 'Never for routine beats']) {
+      expect(moments, phrase).toContain(phrase);
+    }
+  });
+
+  it('lets an out-of-character request for a picture use show_image', () => {
+    expect(section(DM_INSTRUCTIONS, '## Table talk')).toContain('If they ask to see something, use show_image as the illustrations rule allows.');
+  });
+});
+
+describe('ambitions and an indifferent world', () => {
+  it('takes the player anywhere, but makes ambitions earned, tracked on clocks, and fallible', () => {
+    const text = section(DM_INSTRUCTIONS, '## Ambitions and an indifferent world');
+    for (const phrase of [
+      'The player may take the story anywhere',
+      'adapt your prepared material to their direction instead of steering them back to it',
+      "You needn't indulge every whim",
+      'a declaration is not progress',
+      'When the player commits to one, record it with update_quest (ambition: true)',
+      'no objectives of your own',
+      'Add objectives only for concrete steps the hero has identified themselves',
+      'never turn an ambition into a checklist of steps you invented',
+      'progress clock (update_clocks, kind "progress")',
+      '6 segments for a local goal, up to 12',
+      'Advance it only for concrete accomplishments earned in the fiction',
+      'allies won, resources secured, rivals outplayed, risks survived, rolls made',
+      'roll it back for setbacks',
+      'threat clock for the opposition',
+      'egregious ones can close the door for good',
+      'The world is indifferent — not adversarial, not accommodating',
+      'NPCs and factions pursue their own interests',
+    ]) {
+      expect(text, phrase).toContain(phrase);
+    }
+  });
+
+  it('lists ambitions in their own group of the quest log', () => {
+    const ambition: Quest = {
+      id: 'q-amb',
+      campaignId: 'camp-1',
+      title: 'Found a thieves\' guild',
+      status: 'active',
+      summary: 'Mira wants the docks to answer to her.',
+      objectives: [{ id: 'o-a', text: 'Win over the dockside urchins', done: false }],
+      ambition: true,
+      createdAt: 2,
+      updatedAt: 2,
+    };
+    const text = buildSystemPrompt(input({ quests: [...sampleQuests(), ambition] }));
+    const quests = section(text, '## Quests');
+    expect(quests.indexOf('- [active] Find Keeper Halvard')).toBeLessThan(quests.indexOf('### Ambitions'));
+    expect(quests).toContain("### Ambitions (the hero's own goals: no checklists; progress only for what they earn, on their clocks)\n- [active] Found a thieves' guild");
+    const onlyAmbition = section(buildSystemPrompt(input({ quests: [ambition] })), '## Quests');
+    expect(onlyAmbition).toContain('## Quests\nNone besides the ambitions below.');
+  });
+});
+
+describe('the new sections stay deterministic', () => {
+  it('renders identical text for identical settings, and different text when a mode changes', () => {
+    expect(withModes('consequences', 'moments')).toBe(withModes('consequences', 'moments'));
+    expect(withModes('consequences', 'moments')).not.toBe(withModes('consequences', 'request'));
+    const text = withModes('off', 'request');
+    const campaignPart = text.indexOf('# This campaign');
+    const order = ['## Table rules', '## Transformations: Off', '## Illustrations: On request', '## Safety'].map((h) => text.indexOf(h, campaignPart));
+    expect(order.every((at, i) => at > campaignPart && (i === 0 || at > order[i - 1]))).toBe(true);
+    expect(DM_INSTRUCTIONS).not.toMatch(/## (Transformations|Illustrations):/);
   });
 });

@@ -5,12 +5,14 @@
  * only the tables whose indexes change (set a table to null to drop it), and transform existing
  * rows in an upgrade callback, e.g.
  *
- *   db.version(2)
+ *   db.version(3)
  *     .stores({ quests: 'id, campaignId, status' })
  *     .upgrade((tx) => tx.table('quests').toCollection().modify((q) => { q.status ??= 'active'; }));
  *
  * Dexie runs every pending upgrade in order the next time the database opens. Bump
  * CampaignBundle.version too if exported files change shape.
+ *
+ * History: 1 = the original schema; 2 = illustrations (the "images" and "imageData" tables).
  */
 import Dexie, { type EntityTable, type IndexableType, type Table } from 'dexie';
 import type {
@@ -25,6 +27,7 @@ import type {
   LogEntry,
   Quest,
   Session,
+  StoredImage,
   TranscriptMessage,
 } from '@/types';
 
@@ -32,6 +35,24 @@ import type {
 export interface CombatRecord {
   campaignId: string;
   state: CombatState;
+}
+
+/**
+ * An illustration's metadata (table "images"): StoredImage without the picture, plus its size in
+ * bytes. Listing a gallery reads only these rows, never the pictures.
+ */
+export interface ImageRecord extends Omit<StoredImage, 'blob'> {
+  size: number;
+}
+
+/**
+ * An illustration's picture (table "imageData"), stored as bytes rather than a Blob: Blobs in
+ * IndexedDB have been unreliable in some Safari versions, and bytes behave the same everywhere.
+ */
+export interface ImageDataRecord {
+  id: string;
+  campaignId: string;
+  bytes: ArrayBuffer;
 }
 
 export type SoloDmDatabase = Dexie & {
@@ -47,6 +68,8 @@ export type SoloDmDatabase = Dexie & {
   homebrew: EntityTable<HomebrewEntry, 'id'>;
   library: EntityTable<LibrarySource, 'id'>;
   libraryEntries: EntityTable<CompendiumEntry, 'id'>;
+  images: EntityTable<ImageRecord, 'id'>;
+  imageData: EntityTable<ImageDataRecord, 'id'>;
 };
 
 export const db = new Dexie('solo-dm') as SoloDmDatabase;
@@ -66,7 +89,19 @@ db.version(1).stores({
   libraryEntries: 'id, sourceId, kind',
 });
 
-/** Every table that holds data owned by a campaign (all of them except the library). */
+// Version 2: illustrations. Two new tables, so existing rows need no upgrade callback. Pictures live
+// apart from their metadata ("imageData") so a gallery can be listed without reading every picture.
+// Neither table is part of campaignTables(): images never go into save files or GitHub saves, and a
+// campaign replaced by an import or a pull keeps its pictures. deleteCampaign removes them.
+db.version(2).stores({
+  images: 'id, campaignId, createdAt, [campaignId+createdAt]',
+  imageData: 'id, campaignId',
+});
+
+/**
+ * Every table that holds a campaign's saved game (all of them except the library and the
+ * illustrations, which stay on this device: see imageTables()).
+ */
 export function campaignTables(): Table[] {
   return [
     db.campaigns,
@@ -80,6 +115,16 @@ export function campaignTables(): Table[] {
     db.clocks,
     db.homebrew,
   ];
+}
+
+/** The tables of a campaign's illustrations (metadata and pictures). */
+export function imageTables(): Table[] {
+  return [db.images, db.imageData];
+}
+
+/** Everything a campaign owns on this device: its saved game and its illustrations. */
+export function campaignAndImageTables(): Table[] {
+  return [...campaignTables(), ...imageTables()];
 }
 
 /**

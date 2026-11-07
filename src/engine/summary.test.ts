@@ -3,6 +3,7 @@ import type { Character } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import { applyDamage } from './character';
 import { characterSheetText, characterStatusLine } from './summary';
+import { beginTransformation, endTransformation } from './transform';
 
 const mira = (overrides: Partial<Character> = {}) => sampleCharacter(overrides);
 
@@ -93,5 +94,36 @@ describe('characterSheetText', () => {
     expect(bare).not.toContain('### Spellcasting');
     expect(bare).not.toContain('### Attacks');
     expect(bare).toContain('### Equipment\nnothing');
+  });
+});
+
+describe('transformations in the DM-facing text', () => {
+  const opts = { session: 2, now: 1, newId: (() => { let n = 0; return () => `t-${++n}`; })() };
+  const turned = beginTransformation(
+    mira(),
+    {
+      name: 'Vampirism',
+      summary: 'Strength in darkness, a thirst for blood, and the sun as an enemy.',
+      origin: 'imposed',
+      stage: 'Fledgling',
+      howItEnds: 'Slay the vampire lord who sired you.',
+      features: [{ name: 'Vampiric Bite', description: 'Bite and drink.', uses: { max: 1, recharge: 'long' } }],
+    },
+    opts,
+  ).character;
+
+  it('lists active transformations on the status line', () => {
+    expect(characterStatusLine(turned)).toMatch(/ · Transformations: Vampirism \(Fledgling\)$/);
+    expect(characterStatusLine(mira())).not.toContain('Transformations');
+  });
+
+  it('gives the sheet a Transformations section and marks transformation features', () => {
+    const sheet = characterSheetText(turned);
+    expect(sheet).toContain('### Transformations\n- **Vampirism** (Fledgling; imposed; since session 2): Strength in darkness, a thirst for blood, and the sun as an enemy. How it could end: Slay the vampire lord who sired you.');
+    expect(sheet).toContain('- **Vampiric Bite** (transformation: Vampirism; 1/1 per long rest): Bite and drink.');
+    const cured = characterSheetText(endTransformation(turned, 'Vampirism', { ...opts, session: 4 }).character);
+    expect(cured).toContain('### Transformations\n- Ended: Vampirism (ended in session 4)');
+    expect(cured).not.toContain('Vampiric Bite');
+    expect(characterSheetText(mira())).not.toContain('### Transformations');
   });
 });

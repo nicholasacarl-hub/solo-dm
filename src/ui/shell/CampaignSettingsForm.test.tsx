@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { useState } from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import type { CampaignSettings } from '@/types';
@@ -76,6 +76,57 @@ describe('CampaignSettingsForm', () => {
 
     await user.click(screen.getByRole('button', { name: 'Remove Harm to children' }));
     expect(lastCall(onChange).lines).toEqual(['torture']);
+  });
+
+  it('offers transformations, as "offered" for campaigns made before the setting existed', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<Harness initial={sampleSettings()} sections={['rules']} onChange={onChange} />);
+
+    const group = screen.getByRole('group', { name: 'Transformations' });
+    expect(within(group).getByRole('radio', { name: /Offered — you always choose/ })).toBeChecked();
+    expect(within(group).getByText('Default')).toBeInTheDocument();
+    expect(within(group).getByText(/nothing changes unless you choose it in the story/)).toBeInTheDocument();
+    expect(within(group).getByText(/always a way to resist, reverse or cure it/)).toBeInTheDocument();
+
+    await user.click(within(group).getByRole('radio', { name: /Consequences can stick/ }));
+    expect(lastCall(onChange).transformations).toBe('consequences');
+    await user.click(within(group).getByRole('radio', { name: /^Off(?!ered)/ }));
+    expect(lastCall(onChange).transformations).toBe('off');
+  });
+
+  it('suggests art styles that suit the tone, and takes the player’s own', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<Harness initial={sampleSettings()} sections={['story']} onChange={onChange} />);
+
+    const input = screen.getByLabelText('Art style');
+    expect(input).toHaveValue('');
+    expect(input).toHaveAttribute('placeholder', expect.stringMatching(/^heroic fantasy oil painting/));
+    const suggestions = within(screen.getByRole('group', { name: 'Art style suggestions' })).getAllByRole('button');
+    expect(suggestions.map((b) => b.textContent)).toEqual([
+      'Heroic oil· suits your tone',
+      'Painterly',
+      'Bright adventure',
+      'Storybook',
+      'Ink & wash',
+    ]);
+    expect(suggestions.every((b) => b.getAttribute('aria-pressed') === 'false')).toBe(true);
+
+    await user.click(screen.getByRole('button', { name: 'Storybook' }));
+    expect(lastCall(onChange).artStyle).toBe('storybook watercolor illustration, soft pastel palette, gentle glowing light');
+    expect(screen.getByRole('button', { name: 'Storybook' })).toHaveAttribute('aria-pressed', 'true');
+
+    await user.clear(input);
+    await user.type(input, 'woodcut print');
+    expect(lastCall(onChange).artStyle).toBe('woodcut print');
+    expect(screen.getByRole('button', { name: 'Storybook' })).toHaveAttribute('aria-pressed', 'false');
+
+    // A darker tone suggests darker styles.
+    await user.click(screen.getByRole('radio', { name: /Cosmic horror/ }));
+    expect(within(screen.getByRole('group', { name: 'Art style suggestions' })).getAllByRole('button')[0]).toHaveTextContent(
+      /^Eerie/,
+    );
   });
 
   it('maps leveling and DM-roll choices to booleans and points rules sources at the Library', async () => {

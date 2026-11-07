@@ -10,7 +10,6 @@ vibe-coding session.
 - **Battle map**: a simple grid or zone map for combat positions (zones first, grid later), driven by
   a `set_positions` tool so the DM keeps it consistent.
 - **Voice**: optional text-to-speech for narration and voice input for the composer.
-- **Scene art**: optional generated images for new locations and NPC portraits.
 - **Downtime and Bastions** (2024 DMG concepts, from the player's imported books): between-session
   activities the DM resolves with tools.
 - **Session-zero chat**: a guided conversation that builds the character and campaign premise with the

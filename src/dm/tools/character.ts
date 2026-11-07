@@ -4,6 +4,7 @@
  */
 import {
   abilityModifier,
+  changeAbilityScore,
   computeArmorClass,
   addCondition,
   addFeature,
@@ -38,7 +39,6 @@ import {
 import {
   ABILITY_NAMES,
   SKILL_NAMES,
-  type Ability,
   type Character,
   type Currency,
   type GameEvent,
@@ -227,35 +227,6 @@ function statSteps(input: ToolInput<'update_character'>): ((c: Character) => Eng
 }
 
 // -- abilities and proficiencies ---------------------------------------------
-
-/**
- * Change one ability score (SRD 5.2.1 Ability Score Improvement: max 20 unless a feature says
- * otherwise). A Constitution modifier change also changes the HP maximum as though the new modifier
- * had applied from level 1 (SRD 5.2.1 "Hit Points": Constitution changes) — current HP moves with it.
- */
-export function changeAbilityScore(c: Character, ability: Ability, change: number, max = 20): EngineResult {
-  const before = c.abilityScores[ability];
-  // An increase never lowers a score that is already above the cap (e.g. set by a magic item).
-  const target = change > 0 ? Math.max(before, Math.min(max, before + change)) : Math.max(1, before + change);
-  const name = ABILITY_NAMES[ability];
-  if (target === before) {
-    return { character: c, events: [{ type: 'warning', message: `${name} is already ${before}${change > 0 ? ` (the most it can reach here is ${max})` : ''}.` }] };
-  }
-  const events: GameEvent[] = [statEvent(`${name} ${before} → ${target}`)];
-  if (change > 0 && before + change > max) events.push({ type: 'warning', message: `${name} is capped at ${max}.` });
-  let character: Character = { ...c, abilityScores: { ...c.abilityScores, [ability]: target } };
-  if (ability === 'con') {
-    const perLevel = abilityModifier(target) - abilityModifier(before);
-    const hpChange = perLevel * characterLevel(c);
-    if (hpChange !== 0) {
-      const maxHp = Math.max(1, c.hp.max + hpChange);
-      const current = c.hp.current > 0 ? Math.min(maxHp, Math.max(1, c.hp.current + hpChange)) : 0;
-      character = { ...character, hp: { ...c.hp, max: maxHp, current } };
-      events.push({ type: 'hp-changed', message: `HP maximum ${c.hp.max} → ${maxHp} (Constitution modifier ${perLevel > 0 ? '+' : ''}${perLevel} per level)` });
-    }
-  }
-  return { character, events };
-}
 
 const PROFICIENCY: Record<'none' | 'half' | 'proficient' | 'expertise', ProficiencyLevel> = { none: 0, half: 0.5, proficient: 1, expertise: 2 };
 const PROFICIENCY_NAME: Record<number, string> = { 0: 'not proficient', 0.5: 'half proficiency', 1: 'proficient', 2: 'expertise' };

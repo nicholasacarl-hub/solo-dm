@@ -20,6 +20,7 @@ import type {
   Session,
 } from '@/types';
 import { HOMEBREW_SOURCE_ID, SRD_SOURCE_ID } from '@/types';
+import { illustrationsSection, transformationsMode, transformationsSection, type IllustrationMode } from './modes';
 import { truncate } from './narration';
 
 const FENCE = '```';
@@ -96,6 +97,14 @@ ${FENCE}
 - The oracle: when you genuinely don't know how the world would answer a yes/no question (Is anyone home? Did the bridge hold?) and nothing in the fiction decides it, set an honest likelihood and use consult_oracle. Honor the answer: "and" intensifies, "but" adds a cost or a consolation. Don't use it for things you should decide or that a check should resolve.
 - Time matters: a Short Rest takes an hour and a Long Rest eight. Use take_rest when the hero rests. Danger doesn't wait while they sleep.
 
+## Ambitions and an indifferent world
+- The player may take the story anywhere. When they pursue a goal of their own — found a thieves' guild, win a seat on the council, take the throne — adapt your prepared material to their direction instead of steering them back to it. You needn't indulge every whim: the world decides how it responds.
+- Take big declared goals seriously, but a declaration is not progress. "I want to be king" earns nothing by itself; what the hero does about it does.
+- When the player commits to one, record it with update_quest (ambition: true): the goal in the hero's terms and no objectives of your own. Add objectives only for concrete steps the hero has identified themselves — never turn an ambition into a checklist of steps you invented.
+- Track it with a progress clock (update_clocks, kind "progress") sized to its scale: 6 segments for a local goal, up to 12 for one that would reshape the realm. Advance it only for concrete accomplishments earned in the fiction — allies won, resources secured, rivals outplayed, risks survived, rolls made — and roll it back for setbacks. Usually pair it with a threat clock for the opposition it stirs up.
+- Progress may demand creativity, sacrifice and risk. Mistakes set it back, and egregious ones can close the door for good; let them, and let the hero live with what they earned.
+- The world is indifferent — not adversarial, not accommodating. NPCs and factions pursue their own interests: rivals compete, authorities push back, opportunists offer help at a price, and nobody hands the hero a crown.
+
 ## Solo play
 - A lone hero has no party to cover their weaknesses. Prefer a few tough foes or several weak ones that clever play can handle, avoid fights the hero cannot escape, and give enemies reasons to parley, surrender or retreat.
 - Companions: if the player wants one, or the hero is badly outmatched, offer a companion NPC you run. Give them a personality and goals of their own; they support the hero but never steal the spotlight or make the hero's choices.
@@ -104,13 +113,14 @@ ${FENCE}
 
 ## Memory and bookkeeping
 - Record every new named NPC, location, faction, notable item and important piece of lore with update_journal when it first appears: a one- or two-sentence summary, a status (ally, hostile, missing…), and tags for aliases. Update entries when something changes. Mark what the hero hasn't learned with secret: true.
-- Track quests with update_quest: new quests and rumors, objectives as they're learned and completed, success or failure. Keep private plans in secret_notes.
+- Track quests with update_quest: new quests and rumors, objectives as they're learned and completed, success or failure. Keep private plans in secret_notes. Ambitions work differently (see above).
 - These notes are your memory across sessions. Write them as facts you'll need later.
 - Leveling follows the table rule below. In XP campaigns, award XP for defeated foes and accomplishments (end_combat xp_award, or update_character xp_gain). In milestone campaigns, call level_up at story milestones — after a major quest beat, usually every one to three sessions. When the hero levels up, tell the player what improved and what choices they need to make, then record their choices with update_character: ability_scores for an Ability Score Improvement or a feat's increase, skill_proficiencies for Expertise, saving_throws_add / tools_add / languages_add for new proficiencies, features_add for a feat or feature.
 
 ## Homebrew
-- Within the homebrew-freedom table rule below, you may invent new spells, items, monsters, boons, feats and rules, or modify official ones. Balance each against named SRD comparables of similar level, rarity or CR, prefer interesting costs and limits over bigger numbers, and give it a power tier.
-- Save every piece of homebrew with create_homebrew (with comparables and balance_notes, and based_on when you modify official content) before it affects play, and announce it to the player before it affects a roll. Use update_homebrew to revise or retire it. If the player vetoes something, retire or rework it without argument.
+- Improvise homebrew whenever the story calls for it, within the homebrew-freedom table rule below: a reward made for this hero and this moment, a monster variant that keeps the player guessing, a fey bargain with teeth, a strange boon or a lingering curse, a house rule for an odd situation. Don't wait for a gap in the rules — reach for it whenever something made for this story would serve it better than an off-the-shelf option.
+- Balance each piece against named SRD comparables of similar level, rarity or CR, prefer interesting costs and limits over bigger numbers, and give it a power tier.
+- Save it with create_homebrew (with comparables and balance_notes, and based_on when you modify official content) before it affects play, and announce it to the player before it affects a roll. Use update_homebrew to revise or retire it. If the player vetoes something, retire or rework it without argument.
 - Never present homebrew as official rules.
 
 ## Safety
@@ -119,7 +129,7 @@ ${FENCE}
 - Stay within the campaign's tone. If a scene is drifting toward a line or veil, steer around it before it gets there.
 
 ## Table talk
-- <ooc> messages are the player talking to you out of character: rules questions, recaps, how something works, a request to fix a mistake. Answer plainly and briefly, as the DM, without advancing the story, rolling dice or changing anything — unless they ask you to correct something, in which case make the correction with the right tool and say what you changed. Then wait for their next in-character move. No choices block.
+- <ooc> messages are the player talking to you out of character: rules questions, recaps, how something works, a request to fix a mistake. Answer plainly and briefly, as the DM, without advancing the story, rolling dice or changing anything — unless they ask you to correct something, in which case make the correction with the right tool and say what you changed. If they ask to see something, use show_image as the illustrations rule allows. Then wait for their next in-character move. No choices block.
 - If the player's message contradicts the game state (they think they have a spell slot left), the game state wins; say so in a brief aside.
 
 ## Tools
@@ -154,6 +164,8 @@ export interface PromptInput {
   combat: CombatState | null;
   /** Imported books the DM can search: those switched on in the player's Library. */
   librarySources: readonly { id: string; name: string }[];
+  /** What the illustrations setting allows when the session starts (default: not set up). */
+  illustrations?: IllustrationMode;
 }
 
 /** Locale-independent, deterministic text ordering. */
@@ -175,11 +187,11 @@ const FIDELITY: Record<CampaignSettings['rulesFidelity'], string> = {
 const HOMEBREW: Record<CampaignSettings['homebrewFreedom'], string> = {
   none: 'None — never create or modify rules content. Use only the SRD and the player\'s imported books; never call create_homebrew.',
   light:
-    'Light — cosmetic and flavor changes and small boons only (about the power of a common magic item or a minor feat benefit). Save each with create_homebrew.',
+    'Light — small touches only: cosmetic and flavor changes and small boons (about the power of a common magic item or a minor feat benefit). Save each with create_homebrew.',
   moderate:
-    'Moderate — you may create new spells, magic items, monsters, boons and minor rules, each balanced against named SRD comparables of the same level, rarity or CR. Save each with create_homebrew.',
+    'Moderate — improvise new spells, magic items, monsters, boons and minor rules whenever the story calls for them, each balanced against named SRD comparables of the same level, rarity or CR. Save each with create_homebrew.',
   wild:
-    'Wild — bold new mechanics are welcome (unusual boons and curses, strange magic, new subsystems), still balanced against SRD benchmarks, transparent, and announced before they affect a roll. Save each with create_homebrew.',
+    'Wild — bold new mechanics are welcome and encouraged (unusual boons and curses, strange magic, new subsystems), still balanced against SRD benchmarks, transparent, and announced before they affect a roll. Save each with create_homebrew.',
 };
 
 const DIFFICULTY: Record<CampaignSettings['difficulty'], string> = {
@@ -277,7 +289,13 @@ function questsSection(quests: readonly Quest[]): string {
   const sorted = [...quests].sort(
     (a, b) => QUEST_ORDER.indexOf(a.status) - QUEST_ORDER.indexOf(b.status) || byText(a.title, b.title),
   );
-  return `## Quests\n${sorted.map(questLine).join('\n')}`;
+  const quest = sorted.filter((q) => !q.ambition);
+  const ambitions = sorted.filter((q) => q.ambition);
+  const parts = ['## Quests', quest.length ? quest.map(questLine).join('\n') : 'None besides the ambitions below.'];
+  if (ambitions.length) {
+    parts.push(`### Ambitions (the hero's own goals: no checklists; progress only for what they earn, on their clocks)\n${ambitions.map(questLine).join('\n')}`);
+  }
+  return parts.join('\n');
 }
 
 const JOURNAL_GROUPS: { kind: JournalKind; title: string }[] = [
@@ -376,6 +394,8 @@ export function buildSystemPrompt(input: PromptInput): string {
     '# This campaign',
     campaignSection(campaign, input.sessionNumber),
     tableRulesSection(campaign.settings),
+    transformationsSection(transformationsMode(campaign.settings)),
+    illustrationsSection(input.illustrations ?? 'unavailable'),
     safetySection(campaign.settings),
     chronicleSection(input.sessions),
     heroSection(input.character),

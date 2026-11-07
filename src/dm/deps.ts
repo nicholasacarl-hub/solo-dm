@@ -10,6 +10,7 @@ import type {
 } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { getRulesIndex, invalidateRulesIndex, type RulesIndex } from '@/data';
 import type { Rng } from '@/engine';
+import { imagesAvailable, requestIllustration, type IllustrationRequest, type IllustrationStart } from '@/images';
 import { newId } from '@/lib/id';
 import { useGame, type GameStore } from '@/state/gameStore';
 import { getSettings } from '@/state/settingsStore';
@@ -32,6 +33,14 @@ export interface DmClient {
   };
 }
 
+/** Illustrations (src/images): whether they can be made now, and starting one in the background. */
+export interface DmImages {
+  /** A key is set and the player's frequency isn't "off" (the reason says what's missing). */
+  available(settings: AppSettings): { ok: true } | { ok: false; reason: string };
+  /** Resolves once the pending image is in the log; the picture is painted in the background. */
+  request(req: IllustrationRequest): Promise<IllustrationStart>;
+}
+
 /** The parts of the Anthropic client testApiKey uses. */
 export interface KeyCheckClient {
   models: { list(params: { limit: number }): PromiseLike<unknown> };
@@ -48,6 +57,7 @@ export interface DmDeps {
   invalidateRulesIndex: () => void;
   /** Imported books switched on in the player's Library (the DM searches them in every campaign). */
   libraryImports: () => Promise<{ id: string; name: string }[]>;
+  images: DmImages;
   /** Randomness for engine calls; undefined = the engine's crypto RNG. */
   rng?: Rng;
   now: () => number;
@@ -85,6 +95,11 @@ const defaultDeps: DmDeps = {
   invalidateRulesIndex: () => invalidateRulesIndex(),
   libraryImports: async () =>
     (await listLibrarySources()).filter((s) => s.kind === 'import' && s.enabled).map((s) => ({ id: s.id, name: s.title })),
+  // Called lazily, so the images module may load after this one.
+  images: {
+    available: (settings) => imagesAvailable(settings),
+    request: (req) => requestIllustration(req),
+  },
   rng: undefined,
   now: () => Date.now(),
   newId: () => newId(),

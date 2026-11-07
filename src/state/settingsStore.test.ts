@@ -3,6 +3,7 @@ import { DEFAULT_SETTINGS } from '@/types';
 
 const KEY = 'solo-dm:settings';
 const SESSION_KEY = 'solo-dm:api-key';
+const SESSION_OPENAI_KEY = 'solo-dm:openai-key';
 
 /** A fresh copy of the store, as a tab opened now would load it. */
 async function openTab() {
@@ -84,5 +85,86 @@ describe('settings shared by several tabs', () => {
     tab.getState().reset();
     expect(stored()).toMatchObject({ theme: DEFAULT_SETTINGS.theme, apiKey: '' });
     expect(tab.getState().apiKey).toBe('');
+  });
+});
+
+describe('the OpenAI key for illustrations', () => {
+  it('follows the same "remember on this device" switch as the Anthropic key', async () => {
+    const tab = await openTab();
+    tab.getState().setOpenAiKey('  sk-proj-abc  ');
+    expect(tab.getState().images.openaiApiKey).toBe('sk-proj-abc');
+    // Remembered (the default): shared through localStorage.
+    expect((stored().images as Record<string, unknown>).openaiApiKey).toBe('sk-proj-abc');
+    expect(sessionStorage.getItem(SESSION_OPENAI_KEY)).toBeNull();
+
+    // Remember off: both keys leave localStorage and live in this tab's sessionStorage.
+    tab.getState().setApiKey('sk-ant-1');
+    tab.getState().update({ rememberApiKey: false });
+    expect(stored().apiKey).toBeUndefined();
+    expect(stored().images).not.toHaveProperty('openaiApiKey');
+    expect(JSON.stringify(stored())).not.toContain('sk-proj-abc');
+    expect(sessionStorage.getItem(SESSION_OPENAI_KEY)).toBe('sk-proj-abc');
+    expect(sessionStorage.getItem(SESSION_KEY)).toBe('sk-ant-1');
+
+    // A reload of this tab still has it; a fresh tab (empty sessionStorage) doesn't.
+    expect((await openTab()).getState().images.openaiApiKey).toBe('sk-proj-abc');
+    sessionStorage.clear();
+    expect((await openTab()).getState().images.openaiApiKey).toBe('');
+  });
+
+  it('keeps other image settings stored either way, and removes the key with an empty value', async () => {
+    const tab = await openTab();
+    tab.getState().update({ rememberApiKey: false });
+    tab.getState().setOpenAiKey('sk-proj-xyz');
+    tab.getState().updateImages({ frequency: 'moments', quality: 'high' });
+    expect(stored().images).toEqual({ model: 'gpt-image-2.5-flare', quality: 'high', frequency: 'moments' });
+    expect(tab.getState().images).toMatchObject({ openaiApiKey: 'sk-proj-xyz', frequency: 'moments', quality: 'high' });
+
+    tab.getState().setOpenAiKey('');
+    expect(sessionStorage.getItem(SESSION_OPENAI_KEY)).toBeNull();
+    expect(tab.getState().images.openaiApiKey).toBe('');
+  });
+
+  it("merges other tabs' changes without losing this tab's own key", async () => {
+    const tab = await openTab();
+    tab.getState().update({ rememberApiKey: false });
+    tab.getState().setOpenAiKey('sk-proj-mine');
+
+    // Another tab changes the image model and the theme.
+    storageEvent(saveFromAnotherTab({ theme: 'dark', images: { ...(stored().images as object), model: 'gpt-image-1-mini' } }));
+    expect(tab.getState().theme).toBe('dark');
+    expect(tab.getState().images).toMatchObject({ model: 'gpt-image-1-mini', openaiApiKey: 'sk-proj-mine' });
+
+    // This tab's next change is written over what is stored now: the other tab's model survives.
+    tab.getState().updateImages({ quality: 'low' });
+    expect(stored().images).toMatchObject({ model: 'gpt-image-1-mini', quality: 'low' });
+    expect(tab.getState().images.openaiApiKey).toBe('sk-proj-mine');
+  });
+
+  it('a tab opened earlier does not wipe a remembered OpenAI key saved since', async () => {
+    const stale = await openTab();
+    const other = await openTab();
+    other.getState().setOpenAiKey('sk-proj-shared');
+    stale.getState().updateImages({ frequency: 'off' });
+    expect(stored().images).toMatchObject({ openaiApiKey: 'sk-proj-shared', frequency: 'off' });
+    expect(stale.getState().images.openaiApiKey).toBe('sk-proj-shared');
+  });
+
+  it('fills image settings missing from older saves, and reset clears the key', async () => {
+    localStorage.setItem(KEY, JSON.stringify({ theme: 'light' }));
+    const tab = await openTab();
+    expect(tab.getState().images).toEqual(DEFAULT_SETTINGS.images);
+    tab.getState().setOpenAiKey('sk-proj-1');
+    tab.getState().reset();
+    expect(tab.getState().images).toEqual(DEFAULT_SETTINGS.images);
+    expect(DEFAULT_SETTINGS.images.openaiApiKey).toBe('');
+  });
+
+  it('getSettings is a plain snapshot without the store actions', async () => {
+    vi.resetModules();
+    const { getSettings } = await import('./settingsStore');
+    const snapshot = getSettings();
+    expect(Object.values(snapshot).some((v) => typeof v === 'function')).toBe(false);
+    expect(snapshot.images).toEqual(DEFAULT_SETTINGS.images);
   });
 });

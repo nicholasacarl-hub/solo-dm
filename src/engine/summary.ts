@@ -25,6 +25,7 @@ import {
   weaponCritRange,
 } from './rules';
 import { ordinal } from './spellcasting';
+import { activeTransformations } from './transform';
 import { truncate } from './util';
 
 const SLOT_LEVELS: readonly SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -96,6 +97,8 @@ export function characterStatusLine(c: Character): string {
   if (exhaustion > 0) parts.push(`Exhaustion ${exhaustion}`);
   if (c.spellcasting?.concentratingOn) parts.push(`Concentrating: ${c.spellcasting.concentratingOn}`);
   if (c.heroicInspiration) parts.push('Heroic Inspiration');
+  const transformations = activeTransformations(c);
+  if (transformations.length) parts.push(`Transformations: ${transformations.map((t) => `${t.name}${t.stage ? ` (${t.stage})` : ''}`).join(', ')}`);
   return parts.join(' · ');
 }
 
@@ -215,7 +218,8 @@ function spellcastingLines(c: Character): string[] {
 const RECHARGE_TEXT: Record<string, string> = { short: 'short rest', long: 'long rest', dawn: 'dawn', turn: 'turn', none: 'total' };
 
 function featureLine(f: Feature): string {
-  const meta = [f.sourceName ?? '', f.uses ? `${f.uses.max - f.uses.used}/${f.uses.max} per ${RECHARGE_TEXT[f.uses.recharge] ?? f.uses.recharge}` : '', f.homebrewId ? 'homebrew' : '']
+  const source = f.source === 'transformation' ? `transformation: ${f.sourceName ?? 'unnamed'}` : (f.sourceName ?? '');
+  const meta = [source, f.uses ? `${f.uses.max - f.uses.used}/${f.uses.max} per ${RECHARGE_TEXT[f.uses.recharge] ?? f.uses.recharge}` : '', f.homebrewId ? 'homebrew' : '']
     .filter((x) => x.trim() !== '')
     .join('; ');
   const description = f.description?.trim() ? `: ${truncate(f.description, 200)}` : '';
@@ -254,7 +258,6 @@ function personalityLines(c: Character): string[] {
   return lines.length ? ['### Personality', ...lines] : [];
 }
 
-/** Full character sheet as compact markdown for the DM (abilities, saves, skills, attacks, spells, features, inventory, money). */
 /** "**Defenses:** Resistance: fire · Condition immunity: Poisoned", or null when there are none. */
 function defensesLine(c: Character): string | null {
   const parts = [
@@ -268,11 +271,26 @@ function defensesLine(c: Character): string | null {
   return parts.length ? `**Defenses:** ${parts.join(' · ')}` : null;
 }
 
+/** Lasting changes to the hero: active ones in full, ended ones as a short history line. */
+function transformationLines(c: Character): string[] {
+  const all = c.transformations ?? [];
+  if (all.length === 0) return [];
+  const active = all.filter((t) => t.status === 'active').map((t) => {
+    const meta = [t.stage, t.origin === 'accepted' ? 'chosen' : 'imposed', `since session ${t.startedSession}`].filter(Boolean).join('; ');
+    const ends = t.howItEnds?.trim() ? ` How it could end: ${truncate(t.howItEnds, 200)}` : '';
+    return `- **${t.name}** (${meta}): ${truncate(t.summary, 240)}${ends}`;
+  });
+  const ended = all.filter((t) => t.status === 'ended').map((t) => `${t.name}${t.endedSession ? ` (ended in session ${t.endedSession})` : ''}`);
+  return ['### Transformations', ...active, ...(ended.length ? [`- Ended: ${ended.join(', ')}`] : [])];
+}
+
+/** Full character sheet as compact markdown for the DM (abilities, saves, skills, attacks, spells, features, inventory, money). */
 export function characterSheetText(c: Character): string {
   const defenses = defensesLine(c);
   const sections: string[][] = [
     [...headerLines(c), '', ...vitalsLines(c)],
     [...abilityLines(c), proficiencyLine(c), ...(defenses ? [defenses] : [])],
+    transformationLines(c),
     attackLines(c),
     spellcastingLines(c),
     c.features.length ? ['### Features', ...c.features.map(featureLine)] : [],

@@ -123,4 +123,24 @@ describe('the offline demo DM', () => {
     expectValidTranscript(h.s().transcript);
     expect(h.s().dm.phase).toBe('idle');
   });
+
+  it('never uses the new tools, so it paints nothing even with an OpenAI key', async () => {
+    const request = vi.fn(async () => ({ ok: false as const, reason: 'should not be called' }));
+    const h = setupHarness({
+      settings: { mockMode: true, images: { openaiApiKey: 'sk-openai-test', model: 'gpt-image-2.5-flare', quality: 'medium', frequency: 'moments' } },
+      campaignSettings: { playerRollMode: 'auto', transformations: 'consequences' },
+      images: { available: () => ({ ok: true }), request },
+    });
+    await h.controller.beginOrResume();
+    for (const words of ['I scan the room.', 'I confront the hooded figure.', 'I stab with my dagger.', 'I ask Wren about the token.']) {
+      await h.controller.sendPlayerMessage(words);
+    }
+    const s = h.s();
+    expect(request).not.toHaveBeenCalled();
+    expect(toolNames(s.log)).not.toEqual(expect.arrayContaining(['transform_character']));
+    expect(s.character?.transformations).toBeUndefined();
+    expectValidTranscript(s.transcript);
+    expect(s.dm.phase).toBe('idle');
+  });
 });
+

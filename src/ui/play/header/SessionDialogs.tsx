@@ -9,7 +9,7 @@ import { runDm } from '../dmStatus';
 import { errorMessage } from '../format';
 import { PanelBoundary } from '../PanelBoundary';
 import { RulesPanel } from '../RulesPanel';
-import { describeSettingsChanges, settingsChangeNotice } from './settingsDiff';
+import { describeSettingsChanges, quietSettingsChanges, settingsChangeNotice } from './settingsDiff';
 
 /** Confirm, then ask the DM to wrap up: final journal/quest updates and the recap. */
 export function EndSessionDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -54,9 +54,11 @@ function TableRulesEditor({ onClose }: { onClose: () => void }) {
   const [draft, setDraft] = useState<CampaignSettings | null>(original);
   const [saving, setSaving] = useState(false);
   const changes = original && draft ? describeSettingsChanges(original, draft) : [];
+  const quiet = original && draft ? quietSettingsChanges(original, draft) : [];
+  const changed = changes.length > 0 || quiet.length > 0;
 
   const save = async () => {
-    if (!draft || changes.length === 0) {
+    if (!draft || !changed) {
       onClose();
       return;
     }
@@ -64,8 +66,9 @@ function TableRulesEditor({ onClose }: { onClose: () => void }) {
     try {
       const { updateCampaign, queueDmNotice } = useGame.getState();
       await updateCampaign((c) => ({ ...c, settings: draft }));
-      queueDmNotice(settingsChangeNotice(changes));
-      toast.success('Table rules updated. The DM will hear about it on your next turn.');
+      if (changes.length > 0) queueDmNotice(settingsChangeNotice(changes));
+      const dmHears = changes.length > 0 || quiet.includes('transformations');
+      toast.success(dmHears ? 'Table rules updated. The DM will hear about it on your next turn.' : 'Table rules updated.');
       onClose();
     } catch (err) {
       toast.error(errorMessage(err));
@@ -86,7 +89,7 @@ function TableRulesEditor({ onClose }: { onClose: () => void }) {
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" onClick={() => void save()} loading={saving} disabled={changes.length === 0}>
+          <Button variant="primary" onClick={() => void save()} loading={saving} disabled={!changed}>
             Save changes
           </Button>
         </>

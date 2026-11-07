@@ -1,66 +1,51 @@
 /**
  * Illustrations: Claude writes the picture description, OpenAI's image model paints it (the player's
- * own OpenAI key, from Settings → Images). CONTRACT — implemented by the images engineer.
+ * own OpenAI key, from Settings → Illustrations).
  *
  * Generation happens in the background: the story log shows a pending image card that turns into the
- * picture (or a friendly failure) when it's ready, so narration never waits on it.
+ * picture (or a friendly failure) when it's ready, so narration never waits on it. Pictures are stored
+ * only on this device (see '@/storage': saveImage, useImageList, useImageUrl...).
+ *
+ * The OpenAI SDK is loaded on first use, so importing this module costs almost nothing.
  */
-import type { Campaign, Character, ImageSubject, AppSettings } from '@/types';
+import { checkOpenAiKey } from './openai';
+import { buildImagePrompt as buildPrompt, type ImagePromptInput } from './prompt';
 
-export type ImageAspect = 'landscape' | 'portrait' | 'square';
-
-export interface IllustrationRequest {
-  campaignId: string;
-  title: string;
-  subject: ImageSubject;
-  /** A vivid, specific visual description written by the DM (no text, captions, maps or UI). */
-  prompt: string;
-  aspect?: ImageAspect;
-}
-
-export type IllustrationStart =
-  | { ok: true; imageId: string; logEntryId: string }
-  | { ok: false; reason: string };
-
-/** Whether illustrations can be made right now (a key is set and the frequency isn't "off"). */
-export function imagesAvailable(_settings?: AppSettings): { ok: true } | { ok: false; reason: string } {
-  throw new Error('images: imagesAvailable not implemented');
-}
-
-/**
- * Start painting an illustration for the LOADED campaign: appends a pending image log entry, then
- * generates, stores and marks it ready (or failed) in the background. Resolves as soon as the pending
- * entry exists. Never throws for expected problems (no key, images off): returns { ok: false, reason }.
- */
-export async function requestIllustration(_req: IllustrationRequest): Promise<IllustrationStart> {
-  throw new Error('images: requestIllustration not implemented');
-}
-
-/**
- * Paint a portrait of the hero from their sheet (species, class, appearance, gear) in the campaign's
- * art style. Stores the full image in the gallery and returns a small data: URL (≈256 px JPEG) to set
- * as Character.portrait.
- */
-export async function generatePortrait(
-  _character: Character,
-  _campaign: Campaign,
-  _signal?: AbortSignal,
-): Promise<{ portrait: string; imageId: string }> {
-  throw new Error('images: generatePortrait not implemented');
-}
+export type { ImageAspect } from './openai';
+export { IMAGE_SIZES } from './openai';
+export type { IllustrationRequest, IllustrationStart } from './illustrate';
+export {
+  MAX_PARALLEL_PAINTINGS,
+  NOT_AT_TABLE,
+  canRetryIllustration,
+  imagesAvailable,
+  isPainting,
+  requestIllustration,
+  retryIllustration,
+} from './illustrate';
+export { generatePortrait, portraitPrompt } from './portrait';
+export { IMAGE_DECLINED, OPENAI_UNREACHABLE, ImageServiceError } from './errors';
+export type { ArtStylePreset, ImagePromptInput } from './prompt';
+export {
+  ART_STYLE_PRESETS,
+  DEFAULT_ART_STYLE,
+  IMAGE_GUARDRAILS,
+  SUBJECT_FRAMING,
+  campaignArtStyle,
+  defaultArtStyle,
+  describeHero,
+  heroInFrame,
+  toneArtStylePreset,
+} from './prompt';
+export type { PictureView } from './usePicture';
+export { PICTURE_INTERRUPTED, PICTURE_MISSING, usePicture } from './usePicture';
 
 /** Check an OpenAI API key cheaply (no image is generated). */
-export async function testOpenAiKey(_apiKey: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  throw new Error('images: testOpenAiKey not implemented');
+export async function testOpenAiKey(apiKey: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  return checkOpenAiKey(apiKey);
 }
 
 /** The full prompt sent to the image model: art style + subject framing + description + guardrails. */
-export function buildImagePrompt(_input: {
-  prompt: string;
-  subject: ImageSubject;
-  artStyle?: string;
-  /** The hero's appearance, when the hero is in frame. */
-  heroAppearance?: string;
-}): string {
-  throw new Error('images: buildImagePrompt not implemented');
+export function buildImagePrompt(input: ImagePromptInput): string {
+  return buildPrompt(input);
 }

@@ -15,6 +15,7 @@ import { resetMediaQueryCache } from './useMediaQuery';
 
 vi.mock('@/dm', () => import('./testing/dmMock'));
 vi.mock('@/engine', () => import('./testing/engineMock'));
+vi.mock('@/images', () => import('./testing/imagesMock'));
 vi.mock('@/data', () => ({ useRulesIndex: () => null }));
 vi.mock('@/ui/sheet/CharacterSheet', () => ({
   CharacterSheet: ({ variant, editable }: { variant: string; editable: boolean }) => (
@@ -28,12 +29,17 @@ vi.mock('@/ui/sheet/ShortRestDialog', () => ({ ShortRestDialog: () => null }));
 vi.mock('@/ui/sheet/LevelUpDialog', () => ({ LevelUpDialog: () => null }));
 vi.mock('@/ui/shell/CampaignSettingsForm', () => ({
   CampaignSettingsForm: ({ value, onChange }: { value: CampaignSettings; onChange: (v: CampaignSettings) => void }) => (
-    <button
-      type="button"
-      onClick={() => onChange({ ...value, difficulty: 'hard', veils: [...value.veils, 'Spiders'] })}
-    >
-      Make it harder
-    </button>
+    <>
+      <button
+        type="button"
+        onClick={() => onChange({ ...value, difficulty: 'hard', veils: [...value.veils, 'Spiders'] })}
+      >
+        Make it harder
+      </button>
+      <button type="button" onClick={() => onChange({ ...value, transformations: 'consequences' })}>
+        Let consequences stick
+      </button>
+    </>
   ),
 }));
 
@@ -118,6 +124,21 @@ describe('PlayTable — desktop', () => {
     expect(spies.queueDmNotice).toHaveBeenCalledWith(
       'The player changed the table rules: difficulty: standard → hard; new veils (keep off-screen): "Spiders". Follow the new rules from now on.',
     );
+  });
+
+  it('saves a transformations-only change without a notice of its own (the DM harness tells the DM)', async () => {
+    const { spies, user } = renderTable();
+    await user.click(screen.getByRole('button', { name: 'Table rules' }));
+    const dialog = screen.getByRole('heading', { name: 'Table rules' }).closest('dialog')!;
+    const save = within(dialog).getByRole('button', { name: 'Save changes' });
+    expect(save).toBeDisabled();
+
+    await user.click(within(dialog).getByRole('button', { name: 'Let consequences stick' }));
+    expect(save).toBeEnabled();
+    await user.click(save);
+    await waitFor(() => expect(spies.updateCampaign).toHaveBeenCalledTimes(1));
+    expect(useGame.getState().campaign?.settings.transformations).toBe('consequences');
+    expect(spies.queueDmNotice).not.toHaveBeenCalled();
   });
 
   it('toggles "Reveal all DM rolls"', async () => {

@@ -14,6 +14,7 @@ import { seedGame } from '../testing/seed';
 import { activeChoicesEntryId, latestErrorEntryId, NarrativeLog } from './NarrativeLog';
 
 vi.mock('@/dm', () => import('../testing/dmMock'));
+vi.mock('@/images', () => import('../testing/imagesMock'));
 
 const meta = { campaignId: 'camp-1', sessionId: 'sess-1', createdAt: 1 };
 
@@ -228,6 +229,54 @@ describe('NarrativeLog', () => {
       'The player vetoed homebrew "Tidecaller\'s Mark". Retire or rework it.',
     );
     expect(screen.getByRole('button', { name: "Vetoed homebrew Tidecaller's Mark" })).toBeDisabled();
+  });
+
+  it('gives a transformation a prominent card with what changed, not a one-line note', async () => {
+    const user = userEvent.setup();
+    const line: LogEntry = {
+      ...meta,
+      id: 'tf',
+      seq: 71,
+      kind: 'tool',
+      tool: 'transform_character',
+      icon: 'transform',
+      summary: 'Transformation: Vampiric Curse takes hold (stage 1 of 3, imposed)',
+      detail: '- Resistance to **necrotic** damage\n- Sunlight Sensitivity',
+    };
+    const plain: LogEntry = { ...meta, id: 'hp', seq: 72, kind: 'tool', tool: 'update_character', icon: 'hp', summary: 'HP 12 → 9' };
+    seedGame({ log: [line, plain] });
+    render(<NarrativeLog />);
+
+    const card = screen.getByRole('region', { name: 'Transformation' });
+    // The heading already says "Transformation", so the summary doesn't repeat it.
+    expect(within(card).getByText('Vampiric Curse takes hold (stage 1 of 3, imposed)')).toBeInTheDocument();
+    expect(card).toHaveClass('border-arcane/40');
+    // What changed is shown right away, and can be folded.
+    expect(within(card).getByText('necrotic').tagName).toBe('STRONG');
+    await user.click(within(card).getByRole('button', { name: 'Hide what changed' }));
+    expect(within(card).queryByText('necrotic')).not.toBeInTheDocument();
+    expect(within(card).getByRole('button', { name: 'What changed' })).toHaveAttribute('aria-expanded', 'false');
+    // Ordinary tool lines stay small.
+    expect(screen.getAllByRole('region')).toHaveLength(1);
+    expect(screen.getByText('HP 12 → 9').closest('[data-kind]')).toHaveClass('mt-2');
+    expect(card.closest('[data-kind]')).toHaveClass('mt-5');
+  });
+
+  it('keeps a secret transformation line behind the screen like any secret note', () => {
+    const line: LogEntry = {
+      ...meta,
+      id: 'tf-secret',
+      seq: 73,
+      kind: 'tool',
+      tool: 'transform_character',
+      icon: 'transform',
+      summary: 'The curse advances to stage 2',
+      secret: true,
+    };
+    seedGame({ log: [line] });
+    render(<NarrativeLog />);
+    expect(screen.getByText('The DM made a secret note.')).toBeInTheDocument();
+    expect(screen.queryByText('The curse advances to stage 2')).not.toBeInTheDocument();
   });
 
   it('keeps the DM notes collapsed behind a spoiler warning', () => {

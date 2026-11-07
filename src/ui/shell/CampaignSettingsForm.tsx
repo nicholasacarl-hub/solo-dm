@@ -1,15 +1,17 @@
 /**
- * The campaign "table rules" form: story (tone, setting, notes), rules (fidelity, homebrew,
- * difficulty, narration, roll mode, leveling, DM rolls, rules sources) and safety (lines & veils).
- * Used by the New Campaign wizard (one section per step) and by the Play screen's "Table rules"
- * dialog (all sections). Every option carries a one-line explanation.
+ * The campaign "table rules" form: story (tone, setting, notes, art style), rules (fidelity, homebrew,
+ * transformations, difficulty, narration, roll mode, leveling, DM rolls, rules sources) and safety
+ * (lines & veils). Used by the New Campaign wizard (one section per step) and by the Play screen's
+ * "Table rules" dialog (all sections). Every option carries a one-line explanation.
  */
 import { useId, useState } from 'react';
 import { Link } from 'react-router';
-import { ShieldCheck } from 'lucide-react';
-import type { CampaignSettings } from '@/types';
-import { Field, Input, SectionTitle, Textarea } from '@/ui/components/ui';
-import { OptionCards } from '@/ui/components/OptionCards';
+import { Check, ShieldCheck } from 'lucide-react';
+import { cn } from '@/lib/cn';
+import { defaultArtStyle } from '@/images';
+import type { CampaignSettings, TransformationsMode } from '@/types';
+import { Badge, Field, Input, SectionTitle, Textarea } from '@/ui/components/ui';
+import { OptionCards, type OptionCardOption } from '@/ui/components/OptionCards';
 import { TagInput } from '@/ui/components/TagInput';
 import {
   DIFFICULTY_OPTIONS,
@@ -21,9 +23,12 @@ import {
   RULES_FIDELITY_OPTIONS,
   SAFETY_PRESETS,
   TONE_PRESETS,
+  TRANSFORMATION_OPTIONS,
+  artStyleSuggestions,
   findTonePreset,
   tonePreset,
   toneText,
+  transformationsMode,
   type TonePresetId,
 } from './campaignOptions';
 
@@ -152,13 +157,71 @@ function StoryFields({ value, patch, toneError }: { value: CampaignSettings; pat
           onChange={(e) => patch({ playerNotes: e.target.value })}
         />
       </Field>
+
+      <ArtStyleField value={value} patch={patch} />
     </>
+  );
+}
+
+/** The look of the campaign's illustrations: free text, with a few suggestions led by one that suits the tone. */
+function ArtStyleField({ value, patch }: { value: CampaignSettings; patch: Patch }) {
+  const id = useId();
+  const style = value.artStyle ?? '';
+  const toneStyle = defaultArtStyle(value.tone);
+  const suggestions = artStyleSuggestions(value.tone);
+  const chosen = style.trim().toLowerCase();
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={`${id}-art`} className="text-sm font-medium">
+        Art style
+      </label>
+      <Input
+        id={`${id}-art`}
+        value={style}
+        maxLength={300}
+        placeholder={toneStyle}
+        aria-describedby={`${id}-art-hint`}
+        onChange={(e) => patch({ artStyle: e.target.value })}
+      />
+      <p id={`${id}-art-hint`} className="text-xs text-muted">
+        How pictures look, if you turn them on in Settings → Illustrations. Every picture uses it, so they match. Leave
+        it empty to suit your tone.
+      </p>
+      <div role="group" aria-label="Art style suggestions" className="mt-1 flex flex-wrap gap-1.5">
+        {suggestions.map((preset, i) => {
+          const pressed = chosen === preset.style.toLowerCase();
+          return (
+            <button
+              key={preset.id}
+              type="button"
+              aria-pressed={pressed}
+              title={preset.style}
+              onClick={() => patch({ artStyle: preset.style })}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-xs transition-colors',
+                pressed
+                  ? 'border-accent bg-accent-soft text-text'
+                  : 'border-dashed border-border text-muted hover:border-accent hover:text-text',
+              )}
+            >
+              {pressed && <Check className="size-3" aria-hidden />}
+              {preset.label}
+              {i === 0 && <span className="text-faint">· suits your tone</span>}
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 
 // ---------------------------------------------------------------------------
 // Table rules
 // ---------------------------------------------------------------------------
+
+const TRANSFORMATION_CARDS: readonly OptionCardOption<TransformationsMode>[] = TRANSFORMATION_OPTIONS.map((option) =>
+  option.value === 'offered' ? { ...option, aside: <Badge tone="arcane">Default</Badge> } : option,
+);
 
 function RulesFields({ value, patch }: { value: CampaignSettings; patch: Patch }) {
   return (
@@ -178,6 +241,13 @@ function RulesFields({ value, patch }: { value: CampaignSettings; patch: Patch }
         value={value.homebrewFreedom}
         options={HOMEBREW_OPTIONS}
         onChange={(homebrewFreedom) => patch({ homebrewFreedom })}
+      />
+      <OptionCards
+        legend="Transformations"
+        hint="Lasting changes to your hero, like vampirism, lycanthropy or a celestial blessing, with real costs as well as powers. They follow the story: never forced in, never rationed."
+        value={transformationsMode(value)}
+        options={TRANSFORMATION_CARDS}
+        onChange={(transformations) => patch({ transformations })}
       />
       <OptionCards
         legend="Difficulty"

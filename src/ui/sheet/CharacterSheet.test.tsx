@@ -1,15 +1,19 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { generatePortrait } from '@/images';
 import { useGame } from '@/state/gameStore';
 import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
+import type { Feature, Transformation } from '@/types';
 import { builderFixture } from '@/ui/builder/testing/builderFixture';
 import { clearRolls, queueRolls } from '@/ui/builder/testing/fakeEngine';
 import { installDialogPolyfill, resetFakeGame } from '@/ui/builder/testing/fakeGameStore';
+import { PAINTED_PORTRAIT, resetImagesMock, withImages } from '@/ui/play/testing/imagesMock';
 import { CharacterSheet } from './CharacterSheet';
 import { LevelUpDialog } from './LevelUpDialog';
 
 vi.mock('@/engine', async () => (await import('@/ui/builder/testing/fakeEngine')).fakeEngine);
+vi.mock('@/images', () => import('@/ui/play/testing/imagesMock'));
 vi.mock('@/state/gameStore', async () => (await import('@/ui/builder/testing/fakeGameStore')).fakeGameStoreModule());
 vi.mock('@/data', async () => {
   const { builderFixture, spellFixture } = await import('@/ui/builder/testing/builderFixture');
@@ -36,6 +40,7 @@ afterEach(cleanup);
 
 beforeEach(() => {
   clearRolls();
+  resetImagesMock();
   resetFakeGame({ campaign: sampleCampaign(), character: sampleCharacter() });
 });
 
@@ -168,6 +173,212 @@ describe('CharacterSheet', () => {
     render(<Harness variant="compact" />);
     expect(screen.queryByRole('tablist')).toBeNull();
     expect(screen.getByRole('list', { name: 'Ability scores' })).toBeInTheDocument();
+  });
+});
+
+const curse = (overrides: Partial<Transformation> = {}): Transformation => ({
+  id: 'tf-curse',
+  name: 'Vampiric Curse',
+  summary: 'The Drowned Lord’s bite is changing you: stronger by night, hungrier by day.',
+  stage: 'Stage 1 of 3',
+  origin: 'imposed',
+  status: 'active',
+  howItEnds: 'Greater Restoration before the third stage, or the Drowned Lord’s death.',
+  featureIds: ['f-bite'],
+  startedSession: 2,
+  createdAt: 1,
+  updatedAt: 1,
+  ...overrides,
+});
+
+const blessing: Transformation = {
+  id: 'tf-blessing',
+  name: 'Blessing of the Tide',
+  summary: 'The sea goddess marked you for a season.',
+  origin: 'accepted',
+  status: 'ended',
+  featureIds: [],
+  startedSession: 1,
+  endedSession: 2,
+  createdAt: 1,
+  updatedAt: 1,
+};
+
+const bite: Feature = {
+  id: 'f-bite',
+  name: 'Vampiric Bite',
+  source: 'transformation',
+  sourceName: 'Vampiric Curse',
+  description: 'Bite a grappled creature: 1d6 piercing plus 1d6 necrotic, and you regain that much HP.',
+  uses: { max: 1, used: 0, recharge: 'long' },
+};
+
+const leftover: Feature = { id: 'f-chill', name: 'Grave Chill', source: 'transformation', sourceName: 'An old curse', description: 'You feel no cold.' };
+
+function transformed(transformations: Transformation[] = [curse(), blessing]) {
+  const base = sampleCharacter();
+  resetFakeGame({ campaign: sampleCampaign(), character: { ...base, features: [...base.features, bite, leftover], transformations } });
+}
+
+describe('CharacterSheet — transformations', () => {
+  it('shows active transformations with stage, origin, what they mean and how they could end', async () => {
+    const user = userEvent.setup();
+    transformed();
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Features/ }));
+
+    const section = screen.getByRole('region', { name: 'Transformations' });
+    const card = within(section).getByRole('article', { name: 'Transformation: Vampiric Curse' });
+    expect(within(card).getByText('Stage 1 of 3')).toBeInTheDocument();
+    expect(within(card).getByText('Imposed')).toBeInTheDocument();
+    expect(within(card).getByText(/stronger by night, hungrier by day/)).toBeInTheDocument();
+    expect(within(card).getByText('How it could end:').parentElement).toHaveTextContent(/Greater Restoration before the third stage/);
+    // Its features sit with it, in the arcane style, and aren't listed twice.
+    const features = within(card).getByRole('list', { name: 'Features from Vampiric Curse' });
+    expect(within(features).getByText('Vampiric Bite').closest('li')).toHaveClass('border-arcane/40');
+    expect(screen.getAllByText('Vampiric Bite')).toHaveLength(1);
+    // A transformation feature without its record still shows, styled the same.
+    const others = screen.getByRole('region', { name: 'Transformation features' });
+    expect(within(others).getByText('Grave Chill').closest('li')).toHaveAttribute('data-source', 'transformation');
+  });
+
+  it('folds ended transformations away', async () => {
+    const user = userEvent.setup();
+    transformed();
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Features/ }));
+    const ended = screen.getByText('Ended (1)');
+    expect(screen.getByText('Blessing of the Tide')).not.toBeVisible();
+    await user.click(ended);
+    expect(screen.getByText('Blessing of the Tide')).toBeVisible();
+    expect(screen.getByText('Accepted')).toBeVisible();
+    expect(screen.getByText('Ended in session 2')).toBeVisible();
+  });
+
+  it('says so when every transformation has ended', async () => {
+    const user = userEvent.setup();
+    transformed([blessing]);
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Features/ }));
+    expect(screen.getByText('No transformation is active right now.')).toBeInTheDocument();
+  });
+
+  it('spends a transformation feature like any other (the DM is told)', async () => {
+    const user = userEvent.setup();
+    transformed();
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Features/ }));
+    await user.click(screen.getByRole('button', { name: 'Vampiric Bite uses 1 of 1: available — mark as used' }));
+    expect(useGame.getState().character?.features.find((f) => f.id === 'f-bite')?.uses?.used).toBe(1);
+    expect(notices()).toHaveLength(1);
+  });
+
+  it('names what the hero is becoming in the header, which opens the Features tab', async () => {
+    const user = userEvent.setup();
+    transformed();
+    render(<Harness />);
+    const note = screen.getByRole('button', { name: 'Transformed: Vampiric Curse (Stage 1 of 3)' });
+    await user.click(note);
+    expect(screen.getByRole('tab', { name: /Features/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('region', { name: 'Transformations' })).toBeInTheDocument();
+  });
+
+  it('has no transformations section for a hero who is as built', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    expect(screen.queryByText(/Transformed:/)).not.toBeInTheDocument();
+    await user.click(screen.getByRole('tab', { name: /Features/ }));
+    expect(screen.queryByRole('region', { name: 'Transformations' })).not.toBeInTheDocument();
+  });
+});
+
+describe('CharacterSheet — paint portrait', () => {
+  it('is only offered when illustrations are available', () => {
+    render(<Harness />);
+    expect(screen.queryByRole('button', { name: 'Paint portrait' })).not.toBeInTheDocument();
+    cleanup();
+    withImages();
+    render(<Harness editable={false} />);
+    expect(screen.queryByRole('button', { name: 'Paint portrait' })).not.toBeInTheDocument();
+  });
+
+  it('paints a portrait from the sheet and uses it only when the player says so (no DM notice)', async () => {
+    const user = userEvent.setup();
+    withImages();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'Paint portrait' }));
+    const dialog = screen.getByRole('dialog', { name: 'Paint a portrait' });
+    await user.click(within(dialog).getByRole('button', { name: 'Paint portrait' }));
+
+    expect(generatePortrait).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'char-1', name: 'Mira Voss' }),
+      expect.objectContaining({ id: 'camp-1' }),
+      expect.any(AbortSignal),
+    );
+    expect(await within(dialog).findByRole('img', { name: 'New portrait of Mira Voss' })).toHaveAttribute('src', PAINTED_PORTRAIT);
+    expect(useGame.getState().character?.portrait).toBe('🧝‍♀️');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Use this portrait' }));
+    expect(useGame.getState().updateCharacter).toHaveBeenCalledTimes(1);
+    expect(useGame.getState().character?.portrait).toBe(PAINTED_PORTRAIT);
+    expect(notices()).toEqual([]);
+    expect(screen.queryByRole('dialog', { name: 'Paint a portrait' })).not.toBeInTheDocument();
+  });
+
+  it('shows progress while painting, and Stop abandons it', async () => {
+    const user = userEvent.setup();
+    let signal: AbortSignal | undefined;
+    vi.mocked(generatePortrait).mockImplementation(
+      (_c, _campaign, s) =>
+        new Promise((_resolve, reject) => {
+          signal = s;
+          s?.addEventListener('abort', () => reject(new DOMException('The portrait was cancelled.', 'AbortError')));
+        }),
+    );
+    withImages();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'Paint portrait' }));
+    const dialog = screen.getByRole('dialog', { name: 'Paint a portrait' });
+    await user.click(within(dialog).getByRole('button', { name: 'Paint portrait' }));
+    expect(within(dialog).getByRole('status')).toHaveTextContent('Painting your portrait…');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Stop' }));
+    expect(signal?.aborted).toBe(true);
+    expect(within(dialog).queryByRole('status')).not.toBeInTheDocument();
+    expect(within(dialog).queryByRole('alert')).not.toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Paint portrait' })).toBeEnabled();
+  });
+
+  it('says why a portrait could not be painted and can try again', async () => {
+    const user = userEvent.setup();
+    vi.mocked(generatePortrait).mockRejectedValueOnce(new Error('The image service declined this picture.'));
+    withImages();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'Paint portrait' }));
+    const dialog = screen.getByRole('dialog', { name: 'Paint a portrait' });
+    await user.click(within(dialog).getByRole('button', { name: 'Paint portrait' }));
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('The image service declined this picture.');
+
+    await user.click(within(dialog).getByRole('button', { name: 'Try again' }));
+    expect(await within(dialog).findByRole('img', { name: 'New portrait of Mira Voss' })).toBeInTheDocument();
+    expect(generatePortrait).toHaveBeenCalledTimes(2);
+  });
+
+  it('abandons the painting when the dialog closes', async () => {
+    const user = userEvent.setup();
+    let signal: AbortSignal | undefined;
+    vi.mocked(generatePortrait).mockImplementation((_c, _campaign, s) => {
+      signal = s;
+      return new Promise(() => {});
+    });
+    withImages();
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'Paint portrait' }));
+    const dialog = screen.getByRole('dialog', { name: 'Paint a portrait' });
+    await user.click(within(dialog).getByRole('button', { name: 'Paint portrait' }));
+    await user.click(within(dialog).getByRole('button', { name: 'Close' }));
+    expect(signal?.aborted).toBe(true);
+    expect(useGame.getState().updateCharacter).not.toHaveBeenCalled();
   });
 });
 

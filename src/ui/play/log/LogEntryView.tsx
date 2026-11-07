@@ -1,6 +1,7 @@
 import { memo } from 'react';
 import { cn } from '@/lib/cn';
 import type { LogEntry, LogEntryKind } from '@/types';
+import { ImageCard } from '../images/ImageCard';
 import { isStoppedNote } from './dmContext';
 import { DmEntry } from './DmEntry';
 import { RollCard } from './RollCard';
@@ -19,6 +20,16 @@ const SPACING: Record<LogEntryKind, string> = {
   error: 'mt-5',
   image: 'mt-6',
 };
+
+function spacingFor(entry: LogEntry): string {
+  // The DM's "Stopped." note sits right under the reply it marks.
+  if (isStoppedNote(entry)) return 'mt-2';
+  // A transformation is a turning point in the story: its card gets room like narration does.
+  if (entry.kind === 'tool' && entry.icon === 'transform') return 'mt-5';
+  // A picture that couldn't be painted is a quiet line, like the tool lines.
+  if (entry.kind === 'image' && entry.status === 'failed') return 'mt-3';
+  return SPACING[entry.kind];
+}
 
 export interface LogEntryViewProps {
   entry: LogEntry;
@@ -40,10 +51,8 @@ export const LogEntryView = memo(function LogEntryView({
   cutOff = false,
   pending = false,
 }: LogEntryViewProps) {
-  // The DM's "Stopped." note sits right under the reply it marks.
-  const spacing = isStoppedNote(entry) ? 'mt-2' : SPACING[entry.kind];
   return (
-    <div className={cn(spacing, 'first:mt-0')} data-kind={entry.kind}>
+    <div className={cn(spacingFor(entry), 'first:mt-0')} data-kind={entry.kind}>
       {renderEntry(entry, showChoices, latestError, cutOff, pending)}
     </div>
   );
@@ -67,5 +76,7 @@ function renderEntry(entry: LogEntry, showChoices: boolean, latestError: boolean
       return <RecapCard entry={entry} />;
     case 'error':
       return <ErrorCard entry={entry} latest={latestError} />;
+    case 'image':
+      return <ImageCard entry={entry} />;
   }
 }

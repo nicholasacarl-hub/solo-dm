@@ -580,6 +580,42 @@ describe('journal, quests, clocks, scene, oracle, memory', () => {
     expect(out.content).toContain('Open objectives: Open the lantern room');
   });
 
+  it('records an ambition without a checklist, and reminds the DM how it is earned', async () => {
+    const h = setup();
+    const out = await h.run('update_quest', { title: "Found a thieves' guild", summary: 'The docks will answer to Mira.', ambition: true });
+    const quest = h.s().quests.find((q) => q.title === "Found a thieves' guild");
+    expect(quest).toMatchObject({ ambition: true, status: 'active', objectives: [] });
+    expect(toolLines(h.s().log).at(-1)).toMatchObject({ icon: 'quest', summary: "New ambition: Found a thieves' guild", refId: quest?.id });
+    expect(out.content).toContain('progress clock (update_clocks, kind "progress", 6–12 segments by its scale)');
+    expect(out.content).toContain('goes back for setbacks');
+    expect(out.content).toContain('threat clock');
+    expect(out.content).toContain('A declaration alone is not progress.');
+    expect(out.content).not.toContain('never a checklist of your own');
+
+    // A step the hero named; the flag sticks when an update leaves it out.
+    const step = await h.run('update_quest', { title: "found a thieves' guild", objectives: [{ text: 'Win over the dockside urchins' }] });
+    expect(step.content).toContain("Ambition: Found a thieves' guild — new objective: Win over the dockside urchins");
+    expect(step.content).toContain('only for concrete steps the hero has identified themselves — never a checklist of your own');
+    expect(step.content).not.toContain('6–12 segments');
+    expect(h.s().quests.find((q) => q.id === quest?.id)?.ambition).toBe(true);
+    expect((await h.run('search_memory', { query: 'thieves guild' })).content).toContain("Found a thieves' guild (Ambition, active)");
+
+    const demoted = await h.run('update_quest', { title: "Found a thieves' guild", ambition: false });
+    expect(demoted.content).toContain("Quest: Found a thieves' guild — no longer an ambition");
+    expect(h.s().quests.find((q) => q.id === quest?.id)?.ambition).toBe(false);
+  });
+
+  it('turns an existing quest into an ambition', async () => {
+    const h = setup();
+    const out = await h.run('update_quest', { title: 'Find Keeper Halvard', ambition: true });
+    expect(out.content).toContain('Ambition: Find Keeper Halvard — now an ambition');
+    expect(out.content).toContain('6–12 segments');
+    // Ordinary quests are untouched by any of this.
+    const plain = await h.run('update_quest', { title: 'The smugglers of Gull Cove', status: 'active' });
+    expect(plain.content).toBe('Quest: The smugglers of Gull Cove — active. Status: active. Open objectives: none.');
+    expect(h.s().quests.find((q) => q.title === 'The smugglers of Gull Cove')).not.toHaveProperty('ambition');
+  });
+
   it('creates and advances clocks, flagging the moment one fills', async () => {
     const h = setup();
     const created = await h.run('update_clocks', { clocks: [{ name: 'Storm front', consequence: 'The harbor floods.' }] });

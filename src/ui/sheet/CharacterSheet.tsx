@@ -132,7 +132,14 @@ export function CharacterSheet({ character, variant = 'full', editable = false }
     }
   };
 
-  const header = <SheetHeader character={character} editable={editable} onLevelUp={editable ? () => setLevelingUp(true) : undefined} />;
+  const header = (
+    <SheetHeader
+      character={character}
+      editable={editable}
+      onLevelUp={editable ? () => setLevelingUp(true) : undefined}
+      onShowTransformations={variant === 'full' ? () => setTab('features') : undefined}
+    />
+  );
   const vitals = <VitalsPanel character={character} editable={editable} onEdit={onEdit} onRoll={onRoll ?? (() => undefined)} />;
   const dialogs = editable && (
     <>

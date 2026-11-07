@@ -99,11 +99,40 @@ describe('NewCampaignScreen', () => {
         enabledSources: ['srd-5.2.1'],
         lines: ['Torture'],
         veils: ['Drowning'],
+        // New campaigns offer transformations, and their pictures get an art style that suits the tone.
+        transformations: 'offered',
+        artStyle: 'eerie atmospheric illustration, sickly muted colors, deep shadows, fog',
       }),
     });
     expect(await screen.findByTestId('location')).toHaveTextContent('/campaign/camp-new/character');
     // The new save is the only copy: ask the browser not to evict it (a refusal changes nothing).
     expect(requestPersistentStorage).toHaveBeenCalledTimes(1);
+  });
+
+  it('lets the player choose how transformations work and the look of the pictures', async () => {
+    vi.mocked(createCampaign).mockResolvedValue(sampleCampaign({ id: 'camp-new', status: 'setup', characterId: null }));
+    const user = userEvent.setup();
+    renderWizard();
+    await user.type(screen.getByLabelText('Campaign name'), 'Bloodmoon');
+    await user.click(screen.getByRole('radio', { name: /Grim & gritty/ }));
+    const artStyle = screen.getByLabelText('Art style');
+    expect(artStyle).toHaveValue('');
+    expect(artStyle).toHaveAttribute('placeholder', expect.stringMatching(/^dark gritty fantasy painting/));
+    await user.click(screen.getByRole('button', { name: /^Ink & wash/ }));
+    expect(artStyle).toHaveValue('ink and wash illustration, loose linework, limited palette with one accent color');
+    await user.click(nextButton());
+
+    expect(screen.getByRole('radio', { name: /Offered — you always choose/ })).toBeChecked();
+    await user.click(screen.getByRole('radio', { name: /Consequences can stick/ }));
+    await user.click(nextButton());
+    expect(screen.getByText('Consequences can stick')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Create campaign' }));
+
+    await waitFor(() => expect(createCampaign).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createCampaign).mock.calls[0][0].settings).toMatchObject({
+      transformations: 'consequences',
+      artStyle: 'ink and wash illustration, loose linework, limited palette with one accent color',
+    });
   });
 
   it('lets the player go back without losing choices', async () => {
@@ -165,5 +194,18 @@ describe('wizard helpers', () => {
     expect(input.premise).toBe('Pitch');
     expect(input.settings.setting).toBe('Coast');
     expect(input.settings.playerNotes).toBeUndefined();
+  });
+
+  it('starts with transformations offered and fixes the art style at creation', () => {
+    const draft = newCampaignDraft();
+    expect(draft.settings.transformations).toBe('offered');
+    expect(draft.settings.artStyle).toBeUndefined();
+
+    const fairy = toCampaignInput({ ...draft, settings: { ...draft.settings, tone: 'Fairy-tale whimsy: gentle wonder' } });
+    expect(fairy.settings.artStyle).toBe('storybook watercolor illustration, soft pastel palette, gentle glowing light');
+    const chosen = toCampaignInput({ ...draft, settings: { ...draft.settings, artStyle: '  woodcut print  ' } });
+    expect(chosen.settings.artStyle).toBe('woodcut print');
+    const { transformations: _t, ...older } = draft.settings;
+    expect(toCampaignInput({ ...draft, settings: older }).settings.transformations).toBe('offered');
   });
 });

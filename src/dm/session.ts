@@ -10,11 +10,12 @@
  */
 import type { BetaMessageParam, BetaTextBlockParam } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import type { DmStatus } from '@/state/gameStore';
-import type { Session, UsageTotals } from '@/types';
+import type { Campaign, Session, UsageTotals } from '@/types';
 import { AgentFailure, answerUnfinishedToolCalls, NOTES, runAgentLoop, type LoopResult } from './agent';
 import { deps as currentDeps, type DmDeps } from './deps';
 import { describeError, isAbortError } from './errors';
 import { createMockClient } from './mock';
+import { illustrationMode, isModeNotice, modeNotices, modesTold, transformationsMode, type TableModes } from './modes';
 import { parseWrapUp, playerTextForModel } from './narration';
 import { buildSystemPrompt } from './prompts';
 import { buildGameState } from './state';
@@ -27,6 +28,7 @@ import {
   lastTurnStartIndex,
   noticesAfterLastTurn,
   owesReply,
+  systemNotes,
   toolsInLastResponse,
   turnWords,
 } from './transcript';
@@ -297,9 +299,28 @@ export class DmSessionController {
     return this.logSinceLastTurn().some((e) => e.kind === 'system' && e.text === NOTES.stopped);
   }
 
+  /** The transformations rule and illustrations setting as they stand now. */
+  private currentModes(campaign: Campaign): TableModes {
+    return {
+      transformations: transformationsMode(campaign.settings),
+      illustrations: illustrationMode(this.d.settings(), this.d.images.available),
+    };
+  }
+
+  /** Notes for the modes that changed since the DM was last told (by the frozen prompt or a note). */
+  private modeChangeNotices(campaign: Campaign): string[] {
+    const store = this.d.store();
+    const session = store.activeSession;
+    if (!session) return [];
+    const told = modesTold(session.systemPrompt, systemNotes(store.transcript).flatMap(parseNotices));
+    return modeNotices(told, this.currentModes(campaign));
+  }
+
   /**
    * Append a turn: the <game_state> block, the words of any turn that never got a reply, the new
-   * words, then the pending app notices (plus `extraNotices`) as a system message.
+   * words, then the pending app notices (plus `extraNotices`, plus a note for any table mode that
+   * changed) as a system message. A mode note re-queued from a set-aside turn is replaced by a
+   * fresh one, so the DM never gets a stale or duplicate one.
    */
   private async appendTurn(
     text: string,
@@ -324,7 +345,8 @@ export class DmSessionController {
     if (carried.length > 0) content.push({ type: 'text', text: unansweredBlock(carried) });
     content.push({ type: 'text', text });
     const messages: BetaMessageParam[] = [{ role: 'user', content }];
-    const notices = [...(withNotices ? store.takeDmNotices() : []), ...(opts.extraNotices ?? [])];
+    const pending = withNotices ? store.takeDmNotices().filter((n) => !isModeNotice(n)) : [];
+    const notices = [...pending, ...(opts.extraNotices ?? []), ...this.modeChangeNotices(campaign)];
     if (notices.length > 0) messages.push({ role: 'system', content: formatNotices(notices, { sessionStart: opts.sessionStart }) });
     await store.appendTranscript(messages);
   }
@@ -339,9 +361,10 @@ export class DmSessionController {
     const imports = await libraryImports(d);
     if (signal.aborted) return;
     const s = d.store();
-    const number = (s.campaign ?? campaign).sessionCount + 1;
+    const current = s.campaign ?? campaign;
+    const number = current.sessionCount + 1;
     const systemPrompt = buildSystemPrompt({
-      campaign: s.campaign ?? campaign,
+      campaign: current,
       character: s.character,
       sessions: s.sessions,
       sessionNumber: number,
@@ -351,6 +374,7 @@ export class DmSessionController {
       homebrew: s.homebrew,
       combat: s.combat,
       librarySources: imports,
+      illustrations: this.currentModes(current).illustrations,
     });
     const session: Session = {
       id: d.newId(),

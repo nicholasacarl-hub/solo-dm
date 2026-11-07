@@ -333,6 +333,42 @@ describe('parseCampaignBundle', () => {
     expect(bundle.quests).toEqual([]);
     expect(bundle.character?.spellcasting?.spells).toHaveLength(10);
   });
+
+  it('reads transformations, the art style and ambitions, setting aside what it cannot read', () => {
+    const data = valid();
+    const campaign = data.campaign as { settings: Record<string, unknown> };
+    const vampirism = {
+      id: 'tr-1',
+      name: 'Vampirism',
+      summary: 'Hungry for blood; strong at night.',
+      stage: 'Stage 1 of 3',
+      origin: 'imposed',
+      status: 'active',
+      featureIds: ['f-1'],
+      startedSession: 2,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const bundle = parseCampaignBundle({
+      ...data,
+      campaign: { ...campaign, settings: { ...campaign.settings, transformations: 'consequences', artStyle: 'ink and wash' } },
+      character: {
+        ...(data.character as object),
+        transformations: [vampirism, { id: 'tr-2', name: 'Odd', origin: 'sideways', status: '?' }, { name: 'No id' }],
+      },
+      quests: [{ id: 'q-1', title: 'Found a thieves’ guild', ambition: true }, { id: 'q-2', title: 'Odd', ambition: 'yes' }],
+    });
+    expect(bundle.campaign.settings).toMatchObject({ transformations: 'consequences', artStyle: 'ink and wash' });
+    expect(bundle.character?.transformations).toEqual([
+      vampirism,
+      expect.objectContaining({ id: 'tr-2', origin: 'accepted', status: 'active', featureIds: [], summary: '' }),
+    ]);
+    expect(bundle.quests.map((q) => q.ambition)).toEqual([true, undefined]);
+
+    const odd = parseCampaignBundle({ ...data, campaign: { ...campaign, settings: { ...campaign.settings, transformations: 'always' } } });
+    expect(odd.campaign.settings.transformations).toBeUndefined();
+    expect(parseCampaignBundle(data).character).not.toHaveProperty('transformations');
+  });
 });
 
 describe('downloadCampaign', () => {

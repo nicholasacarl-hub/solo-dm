@@ -1,6 +1,6 @@
-/** Route: #/settings — everything stored in this browser: API key, DM, appearance, saves, cloud saves. */
+/** Route: #/settings — everything stored in this browser: API key, DM, illustrations, appearance, saves, cloud saves. */
 import { useLocation } from 'react-router';
-import { Cloud, HardDrive, KeyRound, Palette, Sparkles, TriangleAlert, WandSparkles } from 'lucide-react';
+import { Cloud, HardDrive, Image, KeyRound, Palette, Sparkles, TriangleAlert, WandSparkles } from 'lucide-react';
 import { ErrorBoundary } from '@/ui/components/ErrorBoundary';
 import { Page, PageHeader, useDocumentTitle } from '@/ui/shell/Page';
 import { ApiKeySettings } from '@/ui/shell/settings/ApiKeySettings';
@@ -8,6 +8,7 @@ import { AppearanceSettings, DemoSettings } from '@/ui/shell/settings/Appearance
 import { DangerZone } from '@/ui/shell/settings/DangerZone';
 import { DmSettings } from '@/ui/shell/settings/DmSettings';
 import { GithubSettings } from '@/ui/shell/settings/GithubSettings';
+import { IllustrationSettings } from '@/ui/shell/settings/IllustrationSettings';
 import { SettingsSection } from '@/ui/shell/settings/SettingsSection';
 import { StorageSettings } from '@/ui/shell/settings/StorageSettings';
 
@@ -27,6 +28,16 @@ export function SettingsScreen() {
         </SettingsSection>
         <SettingsSection id="dm" title="Your DM" icon={WandSparkles} description="Which Claude model runs the table, and how.">
           <DmSettings />
+        </SettingsSection>
+        <SettingsSection
+          id="images"
+          title="Illustrations"
+          icon={Image}
+          description="Optional pictures of places, faces and fights: Claude describes them, OpenAI paints them with your own OpenAI key."
+        >
+          <ErrorBoundary label="Illustrations">
+            <IllustrationSettings />
+          </ErrorBoundary>
         </SettingsSection>
         <SettingsSection id="appearance" title="Appearance" icon={Palette}>
           <AppearanceSettings />

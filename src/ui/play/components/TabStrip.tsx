@@ -84,10 +84,11 @@ export function TabStrip<T extends string>({
             title={showLabel ? undefined : item.label}
             className={cn(
               'relative flex min-w-0 items-center font-medium transition-colors',
+              // Narrow rails: icon-only tabs stay small so the selected one has room for its label.
               labels === 'selected'
-                ? cn('justify-center gap-1.5 text-xs', selected ? 'flex-1' : 'w-9 shrink-0')
-                : 'flex-col gap-1 text-[0.6875rem]',
-              variant === 'panel' ? '-mb-px border-b-2 px-1 pt-1.5 pb-2' : 'px-1 pt-2 pb-1.5',
+                ? cn('justify-center gap-1 text-xs', selected ? 'flex-1 px-1' : 'w-6 shrink-0')
+                : cn('flex-col gap-1 text-[0.6875rem]', variant === 'panel' ? 'px-0 tracking-tight' : 'px-1'),
+              variant === 'panel' ? '-mb-px border-b-2 pt-1.5 pb-2' : 'pt-2 pb-1.5',
               selected
                 ? variant === 'panel'
                   ? 'border-accent text-text'
