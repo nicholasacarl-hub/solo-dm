@@ -8,11 +8,9 @@ import { useId, useState } from 'react';
 import { Link } from 'react-router';
 import { ShieldCheck } from 'lucide-react';
 import type { CampaignSettings } from '@/types';
-import { useLibrarySources } from '@/storage';
 import { Field, Input, SectionTitle, Textarea } from '@/ui/components/ui';
 import { OptionCards } from '@/ui/components/OptionCards';
 import { TagInput } from '@/ui/components/TagInput';
-import { ErrorBoundary } from '@/ui/components/ErrorBoundary';
 import {
   DIFFICULTY_OPTIONS,
   DM_ROLLS_OPTIONS,
@@ -28,7 +26,6 @@ import {
   toneText,
   type TonePresetId,
 } from './campaignOptions';
-import { plural } from './format';
 
 export type CampaignSettingsSection = 'story' | 'rules' | 'safety';
 
@@ -220,69 +217,20 @@ function RulesFields({ value, patch }: { value: CampaignSettings; patch: Patch }
         options={DM_ROLLS_OPTIONS}
         onChange={(choice) => patch({ showDmRolls: choice === 'shown' })}
       />
-      <ErrorBoundary
-        fallback={() => <p className="text-xs text-muted">Your imported books couldn’t be listed right now.</p>}
-      >
-        <SourcesPicker value={value.enabledSources} onChange={(enabledSources) => patch({ enabledSources })} />
-      </ErrorBoundary>
+      <div>
+        <p className="text-sm font-medium">Rules sources</p>
+        <p className="mt-0.5 text-xs text-muted">
+          The DM consults the SRD 5.2.1, this campaign’s homebrew, and every book switched on in your{' '}
+          <Link to="/library?tab=mine" className="text-accent underline underline-offset-2">
+            Library
+          </Link>
+          .
+        </p>
+      </div>
     </>
   );
 }
 
-function SourcesPicker({ value, onChange }: { value: string[]; onChange: (next: string[]) => void }) {
-  const sources = useLibrarySources();
-  const imports = (sources ?? []).filter((s) => s.kind === 'import');
-
-  const toggle = (sourceId: string, on: boolean) => {
-    const rest = value.filter((v) => v !== sourceId);
-    onChange(on ? [...rest, sourceId] : rest);
-  };
-
-  const row = 'flex items-center gap-3 rounded-xl border border-border bg-surface px-3 py-2.5';
-  return (
-    <fieldset className="min-w-0">
-      <legend className="text-sm font-medium">Rules sources</legend>
-      <p className="mt-0.5 text-xs text-muted">What the DM may consult in this campaign. The SRD is always on.</p>
-      <ul className="mt-2 flex flex-col gap-2">
-        <li>
-          <label className={row}>
-            <input type="checkbox" checked disabled className="size-4 accent-accent" />
-            <span className="flex-1 text-sm font-medium">SRD 5.2.1</span>
-            <span className="text-xs text-muted">Always on</span>
-          </label>
-        </li>
-        {imports.map((source) => (
-          <li key={source.id}>
-            <label className={`${row} cursor-pointer hover:border-faint`}>
-              <input
-                type="checkbox"
-                className="size-4 accent-accent"
-                checked={value.includes(source.id)}
-                onChange={(e) => toggle(source.id, e.target.checked)}
-              />
-              <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm font-medium">{source.title}</span>
-                <span className="block text-xs text-muted">
-                  {plural(source.entryCount, 'entry', 'entries')}
-                  {!source.enabled && ' · switched off in the Library'}
-                </span>
-              </span>
-            </label>
-          </li>
-        ))}
-      </ul>
-      {sources !== undefined && imports.length === 0 && (
-        <p className="mt-2 text-xs text-muted">
-          Own other books?{' '}
-          <Link to="/library?tab=mine" className="text-accent underline underline-offset-2">
-            Import them in the Library
-          </Link>{' '}
-          and switch them on here.
-        </p>
-      )}
-    </fieldset>
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Safety

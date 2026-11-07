@@ -80,6 +80,20 @@ via tools, then writes `## Recap` (player-facing) and `## DM Notes` (private pla
 session is marked ended. The next session starts a fresh conversation whose system prompt carries
 the chronicle — "simple compaction", which is compatible with preserved thinking.
 
+**Interruptions and recovery** (all append-only):
+
+- *Stop* after text appeared appends the visible text as a text-only assistant message, plus a note
+  that the reply was cut off; Stop before any text carries the player's words into their next turn
+  in an `<unanswered_turn>` block.
+- A reload in the middle of a tool batch: each finished tool's result is saved on the session
+  (`pendingToolResults`) as it completes, so recovery returns the real results for finished tools and
+  an "interrupted — check the current state" note only for the one in flight (no double damage).
+- DM notices (sheet edits, vetoes, Library homebrew edits) persist on the campaign record until
+  delivered; a new session delivers them with its opening request.
+- One tab at a time: the play screen holds a per-campaign Web Lock; the store refuses writes to a
+  campaign another tab holds.
+- Rules lookups search the SRD, every import switched on in the Library, and homebrew.
+
 **Refusals and errors:** `stop_reason: "refusal"` is handled before reading content. On models that
 support it, requests opt into server-side fallbacks (`fallbacks: "default"`, beta
 `server-side-fallback-2026-07-01`). Typed SDK errors map to friendly log errors with Retry.

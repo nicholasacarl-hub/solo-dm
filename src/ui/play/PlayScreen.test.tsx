@@ -80,7 +80,7 @@ describe('PlayScreen', () => {
     seedUnloaded();
     renderAt('/play/camp-1');
     await screen.findByRole('heading', { name: 'The Drowned Lantern' });
-    expect(document.title).toBe('The Drowned Lantern · Session 2 · Solo DM');
+    await waitFor(() => expect(document.title).toBe('The Drowned Lantern · Session 2 · Solo DM'));
   });
 
   it('unloads the campaign and stops a busy DM when leaving the table', async () => {
@@ -171,7 +171,7 @@ describe('PlayScreen — one tab at a time', () => {
     renderAt('/play/camp-1');
 
     expect(await screen.findByRole('heading', { name: 'This campaign is open in another tab' })).toBeInTheDocument();
-    expect(document.title).toBe('Open in another tab · Solo DM');
+    await waitFor(() => expect(document.title).toBe('Open in another tab · Solo DM'));
     expect(spies.loadCampaign).not.toHaveBeenCalled();
     expect(dm.beginOrResume).not.toHaveBeenCalled();
     expect(screen.getByRole('link', { name: 'Back to campaigns' })).toHaveAttribute('href', '/');

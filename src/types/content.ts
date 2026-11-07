@@ -64,7 +64,7 @@ export interface LibrarySource {
   title: string;
   kind: 'builtin' | 'import';
   format?: 'text' | 'markdown' | 'pdf' | 'json';
-  /** Globally enabled for the DM's rules search (campaigns can further restrict). */
+  /** Switched on in the Library: the DM consults it in every campaign. */
   enabled: boolean;
   entryCount: number;
   /** For builtin sources: license name, e.g. "CC-BY-4.0". */

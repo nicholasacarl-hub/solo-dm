@@ -78,7 +78,7 @@ describe('CampaignSettingsForm', () => {
     expect(lastCall(onChange).lines).toEqual(['torture']);
   });
 
-  it('maps leveling and DM-roll choices to booleans and toggles imported sources', async () => {
+  it('maps leveling and DM-roll choices to booleans and points rules sources at the Library', async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();
     render(<Harness initial={sampleSettings()} sections={['rules']} onChange={onChange} />);
@@ -88,8 +88,8 @@ describe('CampaignSettingsForm', () => {
     await user.click(screen.getByRole('radio', { name: /In the open/ }));
     expect(lastCall(onChange).showDmRolls).toBe(true);
 
-    await user.click(screen.getByRole('checkbox', { name: /My spell notes/ }));
-    expect(lastCall(onChange).enabledSources).toEqual(['srd-5.2.1', 'lib-notes']);
-    expect(screen.getByRole('checkbox', { name: /SRD 5\.2\.1/ })).toBeDisabled();
+    // The DM consults every book switched on in the Library; there is no per-campaign picker.
+    expect(screen.queryByRole('checkbox', { name: /My spell notes/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Library' })).toHaveAttribute('href', '/library?tab=mine');
   });
 });

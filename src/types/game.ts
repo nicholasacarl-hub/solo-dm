@@ -112,7 +112,10 @@ export interface CampaignSettings {
   showDmRolls: boolean;
   /** Milestone leveling (true) or XP (false). */
   milestoneLeveling: boolean;
-  /** Library source ids the DM may consult in this campaign (the SRD is always on). */
+  /**
+   * Extra library source ids for this campaign. The DM always consults the SRD plus every source
+   * switched on in the Library; kept for older saves and future per-campaign sourcing.
+   */
   enabledSources: string[];
   /** Safety tools: hard limits that never appear. */
   lines: string[];
