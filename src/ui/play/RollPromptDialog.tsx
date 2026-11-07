@@ -1,12 +1,14 @@
 import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react';
-import { Dices, Hand } from 'lucide-react';
+import { Dices, Hand, Sparkles } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import { manualD20Result, manualRollResult, rollD20Test, rollDice } from '@/engine';
+import { manualD20Result, manualRollResult, rollD20Test, rollDice, setHeroicInspiration } from '@/engine';
 import { useGame } from '@/state/gameStore';
 import { useSettings } from '@/state/settingsStore';
 import type { D20TestResult, InteractionRequest, PlayerRollMode, PlayerRollResponse } from '@/types';
+import { toast } from '@/ui/components/toast';
 import { Badge, Button, Dialog, Input } from '@/ui/components/ui';
 import { D20Face } from './dice/D20Face';
+import { physicalRerollInstructions, rerollOneDie } from './dice/heroicInspiration';
 import { TONE_TEXT, outcomeBadges, primaryTone, targetLabel, type OutcomeBadge } from './dice/rollDisplay';
 import {
   criticalExpression,
@@ -23,7 +25,10 @@ import { usePrefersReducedMotion } from './useMediaQuery';
 
 /** How long the dice tumble before landing. */
 export const ROLL_ANIMATION_MS = 650;
-/** How long a tapped roll's result stays up before the DM continues (Continue skips the wait). */
+/**
+ * How long a tapped roll's result stays up before the DM continues (Continue skips the wait). A
+ * hero with Heroic Inspiration gets no countdown: they choose between Continue and a reroll.
+ */
 export const RESULT_HOLD_MS = 1100;
 
 type RollInteraction = Extract<InteractionRequest, { kind: 'roll' }>;
@@ -39,8 +44,23 @@ export interface RollPromptDialogProps {
 }
 
 /**
+ * Spend Heroic Inspiration on a reroll: the sheet is updated through the engine before the new roll
+ * goes back to the DM (the roll tool reads the spent flag), and the DM is told on the next turn.
+ */
+function spendHeroicInspiration(label: string, first: D20TestResult, reroll: D20TestResult): void {
+  const { updateCharacter, queueDmNotice } = useGame.getState();
+  updateCharacter((c) => setHeroicInspiration(c, false).character).catch((err: unknown) =>
+    toast.error(`Couldn't save the spent Heroic Inspiration: ${errorMessage(err)}`),
+  );
+  queueDmNotice(
+    `Player spent Heroic Inspiration to reroll ${label}: the first roll (${first.total}) was replaced by the reroll (${reroll.total}), which stands.`,
+  );
+}
+
+/**
  * The roll the DM is waiting on. Not dismissible: the player rolls (tap or physical dice) or
- * explicitly cancels the DM's turn.
+ * explicitly cancels the DM's turn. A hero with Heroic Inspiration may spend it on one reroll and
+ * must use the new roll (SRD 5.2.1 Rules Glossary, "Heroic Inspiration").
  */
 export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }: RollPromptDialogProps) {
   const { request, modifier, label } = interaction;
@@ -59,13 +79,17 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
   const [result, setResult] = useState<D20TestResult | null>(null);
   const [manual, setManual] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** The first roll, once Heroic Inspiration has rerolled it (one reroll; the new roll stands). */
+  const [replaced, setReplaced] = useState<D20TestResult | null>(null);
   const resolvedRef = useRef(false);
   const primaryRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const offerReroll = character?.heroicInspiration === true && replaced === null;
 
   const finish = (final: D20TestResult, isManual: boolean) => {
     if (resolvedRef.current) return;
     resolvedRef.current = true;
+    if (replaced) spendHeroicInspiration(label, replaced, final);
     onResolve({ result: final, manual: isManual });
   };
 
@@ -86,13 +110,14 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
     return () => window.clearTimeout(id);
   }, [stage]);
 
-  // Tapped rolls continue on their own after a moment; physical rolls wait for Continue.
+  // Tapped rolls continue on their own after a moment; physical rolls wait for Continue, and so
+  // does a roll the player could still reroll with Heroic Inspiration.
   useEffect(() => {
-    if (stage !== 'result' || !result || manual) return;
+    if (stage !== 'result' || !result || manual || offerReroll) return;
     const id = window.setTimeout(() => finish(result, false), RESULT_HOLD_MS);
     return () => window.clearTimeout(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stage, result, manual]);
+  }, [stage, result, manual, offerReroll]);
 
   const judge = (raw: D20TestResult) => (request.rollType === 'attack' ? withAttackRollRules(raw) : raw);
 
@@ -135,6 +160,31 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
     }
   };
 
+  /** Heroic Inspiration: reroll one die of this result (the engine's dice, or the player's own). */
+  const rerollWithInspiration = () => {
+    if (!result || replaced) return;
+    setError(null);
+    if (physical) {
+      // Physical dice: the player rerolls their die and enters what it shows now.
+      setReplaced(result);
+      setResult(null);
+      setManual(false);
+      setStage('ready');
+      return;
+    }
+    try {
+      const rerolled =
+        kind === 'd20'
+          ? judge(rerollOneDie(result, { kind: 'd20', modifier, advantage: request.advantage, dc }))
+          : rerollOneDie(result, { kind: 'dice', expression: baseExpression ?? '1d20', critical: request.critical });
+      setReplaced(result);
+      setResult(rerolled);
+      setStage(animate ? 'rolling' : 'result');
+    } catch (err) {
+      setError(errorMessage(err));
+    }
+  };
+
   const showTarget = request.revealDc && dc !== undefined;
   const target = targetLabel({ rollType: request.rollType });
 
@@ -147,7 +197,8 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
       title={label}
       description={request.reason}
       footer={
-        onCancelTurn && stage === 'ready' ? (
+        // Once Heroic Inspiration is spent the new roll must be used, so the turn can't be called off.
+        onCancelTurn && stage === 'ready' && !replaced ? (
           <Button
             variant="ghost"
             size="sm"
@@ -189,8 +240,17 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
           />
         )}
 
+        {replaced && (
+          <p className="flex items-center gap-1.5 text-xs text-gold">
+            <Sparkles className="size-3.5 shrink-0" aria-hidden />
+            Heroic Inspiration: rerolled from {replaced.total}. The new roll stands.
+          </p>
+        )}
+
         <p className="sr-only" aria-live="polite">
-          {stage === 'result' && result ? announceResult(result, kind, showTarget, request.rollType === 'attack') : ''}
+          {stage === 'result' && result
+            ? `${replaced ? 'Rerolled with Heroic Inspiration. ' : ''}${announceResult(result, kind, showTarget, request.rollType === 'attack')}`
+            : ''}
         </p>
 
         {error && (
@@ -216,7 +276,9 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
         {stage === 'ready' && physical && (
           <PhysicalEntry
             inputRef={inputRef}
-            instructions={physicalInstructions(request, expression)}
+            instructions={
+              replaced ? physicalRerollInstructions(request, expression) : physicalInstructions(request, expression)
+            }
             label={kind === 'd20' ? 'Your d20' : 'Your total'}
             d20={kind === 'd20'}
             onSubmit={submitManual}
@@ -225,21 +287,34 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
         )}
 
         {stage === 'result' && result && (
-          <div className="flex w-full gap-2">
-            {manual && (
-              <Button variant="ghost" onClick={() => setStage('ready')}>
-                Change
+          <div className="flex w-full flex-col gap-2">
+            {offerReroll && (
+              <Button
+                variant="secondary"
+                className="w-full"
+                onClick={rerollWithInspiration}
+                icon={<Sparkles className="size-4 text-gold" aria-hidden />}
+                title="Spend Heroic Inspiration to reroll a die. You must use the new roll."
+              >
+                Reroll with Heroic Inspiration
               </Button>
             )}
-            <Button
-              ref={primaryRef}
-              variant="primary"
-              size="lg"
-              className="flex-1"
-              onClick={() => finish(result, manual)}
-            >
-              Continue
-            </Button>
+            <div className="flex w-full gap-2">
+              {manual && (
+                <Button variant="ghost" onClick={() => setStage('ready')}>
+                  Change
+                </Button>
+              )}
+              <Button
+                ref={primaryRef}
+                variant="primary"
+                size="lg"
+                className="flex-1"
+                onClick={() => finish(result, manual)}
+              >
+                Continue
+              </Button>
+            </div>
           </div>
         )}
       </div>

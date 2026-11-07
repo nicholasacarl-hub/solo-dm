@@ -21,6 +21,7 @@ import type { DmLogEntry, LogEntry } from '@/types';
 import { MAX_ITERATIONS, NOTES, SOFT_LIMIT_PREFIX } from './agent';
 import { resetDmDeps } from './deps';
 import { makeMessage, textBlock, thinkingBlock, toolUseBlock } from './scripted';
+import { DmSessionController } from './session';
 import { fakeDice } from './testing/fakeEngine';
 import { setupHarness } from './testing/harness';
 
@@ -40,6 +41,12 @@ function toolResults(param: BetaMessageParam): BetaToolResultBlockParam[] {
 
 function dmEntries(log: LogEntry[]): DmLogEntry[] {
   return log.filter((e): e is DmLogEntry => e.kind === 'dm');
+}
+
+/** `later` starts with every message of `earlier`, byte for byte (append-only). */
+function expectPrefix(earlier: BetaMessageParam[], later: BetaMessageParam[]): void {
+  expect(later.length).toBeGreaterThan(earlier.length);
+  earlier.forEach((m, i) => expect(JSON.stringify(later[i])).toBe(JSON.stringify(m)));
 }
 
 const refusalDetails: BetaRefusalStopDetails = {
@@ -205,8 +212,79 @@ describe('agent loop: tools', () => {
     ]);
     await h.controller.sendPlayerMessage('I wake up.');
     const t = h.s().transcript;
-    expect(toolResults(t[2].param)[0]).toMatchObject({ tool_use_id: 'toolu_dangling', is_error: true, content: NOTES.interrupted });
+    const [result] = toolResults(t[2].param);
+    expect(result).toMatchObject({ tool_use_id: 'toolu_dangling', is_error: true });
+    // No result was saved for it: it may or may not have run, so the DM is told to check the state.
+    expect(String(result.content)).toContain(NOTES.interrupted);
+    expect(String(result.content)).toContain('The hero now: Mira Voss');
     expect(t.map((m) => m.param.role)).toEqual(['user', 'assistant', 'user', 'user', 'assistant']);
+  });
+});
+
+describe('agent loop: a reload in the middle of a tool batch', () => {
+  // update_character (12 → 6 HP) has run; the CON save waits in the tap-to-roll dialog; the clock
+  // update never started. Then the tab reloads.
+  const batch = () =>
+    makeMessage(
+      [
+        textBlock("The ogre's club slams into you."),
+        toolUseBlock('toolu_dmg', 'update_character', { hp: { amount: 6, kind: 'damage', damage_type: 'bludgeoning' }, reason: 'Ogre club' }),
+        toolUseBlock('toolu_save', 'request_player_roll', { roll_type: 'save', ability: 'con', dc: 10, reason: 'Keep concentration' }),
+        toolUseBlock('toolu_clock', 'update_clocks', { clocks: [{ name: 'The ogre clan stirs', advance: 1 }] }),
+      ],
+      'tool_use',
+    );
+
+  async function reloadDuringTheSave() {
+    const h = setupHarness({ withSession: true, campaignSettings: { playerRollMode: 'prompt' }, steps: [batch()] });
+    void h.controller.sendPlayerMessage('I hold the line.');
+    for (let i = 0; i < 200 && !h.s().interaction; i++) await new Promise((r) => setTimeout(r, 1));
+    expect(h.s().interaction?.kind).toBe('roll');
+    return h;
+  }
+
+  it('saves each finished tool result on the session while the batch runs (imported text left out)', async () => {
+    const h = await reloadDuringTheSave();
+    expect(h.s().character?.hp.current).toBe(6);
+    const saved = h.s().activeSession?.pendingToolResults ?? [];
+    expect(saved.map((r) => r.toolUseId)).toEqual(['toolu_dmg']);
+    expect(saved[0].content).toContain('HP 12 → 6');
+  });
+
+  it('answers finished tools with their real results, the running one as interrupted, the rest as not run', async () => {
+    const h = await reloadDuringTheSave();
+    h.client.push(end('You stagger, but the spell holds — roll that save again.'));
+    // "Reload": a fresh controller over what was saved; the old dialog is gone.
+    await new DmSessionController().sendPlayerMessage('Where was I?');
+
+    const t = h.s().transcript;
+    expect(t.map((m) => m.param.role)).toEqual(['user', 'assistant', 'user', 'user', 'assistant']);
+    const [dmg, save, clock] = toolResults(t[2].param);
+    expect(dmg.tool_use_id).toBe('toolu_dmg');
+    expect(dmg.is_error).toBeUndefined();
+    expect(String(dmg.content)).toContain('HP 12 → 6');
+    expect(String(dmg.content)).not.toContain('Nothing happened');
+    expect(save).toMatchObject({ tool_use_id: 'toolu_save', is_error: true });
+    expect(String(save.content)).toContain(NOTES.interrupted);
+    expect(String(save.content)).toContain('HP 6/17');
+    expect(clock).toMatchObject({ tool_use_id: 'toolu_clock', is_error: true, content: NOTES.notRun });
+    // The damage was applied once; the saved results are cleared once the tool_result message exists.
+    expect(h.s().character?.hp.current).toBe(6);
+    expect(h.s().activeSession?.pendingToolResults ?? null).toBeNull();
+  });
+
+  it('clears the saved results once a batch finishes normally', async () => {
+    fakeDice.queue(15);
+    const h = setupHarness({
+      withSession: true,
+      steps: [makeMessage([toolUseBlock('toolu_1', 'roll_dice', { expression: '1d20', purpose: 'Luck' })], 'tool_use'), end('Fate decides.')],
+    });
+    const seen: number[] = [];
+    const unsubscribe = h.store.subscribe((s) => seen.push(s.activeSession?.pendingToolResults?.length ?? 0));
+    await h.controller.sendPlayerMessage('I trust to luck.');
+    unsubscribe();
+    expect(Math.max(...seen)).toBe(1);
+    expect(h.s().activeSession?.pendingToolResults ?? null).toBeNull();
   });
 });
 
@@ -260,14 +338,21 @@ describe('agent loop: stop reasons and errors', () => {
     expect(h.s().log.at(-1)).toMatchObject({ kind: 'system', text: NOTES.truncatedText });
   });
 
-  it('cancel() mid-stream finalizes the partial narration and appends nothing', async () => {
+  it('cancel() mid-stream keeps exactly the narration the player saw, as a text-only assistant message', async () => {
     const h = setupHarness({ withSession: true });
     h.client.push({
-      message: end('The door creaks open, and beyond it the corridor stretches into a darkness that seems to breathe.'),
+      message: makeMessage(
+        [
+          thinkingBlock('The corridor hides a mimic.', 'sig-cut'),
+          textBlock('The door creaks open, and beyond it the corridor stretches into a darkness that seems to breathe.'),
+          toolUseBlock('toolu_never', 'roll_dice', { expression: '1d20+2', purpose: 'Mimic Stealth', secret: true }),
+        ],
+        'tool_use',
+      ),
       stream: {
         chunkSize: 8,
         beforeEvent: (index) => {
-          if (index === 6) h.controller.cancel();
+          if (index === 12) h.controller.cancel();
         },
       },
     });
@@ -276,11 +361,48 @@ describe('agent loop: stop reasons and errors', () => {
     const [entry] = dmEntries(s.log);
     expect(entry.streaming).toBe(false);
     expect(entry.text.length).toBeGreaterThan(0);
-    expect(entry.text.length).toBeLessThan(40);
-    expect(s.transcript.map((m) => m.param.role)).toEqual(['user']);
-    expect(s.log.some((e) => e.kind === 'error')).toBe(false);
+    expect(entry.text.length).toBeLessThan(60);
+    // The DM's context matches the screen: no unfinished thinking, no tool call that never ran.
+    expect(s.transcript.map((m) => m.param.role)).toEqual(['user', 'assistant']);
+    expect(blocksOf(s.transcript[1].param)).toEqual([{ type: 'text', text: entry.text }]);
+    expect(s.log.at(-1)).toMatchObject({ kind: 'system', level: 'info', text: NOTES.stopped });
+    expect(s.log.some((e) => e.kind === 'error' || e.kind === 'roll')).toBe(false);
     expect(s.dm.phase).toBe('idle');
     expect(h.controller.isBusy()).toBe(false);
+
+    // The next turn tells the DM its reply was cut off, after the player's words.
+    h.client.push(end('The darkness waits.'));
+    await h.controller.sendPlayerMessage('I attack the thing in the dark.');
+    const next = h.client.requests[1].messages;
+    expect(next.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'system']);
+    expect(JSON.stringify(next[3])).toContain('stopped your last reply partway');
+    expectPrefix(h.client.requests[0].messages, next);
+  });
+
+  it('cancel() before any narration keeps nothing and sends those words again with the next turn', async () => {
+    const h = setupHarness({ withSession: true });
+    h.client.push({
+      message: makeMessage([thinkingBlock('Let me think about the door.', 'sig-x'), textBlock('It opens.')], 'end_turn'),
+      stream: {
+        chunkSize: 6,
+        beforeEvent: (index) => {
+          if (index === 2) h.controller.cancel();
+        },
+      },
+    });
+    await h.controller.sendPlayerMessage('I open the door.');
+    expect(h.s().transcript.map((m) => m.param.role)).toEqual(['user']);
+    expect(dmEntries(h.s().log)).toHaveLength(0);
+
+    h.client.push(end('Beyond the door: a cellar.'));
+    await h.controller.sendPlayerMessage('Carefully.');
+    const t = h.s().transcript;
+    expect(t.map((m) => m.param.role)).toEqual(['user', 'assistant']);
+    const user = blocksOf(t[0].param);
+    expect(user).toHaveLength(3);
+    expect(user[1].type === 'text' && user[1].text).toMatch(/^<unanswered_turn>[\s\S]*I open the door\.\n<\/unanswered_turn>$/);
+    expect(user[2]).toEqual({ type: 'text', text: 'Carefully.' });
+    expect(h.s().log.filter((e) => e.kind === 'player').map((e) => (e.kind === 'player' ? e.text : ''))).toEqual(['I open the door.', 'Carefully.']);
   });
 
   it('re-issues a request whose tool input JSON could not be parsed (twice at most)', async () => {

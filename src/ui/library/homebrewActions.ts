@@ -1,10 +1,15 @@
 /**
  * Saving homebrew from the Library. When the change affects the campaign loaded in the game store
- * (its own or shared homebrew), it goes through the store so memory stays in sync, and the DM gets
- * a notice on the next turn. The rules index is refreshed either way.
+ * (its own or shared homebrew), it goes through the store so memory stays in sync. The rules index
+ * is refreshed either way.
+ *
+ * The DM's system prompt is frozen for a session, so every campaign with a session in progress that
+ * can use the entry gets a notice for its next turn. Notices are queued per campaign (persisted on
+ * the campaign record), so they arrive even though the Library isn't the table: by the time the
+ * player is here, the table has usually unloaded its campaign.
  */
-import { deleteHomebrewRecord, putHomebrew } from '@/storage';
-import { useGame } from '@/state/gameStore';
+import { deleteHomebrewRecord, listCampaigns, putHomebrew } from '@/storage';
+import { queueCampaignNotice, useGame } from '@/state/gameStore';
 import type { HomebrewEntry } from '@/types';
 import { kindInfo, refreshRulesIndex } from './kinds';
 
@@ -18,9 +23,9 @@ function loadedCampaignId(): string | null {
   }
 }
 
-function affectsLoadedCampaign(entry: HomebrewEntry): boolean {
+function affectsLoadedCampaign(entries: HomebrewEntry[]): boolean {
   const loaded = loadedCampaignId();
-  return loaded !== null && (entry.campaignId === null || entry.campaignId === loaded);
+  return loaded !== null && entries.some((e) => e.campaignId === null || e.campaignId === loaded);
 }
 
 const NOTICE_TAIL: Record<HomebrewChange, string> = {
@@ -37,26 +42,49 @@ export function homebrewNotice(entry: HomebrewEntry, change: HomebrewChange): st
   return `The player ${change} the homebrew ${kind} “${entry.name}” in the Library. ${NOTICE_TAIL[change]}`;
 }
 
-function tellDm(entry: HomebrewEntry, change: HomebrewChange): void {
+/**
+ * Campaigns whose DM should hear about a change: those with a session in progress that could use
+ * any version of the entry (shared homebrew reaches every campaign). Campaigns between sessions
+ * need nothing: the next session's prompt is built from the current homebrew.
+ */
+async function campaignsToTell(versions: HomebrewEntry[]): Promise<string[]> {
+  const owners = new Set(versions.map((v) => v.campaignId));
+  const summaries = await listCampaigns();
+  return summaries
+    .map((s) => s.campaign)
+    .filter((c) => c.activeSessionId !== null && (owners.has(null) || owners.has(c.id)))
+    .map((c) => c.id);
+}
+
+/** Never throws: the homebrew itself is already saved. */
+async function tellDms(versions: HomebrewEntry[], notice: string): Promise<void> {
   try {
-    useGame.getState().queueDmNotice(homebrewNotice(entry, change));
-  } catch {
-    // No DM session to tell; the next session's prompt includes the current homebrew.
+    const ids = await campaignsToTell(versions);
+    const results = await Promise.allSettled(ids.map((id) => queueCampaignNotice(id, notice)));
+    for (const r of results) {
+      if (r.status === 'rejected') console.warn('[library] Could not queue a homebrew notice for the DM:', r.reason);
+    }
+  } catch (error) {
+    console.warn('[library] Could not queue the homebrew notice for the DM:', error);
   }
 }
 
-export async function saveHomebrewEntry(entry: HomebrewEntry, change: Exclude<HomebrewChange, 'deleted'>): Promise<void> {
-  const viaStore = affectsLoadedCampaign(entry);
-  if (viaStore) await useGame.getState().saveHomebrew(entry);
+/** `previous` is the stored version being replaced, so a campaign the entry moves away from hears too. */
+export async function saveHomebrewEntry(
+  entry: HomebrewEntry,
+  change: Exclude<HomebrewChange, 'deleted'>,
+  previous?: HomebrewEntry | null,
+): Promise<void> {
+  const versions = previous ? [entry, previous] : [entry];
+  if (affectsLoadedCampaign(versions)) await useGame.getState().saveHomebrew(entry);
   else await putHomebrew(entry);
   refreshRulesIndex();
-  if (viaStore) tellDm(entry, change);
+  await tellDms(versions, homebrewNotice(entry, change));
 }
 
 export async function deleteHomebrewEntry(entry: HomebrewEntry): Promise<void> {
-  const viaStore = affectsLoadedCampaign(entry);
-  if (viaStore) await useGame.getState().deleteHomebrew(entry.id);
+  if (affectsLoadedCampaign([entry])) await useGame.getState().deleteHomebrew(entry.id);
   else await deleteHomebrewRecord(entry.id);
   refreshRulesIndex();
-  if (viaStore) tellDm(entry, 'deleted');
+  await tellDms([entry], homebrewNotice(entry, 'deleted'));
 }

@@ -30,17 +30,22 @@ export function JournalTab() {
   const [query, setQuery] = useState('');
   const filterId = useId();
 
+  const trimmed = query.trim();
   const visible = useMemo(
-    () => journal.filter((e) => (spoilers || !e.secret) && matches(e, query.trim())),
-    [journal, spoilers, query],
+    () => journal.filter((e) => (spoilers || !e.secret) && matches(e, trimmed)),
+    [journal, spoilers, trimmed],
   );
   const hiddenSecrets = spoilers ? 0 : journal.filter((e) => e.secret).length;
 
-  if (journal.length === 0) {
+  // Nothing the player may see yet (an empty journal, or only DM secrets with spoilers off).
+  if (journal.length === hiddenSecrets) {
     return (
-      <EmptyState icon={<NotebookPen className="size-7" aria-hidden />} title="The journal is empty" className="py-8!">
-        People, places and house rules are recorded here as you meet them.
-      </EmptyState>
+      <div className="flex flex-col gap-3">
+        <EmptyState icon={<NotebookPen className="size-7" aria-hidden />} title="The journal is empty" className="py-8!">
+          People, places and house rules are recorded here as you meet them.
+        </EmptyState>
+        <HiddenNote count={hiddenSecrets} singular="entry" plural="entries" />
+      </div>
     );
   }
 
@@ -74,7 +79,7 @@ export function JournalTab() {
           </Group>
         );
       })}
-      {visible.length === 0 && <p className="text-sm text-muted">Nothing matches “{query.trim()}”.</p>}
+      {visible.length === 0 && <p className="text-sm text-muted">Nothing matches “{trimmed}”.</p>}
       <HiddenNote count={hiddenSecrets} singular="entry" plural="entries" />
     </div>
   );

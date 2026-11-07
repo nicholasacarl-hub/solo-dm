@@ -36,6 +36,7 @@ import {
   type KnownSpell,
   type ProficiencyLevel,
   type Skill,
+  type SkillBonus,
   type Spellcasting,
 } from '@/types';
 import { nameKey, newId } from '@/lib/id';
@@ -69,7 +70,7 @@ import {
   validateSpeciesSkill,
   type Picks,
 } from './origin';
-import { cantripNames, hpBonusPerLevel, lineageEffects, speciesDisplayName } from './species';
+import { cantripNames, hpBonusPerLevel, lineageEffects, lineageFeatureText, speciesDisplayName, speciesResistances } from './species';
 import { findSpellByName, knownSpell, spellAttack, spellsForClass, spellsForClassOption, type SpellInfo } from './spells';
 import { BUILDER_STEPS, type BuilderDraft, type BuilderStep } from './types';
 
@@ -102,9 +103,9 @@ function notNone(text: string): boolean {
 // Class choices
 // ---------------------------------------------------------------------------
 
-/** Proficiencies and cantrips granted by the chosen level-1 class options (Divine Order...). */
+/** Proficiencies, cantrips and skill bonuses granted by the chosen level-1 class options (Divine Order...). */
 export function classOptionGrants(draft: BuilderDraft, cls: ClassOption | undefined) {
-  const grants = { weapons: [] as string[], armor: [] as string[], extraCantrips: 0 };
+  const grants = { weapons: [] as string[], armor: [] as string[], extraCantrips: 0, skillBonuses: [] as SkillBonus[] };
   for (const { feature, options } of classChoiceFeatures(cls)) {
     const chosen = options.find((o) => o.name === draft.classOptions[feature.name]);
     if (!chosen) continue;
@@ -112,6 +113,8 @@ export function classOptionGrants(draft: BuilderDraft, cls: ClassOption | undefi
     grants.weapons.push(...g.weapons);
     grants.armor.push(...g.armor);
     grants.extraCantrips += g.extraCantrips;
+    // Thaumaturge / Magician: "Thaumaturge (Divine Order)" adds WIS (min +1) to Arcana and Religion.
+    if (g.skillBonus) grants.skillBonuses.push({ ...g.skillBonus, source: `${chosen.name} (${feature.name})` });
   }
   return grants;
 }
@@ -250,8 +253,10 @@ function buildFeatures(draft: BuilderDraft, data: BuilderData, p: Picks, usesCtx
   const out: Feature[] = [];
   const { cls, species, lineage, choices } = p;
   if (cls) {
+    // Only real choices get the option in their name (a stale draft may still hold e.g. Rage: "Duration").
+    const choiceOptions = new Map(classChoiceFeatures(cls).map(({ feature: def, options }) => [def.name, options]));
     for (const def of featuresAtLevel(cls, 1)) {
-      const chosen = draft.classOptions[def.name];
+      const chosen = choiceOptions.get(def.name)?.find((o) => o.name === draft.classOptions[def.name])?.name;
       const name = chosen ? `${def.name} (${chosen})` : def.name;
       out.push(feature(name, 'class', `${cls.name} 1`, def.description, inferFeatureUses(def.name, def.description, { ...usesCtx, cls })));
     }
@@ -266,15 +271,10 @@ function buildFeatures(draft: BuilderDraft, data: BuilderData, p: Picks, usesCtx
   }
   for (const trait of species?.traits ?? []) {
     if (trait === choices.lineageTrait && lineage) {
-      out.push(
-        feature(
-          `${trait.name} (${lineage.name})`,
-          'species',
-          species!.name,
-          `${trait.description}\n\n**${lineage.name}.** ${lineage.description}`,
-          inferFeatureUses(trait.name, lineage.description, usesCtx),
-        ),
-      );
+      // Only the chosen option: Giant Ancestry's use limit is in its preamble, and the Forest Gnome's
+      // Proficiency Bonus uses must not reach a Rock Gnome.
+      const text = lineageFeatureText(trait, lineage);
+      out.push(feature(`${trait.name} (${lineage.name})`, 'species', species!.name, text, inferFeatureUses(trait.name, text, usesCtx)));
       continue;
     }
     let name = trait.name;
@@ -347,6 +347,9 @@ export function buildCharacter(draft: BuilderDraft, ctx: BuilderContext, opts: B
   const lineageFx = lineage ? lineageEffects(lineage.description) : undefined;
   const feats = originFeats(draft, data);
   const resourceful = (species?.traits ?? []).some((t) => /gain Heroic Inspiration whenever you finish a Long Rest/i.test(t.description));
+  // The engine halves damage of these types (Dwarven Resilience, Dragonborn ancestry, Tiefling legacy).
+  const resistances = speciesResistances(species, lineage);
+  const skillBonuses = classOptionGrants(draft, cls).skillBonuses;
 
   const character: Character = {
     ...blank,
@@ -373,6 +376,8 @@ export function buildCharacter(draft: BuilderDraft, ctx: BuilderContext, opts: B
     size: draft.size ?? species?.sizes[0] ?? 'Medium',
     initiativeBonusExtra: feats.some(grantsInitiativeProficiency) ? pb : 0,
     darkvision: lineageFx?.darkvision ?? species?.darkvision,
+    ...(resistances.length ? { damageResistances: resistances } : {}),
+    ...(skillBonuses.length ? { skillBonuses } : {}),
     hp: { max: maxHp, current: maxHp, temp: 0 },
     hitDice: cls ? [{ die: cls.hitDie, total: 1, spent: 0 }] : [],
     deathSaves: { successes: 0, failures: 0, stable: false, dead: false },

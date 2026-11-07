@@ -4,8 +4,8 @@
  */
 import {
   forwardRef,
-  useEffect,
   useId,
+  useLayoutEffect,
   useRef,
   type ButtonHTMLAttributes,
   type HTMLAttributes,
@@ -204,8 +204,10 @@ export function Field({
   );
 }
 
+// 16px on phones: iOS Safari zooms the page into any focused field smaller than that. A caller's
+// own text size still applies from the sm breakpoint up.
 const controlBase =
-  'w-full rounded-xl border border-border bg-surface px-3 text-sm text-text placeholder:text-faint ' +
+  'w-full rounded-xl border border-border bg-surface px-3 text-sm max-sm:text-base text-text placeholder:text-faint ' +
   'transition-colors focus:border-accent focus:outline-none disabled:opacity-60';
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function Input(
@@ -377,22 +379,85 @@ export function Dialog({
   dismissible?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
-  useEffect(() => {
+  const titleId = useId();
+  const descriptionId = useId();
+  /** The committed `open` prop, so native events can tell whether the app still wants the dialog up. */
+  const openRef = useRef(false);
+  /** The control that last had focus inside the dialog, put back if the browser closes it on its own. */
+  const lastFocusRef = useRef<HTMLElement | null>(null);
+  /** onClose already ran for a close the browser is forcing (a `cancel` that can't be prevented). */
+  const reportedRef = useRef(false);
+  /** The current press started on the backdrop. A drag that only ends there (selecting text) doesn't close. */
+  const backdropPressRef = useRef(false);
+
+  // Layout effects: the dialog is showing before paint and before any effect tries to focus a control in it.
+  useLayoutEffect(() => {
     const el = ref.current;
+    openRef.current = open;
     if (!el) return;
-    if (open && !el.open) el.showModal();
-    if (!open && el.open) el.close();
+    if (open && !el.open) {
+      lastFocusRef.current = null;
+      el.showModal();
+    } else if (!open && el.open) {
+      el.close();
+    }
   }, [open]);
+
+  // Removing an open <dialog> skips the native close steps, which drops focus to <body>. This
+  // cleanup runs before React detaches the element, so close it first: focus returns to the opener.
+  useLayoutEffect(() => {
+    const el = ref.current;
+    return () => {
+      openRef.current = false;
+      if (el?.open) el.close();
+    };
+  }, []);
+
+  /**
+   * The native dialog closed. If the app still wants it open, the browser closed it by itself: a
+   * second Escape or Android Back with no click or key press in between fires a `cancel` that can't
+   * be prevented. Show it again so the screen matches state (a roll the DM is waiting on stays up).
+   */
+  const handleNativeClose = () => {
+    const el = ref.current;
+    const reported = reportedRef.current;
+    reportedRef.current = false;
+    if (!el || el.open || !el.isConnected || !openRef.current) return;
+    // Owners that accept the close re-render with open=false, which closes it again.
+    if (dismissible && !reported) onClose();
+    const focusTarget = lastFocusRef.current;
+    try {
+      el.showModal();
+    } catch {
+      return;
+    }
+    if (focusTarget?.isConnected && el.contains(focusTarget)) focusTarget.focus({ preventScroll: true });
+  };
+
   const widths = { sm: 'max-w-sm', md: 'max-w-lg', lg: 'max-w-2xl', xl: 'max-w-4xl' };
   return (
     <dialog
       ref={ref}
+      aria-labelledby={open ? titleId : undefined}
+      aria-describedby={open && description ? descriptionId : undefined}
       onCancel={(e) => {
         e.preventDefault();
-        if (dismissible) onClose();
+        if (!dismissible) return;
+        // Not cancelable: the browser closes it regardless; the close handler shouldn't report it twice.
+        if (!e.nativeEvent.cancelable) reportedRef.current = true;
+        onClose();
+      }}
+      onClose={handleNativeClose}
+      onFocus={(e) => {
+        if (e.target !== e.currentTarget && e.target instanceof HTMLElement) lastFocusRef.current = e.target;
+      }}
+      onPointerDown={(e) => {
+        backdropPressRef.current = e.target === e.currentTarget;
       }}
       onClick={(e) => {
-        if (dismissible && e.target === ref.current) onClose();
+        const pressedBackdrop = backdropPressRef.current;
+        backdropPressRef.current = false;
+        if (dismissible && pressedBackdrop && e.target === e.currentTarget) onClose();
       }}
       className={cn(
         'm-auto w-[calc(100%-2rem)] rounded-2xl border border-border bg-surface p-0 text-text shadow-card backdrop:bg-black/60',
@@ -403,8 +468,14 @@ export function Dialog({
         <div className="flex max-h-[85vh] flex-col">
           <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
             <div>
-              <h2 className="font-display text-lg font-semibold">{title}</h2>
-              {description && <p className="mt-1 text-sm text-muted">{description}</p>}
+              <h2 id={titleId} className="font-display text-lg font-semibold">
+                {title}
+              </h2>
+              {description && (
+                <p id={descriptionId} className="mt-1 text-sm text-muted">
+                  {description}
+                </p>
+              )}
             </div>
             {dismissible && (
               <IconButton label="Close" size="sm" onClick={onClose}>

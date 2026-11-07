@@ -2,11 +2,24 @@
  * Leveling and resting under the 2024 rules (SRD 5.2.1 "Level Advancement", "Multiclassing",
  * "Short Rest", "Long Rest").
  */
-import { ABILITY_NAMES, type Ability, type CasterType, type Character, type ClassLevel, type Feature, type FeatureUses, type GameEvent, type HitDie, type RollResult } from '@/types';
+import {
+  ABILITY_NAMES,
+  type Ability,
+  type CasterType,
+  type Character,
+  type ClassLevel,
+  type EquipmentOption,
+  type Feature,
+  type FeatureScale,
+  type FeatureUses,
+  type GameEvent,
+  type HitDie,
+  type RollResult,
+} from '@/types';
 import { newId, nameKey, slugify } from '@/lib/id';
-import { asiLevels, featuresAtLevel, findSrdClass, srdClassFor, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
+import { asiLevels, featuresAtLevel, findSrdClass, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
-import { abilityModifier, characterLevel, formatModifier, proficiencyBonus } from './rules';
+import { abilityModifier, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
 import { recomputeSlots, resetSpellSlots } from './spellcasting';
 import { clamp, formatInt, gameEvent, listJoin, toInt, touch, warning } from './util';
 
@@ -46,6 +59,8 @@ export interface LevelUpOptions {
    */
   hpMethod: 'average' | 'roll' | { fixed: number };
   newFeatures?: Omit<Feature, 'id'>[];
+  /** Equipment catalog (BuilderData.equipment) for recomputing AC; without it the SRD armor table is used. */
+  equipment?: readonly EquipmentOption[];
   rng?: Rng;
 }
 
@@ -212,7 +227,83 @@ function unchanged(c: Character, message: string): LevelUpResult {
   return { character: c, events: [warning(message)], newLevel: characterLevel(c), hpGained: 0, reminders: [] };
 }
 
-/** Gain one level: class level, HP max and current HP, hit dice, spell slots (recomputed), features. */
+// ---------------------------------------------------------------------------
+// Feature uses that grow with level
+// ---------------------------------------------------------------------------
+
+/** Levels in one class, by SRD class or by name ("Paladin"). */
+function levelInClass(c: Character, className: string): number {
+  const key = nameKey(className);
+  return c.classes
+    .filter((cl) => nameKey(cl.name) === key || nameKey(srdClassFor(cl)?.name ?? '') === key)
+    .reduce((sum, cl) => sum + Math.max(0, toInt(cl.level)), 0);
+}
+
+/**
+ * Maximum uses a FeatureScale gives at the character's current levels: the Proficiency Bonus, a
+ * multiple of a class level (Lay On Hands: 5 × Paladin level), or the class table's value for the
+ * class level (Rages). Null when it can't tell (no levels in that class, a "—" table cell, bad data).
+ */
+export function scaledUsesMax(c: Character, scale: FeatureScale | undefined): number | null {
+  if (!scale || typeof scale !== 'object') return null;
+  switch (scale.by) {
+    case 'proficiency-bonus':
+      return proficiencyBonus(characterLevel(c));
+    case 'class-level': {
+      const level = levelInClass(c, scale.className ?? '');
+      const multiplier = typeof scale.multiplier === 'number' && Number.isFinite(scale.multiplier) ? scale.multiplier : 1;
+      const max = Math.floor(level * multiplier);
+      return level > 0 && max > 0 ? max : null;
+    }
+    case 'table': {
+      const level = levelInClass(c, scale.className ?? '');
+      const values = Array.isArray(scale.values) ? scale.values : [];
+      if (level < 1 || values.length === 0) return null;
+      const max = toInt(values[Math.min(level, values.length) - 1]);
+      return max > 0 ? max : null;
+    }
+    default:
+      return null;
+  }
+}
+
+/** "Rage (Duration)" -> "Rage". */
+function baseName(name: string): string {
+  return name.replace(/\s*\([^)]*\)\s*$/, '');
+}
+
+/** The feature's own scale, or for sheets saved before FeatureUses.scale, the SRD table for a well-known class feature. */
+function featureScale(f: Feature): FeatureScale | undefined {
+  if (f.uses?.scale) return f.uses.scale;
+  if (f.source !== 'class') return undefined;
+  const key = nameKey(baseName(f.name));
+  const owner = nameKey(f.sourceName ?? '');
+  return SRD_FEATURE_USE_SCALES.find((s) => nameKey(s.feature) === key && owner.startsWith(nameKey(s.className)))?.scale;
+}
+
+/**
+ * Re-read the maximum uses of every feature whose uses grow with level (FeatureUses.scale, or the SRD
+ * class tables for older sheets), e.g. after a level-up: Rage 2 → 3 at Barbarian 3, Lay On Hands
+ * 5 → 10 at Paladin 2. Spent uses stay spent, capped at the new maximum.
+ */
+export function refreshScaledFeatureUses(c: Character): { character: Character; changes: string[] } {
+  const changes: string[] = [];
+  const features = c.features.map((f) => {
+    const uses = f.uses;
+    if (!uses) return f;
+    const max = scaledUsesMax(c, featureScale(f));
+    if (max === null || max === uses.max) return f;
+    changes.push(`${f.name} ${uses.max} → ${max}`);
+    return { ...f, uses: { ...uses, max, used: clamp(toInt(uses.used), 0, max) } };
+  });
+  return changes.length ? { character: { ...c, features }, changes } : { character: c, changes };
+}
+
+/**
+ * Gain one level: class level, HP max and current HP, hit dice, spell slots (recomputed), features,
+ * the uses of features that grow with level (refreshScaledFeatureUses), and the AC when the new level
+ * changes it (syncArmorClass: an AC set by hand is kept, with a reminder giving the computed value).
+ */
 export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
   const className = opts.className?.trim() ?? '';
   if (!className) return unchanged(c, 'Level up needs a class name.');
@@ -257,7 +348,10 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
     features: [...c.features, ...added],
     ...(alertDelta ? { initiativeBonusExtra: toInt(c.initiativeBonusExtra) + alertDelta } : {}),
   };
-  next = touch(recomputeSlots(next));
+  const uses = refreshScaledFeatureUses(next);
+  // A new class or subclass can change the AC (Unarmored Defense, Draconic Resilience, Defense).
+  const ac = syncArmorClass(c, uses.character, opts.equipment ?? []);
+  next = touch(recomputeSlots(ac.character));
 
   const bonusText = bonuses.map((b) => ` + ${b.amount} ${b.note}`).join('');
   const classText = classes.map((cl) => `${cl.name} ${cl.level}`).join(' / ');
@@ -268,6 +362,8 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
     ),
   ];
   if (added.length) events.push(gameEvent('feature-restored', `New features: ${added.map((f) => f.name).join(', ')}.`));
+  if (uses.changes.length) events.push(gameEvent('level-up', `Feature uses now: ${listJoin(uses.changes)}.`));
+  events.push(...ac.events.filter((e) => e.type !== 'warning'));
 
   const reminders: string[] = [];
   if (!existing && oldTotal > 0) reminders.push(...multiclassPrerequisites(c, info, gained.name));
@@ -276,6 +372,8 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
   reminders.push(...slotReminders(c, next));
   if (newPb > oldPb && oldTotal > 0) reminders.push(`Proficiency Bonus is now ${formatModifier(newPb)}.`);
   if (alertDelta) reminders.push(`Alert: initiative bonus from your Proficiency Bonus is now ${formatModifier(newPb)}.`);
+  // An AC set by hand that the new level would change (see syncArmorClass).
+  reminders.push(...ac.events.filter((e) => e.type === 'warning').map((e) => e.message));
   if (c.hp.current <= 0 && oldTotal > 0) reminders.push('Current HP stays at 0 until healed.');
 
   return { character: next, events, newLevel, hpGained, ...(hp.roll ? { hpRoll: hp.roll } : {}), reminders };

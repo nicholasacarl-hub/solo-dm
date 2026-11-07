@@ -1,10 +1,12 @@
 import './testing/setup';
 import { StrictMode } from 'react';
 import { act, render, screen, waitFor } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import { dm } from '@/dm';
 import { initialDmStatus, useGame } from '@/state/gameStore';
+import { acquireCampaignLock, type CampaignLock } from '@/storage';
 import { sampleCampaign } from '@/test/fixtures';
 import { PlayScreen } from '@/ui/screens/PlayScreen';
 import { resetDmMock } from './testing/dmMock';
@@ -12,6 +14,10 @@ import { fixtureState } from './testing/fakeGame';
 import { seedGame, type ActionSpies } from './testing/seed';
 
 vi.mock('@/dm', () => import('./testing/dmMock'));
+vi.mock('@/storage', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/storage')>()),
+  acquireCampaignLock: vi.fn(),
+}));
 vi.mock('@/engine', () => import('./testing/engineMock'));
 vi.mock('@/data', () => ({ useRulesIndex: () => null }));
 vi.mock('@/ui/sheet/CharacterSheet', () => ({ CharacterSheet: () => <p>Character sheet</p> }));
@@ -45,8 +51,18 @@ function renderAt(path: string, strict = true) {
   return render(strict ? <StrictMode>{tree}</StrictMode> : tree);
 }
 
+/** A campaign lock whose loss (another tab stealing it) the test controls. */
+function fakeLock(): { lock: CampaignLock & { release: Mock<() => void> }; lose: () => void } {
+  let lose!: () => void;
+  const lost = new Promise<void>((resolve) => (lose = resolve));
+  return { lock: { release: vi.fn<() => void>(), lost }, lose };
+}
+
+const acquire = vi.mocked(acquireCampaignLock);
+
 beforeEach(() => {
   resetDmMock();
+  acquire.mockReset().mockImplementation(async () => fakeLock().lock);
 });
 
 describe('PlayScreen', () => {
@@ -58,6 +74,15 @@ describe('PlayScreen', () => {
     expect(spies.loadCampaign).toHaveBeenCalledWith('camp-1');
     await waitFor(() => expect(dm.beginOrResume).toHaveBeenCalledTimes(1));
     expect(screen.getByRole('log', { name: 'Story so far' })).toBeInTheDocument();
+    // StrictMode's remount reuses the claim instead of racing its own release.
+    expect(acquire).toHaveBeenCalledTimes(1);
+  });
+
+  it('titles the tab with the campaign and session', async () => {
+    seedUnloaded();
+    renderAt('/play/camp-1');
+    await screen.findByRole('heading', { name: 'The Drowned Lantern' });
+    expect(document.title).toBe('The Drowned Lantern · Session 2 · Solo DM');
   });
 
   it('unloads the campaign and stops a busy DM when leaving the table', async () => {
@@ -124,5 +149,64 @@ describe('PlayScreen', () => {
     spies.loadCampaign.mockImplementation(() => new Promise(() => {}));
     renderAt('/play/camp-1');
     expect(screen.getByText('Opening the campaign…')).toBeInTheDocument();
+  });
+});
+
+describe('PlayScreen — one tab at a time', () => {
+  it('claims the campaign before loading it and lets go after leaving the table', async () => {
+    const spies = seedUnloaded();
+    const { lock } = fakeLock();
+    acquire.mockResolvedValue(lock);
+    const view = renderAt('/play/camp-1', false);
+    await screen.findByRole('heading', { name: 'The Drowned Lantern' });
+    expect(acquire).toHaveBeenCalledWith('camp-1', undefined);
+    expect(acquire.mock.invocationCallOrder[0]).toBeLessThan(spies.loadCampaign.mock.invocationCallOrder[0]);
+
+    view.unmount();
+    await waitFor(() => expect(lock.release).toHaveBeenCalledTimes(1));
+  });
+
+  it('stays out of a campaign another tab has open: no load, no DM, a way to take it over', async () => {
+    const spies = seedUnloaded();
+    acquire.mockResolvedValueOnce(null);
+    renderAt('/play/camp-1');
+
+    expect(await screen.findByRole('heading', { name: 'This campaign is open in another tab' })).toBeInTheDocument();
+    expect(document.title).toBe('Open in another tab · Solo DM');
+    expect(spies.loadCampaign).not.toHaveBeenCalled();
+    expect(dm.beginOrResume).not.toHaveBeenCalled();
+    expect(screen.getByRole('link', { name: 'Back to campaigns' })).toHaveAttribute('href', '/');
+
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Use this tab instead' }));
+    expect(await screen.findByRole('heading', { name: 'The Drowned Lantern' })).toBeInTheDocument();
+    expect(acquire).toHaveBeenLastCalledWith('camp-1', { steal: true });
+    expect(spies.loadCampaign).toHaveBeenCalledWith('camp-1');
+    await waitFor(() => expect(dm.beginOrResume).toHaveBeenCalledTimes(1));
+  });
+
+  it('stops the DM and steps back when another tab takes the campaign over', async () => {
+    const spies = seedUnloaded();
+    const taken = fakeLock();
+    acquire.mockResolvedValueOnce(taken.lock);
+    renderAt('/play/camp-1');
+    await screen.findByRole('heading', { name: 'The Drowned Lantern' });
+    vi.mocked(dm.isBusy).mockReturnValue(true);
+
+    await act(async () => taken.lose());
+    expect(await screen.findByRole('heading', { name: 'This campaign moved to another tab' })).toBeInTheDocument();
+    expect(dm.cancel).toHaveBeenCalled();
+    expect(spies.unloadCampaign).toHaveBeenCalled();
+    expect(screen.queryByRole('log', { name: 'Story so far' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Use this tab instead' })).toBeInTheDocument();
+  });
+
+  it('still opens the campaign if locking itself fails', async () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    seedUnloaded();
+    acquire.mockRejectedValueOnce(new Error('Web Locks broke'));
+    renderAt('/play/camp-1', false);
+    expect(await screen.findByRole('heading', { name: 'The Drowned Lantern' })).toBeInTheDocument();
+    expect(error).toHaveBeenCalled();
+    error.mockRestore();
   });
 });

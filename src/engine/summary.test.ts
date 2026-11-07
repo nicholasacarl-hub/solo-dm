@@ -73,6 +73,19 @@ describe('characterSheetText', () => {
     expect(approxTokens).toBeLessThan(900);
   });
 
+  it('shows scaled cantrip dice, Eldritch Blast beams and a Champion’s critical range', () => {
+    const blast = { id: 'eb', name: 'Eldritch Blast', ability: 'spell' as const, proficient: true, damage: '1d10', damageType: 'force', addAbilityToDamage: false, notes: 'Cantrip' };
+    const wizard5 = mira({ classes: [{ ...mira().classes[0], level: 5 }], attacks: [...mira().attacks, blast] });
+    const text = characterSheetText(wizard5);
+    expect(text).toContain('- **Fire Bolt** +6 to hit, 2d10 fire · 120 ft.');
+    expect(text).toContain('- **Eldritch Blast** +6 to hit, 1d10 force · Cantrip · 2 beams at this level (one attack roll each)');
+    expect(text).not.toContain('Critical Hit on');
+    const champion = mira({ classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level: 3, hitDie: 10, casterType: 'none', subclass: 'Champion' }] });
+    const fighterSheet = characterSheetText(champion);
+    expect(fighterSheet).toMatch(/- \*\*Dagger\*\* .* · Critical Hit on 19–20/);
+    expect(fighterSheet).not.toMatch(/Fire Bolt.*Critical Hit/);
+  });
+
   it('truncates long text and handles a bare character', () => {
     const verbose = characterSheetText(mira({ personality: { backstory: 'word '.repeat(400) } }));
     expect(verbose).toMatch(/Backstory: (word ){50,}.*…/);

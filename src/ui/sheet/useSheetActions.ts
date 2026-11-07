@@ -59,19 +59,27 @@ export interface SheetRoll {
   expression?: string;
 }
 
-/** Log an unprompted player roll and show the result briefly. */
-export function useLogRoll(): (roll: SheetRoll, result: D20TestResult, manual: boolean) => Promise<void> {
+/**
+ * Log an unprompted player roll, show the result briefly, and tell the DM: the DM reads the
+ * transcript, not the story log, so without a notice it never hears about the roll. Pass
+ * `tellDm: false` when the roll's own change already notifies (death saves).
+ */
+export function useLogRoll(): (roll: SheetRoll, result: D20TestResult, manual: boolean, opts?: { tellDm?: boolean }) => Promise<void> {
   const appendLog = useGame((s) => s.appendLog);
+  const queueDmNotice = useGame((s) => s.queueDmNotice);
   return useCallback(
-    async (roll, result, manual) => {
+    async (roll, result, manual, opts = {}) => {
       try {
         await appendLog({ kind: 'roll', actor: 'player', purpose: `${roll.label} (unprompted)`, roll: result, secret: false, ...(manual ? { manual } : {}) });
+        if (opts.tellDm !== false) {
+          queueDmNotice(`The player rolled ${roll.label} on their own: ${result.total} (${result.breakdown})${manual ? ', on physical dice' : ''}.`);
+        }
         toast.info(`${roll.label}: ${result.total} (${result.breakdown})`);
       } catch (err) {
         toast.error(`Couldn't log the roll: ${errorText(err)}`);
       }
     },
-    [appendLog],
+    [appendLog, queueDmNotice],
   );
 }
 

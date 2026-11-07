@@ -13,6 +13,7 @@ import type { Rng } from '@/engine';
 import { newId } from '@/lib/id';
 import { useGame, type GameStore } from '@/state/gameStore';
 import { getSettings } from '@/state/settingsStore';
+import { listLibrarySources } from '@/storage';
 import type { AppSettings } from '@/types';
 import { getAnthropicClient } from './client';
 
@@ -45,6 +46,8 @@ export interface DmDeps {
   keyClient: (apiKey: string) => KeyCheckClient;
   rulesIndex: () => Promise<RulesIndex>;
   invalidateRulesIndex: () => void;
+  /** Imported books switched on in the player's Library (the DM searches them in every campaign). */
+  libraryImports: () => Promise<{ id: string; name: string }[]>;
   /** Randomness for engine calls; undefined = the engine's crypto RNG. */
   rng?: Rng;
   now: () => number;
@@ -80,6 +83,8 @@ const defaultDeps: DmDeps = {
   keyClient: (apiKey) => getAnthropicClient(apiKey),
   rulesIndex: () => getRulesIndex(),
   invalidateRulesIndex: () => invalidateRulesIndex(),
+  libraryImports: async () =>
+    (await listLibrarySources()).filter((s) => s.kind === 'import' && s.enabled).map((s) => ({ id: s.id, name: s.title })),
   rng: undefined,
   now: () => Date.now(),
   newId: () => newId(),

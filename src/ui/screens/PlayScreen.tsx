@@ -1,17 +1,21 @@
 /**
- * Route #/play/:id — the table. Loads the campaign (and unloads it on the way out), sends players
- * without a character to the builder, and asks the DM to begin or resume the session once.
+ * Route #/play/:id — the table. Claims the campaign for this tab (one tab at a time may play a
+ * campaign), loads it (and unloads it on the way out), sends players without a character to the
+ * builder, and asks the DM to begin or resume the session once.
  */
 import { useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useParams } from 'react-router';
-import { BookX } from 'lucide-react';
+import { AppWindow, BookX } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { dm } from '@/dm';
-import { useGame } from '@/state/gameStore';
-import { EmptyState, Spinner } from '@/ui/components/ui';
+import { useGame, whenPersisted } from '@/state/gameStore';
+import type { CampaignLock } from '@/storage';
+import { Button, EmptyState, Spinner } from '@/ui/components/ui';
+import { holdCampaign } from '@/ui/play/campaignLock';
 import { runDm, waitForDmIdle } from '@/ui/play/dmStatus';
 import { errorMessage } from '@/ui/play/format';
 import { PlayTable } from '@/ui/play/PlayTable';
+import { useDocumentTitle } from '@/ui/shell/Page';
 
 /** dm.isBusy() as a safe boolean for effects (an effect has nowhere useful to throw to). */
 function dmIsBusy(): boolean {
@@ -69,12 +73,23 @@ function useBeginOrResume(campaignId: string | null): void {
   }, [campaignId]);
 }
 
+/** Used when locking itself fails: playing on beats locking the player out of their campaign. */
+const UNLOCKED: CampaignLock = { release: () => {}, lost: new Promise<void>(() => {}) };
+
+/**
+ * Whether this tab may play the campaign: 'waiting' for the lock, 'held', 'elsewhere' (another
+ * tab had it open first) or 'taken' (another tab took it over from this one).
+ */
+type Access = 'waiting' | 'held' | 'elsewhere' | 'taken';
+
 export function PlayScreen() {
   const { id } = useParams<{ id: string }>();
-  const { storeCampaignId, loadedId, hasCharacter, loading, loadError } = useGame(
+  const { storeCampaignId, loadedId, name, sessionNumber, hasCharacter, loading, loadError } = useGame(
     useShallow((s) => ({
       storeCampaignId: s.campaignId,
       loadedId: s.campaign?.id ?? null,
+      name: s.campaign?.name ?? null,
+      sessionNumber: s.activeSession?.number ?? null,
       hasCharacter: Boolean(s.campaign?.characterId) && s.character !== null,
       loading: s.loading,
       loadError: s.loadError,
@@ -85,15 +100,46 @@ export function PlayScreen() {
   // (the builder leaves it loaded), but the DM must not start until our own reload settles —
   // otherwise the reload replaces the store's state in the middle of the session's opening.
   const [readyId, setReadyId] = useState<string | null>(null);
+  const [access, setAccess] = useState<{ id: string; state: Access } | null>(null);
+  // "Use this tab instead": the next claim of this id takes the campaign over from the other tab.
+  const takeOverId = useRef<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
 
   useEffect(() => {
     if (!id) return;
     let active = true;
-    useGame
-      .getState()
-      .loadCampaign(id)
-      .then(() => {
-        if (active) setReadyId(id);
+    const steal = takeOverId.current === id;
+    takeOverId.current = null;
+    // Claim the campaign before reading it: a second tab must never load it, start the DM or write.
+    const hold = holdCampaign(id, { steal });
+    hold.lock
+      .catch((err: unknown) => {
+        console.error('[PlayScreen] Could not claim the campaign for this tab:', err);
+        return UNLOCKED;
+      })
+      .then((lock) => {
+        if (!active) return;
+        if (!lock) {
+          // Not even a copy the builder left loaded may be written from here.
+          useGame.getState().unloadCampaign();
+          setAccess({ id, state: 'elsewhere' });
+          return;
+        }
+        setAccess({ id, state: 'held' });
+        // Another tab took over: stop the DM and step back before this tab writes anything else.
+        void lock.lost.then(() => {
+          if (!active) return;
+          stopDm();
+          useGame.getState().unloadCampaign();
+          setReadyId(null);
+          setAccess({ id, state: 'taken' });
+        });
+        return useGame
+          .getState()
+          .loadCampaign(id)
+          .then(() => {
+            if (active) setReadyId(id);
+          });
       })
       .catch((err: unknown) => setFailure({ id, message: errorMessage(err) }));
     return () => {
@@ -101,16 +147,40 @@ export function PlayScreen() {
       setReadyId(null);
       stopDm();
       useGame.getState().unloadCampaign();
+      // Let go once this tab's last writes are saved, so a tab that takes over reads all of them.
+      void whenPersisted(id).finally(() => hold.release());
     };
-  }, [id]);
+  }, [id, attempt]);
 
-  const loaded = Boolean(id) && readyId === id && loadedId === id && !loading;
+  const state = access && access.id === id ? access.state : 'waiting';
+  const loaded = Boolean(id) && state === 'held' && readyId === id && loadedId === id && !loading;
   useBeginOrResume(loaded && hasCharacter ? (id ?? null) : null);
 
-  if (!id) return <Navigate to="/" replace />;
+  const error =
+    failure && failure.id === id ? failure.message : id && storeCampaignId === id && !loading ? loadError : null;
+  const elsewhere = state === 'elsewhere' || state === 'taken';
+  useDocumentTitle(
+    error
+      ? "Campaign couldn't be opened"
+      : elsewhere
+        ? 'Open in another tab'
+        : loaded && name
+          ? sessionNumber
+            ? `${name} · Session ${sessionNumber}`
+            : name
+          : 'Opening the campaign',
+  );
 
-  const error = failure?.id === id ? failure.message : storeCampaignId === id && !loading ? loadError : null;
+  if (!id) return <Navigate to="/" replace />;
   if (error) return <LoadFailed message={error} />;
+  if (elsewhere) {
+    const takeOver = () => {
+      takeOverId.current = id;
+      setAccess({ id, state: 'waiting' });
+      setAttempt((n) => n + 1);
+    };
+    return <OpenElsewhere taken={state === 'taken'} onTakeOver={takeOver} />;
+  }
   if (!loaded) return <Opening />;
   if (!hasCharacter) return <Navigate to={`/campaign/${id}/character`} replace />;
   return <PlayTable />;
@@ -122,6 +192,37 @@ function Opening() {
       <Spinner label="Opening the campaign" className="size-6!" />
       <p className="text-sm">Opening the campaign…</p>
     </div>
+  );
+}
+
+/** Another tab has this campaign at the table: only one tab may play (and save) it at a time. */
+function OpenElsewhere({ taken, onTakeOver }: { taken: boolean; onTakeOver: () => void }) {
+  return (
+    <main className="flex h-dvh items-center justify-center bg-bg px-4">
+      <div className="flex max-w-md flex-col items-center gap-3 px-6 py-10 text-center">
+        <AppWindow className="size-9 text-faint" aria-hidden />
+        <h1 className="font-display text-base font-semibold">
+          {taken ? 'This campaign moved to another tab' : 'This campaign is open in another tab'}
+        </h1>
+        <p role={taken ? 'alert' : undefined} className="max-w-sm text-sm text-muted">
+          {taken
+            ? 'You opened it in another tab, so this one stepped back.'
+            : 'A campaign can be played in one tab at a time, so your saves never overwrite each other.'}{' '}
+          Using this tab instead closes the table in the other one.
+        </p>
+        <div className="flex flex-wrap items-center justify-center gap-2">
+          <Button variant="primary" onClick={onTakeOver}>
+            Use this tab instead
+          </Button>
+          <Link
+            to="/"
+            className="inline-flex h-10 items-center rounded-xl px-4 text-sm font-medium text-muted hover:bg-surface-2 hover:text-text"
+          >
+            Back to campaigns
+          </Link>
+        </div>
+      </div>
+    </main>
   );
 }
 

@@ -7,6 +7,7 @@ import { slugify } from '@/lib/id';
 import type { Campaign } from '@/types';
 import { campaignTables, db } from './db';
 import { deleteCampaignData, normalizeCampaignData, readCampaignData, writeCampaignData } from './campaignData';
+import { isCampaignOpenElsewhere, OPEN_ELSEWHERE_ERROR } from './campaignLock';
 import { emitCampaignChange } from './events';
 import { remapCampaignData } from './remap';
 import type { CampaignBundle, CampaignData } from './types';
@@ -345,6 +346,8 @@ export async function importBundle(
   onForeignIds: 'copy' | 'fail',
 ): Promise<Campaign> {
   const data = normalizeCampaignData(bundleData(bundle));
+  // Checked before the transaction (it can't wait on anything but the database).
+  const openElsewhere = await isCampaignOpenElsewhere(data.campaign.id);
   const { campaign, replaced } = await db.transaction('rw', campaignTables(), async () => {
     const existing = await db.campaigns.get(data.campaign.id);
     const foreign = await collidesWithOtherCampaigns(data);
@@ -356,6 +359,8 @@ export async function importBundle(
       await writeCampaignData(remapped);
       return { campaign: remapped.campaign, replaced: false };
     }
+    // Replacing a campaign that is being played in another tab would be overwritten by that tab.
+    if (existing && openElsewhere) throw new Error(OPEN_ELSEWHERE_ERROR);
     if (existing) await deleteCampaignData(existing.id);
     await writeCampaignData(data);
     return { campaign: data.campaign, replaced: existing !== undefined };

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GithubSyncSettings } from '@/types';
 import { DEFAULT_SETTINGS } from '@/types';
 import {
+  INTERNAL_REPO_ERROR,
   PUBLIC_REPO_ERROR,
   deleteCampaign,
   exportCampaignBundle,
@@ -194,6 +195,21 @@ describe('testGithubConnection', () => {
     const result = await testGithubConnection(settings());
     expect(result).toEqual({ ok: false, private: false, error: PUBLIC_REPO_ERROR });
     expect(result.error).toMatch(/Saves can only sync to a PRIVATE repository/);
+  });
+
+  it('refuses internal repositories, which GitHub also reports as private (visibility decides)', async () => {
+    github.repo = { ...github.repo, private: true, visibility: 'internal' };
+    expect(await testGithubConnection(settings())).toEqual({ ok: false, error: INTERNAL_REPO_ERROR });
+    await expect(listRemoteSaves(settings())).rejects.toThrow(INTERNAL_REPO_ERROR);
+    await seedCampaign('a');
+    await expect(pushCampaignToGithub('a-camp', settings())).rejects.toThrow(INTERNAL_REPO_ERROR);
+    await expect(syncWithGithub(settings())).rejects.toThrow(INTERNAL_REPO_ERROR);
+    expect(github.callsTo('PUT')).toHaveLength(0);
+
+    github.repo = { ...github.repo, private: false, visibility: 'public' };
+    expect(await testGithubConnection(settings())).toEqual({ ok: false, private: false, error: PUBLIC_REPO_ERROR });
+    github.repo = { ...github.repo, private: true, visibility: 'private' };
+    expect(await testGithubConnection(settings())).toEqual({ ok: true, private: true });
   });
 
   it.each([

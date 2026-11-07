@@ -13,6 +13,12 @@
  *   (streaming, batched tool calls) can't interleave or regress. A failed write logs console.error
  *   and rejects the action's promise; memory keeps the optimistic value.
  * - Every persisted change also bumps campaign.updatedAt, which is what cloud sync compares.
+ * - One tab writes a campaign at a time: while another tab holds the campaign's lock (it is open at
+ *   the table there; storage.acquireCampaignLock), writes are refused with OPEN_ELSEWHERE_ERROR.
+ *   Writes queued before the campaign was replaced (import, GitHub pull) or deleted are dropped.
+ * - Pending DM notices are saved on the campaign record (campaign.pendingDmNotices), so leaving the
+ *   table or reloading doesn't lose them. Notices queued from elsewhere (the Library, another tab)
+ *   are kept by every save and picked up into memory.
  */
 import { create } from 'zustand';
 import type { BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages/messages';
@@ -151,8 +157,12 @@ export interface GameStoreActions {
   resolveInteraction(id: string, response: InteractionResponse): void;
   cancelInteraction(id: string, reason?: string): void;
 
+  /** Queue a note for the DM's next turn; saved with the campaign, so it survives a reload. */
   queueDmNotice(text: string): void;
-  /** Return and clear pending DM notices. */
+  /**
+   * Return and clear pending DM notices. The stored copy is cleared by the campaign's next save —
+   * normally the transcript append that delivers them — so a failed append can't lose them.
+   */
   takeDmNotices(): string[];
 }
 
@@ -179,13 +189,127 @@ function enqueueWrite<T>(key: string, task: () => Promise<T>): Promise<T> {
   return run;
 }
 
+/** A write this tab must not make (the campaign is open elsewhere, or was replaced or deleted). */
+class WriteRefused extends Error {}
+
+const CAMPAIGN_REPLACED =
+  'This campaign was replaced or deleted (by an import, a sync or another tab) before the change was saved.';
+const CAMPAIGN_DELETED = 'This campaign has been deleted.';
+
+/**
+ * Bumped when a campaign is replaced or deleted behind this store's back (storage events, from this
+ * tab or another): writes queued before that are dropped instead of overwriting the new data.
+ */
+const replacements = new Map<string, number>();
+const replacementOf = (campaignId: string) => replacements.get(campaignId) ?? 0;
+
+/** Why this tab may not write the campaign right now, or null. */
+async function refusal(key: string, replacement: number): Promise<string | null> {
+  if (key === LIBRARY_QUEUE) return null;
+  if (replacementOf(key) !== replacement) return CAMPAIGN_REPLACED;
+  return (await storage.isCampaignOpenElsewhere(key)) ? storage.OPEN_ELSEWHERE_ERROR : null;
+}
+
 /** Run `task` after every earlier write of this campaign. Failures are logged and rethrown readably. */
 function persist<T>(key: string, what: string, task: () => Promise<T>): Promise<T> {
-  return enqueueWrite(key, task).catch((cause: unknown) => {
+  const replacement = replacementOf(key);
+  return enqueueWrite(key, async () => {
+    const refused = await refusal(key, replacement);
+    if (refused) throw new WriteRefused(refused);
+    return task();
+  }).catch((cause: unknown) => {
     const detail = cause instanceof Error ? cause.message : String(cause);
-    console.error(`[gameStore] Couldn't save ${what}:`, cause);
+    if (cause instanceof WriteRefused) console.warn(`[gameStore] Didn't save ${what}: ${detail}`);
+    else console.error(`[gameStore] Couldn't save ${what}:`, cause);
     throw new Error(`Couldn't save ${what}: ${detail}`, { cause });
   });
+}
+
+// ---------------------------------------------------------------------------
+// DM notices on the campaign record
+// ---------------------------------------------------------------------------
+
+/** Per campaign: the DM notices stored on its record as of this tab's last load or save. */
+const storedNotices = new Map<string, string[]>();
+
+/** Add notices queued elsewhere (the Library, another tab) to the loaded campaign's memory. */
+function adoptNotices(campaignId: string, notices: readonly string[]): void {
+  const s = useGame.getState();
+  if (!s.campaign || s.campaign.id !== campaignId) return;
+  const fresh = notices.filter((n) => !s.pendingDmNotices.includes(n));
+  if (fresh.length === 0) return;
+  const pendingDmNotices = [...s.pendingDmNotices, ...fresh];
+  useGame.setState({ pendingDmNotices, campaign: { ...s.campaign, pendingDmNotices } });
+}
+
+/** Record what a save left stored; notices this tab neither saw nor wrote were queued elsewhere. */
+function noticesSaved(campaignId: string, seen: readonly string[], stored: string[], own: readonly string[]): void {
+  storedNotices.set(campaignId, stored);
+  const queuedElsewhere = stored.filter((n) => !seen.includes(n) && !own.includes(n));
+  if (queuedElsewhere.length > 0) adoptNotices(campaignId, queuedElsewhere);
+}
+
+/** Save the campaign record from a write task, keeping (and picking up) notices queued elsewhere. */
+async function saveCampaign(campaign: Campaign): Promise<void> {
+  const seen = storedNotices.get(campaign.id) ?? [];
+  const stored = await storage.putCampaignKeepingNotices(campaign, seen);
+  noticesSaved(campaign.id, seen, stored, campaign.pendingDmNotices ?? []);
+}
+
+/**
+ * Save one notice by adding it to the stored record (a merge, never a snapshot, so it can't
+ * overwrite anything newer and never recreates a deleted campaign).
+ */
+function saveNotice(campaignId: string, notice: string, updatedAt?: number): Promise<void> {
+  return enqueueWrite(campaignId, async () => {
+    const seen = storedNotices.get(campaignId);
+    const stored = await storage.addPendingDmNotice(campaignId, notice, updatedAt);
+    if (stored && seen) noticesSaved(campaignId, seen, stored, [notice]);
+  }).catch((cause: unknown) => {
+    const detail = cause instanceof Error ? cause.message : String(cause);
+    console.error("[gameStore] Couldn't save a note for the DM:", cause);
+    throw new Error(`Couldn't save the note for the DM: ${detail}`, { cause });
+  });
+}
+
+/** Queue a notice on the loaded campaign (memory first, then saved). Resolves once it is saved. */
+function queueLoadedNotice(text: string): Promise<void> {
+  const notice = text.trim();
+  const s = useGame.getState();
+  if (!notice || s.pendingDmNotices.includes(notice)) return Promise.resolve();
+  const pendingDmNotices = [...s.pendingDmNotices, notice];
+  if (!s.campaign) {
+    // Nothing loaded to save it with (callers outside a campaign should use queueCampaignNotice).
+    useGame.setState({ pendingDmNotices });
+    return Promise.resolve();
+  }
+  const touched: Campaign = { ...touch(s.campaign), pendingDmNotices };
+  useGame.setState({ pendingDmNotices, campaign: touched });
+  return saveNotice(touched.id, notice, touched.updatedAt);
+}
+
+// ---------------------------------------------------------------------------
+// Streaming narration
+// ---------------------------------------------------------------------------
+
+/** Narration that is still streaming is also saved this often, so a reload mid-stream keeps most of it. */
+export const STREAM_CHECKPOINT_MS = 3000;
+/** When each streaming narration entry was last saved. */
+const streamSavedAt = new Map<string, number>();
+
+/**
+ * DM narration still marked as streaming when a campaign is opened fresh in a tab was cut off (the
+ * tab closed, reloaded or left mid-stream): from here on it is finished text.
+ */
+function settleCutOffNarration(log: LogEntry[]): { log: LogEntry[]; settled: LogEntry[] } {
+  const settled: LogEntry[] = [];
+  const next = log.map((entry) => {
+    if (entry.kind !== 'dm' || !entry.streaming) return entry;
+    const done: LogEntry = { ...entry, streaming: false };
+    settled.push(done);
+    return done;
+  });
+  return settled.length > 0 ? { log: next, settled } : { log, settled };
 }
 
 /** Resolves once every queued write (of one campaign, or of all) has finished. */
@@ -366,7 +490,7 @@ function cancelAllInteractions(): void {
 // The store
 // ---------------------------------------------------------------------------
 
-type CampaignSlice = Omit<GameStoreState, 'dm' | 'interaction' | 'pendingDmNotices'>;
+type CampaignSlice = Omit<GameStoreState, 'dm' | 'interaction'>;
 
 function emptyCampaignSlice(): CampaignSlice {
   return {
@@ -382,6 +506,7 @@ function emptyCampaignSlice(): CampaignSlice {
     quests: [],
     clocks: [],
     homebrew: [],
+    pendingDmNotices: [],
     loading: false,
     loadError: null,
   };
@@ -403,6 +528,7 @@ function sliceFromRecords(r: CampaignRecords): CampaignSlice {
     quests: r.quests,
     clocks: r.clocks,
     homebrew: r.homebrew,
+    pendingDmNotices: r.campaign.pendingDmNotices ?? [],
     loading: false,
     loadError: null,
   };
@@ -415,15 +541,17 @@ export const useGame = create<GameStore>()((set, get) => ({
   ...emptyCampaignSlice(),
   dm: initialDmStatus,
   interaction: null,
-  pendingDmNotices: [],
 
   async loadCampaign(id) {
     const token = ++loadToken;
-    if (get().campaignId === id) {
+    // Opened fresh in this tab (not a reload of what it already shows): no narration of its own
+    // can still be streaming into it.
+    const fresh = get().campaignId !== id;
+    if (!fresh) {
       set({ loading: true, loadError: null });
     } else {
       cancelAllInteractions();
-      set({ ...emptyCampaignSlice(), campaignId: id, loading: true, dm: initialDmStatus, interaction: null, pendingDmNotices: [] });
+      set({ ...emptyCampaignSlice(), campaignId: id, loading: true, dm: initialDmStatus, interaction: null });
     }
     try {
       const records = await readSettled(id);
@@ -432,7 +560,19 @@ export const useGame = create<GameStore>()((set, get) => ({
         set({ ...emptyCampaignSlice(), campaignId: id, loadError: 'This campaign could not be found. It may have been deleted.' });
         return;
       }
-      set(sliceFromRecords(records));
+      storedNotices.set(id, records.campaign.pendingDmNotices ?? []);
+      const slice = sliceFromRecords(records);
+      const { log, settled } = fresh ? settleCutOffNarration(slice.log) : { log: slice.log, settled: [] };
+      if (settled.length === 0 || !slice.campaign) {
+        set(slice);
+        return;
+      }
+      const touched = touch(slice.campaign);
+      set({ ...slice, log, campaign: touched });
+      void persist(id, 'the log', async () => {
+        await storage.putLog(settled);
+        await saveCampaign(touched);
+      }).catch(noop);
     } catch (error) {
       if (token !== loadToken) return;
       console.error('[gameStore] Failed to load the campaign:', error);
@@ -444,7 +584,8 @@ export const useGame = create<GameStore>()((set, get) => ({
   unloadCampaign() {
     loadToken += 1;
     cancelAllInteractions();
-    set({ ...emptyCampaignSlice(), dm: initialDmStatus, interaction: null, pendingDmNotices: [] });
+    // Pending notices stay saved on the campaign record and come back when it is loaded again.
+    set({ ...emptyCampaignSlice(), dm: initialDmStatus, interaction: null });
   },
 
   async reload() {
@@ -457,7 +598,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     const patched = typeof patch === 'function' ? patch(current) : { ...current, ...patch };
     const next: Campaign = { ...patched, id: current.id, updatedAt: nextUpdatedAt(current.updatedAt) };
     set({ campaign: next });
-    await persist(current.id, 'the campaign', () => storage.putCampaign(next));
+    await persist(current.id, 'the campaign', () => saveCampaign(next));
     return next;
   },
 
@@ -471,7 +612,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     await persist(campaign.id, 'the character', async () => {
       await storage.putCharacter(next);
       if (replacedId) await storage.deleteCharacterRecord(replacedId);
-      await storage.putCampaign(linked);
+      await saveCampaign(linked);
     });
   },
 
@@ -490,7 +631,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ character: next, campaign: touched });
     await persist(campaign.id, 'the character sheet', async () => {
       await storage.putCharacter(next);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
     return next;
   },
@@ -525,7 +666,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     await persist(campaign.id, 'the new session', async () => {
       if (previous) await storage.putSession(previous);
       await storage.putSession(started);
-      await storage.putCampaign(next);
+      await saveCampaign(next);
     });
   },
 
@@ -547,7 +688,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     });
     await persist(campaign.id, 'the session', async () => {
       await storage.putSession(next);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
     return next;
   },
@@ -570,7 +711,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ sessions: replaceById(s.sessions, ended), activeSession: null, transcript: [], campaign: next });
     await persist(campaign.id, 'the session', async () => {
       await storage.putSession(ended);
-      await storage.putCampaign(next);
+      await saveCampaign(next);
     });
     return ended;
   },
@@ -594,7 +735,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ transcript: [...s.transcript, ...messages], campaign: touched });
     await persist(campaign.id, 'the DM transcript', async () => {
       await storage.putTranscript(messages);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
     return messages;
   },
@@ -610,7 +751,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     if (changed) set({ transcript: kept, campaign: touched });
     await persist(campaign.id, 'the DM transcript', async () => {
       await storage.deleteTranscriptAfter(session.id, seq);
-      if (changed) await storage.putCampaign(touched);
+      if (changed) await saveCampaign(touched);
     });
   },
 
@@ -628,10 +769,11 @@ export const useGame = create<GameStore>()((set, get) => ({
     };
     // Activity in a running session counts as playing (save slots sort by lastPlayedAt).
     const touched: Campaign = { ...touch(campaign, now), ...(s.activeSession && { lastPlayedAt: now }) };
+    if (full.kind === 'dm' && full.streaming) streamSavedAt.set(full.id, now);
     set({ log: [...s.log, full], campaign: touched });
     await persist(campaign.id, 'the log', async () => {
       await storage.putLog([full]);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
     return full;
   },
@@ -646,15 +788,32 @@ export const useGame = create<GameStore>()((set, get) => ({
     const next = { ...current, ...patch, id: current.id, campaignId: current.campaignId, seq: current.seq, kind: current.kind } as LogEntry;
     const log = s.log.slice();
     log[index] = next;
+    const now = Date.now();
+    const streaming = next.kind === 'dm' && next.streaming === true;
     if (opts?.persist === false) {
-      set({ log });
+      const savedAt = streamSavedAt.get(id);
+      if (streaming && savedAt === undefined) streamSavedAt.set(id, now);
+      if (!streaming || savedAt === undefined || now - savedAt < STREAM_CHECKPOINT_MS) {
+        set({ log });
+        return;
+      }
+      // A checkpoint of narration still streaming: best effort, the final text is saved anyway.
+      streamSavedAt.set(id, now);
+      const checkpoint = touch(campaign, now);
+      set({ log, campaign: checkpoint });
+      void persist(campaign.id, 'the narration', async () => {
+        await storage.putLog([next]);
+        await saveCampaign(checkpoint);
+      }).catch(noop);
       return;
     }
-    const touched = touch(campaign);
+    if (streaming) streamSavedAt.set(id, now);
+    else streamSavedAt.delete(id);
+    const touched = touch(campaign, now);
     set({ log, campaign: touched });
     await persist(campaign.id, 'the log', async () => {
       await storage.putLog([next]);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
   },
 
@@ -662,12 +821,13 @@ export const useGame = create<GameStore>()((set, get) => ({
     const s = get();
     const campaign = requireCampaign(s.campaign);
     if (ids.length === 0) return;
+    for (const id of ids) streamSavedAt.delete(id);
     const removed = new Set(ids);
     const touched = touch(campaign);
     set({ log: s.log.filter((e) => !removed.has(e.id)), campaign: touched });
     await persist(campaign.id, 'the log', async () => {
       await storage.deleteLog(ids);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
   },
 
@@ -677,7 +837,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ combat: state, campaign: touched });
     await persist(campaign.id, 'the combat tracker', async () => {
       await storage.putCombat(campaign.id, state);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
   },
 
@@ -700,7 +860,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ journal, campaign: touched });
     await persist(campaign.id, 'the journal', async () => {
       await storage.putJournal([...latest.values()]);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
     return order.flatMap((id) => latest.get(id) ?? []);
   },
@@ -712,7 +872,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ journal: s.journal.filter((j) => j.id !== id), campaign: touched });
     await persist(campaign.id, 'the journal', async () => {
       await storage.deleteJournalEntry(id);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
   },
 
@@ -751,7 +911,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ quests, campaign: touched });
     await persist(campaign.id, 'the quest', async () => {
       await storage.putQuest(next);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
     return next;
   },
@@ -763,7 +923,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ quests: s.quests.filter((q) => q.id !== id), campaign: touched });
     await persist(campaign.id, 'the quest', async () => {
       await storage.deleteQuestRecord(id);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
   },
 
@@ -803,7 +963,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ clocks, campaign: touched });
     await persist(campaign.id, 'the clock', async () => {
       await storage.putClock(next);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
     return next;
   },
@@ -815,7 +975,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ clocks: s.clocks.filter((c) => c.id !== id), campaign: touched });
     await persist(campaign.id, 'the clock', async () => {
       await storage.deleteClockRecord(id);
-      await storage.putCampaign(touched);
+      await saveCampaign(touched);
     });
   },
 
@@ -830,7 +990,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set(touched ? { homebrew, campaign: touched } : { homebrew });
     await persist(s.campaignId ?? LIBRARY_QUEUE, 'the homebrew', async () => {
       await storage.putHomebrew(saved);
-      if (touched) await storage.putCampaign(touched);
+      if (touched) await saveCampaign(touched);
     });
     return saved;
   },
@@ -843,7 +1003,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set(touched ? { homebrew, campaign: touched } : { homebrew });
     await persist(s.campaignId ?? LIBRARY_QUEUE, 'the homebrew', async () => {
       await storage.deleteHomebrewRecord(id);
-      if (touched) await storage.putCampaign(touched);
+      if (touched) await saveCampaign(touched);
     });
   },
 
@@ -855,7 +1015,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     set({ campaign: next, ...(session && { activeSession: session, sessions: replaceById(s.sessions, session) }) });
     await persist(campaign.id, 'usage totals', async () => {
       if (session) await storage.putSession(session);
-      await storage.putCampaign(next);
+      await saveCampaign(next);
     });
   },
 
@@ -890,35 +1050,50 @@ export const useGame = create<GameStore>()((set, get) => ({
   },
 
   queueDmNotice(text) {
-    const notice = text.trim();
-    const { pendingDmNotices } = get();
-    if (!notice || pendingDmNotices.includes(notice)) return;
-    set({ pendingDmNotices: [...pendingDmNotices, notice] });
+    // A failed save is logged; the notice stays in memory and is saved with the next write.
+    void queueLoadedNotice(text).catch(noop);
   },
 
   takeDmNotices() {
-    const notices = get().pendingDmNotices;
-    if (notices.length > 0) set({ pendingDmNotices: [] });
+    const s = get();
+    const notices = s.pendingDmNotices;
+    if (notices.length === 0) return notices;
+    // Memory only: the campaign's next save (normally the transcript append that delivers these)
+    // clears the stored copy, so a failed append can't lose them.
+    set({ pendingDmNotices: [], ...(s.campaign && { campaign: { ...s.campaign, pendingDmNotices: [] } }) });
     return notices;
   },
 }));
 
-// A campaign replaced by an import / GitHub pull, or deleted from the save slots, must not keep
-// being written from a stale in-memory copy.
+// A campaign replaced by an import / GitHub pull, or deleted from the save slots (in this tab or
+// another), must not keep being written from a stale in-memory copy.
 onCampaignChange((change) => {
+  replacements.set(change.campaignId, replacementOf(change.campaignId) + 1);
+  if (change.type === 'deleted') storedNotices.delete(change.campaignId);
   const state = useGame.getState();
   if (change.campaignId !== state.campaignId) return;
-  if (change.type === 'deleted') state.unloadCampaign();
-  else void state.reload();
+  if (change.type === 'deleted') {
+    state.unloadCampaign();
+    // Keep the id, so a table still showing it explains what happened instead of loading forever.
+    useGame.setState({ campaignId: change.campaignId, loadError: CAMPAIGN_DELETED });
+  } else {
+    void state.reload();
+  }
 });
 
 /**
  * Queue a DM notice for any campaign: delivered through the loaded store when that campaign is open
  * at the table, otherwise persisted on the campaign record for its next turn.
- * CONTRACT — implemented by the state module.
+ * Resolves once the notice is saved (a campaign that doesn't exist is ignored).
  */
 export async function queueCampaignNotice(campaignId: string, text: string): Promise<void> {
-  void campaignId;
-  void text;
-  throw new Error('gameStore: queueCampaignNotice not implemented');
+  const notice = text.trim();
+  if (!notice) return;
+  if (useGame.getState().campaign?.id === campaignId) {
+    await queueLoadedNotice(notice);
+    return;
+  }
+  // Not loaded in this tab: add it to the stored record. A tab that has it open at the table picks
+  // it up with its next save.
+  await saveNotice(campaignId, notice);
 }

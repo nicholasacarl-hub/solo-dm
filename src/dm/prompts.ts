@@ -19,7 +19,7 @@ import type {
   QuestStatus,
   Session,
 } from '@/types';
-import { SRD_SOURCE_ID } from '@/types';
+import { HOMEBREW_SOURCE_ID, SRD_SOURCE_ID } from '@/types';
 import { truncate } from './narration';
 
 const FENCE = '```';
@@ -150,8 +150,8 @@ export interface PromptInput {
   clocks: readonly Clock[];
   homebrew: readonly HomebrewEntry[];
   combat: CombatState | null;
-  /** Display names of library sources, by id (unknown ids are shown as-is). */
-  sourceNames: Readonly<Record<string, string>>;
+  /** Imported books the DM can search: those switched on in the player's Library. */
+  librarySources: readonly { id: string; name: string }[];
 }
 
 /** Locale-independent, deterministic text ordering. */
@@ -340,12 +340,9 @@ function homebrewSection(homebrew: readonly HomebrewEntry[]): string {
   return `## Homebrew in play (get_entry for full text)\n${lines.join('\n')}`;
 }
 
-function librarySection(settings: CampaignSettings, names: Readonly<Record<string, string>>): string {
-  const imports = [...new Set(settings.enabledSources)]
-    .filter((id) => id !== SRD_SOURCE_ID)
-    .map((id) => names[id] ?? id)
-    .sort(byText);
-  const lines = ['## Rules library', '- SRD 5.2.1 (always available)'];
+function librarySection(sources: PromptInput['librarySources']): string {
+  const imports = [...new Set(sources.filter((s) => s.id !== SRD_SOURCE_ID && s.id !== HOMEBREW_SOURCE_ID).map((s) => s.name.trim() || s.id))].sort(byText);
+  const lines = ['## Rules library (lookup_rules and get_entry search all of it)', '- SRD 5.2.1 (always available)'];
   for (const name of imports) lines.push(`- ${name} (imported by the player — look its content up before relying on it)`);
   return lines.join('\n');
 }
@@ -384,7 +381,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     journalSection(input.journal),
     clocksSection(input.clocks),
     homebrewSection(input.homebrew),
-    librarySection(campaign.settings, input.sourceNames),
+    librarySection(input.librarySources),
     sceneSection(campaign),
     combatSection(input.combat),
   ];

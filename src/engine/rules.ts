@@ -12,8 +12,11 @@ import {
   type Attack,
   type Character,
   type EquipmentOption,
+  type GameEvent,
+  type InventoryItem,
   type PlayerRollRequest,
   type Skill,
+  type SkillBonus,
 } from '@/types';
 import { nameKey } from '@/lib/id';
 import { resolveArmor, wornArmor, type WornArmor } from './armorData';
@@ -29,7 +32,7 @@ import {
   parseDice,
   type DiceTerm,
 } from './dice';
-import { clamp, matchByName, toInt } from './util';
+import { clamp, gameEvent, matchByName, toInt, warning } from './util';
 
 const MINUS = '\u2212';
 
@@ -89,9 +92,58 @@ export function isIncapacitated(c: Character): boolean {
   return c.conditions.some((cond) => INCAPACITATING_CONDITIONS.has(conditionKey(cond.id)));
 }
 
-/** Skill modifier: ability mod + floor(PB × proficiency level). Excludes the exhaustion penalty. */
+/**
+ * Level-1 Order options that add WIS (minimum +1) to Intelligence checks with two skills (SRD 5.2.1
+ * Cleric "Divine Order: Thaumaturge", Druid "Primal Order: Magician"). Derived from the feature the
+ * builder adds ("Divine Order (Thaumaturge)") for sheets that don't list them in skillBonuses.
+ */
+const ORDER_SKILL_BONUSES: ReadonlyArray<{ feature: RegExp; key: string; bonus: SkillBonus }> = [
+  {
+    feature: /^(divine-order-)?thaumaturge$/,
+    key: 'thaumaturge',
+    bonus: { skills: ['arcana', 'religion'], ability: 'wis', minimum: 1, source: 'Thaumaturge (Divine Order)' },
+  },
+  {
+    feature: /^(primal-order-)?magician$/,
+    key: 'magician',
+    bonus: { skills: ['arcana', 'nature'], ability: 'wis', minimum: 1, source: 'Magician (Primal Order)' },
+  },
+];
+
+/** The sheet's skill bonuses plus Thaumaturge / Magician derived from features (never both for one source). */
+export function skillBonuses(c: Character): SkillBonus[] {
+  const listed = (c.skillBonuses ?? []).filter((b) => Array.isArray(b?.skills));
+  const derived = ORDER_SKILL_BONUSES.filter(
+    (o) => c.features.some((f) => o.feature.test(nameKey(f.name))) && !listed.some((b) => nameKey(b.source ?? '').includes(o.key)),
+  ).map((o) => o.bonus);
+  return [...listed, ...derived];
+}
+
+/** Value of one skill bonus: ability modifier + flat, raised to its minimum. */
+export function skillBonusValue(c: Character, bonus: SkillBonus): number {
+  const raw = (bonus.ability ? mod(c, bonus.ability) : 0) + toInt(bonus.flat);
+  return bonus.minimum === undefined ? raw : Math.max(toInt(bonus.minimum), raw);
+}
+
+/** Total bonus to checks with a skill (the same source counts once). */
+function skillBonusTotal(c: Character, skill: Skill): number {
+  const seen = new Set<string>();
+  let total = 0;
+  for (const bonus of skillBonuses(c)) {
+    const key = nameKey(bonus.source ?? '');
+    if (!bonus.skills.includes(skill) || seen.has(key)) continue;
+    seen.add(key);
+    total += skillBonusValue(c, bonus);
+  }
+  return total;
+}
+
+/**
+ * Skill modifier: ability mod + floor(PB × proficiency level) + skill bonuses (Thaumaturge, Magician…).
+ * Excludes the exhaustion penalty.
+ */
 export function skillModifier(c: Character, skill: Skill): number {
-  return mod(c, SKILL_ABILITY[skill]) + Math.floor(pb(c) * (c.skills[skill] ?? 0));
+  return mod(c, SKILL_ABILITY[skill]) + Math.floor(pb(c) * (c.skills[skill] ?? 0)) + skillBonusTotal(c, skill);
 }
 
 const PROTECTION_ITEMS = new Set(['ring-of-protection', 'cloak-of-protection']);
@@ -207,20 +259,148 @@ function parseDamage(text: string): DiceTerm[] | null {
   }
 }
 
+type DiceGroup = Extract<DiceTerm, { kind: 'dice' }>;
+
+/**
+ * How many times a cantrip's base damage dice are rolled at a character level: ×2 at 5, ×3 at 11,
+ * ×4 at 17 (SRD 5.2.1 "Cantrip Upgrade", e.g. Fire Bolt 1d10 → 2d10 → 3d10 → 4d10).
+ */
+export function cantripDiceMultiplier(level: number): number {
+  const l = toInt(level, 1);
+  return l >= 17 ? 4 : l >= 11 ? 3 : l >= 5 ? 2 : 1;
+}
+
+/** Sides of the Monk's Martial Arts die by Monk level (SRD 5.2.1 Monk Features table): d6, d8 at 5, d10 at 11, d12 at 17. */
+export function martialArtsDieSides(monkLevel: number): 6 | 8 | 10 | 12 | null {
+  const l = toInt(monkLevel);
+  if (l < 1) return null;
+  return l >= 17 ? 12 : l >= 11 ? 10 : l >= 5 ? 8 : 6;
+}
+
+function isEldritchBlast(attack: Attack): boolean {
+  return nameKey(attack.name).startsWith('eldritch-blast');
+}
+
+/**
+ * How an attack's damage dice grow with level: its `scaling`; a Monk's Unarmed Strike (Martial Arts);
+ * or, on sheets made before the `scaling` field existed (no attack has one), a spell-attack cantrip —
+ * notes "Cantrip" or a known cantrip of the same name. Newer sheets leave out `scaling` on purpose for
+ * cantrips that don't gain dice.
+ */
+export function attackScaling(c: Character, attack: Attack): Attack['scaling'] {
+  if (attack.scaling === 'cantrip' || attack.scaling === 'martial-arts') return attack.scaling;
+  if (attack.ability === 'spell') {
+    if (c.attacks.some((a) => a.scaling)) return undefined;
+    const known = (c.spellcasting?.spells ?? []).some((s) => s.level === 0 && nameKey(s.name) === nameKey(attack.name));
+    return known || /\bcantrip\b/i.test(attack.notes ?? '') ? 'cantrip' : undefined;
+  }
+  return nameKey(attack.name) === 'unarmed-strike' && isMonk(c) ? 'martial-arts' : undefined;
+}
+
+/**
+ * Eldritch Blast's beams at the hero's level: 1, then 2 at character level 5, 3 at 11 and 4 at 17, each
+ * a separate attack roll for 1d10 (SRD 5.2.1 Eldritch Blast, "Cantrip Upgrade"); null for other attacks.
+ */
+export function eldritchBlastBeams(c: Character, attack: Attack): number | null {
+  return isEldritchBlast(attack) ? cantripDiceMultiplier(characterLevel(c)) : null;
+}
+
+/** Wearing armor or wielding a Shield (Martial Arts works only without either). */
+function wearsArmorOrShield(c: Character): boolean {
+  const { known, unknown } = wornArmor(c.inventory);
+  return known.length > 0 || unknown.length > 0;
+}
+
+/**
+ * Damage dice after level scaling (`flat` = the damage string's own flat bonus):
+ * - cantrip: every die rolled ×1/2/3/4 by character level — except Eldritch Blast, which gains beams
+ *   instead. Sheets without a `scaling` field are scaled only from the cantrip's single base die.
+ * - martial-arts: the Martial Arts die for the Monk level replaces a smaller die, or the Unarmed Strike's
+ *   flat 1 ("roll 1d6 in place of the normal damage", SRD 5.2.1 Monk), unless armor or a Shield is worn.
+ */
+function scaledDamage(c: Character, attack: Attack, dice: DiceGroup[], flat: number): { dice: DiceGroup[]; flat: number } {
+  const scaling = attackScaling(c, attack);
+  if (scaling === 'cantrip') {
+    if (isEldritchBlast(attack)) return { dice, flat };
+    const baseDie = dice.length === 1 && dice[0].count === 1 && !dice[0].keep;
+    if (!attack.scaling && !baseDie) return { dice, flat };
+    const n = cantripDiceMultiplier(characterLevel(c));
+    return { dice: dice.map((t) => (t.keep ? t : { ...t, count: t.count * n })), flat };
+  }
+  if (scaling === 'martial-arts') {
+    const sides = martialArtsDieSides(classLevelOf(c, 'Monk'));
+    if (!sides || wearsArmorOrShield(c)) return { dice, flat };
+    const index = dice.findIndex((t) => t.sign > 0 && !t.keep);
+    if (index < 0) return flat >= 1 ? { dice: [{ kind: 'dice', sign: 1, count: 1, sides }], flat: flat - 1 } : { dice, flat };
+    if (dice[index].count !== 1 || dice[index].sides >= sides) return { dice, flat };
+    return { dice: dice.map((t, i) => (i === index ? { ...t, sides } : t)), flat };
+  }
+  return { dice, flat };
+}
+
 /**
  * Damage expression including the ability modifier (unless addAbilityToDamage === false),
- * e.g. "1d8+3". With critical=true the dice are doubled ("2d8+3"). Flat terms are merged into one.
+ * e.g. "1d8+3". Cantrip and Martial Arts dice grow with level (see attackScaling): a level-5 Fire Bolt
+ * is "2d10". With critical=true the dice are doubled ("2d8+3"). Flat terms are merged into one.
  * An unreadable damage string is returned unchanged (rolling it then reports the problem).
  */
 export function attackDamageExpression(c: Character, attack: Attack, critical = false): string {
   const terms = parseDamage(attack.damage ?? '');
   if (!terms) return (attack.damage ?? '').trim();
   const abilityBonus = attack.addAbilityToDamage === false ? 0 : attackAbilityModifier(c, attack);
-  const dice = terms.filter((t) => t.kind === 'dice');
-  const flat = terms.reduce((sum, t) => (t.kind === 'flat' ? sum + t.sign * t.value : sum), abilityBonus);
-  const merged: DiceTerm[] = [...(critical ? criticalDiceTerms(dice) : dice)];
+  const base = scaledDamage(
+    c,
+    attack,
+    terms.filter((t): t is DiceGroup => t.kind === 'dice'),
+    terms.reduce((sum, t) => (t.kind === 'flat' ? sum + t.sign * t.value : sum), 0),
+  );
+  const flat = base.flat + abilityBonus;
+  const merged: DiceTerm[] = [...(critical ? criticalDiceTerms(base.dice) : base.dice)];
   if (flat !== 0 || merged.length === 0) merged.push({ kind: 'flat', sign: flat < 0 ? -1 : 1, value: Math.abs(flat) });
   return formatDice(merged);
+}
+
+// ---------------------------------------------------------------------------
+// Critical hits
+// ---------------------------------------------------------------------------
+
+/** Has a feature by name, ignoring a "(…)" suffix ("Improved Critical (Champion)"). */
+function hasFeatureBase(c: Character, name: string): boolean {
+  const key = nameKey(name);
+  return c.features.some((f) => nameKey(f.name) === key || nameKey(f.name.replace(/\s*\([^)]*\)\s*$/, '')) === key);
+}
+
+/**
+ * The lowest natural d20 that scores a Critical Hit with the hero's weapon and Unarmed Strike attacks:
+ * 18 with Superior Critical (Champion 15), 19 with Improved Critical (Champion 3), else 20
+ * (SRD 5.2.1 Fighter, "Fighter Subclass: Champion").
+ */
+export function weaponCritRange(c: Character): number {
+  const champion = c.classes
+    .filter((cl) => srdClassFor(cl)?.name === 'Fighter' && /champion/i.test(cl.subclass ?? ''))
+    .reduce((sum, cl) => sum + Math.max(0, toInt(cl.level)), 0);
+  if (champion >= 15 || hasFeatureBase(c, 'Superior Critical')) return 18;
+  if (champion >= 3 || hasFeatureBase(c, 'Improved Critical')) return 19;
+  return 20;
+}
+
+/** A spell attack: a sheet attack using the spellcasting ability, or (off the sheet) a known spell's name. */
+function isSpellAttack(c: Character, attackName: string | undefined): boolean {
+  const name = attackName?.trim() ?? '';
+  if (!name) return false;
+  const attack = findAttack(c, name);
+  if (attack) return attack.ability === 'spell';
+  return !!(c.spellcasting && matchByName(c.spellcasting.spells, name, (s) => s.name).match);
+}
+
+/**
+ * Critical range for a roll request: weaponCritRange for weapon and Unarmed Strike attack rolls; 20 for
+ * spell attacks and every other roll. Judge the roll with applyAttackRollRules(result, { critRange }).
+ */
+export function attackCritRange(c: Character, req: Pick<PlayerRollRequest, 'rollType' | 'attackName'>): number {
+  if (req.rollType !== 'attack') return 20;
+  const range = weaponCritRange(c);
+  return range < 20 && !isSpellAttack(c, req.attackName) ? range : 20;
 }
 
 export interface SpeedDetails {
@@ -343,12 +523,12 @@ function bestOf(options: AcOption[]): AcOption {
  * fighting style, attuned Ring/Cloak of Protection and Bracers of Defense. When equipped armor can't
  * be identified, the sheet's current AC is kept.
  */
-export function computeArmorClass(c: Character, catalog: EquipmentOption[]): { ac: number; formula: string } {
-  const { known, unknown } = wornArmor(c.inventory, catalog);
+export function computeArmorClass(c: Character, catalog: readonly EquipmentOption[] = []): { ac: number; formula: string } {
+  const { known } = wornArmor(c.inventory, catalog);
   const armors = known.filter((w) => w.stats.kind === 'armor');
   const shields = known.filter((w) => w.stats.kind === 'shield');
-  const unknownArmor = unknown.find((i) => i.category === 'armor');
-  if (armors.length === 0 && unknownArmor) {
+  const unknownArmor = unknownWornArmor(c, catalog);
+  if (unknownArmor) {
     return { ac: c.armorClass, formula: `${unknownArmor.name} (stats unknown — AC kept at ${c.armorClass})` };
   }
 
@@ -398,6 +578,56 @@ export function computeArmorClass(c: Character, catalog: EquipmentOption[]): { a
   return { ac, formula };
 }
 
+/** Equipped armor whose stats aren't known, when no known armor is worn (computeArmorClass then keeps the sheet's AC). */
+function unknownWornArmor(c: Character, catalog: readonly EquipmentOption[]): InventoryItem | undefined {
+  const { known, unknown } = wornArmor(c.inventory, catalog);
+  if (known.some((w) => w.stats.kind === 'armor')) return undefined;
+  return unknown.find((i) => i.category === 'armor');
+}
+
+/**
+ * Keep the stored Armor Class in step after a change that can affect it: a new level (Unarmored
+ * Defense from multiclassing, Draconic Resilience), or equipping, attuning or dropping an item.
+ * The sheet's AC counts as derived when it equals computeArmorClass(before); it then becomes the AC
+ * computed for `after`. Otherwise it was set by hand or by an effect the engine doesn't model (Mage
+ * Armor, armor it can't identify), so it is kept and a warning gives the computed value instead.
+ * Without a catalog the SRD armor table is used. No events when the computed AC doesn't change.
+ */
+export function syncArmorClass(
+  before: Character,
+  after: Character,
+  catalog: readonly EquipmentOption[] = [],
+): { character: Character; events: GameEvent[] } {
+  const was = computeArmorClass(before, catalog);
+  const now = computeArmorClass(after, catalog);
+  if (now.ac === was.ac && now.formula === was.formula) return { character: after, events: [] };
+  const stored = after.armorClass;
+  const derived = before.armorClass === was.ac && stored === before.armorClass;
+  if (!derived) {
+    if (now.ac === stored) return { character: after, events: [] };
+    return {
+      character: after,
+      events: [
+        warning(
+          `AC kept at ${stored}: it differs from the ${was.ac} that gear and features gave, so it may include a spell such as Mage Armor or a manual change. Gear and features now give AC ${now.ac} (${now.formula}); update the AC if that is right.`,
+        ),
+      ],
+    };
+  }
+  const unknown = unknownWornArmor(after, catalog);
+  if (unknown && unknown.id !== unknownWornArmor(before, catalog)?.id) {
+    return {
+      character: { ...after, acFormula: now.formula },
+      events: [warning(`AC kept at ${stored}: ${unknown.name}'s armor stats are unknown, so set the AC by hand.`)],
+    };
+  }
+  if (now.ac === stored) return { character: { ...after, acFormula: now.formula }, events: [] };
+  return {
+    character: { ...after, armorClass: now.ac, acFormula: now.formula },
+    events: [gameEvent('combat', `AC ${stored} → ${now.ac} (${now.formula})`)],
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Player roll requests
 // ---------------------------------------------------------------------------
@@ -430,9 +660,14 @@ function improvisedAttack(c: Character, req: PlayerRollRequest): { modifier: num
   return { modifier: mod(c, ability) + pb(c), label: name ? `${name} attack (${ABBR(ability)}, not on sheet)` : 'Attack roll' };
 }
 
+/**
+ * A skill check, optionally with another ability (the DM's call). Skill bonuses such as Thaumaturge's
+ * apply to the skill's usual ability only ("Intelligence (Arcana or Religion) checks").
+ */
 function skillCheck(c: Character, skill: Skill, ability?: Ability): { modifier: number; label: string } {
   const used = ability ?? SKILL_ABILITY[skill];
-  const modifier = mod(c, used) + Math.floor(pb(c) * (c.skills[skill] ?? 0));
+  const bonus = used === SKILL_ABILITY[skill] ? skillBonusTotal(c, skill) : 0;
+  const modifier = mod(c, used) + Math.floor(pb(c) * (c.skills[skill] ?? 0)) + bonus;
   return { modifier, label: `${SKILL_NAMES[skill]} check (${ABBR(used)})` };
 }
 

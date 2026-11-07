@@ -84,6 +84,9 @@ function CombatantRow({
   playerHp: HitPoints | null;
 }) {
   const hp = c.isPlayer ? playerHp : (c.hp ?? null);
+  // The DM hides this creature's numbers (the default for enemies): its exact HP and its AC, which
+  // would give away a disguised creature's stat block or how hard it is to hit.
+  const numbersHidden = !c.isPlayer && c.hideHp === true;
   return (
     <li
       aria-current={current ? 'true' : undefined}
@@ -116,7 +119,7 @@ function CombatantRow({
             Defeated
           </p>
         ) : (
-          hp && <HealthLine hp={hp} hidden={!c.isPlayer && c.hideHp === true} />
+          hp && <HealthLine hp={hp} hidden={numbersHidden} />
         )}
         {c.conditions.length > 0 && (
           <ul aria-label="Conditions" className="mt-1.5 flex flex-wrap gap-1">
@@ -128,7 +131,7 @@ function CombatantRow({
           </ul>
         )}
       </div>
-      {c.ac !== undefined && (
+      {c.ac !== undefined && !numbersHidden && (
         <span className="mt-0.5 flex shrink-0 items-center gap-1 text-xs text-muted" title="Armor Class">
           <Shield className="size-3.5" aria-hidden />
           <span className="sr-only">Armor Class </span>

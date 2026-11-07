@@ -26,6 +26,7 @@ import {
   inferFeatureUses,
   isWeaponProficient,
   lineageEffects,
+  optionGrants,
   pointBuyCost,
   pointBuyRemaining,
   pointBuySpent,
@@ -192,6 +193,27 @@ describe('class data', () => {
     expect(classChoiceFeatures(cls('Fighter'))).toEqual([]);
   });
 
+  it('does not take rules headings for options when the sentence offers no choice (SRD Rage)', () => {
+    const rage = [
+      'You can enter your Rage the number of times shown for your Barbarian level in the Rages column of the Barbarian Features table.',
+      '_**Damage Resistance.**_ You have Resistance to Bludgeoning, Piercing, and Slashing damage.',
+      '_**Strength Advantage.**_ You have Advantage on Strength checks and Strength saving throws.',
+      '_**Duration.**_ The Rage lasts until the end of your next turn. If your Rage is still active on your next turn, you can extend the Rage for another round by doing one of the following:',
+      '- Make an attack roll against an enemy.\n- Take a Bonus Action to extend your Rage.',
+    ].join('\n\n');
+    expect(featureChoiceOptions(rage)).toBeNull();
+    // Only the headed block right after the choice sentence counts.
+    const choice = '_**Note.**_ Read this first.\n\nYou gain one of the following options of your choice.\n\n_**A.**_ First.\n\n_**B.**_ Second.\n\nAfterwards you rest.\n\n_**Rule.**_ Not an option.';
+    expect(featureChoiceOptions(choice)?.map((o) => o.name)).toEqual(['A', 'B']);
+  });
+
+  it('reads skill bonuses from chosen options (Thaumaturge, Magician)', () => {
+    const magician =
+      'You know one extra cantrip from the Druid spell list. In addition, your mystical connection to nature gives you a bonus to your Intelligence (Arcana or Nature) checks. The bonus equals your Wisdom modifier (minimum bonus of +1).';
+    expect(optionGrants(magician)).toMatchObject({ extraCantrips: 1, skillBonus: { skills: ['arcana', 'nature'], ability: 'wis', minimum: 1 } });
+    expect(optionGrants('Trained for battle, you gain proficiency with Martial weapons.').skillBonus).toBeNull();
+  });
+
   it('reads Expertise and spell counts', () => {
     expect(expertiseCount(cls('Rogue'))).toBe(2);
     expect(spellPlan(wizardDraft(), data)).toMatchObject({ casting: true, cantrips: 3, prepared: 4, spellbook: 6 });
@@ -228,14 +250,27 @@ describe('species choices', () => {
 describe('feature uses', () => {
   const usesCtx = { level: 1, proficiencyBonus: 2, scores: { ...eight, cha: 16 } };
 
-  it('reads uses from the level table column', () => {
+  it('reads uses from the level table column, with the column as its scale', () => {
     const def = cls('Fighter').features[1];
-    expect(inferFeatureUses(def.name, def.description, { ...usesCtx, cls: cls('Fighter') })).toEqual({ max: 2, used: 0, recharge: 'long' });
+    expect(inferFeatureUses(def.name, def.description, { ...usesCtx, cls: cls('Fighter') })).toEqual({
+      max: 2,
+      used: 0,
+      recharge: 'long',
+      scale: { by: 'table', className: 'Fighter', values: [2, 2, 2, 3] },
+    });
+    // A name an older builder decorated still finds its column.
+    expect(inferFeatureUses('Second Wind (Duration)', def.description, { ...usesCtx, level: 4, cls: cls('Fighter') })?.max).toBe(3);
+  });
+
+  it('reads uses from a use count in the name (SRD "Action Surge (one use)")', () => {
+    const text = 'Once you use this feature, you can’t do so again until you finish a Short or Long Rest. Starting at level 17, you can use it twice before a rest but only once on a turn.';
+    expect(inferFeatureUses('Action Surge (one use)', text, { ...usesCtx, level: 2 })).toEqual({ max: 1, used: 0, recharge: 'short' });
+    expect(inferFeatureUses('Action Surge (two uses)', text, { ...usesCtx, level: 17 })?.max).toBe(2);
   });
 
   it('reads Proficiency Bonus and ability-modifier uses', () => {
     const breath = species('Dragonborn').traits[1];
-    expect(inferFeatureUses(breath.name, breath.description, usesCtx)).toEqual({ max: 2, used: 0, recharge: 'long' });
+    expect(inferFeatureUses(breath.name, breath.description, usesCtx)).toEqual({ max: 2, used: 0, recharge: 'long', scale: { by: 'proficiency-bonus' } });
     const bardic = 'You can confer a Bardic Inspiration die a number of times equal to your Charisma modifier (minimum of once), and you regain all expended uses when you finish a Long Rest.';
     expect(inferFeatureUses('Bardic Inspiration', bardic, usesCtx)?.max).toBe(3);
   });
@@ -244,7 +279,8 @@ describe('feature uses', () => {
     const adrenaline = 'You can use this trait a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Short or Long Rest.';
     expect(inferFeatureUses('Adrenaline Rush', adrenaline, usesCtx)?.recharge).toBe('short');
     const layOnHands = 'With that pool, you can restore a total number of Hit Points equal to five times your Paladin level.';
-    expect(inferFeatureUses('Lay On Hands', layOnHands, usesCtx)?.max).toBe(5);
+    expect(inferFeatureUses('Lay On Hands', layOnHands, usesCtx)).toMatchObject({ max: 5, scale: { by: 'class-level', className: 'Paladin', multiplier: 5 } });
+    expect(inferFeatureUses('Lay On Hands', layOnHands, { ...usesCtx, level: 2 })?.max).toBe(10);
     expect(inferFeatureUses('Draconic Flight', species('Dragonborn').traits[4].description, usesCtx)).toBeUndefined();
     expect(inferFeatureUses('Elven Lineage', species('Elf').traits[1].description, usesCtx)).toBeUndefined();
   });
@@ -344,11 +380,51 @@ describe('building a level 1 character', () => {
     expect(c.acFormula).toContain('Defense 1');
     expect(c.weaponMasteries).toEqual(['Greatsword', 'Javelin', 'Flail']);
     expect(c.attacks.find((a) => a.name === 'Greatsword')).toMatchObject({ ability: 'str', proficient: true, mastery: 'Graze' });
-    expect(c.features.find((f) => f.name === 'Second Wind')?.uses).toEqual({ max: 2, used: 0, recharge: 'long' });
+    expect(c.features.find((f) => f.name === 'Second Wind')?.uses).toEqual({
+      max: 2,
+      used: 0,
+      recharge: 'long',
+      scale: { by: 'table', className: 'Fighter', values: [2, 2, 2, 3] },
+    });
     expect(c.features.find((f) => f.name === 'Defense')?.sourceName).toBe('Fighting Style (Fighter 1)');
-    expect(c.features.find((f) => f.name === 'Stonecunning')?.uses).toEqual({ max: 2, used: 0, recharge: 'long' });
+    expect(c.features.find((f) => f.name === 'Stonecunning')?.uses).toEqual({ max: 2, used: 0, recharge: 'long', scale: { by: 'proficiency-bonus' } });
     expect(c.darkvision).toBe(120);
     expect(c.spellcasting).toBeUndefined();
+    // Dwarven Resilience (SRD 5.2.1 Dwarf): Resistance to Poison damage.
+    expect(c.damageResistances).toEqual(['poison']);
+    expect(c.skillBonuses).toBeUndefined();
+  });
+
+  it('records the Dragonborn ancestry’s damage type as a Resistance', () => {
+    const draft: BuilderDraft = { ...fighterDraft(), speciesId: species('Dragonborn').id, lineage: 'Silver' };
+    const c = buildCharacter(draft, ctx, { campaignId: 'camp-1' });
+    expect(c.damageResistances).toEqual(['cold']);
+    // The lineage feature holds only the chosen ancestry.
+    const ancestry = c.features.find((f) => f.name === 'Draconic Ancestry (Silver)');
+    expect(ancestry?.description).toBe('Your lineage stems from a dragon progenitor. Choose the kind of dragon from the table.\n\n**Silver.** Cold');
+  });
+
+  it('gives a Thaumaturge Cleric WIS (min +1) on Arcana and Religion checks', () => {
+    const draft: BuilderDraft = {
+      ...fighterDraft(),
+      classId: cls('Cleric').id,
+      fightingStyle: null,
+      classOptions: { 'Divine Order': 'Thaumaturge' },
+      weaponMasteries: [],
+    };
+    const c = buildCharacter(draft, ctx, { campaignId: 'camp-1' });
+    expect(c.skillBonuses).toEqual([{ skills: ['arcana', 'religion'], ability: 'wis', minimum: 1, source: 'Thaumaturge (Divine Order)' }]);
+    expect(c.features.map((f) => f.name)).toContain('Divine Order (Thaumaturge)');
+  });
+
+  it('marks scaling cantrip attacks and the Monk’s Unarmed Strike', () => {
+    const c = buildCharacter(wizardDraft(), ctx, { campaignId: 'camp-1' });
+    // Fire Bolt's Cantrip Upgrade multiplies its dice; the engine scales 'cantrip' attacks by level.
+    expect(c.attacks.find((a) => a.name === 'Fire Bolt')).toMatchObject({ damage: '1d10', scaling: 'cantrip', notes: 'Cantrip' });
+    expect(c.attacks.find((a) => a.name === 'Unarmed Strike')?.scaling).toBeUndefined();
+    expect(attacksForInventory([], data.equipment, { weaponProficiencies: [], masteries: [], martialArts: true, martialArtsDie: '1d6' })).toEqual([
+      expect.objectContaining({ name: 'Unarmed Strike', ability: 'finesse', damage: '1d6', scaling: 'martial-arts' }),
+    ]);
   });
 
   it('applies Protector training and the Alert initiative bonus', () => {

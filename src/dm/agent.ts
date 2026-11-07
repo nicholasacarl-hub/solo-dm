@@ -3,8 +3,11 @@
  * narration into the log, append the complete assistant message, run its tool calls, append all
  * of their results in one user message, and repeat until the DM hands the turn back.
  *
- * Append-only: nothing earlier in the transcript is ever changed here. A request that is
- * cancelled, refused or cut off mid-tool-call appends nothing.
+ * Append-only: nothing earlier in the transcript is ever changed here. A request that is refused
+ * or cut off mid-tool-call appends nothing. A request the player stops mid-stream appends only the
+ * narration they saw (text blocks, no unfinished thinking or tool calls), so the DM's context
+ * matches the log. While a tool batch runs, each finished tool's result is saved on the session, so
+ * a reload mid-batch can answer the finished tools with their real results.
  */
 import type {
   BetaContentBlockParam,
@@ -12,9 +15,11 @@ import type {
   BetaToolResultBlockParam,
   BetaToolUseBlockParam,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages';
+import { characterStatusLine } from '@/engine';
+import { hasImported, redactImported } from '@/lib/importedContent';
 import type { DmPhase } from '@/state/gameStore';
-import { MODELS } from '@/types';
-import { contextTokensOf, usageDelta } from './cost';
+import { MODELS, type PendingToolResult } from '@/types';
+import { contextTokensOf, longContextThreshold, usageDelta } from './cost';
 import type { DmClient, DmDeps, DmMessageStream } from './deps';
 import { DmError, isAbortError, isUnparseableStreamError } from './errors';
 import { buildMessageRequest } from './request';
@@ -37,8 +42,15 @@ export const MAX_JSON_RETRIES = 2;
 export const SOFT_LIMIT_PREFIX = 'This session is getting long';
 
 export const NOTES = {
-  interrupted: 'Interrupted: the app was closed or reloaded before this finished. Nothing happened; call it again if it still matters.',
+  interrupted:
+    'Interrupted: the app was closed or reloaded while this call was running, before its result was recorded. It may already have taken effect (or, for a roll, the player may not have rolled yet), so check the current state before you repeat it: the <game_state> status line, get_character_sheet, the journal or the combat tracker.',
+  notRun: 'Not run: the app was closed or reloaded before this call started, so nothing happened. Call it again if it still matters.',
   cancelled: 'Cancelled by the player before it resolved. Nothing happened.',
+  /** Shown in the log under narration the player stopped (the DM keeps what they saw). */
+  stopped: 'Stopped. The DM will know its reply was cut off here.',
+  /** Told to the DM with the next turn after the player stopped a reply mid-stream. */
+  stoppedNotice:
+    'The player stopped your last reply partway through. It ends exactly where they stopped it, and nothing after that point happened (no tool calls ran for it). Respond to what the player says now; don\'t resume the cut-off sentence unless they ask you to go on.',
   truncatedTool:
     "The DM's reply was cut off before it finished an action (it hit the response length limit). Retry, or raise Max tokens in Settings.",
   truncatedText: "The DM's reply hit the length limit and was cut off. Ask it to go on, or raise Max tokens in Settings.",
@@ -108,14 +120,70 @@ async function systemNote(d: DmDeps, text: string, level: 'info' | 'warning' = '
   await d.store().appendLog({ kind: 'system', level, text });
 }
 
+// ---------------------------------------------------------------------------
+// Tool results of an unfinished batch (saved as each tool finishes)
+// ---------------------------------------------------------------------------
+
+function resultText(result: BetaToolResultBlockParam): string {
+  const content = result.content;
+  if (typeof content === 'string') return content;
+  return (content ?? []).map((b) => (b.type === 'text' ? b.text : '')).join('\n');
+}
+
+/** What is saved for a finished tool: its result, with imported book text left out of storage. */
+function pendingFrom(result: BetaToolResultBlockParam): PendingToolResult {
+  const text = resultText(result);
+  return {
+    toolUseId: result.tool_use_id,
+    content: hasImported(text) ? redactImported(text) : text,
+    ...(result.is_error ? { isError: true } : {}),
+  };
+}
+
+async function savePendingResults(d: DmDeps, results: readonly BetaToolResultBlockParam[]): Promise<void> {
+  try {
+    await d.store().updateSession({ pendingToolResults: results.map(pendingFrom) });
+  } catch (err) {
+    // Best effort: without it a reload mid-batch reports the finished tools as interrupted.
+    console.warn("[dm] Couldn't save the finished tool results:", err);
+  }
+}
+
+async function clearPendingResults(d: DmDeps): Promise<void> {
+  if (!d.store().activeSession?.pendingToolResults?.length) return;
+  try {
+    await d.store().updateSession({ pendingToolResults: null });
+  } catch (err) {
+    console.warn("[dm] Couldn't clear the saved tool results:", err);
+  }
+}
+
 /**
- * If the transcript ends with tool calls that never got results (the tab closed mid-tool),
- * answer them with error results so the transcript stays valid. Append-only.
+ * If the transcript ends with tool calls that never got results (the tab closed or reloaded
+ * mid-batch), answer them so the transcript stays valid. Append-only. Tools that finished before
+ * the reload get their saved results (their effects are already in the game state); the call that
+ * was running gets an "interrupted, check the state" note with the hero's current status; calls
+ * after it never started.
  */
 export async function answerUnfinishedToolCalls(d: DmDeps): Promise<void> {
-  const pending = unansweredToolUses(d.store().transcript);
-  if (pending.length === 0) return;
-  await d.store().appendTranscript([toolResultMessage(pending.map((b) => errorResult(b.id, NOTES.interrupted)))]);
+  const store = d.store();
+  const pending = unansweredToolUses(store.transcript);
+  if (pending.length === 0) {
+    await clearPendingResults(d);
+    return;
+  }
+  const saved = new Map((store.activeSession?.pendingToolResults ?? []).map((r) => [r.toolUseId, r]));
+  const status = store.character ? characterStatusLine(store.character) : null;
+  let runningSeen = false;
+  const results = pending.map((block): BetaToolResultBlockParam => {
+    const done = saved.get(block.id);
+    if (done) return toolResult(block.id, { content: done.content, isError: done.isError });
+    if (runningSeen) return errorResult(block.id, NOTES.notRun);
+    runningSeen = true;
+    return errorResult(block.id, status ? `${NOTES.interrupted} The hero now: ${status}` : NOTES.interrupted);
+  });
+  await store.appendTranscript([toolResultMessage(results)]);
+  await clearPendingResults(d);
 }
 
 // ---------------------------------------------------------------------------
@@ -124,17 +192,28 @@ export async function answerUnfinishedToolCalls(d: DmDeps): Promise<void> {
 
 const softLimitWarned = new Set<string>();
 
-async function warnIfSessionLong(d: DmDeps, contextTokens: number, limit: number): Promise<void> {
+/**
+ * Suggest wrapping up once the context passes the soft limit, or sooner when the model bills long
+ * prompts at a higher rate (Claude Haiku 5.5 above 100K tokens) — once per session.
+ */
+async function warnIfSessionLong(d: DmDeps, contextTokens: number, softLimit: number, model: string): Promise<void> {
   const store = d.store();
   const session = store.activeSession;
+  const pricier = longContextThreshold(model);
+  const limit = pricier !== null ? Math.min(softLimit, pricier) : softLimit;
   if (!session || contextTokens <= limit || softLimitWarned.has(session.id)) return;
   softLimitWarned.add(session.id);
   const already = store.log.some((e) => e.kind === 'system' && e.sessionId === session.id && e.text.startsWith(SOFT_LIMIT_PREFIX));
   if (already) return;
   const k = Math.round(contextTokens / 1000);
+  const label = MODELS.find((m) => m.id === model)?.label ?? model;
+  const rate =
+    pricier !== null && contextTokens > pricier
+      ? ` ${label} bills prompts over ${Math.round(pricier / 1000)}k tokens at a higher rate (about five times as much per token).`
+      : '';
   await systemNote(
     d,
-    `${SOFT_LIMIT_PREFIX} (about ${k}k tokens of context), so each turn costs more. Consider ending the session soon: the DM writes a recap and the next session starts fresh, with the story carried over.`,
+    `${SOFT_LIMIT_PREFIX} (about ${k}k tokens of context), so each turn costs more.${rate} Consider ending the session soon: the DM writes a recap and the next session starts fresh, with the story carried over.`,
     'info',
   );
 }
@@ -142,14 +221,14 @@ async function warnIfSessionLong(d: DmDeps, contextTokens: number, limit: number
 async function recordUsage(d: DmDeps, message: BetaMessage): Promise<void> {
   const u = message.usage;
   const total = u.input_tokens + u.output_tokens + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-  if (total === 0) return; // the offline demo DM reports no usage
+  if (total === 0 && !u.iterations?.length) return; // the offline demo DM reports no usage
   const settings = d.settings();
-  const model = MODELS.some((m) => m.id === message.model) ? message.model : settings.model;
   const store = d.store();
-  await store.addUsage(usageDelta(u, model, settings.cacheTtl));
+  // Priced per attempt at the model that ran it (a server-side fallback bills at its own rates).
+  await store.addUsage(usageDelta(u, message.model, settings.cacheTtl, settings.model));
   const contextTokens = contextTokensOf(u);
   await store.updateSession({ contextTokens });
-  await warnIfSessionLong(d, contextTokens, settings.sessionSoftLimitTokens);
+  await warnIfSessionLong(d, contextTokens, settings.sessionSoftLimitTokens, settings.model);
 }
 
 // ---------------------------------------------------------------------------
@@ -185,8 +264,12 @@ async function requestOnce(d: DmDeps, opts: LoopOptions, turn: TurnLog): Promise
       await consumer.finish();
       return { message, consumer };
     } catch (err) {
-      await consumer.finish();
-      if (opts.signal.aborted || isAbortError(err)) return null;
+      const stopped = opts.signal.aborted || isAbortError(err);
+      await consumer.finish({ stopped });
+      if (stopped) {
+        await keepStoppedNarration(d, opts, consumer);
+        return null;
+      }
       if (isUnparseableStreamError(err) && attempt < MAX_JSON_RETRIES) {
         await consumer.discard();
         continue;
@@ -196,6 +279,23 @@ async function requestOnce(d: DmDeps, opts: LoopOptions, turn: TurnLog): Promise
       opts.signal.removeEventListener('abort', onAbort);
     }
   }
+}
+
+/**
+ * The player stopped a reply mid-stream: keep what they saw as a text-only assistant message (the
+ * unfinished thinking and tool calls are dropped), so the DM knows what is on screen — for the
+ * X-card, exactly what to steer away from. Append-only; the DM is told about the stop with the next
+ * turn (see NOTES.stoppedNotice).
+ */
+async function keepStoppedNarration(d: DmDeps, opts: LoopOptions, consumer: StreamConsumer): Promise<void> {
+  if (opts.mode !== 'play') return;
+  const text = consumer.visibleText();
+  if (!text) return;
+  const store = d.store();
+  // A paused turn's continuation can't be followed by a second assistant message.
+  if (!store.activeSession || store.transcript.at(-1)?.param.role === 'assistant') return;
+  await store.appendTranscript([{ role: 'assistant', content: [{ type: 'text', text }] }]);
+  await systemNote(d, NOTES.stopped, 'info');
 }
 
 // ---------------------------------------------------------------------------
@@ -223,6 +323,8 @@ async function runToolCalls(
     ctx.status(toolActivity(block.name, block.input));
     try {
       results.push(toolResult(block.id, await runTool(block.name, block.input, ctx)));
+      // Its effects are already saved: keep its result too, in case the app closes mid-batch.
+      await savePendingResults(d, results);
     } catch (err) {
       if (!isAbortError(err) && !opts.signal.aborted) throw err;
       cancelled = true;
@@ -273,6 +375,7 @@ async function handleResponse(d: DmDeps, opts: LoopOptions, { message, consumer 
 
   const { results, cancelled } = await runToolCalls(d, opts, toolUses);
   await store.appendTranscript([toolResultMessage(results)]);
+  await clearPendingResults(d);
   return cancelled ? { outcome: 'cancelled', finalText: '' } : null;
 }
 

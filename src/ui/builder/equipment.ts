@@ -177,7 +177,10 @@ export function weaponAttack(option: EquipmentOption, ctx: AttackContext, name =
   };
 }
 
-/** Unarmed Strike (everyone): 1 + STR, or the Martial Arts die with DEX for Monks. */
+/**
+ * Unarmed Strike (everyone): 1 + STR, or the Martial Arts die with DEX for Monks. The stored die is
+ * the level 1 one; `scaling: 'martial-arts'` lets the engine grow it with Monk level (d8 at 5…).
+ */
 export function unarmedStrike(martialArtsDie: string | null): Attack {
   return {
     id: newId(),
@@ -187,6 +190,7 @@ export function unarmedStrike(martialArtsDie: string | null): Attack {
     damage: martialArtsDie ?? '1',
     damageType: 'bludgeoning',
     range: '5 ft.',
+    ...(martialArtsDie ? { scaling: 'martial-arts' as const } : {}),
   };
 }
 

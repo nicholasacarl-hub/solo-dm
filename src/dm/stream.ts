@@ -78,13 +78,25 @@ class NarrationWriter {
     await this.deps.store().updateLog(this.entryId, { text: visibleWhileStreaming(this.text) }, { persist: false });
   }
 
-  /** Persist the final text (choices parsed out) and stop streaming. */
-  async close(): Promise<void> {
+  /** The raw text of the block so far. */
+  get raw(): string {
+    return this.text;
+  }
+
+  /**
+   * Persist the final text (choices parsed out) and stop streaming. A block cut off by Stop keeps
+   * exactly what the player saw: the visible text, without a half-written choices block.
+   */
+  async close(opts: { stopped?: boolean } = {}): Promise<void> {
     this.closed = true;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
     if (this.creating) await this.creating;
     if (!this.entryId) return;
+    if (opts.stopped) {
+      await this.deps.store().updateLog(this.entryId, { text: visibleWhileStreaming(this.text), streaming: false });
+      return;
+    }
     const parsed = parseChoices(this.text);
     await this.deps.store().updateLog(this.entryId, { text: parsed.text, choices: parsed.choices, streaming: false });
   }
@@ -105,6 +117,8 @@ export class StreamConsumer {
   /** Narration entries created by this request (to discard if the request is retried). */
   readonly createdIds: string[] = [];
   private readonly writers = new Map<number, NarrationWriter>();
+  /** Text of each narration block of this request, and whether the block finished. */
+  private readonly narrated = new Map<number, { writer: NarrationWriter; complete: boolean }>();
   private readonly thinking = new Map<number, string>();
   /** Block closes still persisting (awaited by finish()). */
   private readonly closing: Promise<void>[] = [];
@@ -135,7 +149,9 @@ export class StreamConsumer {
 
   private onBlockStart(index: number, type: string, name: string | undefined): void {
     if (type === 'text' && this.opts.narrate) {
-      this.writers.set(index, new NarrationWriter(this.opts.deps, this.opts.turn, (id) => this.createdIds.push(id)));
+      const writer = new NarrationWriter(this.opts.deps, this.opts.turn, (id) => this.createdIds.push(id));
+      this.writers.set(index, writer);
+      this.narrated.set(index, { writer, complete: false });
     } else if (type === 'thinking') {
       this.thinking.set(index, '');
     } else if (type === 'tool_use' && name) {
@@ -162,11 +178,13 @@ export class StreamConsumer {
     }
   }
 
-  private async closeBlock(index: number): Promise<void> {
+  private async closeBlock(index: number, stopped = false): Promise<void> {
     const writer = this.writers.get(index);
     if (writer) {
       this.writers.delete(index);
-      await writer.close();
+      const block = this.narrated.get(index);
+      if (block && !stopped) block.complete = true;
+      await writer.close({ stopped });
       return;
     }
     const thought = this.thinking.get(index)?.trim();
@@ -177,10 +195,25 @@ export class StreamConsumer {
     }
   }
 
-  /** Close any open narration (end of stream, error or cancel): the text so far is kept. */
-  async finish(): Promise<void> {
-    for (const index of [...this.writers.keys(), ...this.thinking.keys()]) this.closing.push(this.closeBlock(index));
+  /**
+   * Close any open narration (end of stream, error or cancel): the text so far is kept. With
+   * `stopped` (the player pressed Stop) an unfinished block keeps only what the player saw.
+   */
+  async finish(opts: { stopped?: boolean } = {}): Promise<void> {
+    for (const index of [...this.writers.keys(), ...this.thinking.keys()]) this.closing.push(this.closeBlock(index, opts.stopped));
     await Promise.all(this.closing.splice(0));
+  }
+
+  /**
+   * The narration this request showed the player, block by block in order: finished blocks as
+   * written (a complete choices block included), an unfinished one as it was displayed.
+   */
+  visibleText(): string {
+    return [...this.narrated.entries()]
+      .sort(([a], [b]) => a - b)
+      .map(([, block]) => (block.complete ? block.writer.raw : visibleWhileStreaming(block.writer.raw)).trim())
+      .filter(Boolean)
+      .join('\n\n');
   }
 
   /** Remove the narration this request created (it is about to be re-issued, or was declined). */

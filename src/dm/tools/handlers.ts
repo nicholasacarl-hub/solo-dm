@@ -44,11 +44,18 @@ const HANDLERS: { [N in ToolName]: Handler<N> } = {
   consult_oracle: consultOracleTool,
 };
 
-/** "entries.0.name: Required; dc: Too big" */
+/** "entries.0.name: Required; dc: Too big; (input): unknown field "DC" — …" */
 export function formatIssues(error: z.ZodError): string {
   return error.issues
     .slice(0, 8)
-    .map((issue) => `${issue.path.length ? issue.path.join('.') : '(input)'}: ${issue.message}`)
+    .map((issue) => {
+      const where = issue.path.length ? issue.path.join('.') : '(input)';
+      if (issue.code === 'unrecognized_keys') {
+        const keys = issue.keys.map((k) => `"${k}"`).join(', ');
+        return `${where}: unknown field${issue.keys.length > 1 ? 's' : ''} ${keys} — use only the fields in this tool's schema (names are case-sensitive)`;
+      }
+      return `${where}: ${issue.message}`;
+    })
     .join('; ');
 }
 

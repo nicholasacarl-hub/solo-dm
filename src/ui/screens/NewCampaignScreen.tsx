@@ -31,6 +31,7 @@ import {
 import { randomPremise } from '@/ui/shell/premises';
 import { errorMessage, plural } from '@/ui/shell/format';
 import { Page, PageHeader, useDocumentTitle } from '@/ui/shell/Page';
+import { askToKeepSaves } from '@/ui/shell/persistentStorage';
 
 // ---------------------------------------------------------------------------
 // Draft model & validation (exported for tests)
@@ -167,6 +168,7 @@ export function NewCampaignScreen() {
     setCreating(true);
     try {
       const campaign = await createCampaign(toCampaignInput(draft));
+      askToKeepSaves();
       toast.success(`“${campaign.name}” is ready. Now, your hero.`);
       leaving.current = true;
       navigate(`/campaign/${campaign.id}/character`);

@@ -11,6 +11,7 @@ import {
   attackBonus,
   attackDamageExpression,
   characterLevel,
+  eldritchBlastBeams,
   exhaustionLevel,
   formatModifier,
   initiativeModifier,
@@ -21,6 +22,7 @@ import {
   speedDetails,
   spellAttackBonus,
   spellSaveDC,
+  weaponCritRange,
 } from './rules';
 import { ordinal } from './spellcasting';
 import { truncate } from './util';
@@ -158,8 +160,17 @@ function proficiencyLine(c: Character): string {
 
 function attackLines(c: Character): string[] {
   if (c.attacks.length === 0) return [];
+  const critRange = weaponCritRange(c);
   const lines = c.attacks.map((a) => {
-    const extras = [a.range, a.properties?.length ? a.properties.join(', ') : '', a.mastery ? `Mastery: ${a.mastery}` : '', a.notes ?? '']
+    const beams = eldritchBlastBeams(c, a);
+    const extras = [
+      a.range,
+      a.properties?.length ? a.properties.join(', ') : '',
+      a.mastery ? `Mastery: ${a.mastery}` : '',
+      a.notes ?? '',
+      beams && beams > 1 ? `${beams} beams at this level (one attack roll each)` : '',
+      critRange < 20 && a.ability !== 'spell' ? `Critical Hit on ${critRange}–20` : '',
+    ]
       .filter((x): x is string => !!x && x.trim() !== '')
       .map((x) => x.trim());
     const damage = `${attackDamageExpression(c, a)} ${a.damageType}`.trim();

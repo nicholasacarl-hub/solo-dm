@@ -47,7 +47,7 @@ function input(overrides: Partial<PromptInput> = {}): PromptInput {
     clocks: sampleClocks(),
     homebrew: [homebrew('Tide Ward', 'active'), homebrew('Old Curse', 'retired'), homebrew('Shared Charm', 'active', null)],
     combat: null,
-    sourceNames: { 'lib-phb': 'My PHB notes' },
+    librarySources: [{ id: 'lib-phb', name: 'My PHB notes' }],
     ...overrides,
   };
 }

@@ -3,6 +3,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { useGame } from '@/state/gameStore';
+import { sampleJournal } from '@/test/fixtures';
 import { JournalPanel } from './JournalPanel';
 import { seedGame } from './testing/seed';
 
@@ -52,6 +53,28 @@ describe('JournalPanel', () => {
     await user.click(screen.getByRole('switch', { name: 'Show DM secrets (spoilers)' }));
     expect(within(panel).getByText('Keeper Halvard')).toBeInTheDocument();
     expect(within(panel).getByText('DM secret')).toBeInTheDocument();
+  });
+
+  it('shows the empty journal, not "Nothing matches", when every entry is a DM secret', async () => {
+    seedGame({ journal: sampleJournal().filter((e) => e.secret) });
+    render(<JournalPanel />);
+    const user = userEvent.setup();
+    await user.click(screen.getByRole('tab', { name: 'Journal' }));
+    const panel = screen.getByRole('tabpanel');
+    expect(within(panel).getByText('The journal is empty')).toBeInTheDocument();
+    expect(within(panel).getByText(/1 secret entry hidden/)).toBeInTheDocument();
+    expect(within(panel).queryByText(/Nothing matches/)).not.toBeInTheDocument();
+    expect(within(panel).queryByRole('searchbox')).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('switch', { name: 'Show DM secrets (spoilers)' }));
+    expect(within(panel).getByText('Keeper Halvard')).toBeInTheDocument();
+  });
+
+  it('says "Nothing matches" only for a filter that matches nothing', async () => {
+    const { user } = setup();
+    await user.click(screen.getByRole('tab', { name: 'Journal' }));
+    await user.type(screen.getByRole('searchbox', { name: 'Filter the journal' }), 'kraken');
+    expect(screen.getByText('Nothing matches “kraken”.')).toBeInTheDocument();
   });
 
   it('filters the journal', async () => {

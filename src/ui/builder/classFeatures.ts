@@ -3,7 +3,8 @@
  * consistently ("Choose one of the following", "Expertise in two of your skill proficiencies"),
  * so light text matching keeps the builder working for imported classes too.
  */
-import type { ClassFeatureDef, ClassOption, SubclassOption } from '@/types';
+import { ABILITIES, ABILITY_NAMES, type ClassFeatureDef, type ClassOption, type Skill, type SkillBonus, type SubclassOption } from '@/types';
+import { skillFromName } from './species';
 
 /** Lowercase letters and digits only: "Prepared Spells" / "preparedSpells" -> "preparedspells". */
 export function columnKey(name: string): string {
@@ -55,6 +56,11 @@ export function findFeatureDef(cls: ClassOption, name: string, maxLevel = 1): Cl
   return cls.features.find((f) => f.level <= maxLevel && columnKey(f.name) === key);
 }
 
+/** A feature's name without a trailing "(…)": "Divine Order (Thaumaturge)" -> "Divine Order". */
+export function baseFeatureName(name: string): string {
+  return name.replace(/\s*\([^()]*\)\s*$/, '').trim() || name.trim();
+}
+
 /** Does the class get a Fighting Style feat at level 1 (2024 Fighter)? */
 export function needsFightingStyle(cls: ClassOption | undefined): boolean {
   return Boolean(cls && findFeatureDef(cls, 'Fighting Style'));
@@ -94,18 +100,39 @@ export interface FeatureOption {
   description: string;
 }
 
+/** A line that starts with a bold run-in heading: `_**Protector.**_ Trained for battle…`. */
+const RUN_IN_HEADING = /^_?\*\*([^*\n]+?)\.\*\*_?\s*(.*)$/;
+
+/** Every bold run-in heading in a description ("Damage Resistance", "Duration"…). */
+export function runInHeadings(description: string): string[] {
+  return description.split('\n').flatMap((line) => {
+    const match = RUN_IN_HEADING.exec(line.trim());
+    return match ? [match[1].trim()] : [];
+  });
+}
+
 /**
- * Options of a "choose one of the following" feature, parsed from bold run-in headings such as
- * `_**Protector.**_ Trained for battle…`. Returns null for features without a choice.
+ * Options of a "choose one of the following" feature: the bold run-in headings right after that
+ * sentence, such as `_**Protector.**_ Trained for battle…`. The sentence has to offer the choice
+ * ("…sacred roles of your choice", "Choose one of the following"): Rage's "extend the Rage … by
+ * doing one of the following" is a rule, and Rage's bold headings are rules, not options.
+ * Returns null for features without a choice.
  */
 export function featureChoiceOptions(description: string): FeatureOption[] | null {
-  if (!/one of the following/i.test(description)) return null;
-  const options: FeatureOption[] = [];
-  const pattern = /(?:^|\n)\s*_?\*\*([^*\n]+?)\.\*\*_?\s*([^\n]*)/g;
-  for (const match of description.matchAll(pattern)) {
-    options.push({ name: match[1].trim(), description: match[2].trim() });
+  for (const sentence of description.matchAll(/[^.!?\n]*\bone of the following\b[^.!?\n]*[.!?:]?/gi)) {
+    if (!/\bchoose\b|\bof your choice\b/i.test(sentence[0])) continue;
+    // The options are the block of headed lines after the sentence (skipping the rest of its line).
+    const lines = description.slice(sentence.index + sentence[0].length).split('\n').slice(1);
+    const options: FeatureOption[] = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const match = RUN_IN_HEADING.exec(line.trim());
+      if (!match) break;
+      options.push({ name: match[1].trim(), description: match[2].trim() });
+    }
+    return options.length >= 2 ? options : null;
   }
-  return options.length >= 2 ? options : null;
+  return null;
 }
 
 /** Level-1 features (other than spellcasting) that ask the player to pick an option. */
@@ -117,8 +144,16 @@ export function classChoiceFeatures(cls: ClassOption | undefined): { feature: Cl
   });
 }
 
+export interface OptionGrants {
+  weapons: string[];
+  armor: string[];
+  extraCantrips: number;
+  /** A bonus to some skill checks (Thaumaturge, Magician); the caller names its source. */
+  skillBonus: Omit<SkillBonus, 'source'> | null;
+}
+
 /** What a chosen feature option grants mechanically (Protector, Warden, Thaumaturge, Magician...). */
-export function optionGrants(text: string): { weapons: string[]; armor: string[]; extraCantrips: number } {
+export function optionGrants(text: string): OptionGrants {
   const weapons: string[] = [];
   const armor: string[] = [];
   if (/proficiency with Martial weapons/i.test(text)) weapons.push('Martial weapons');
@@ -126,7 +161,23 @@ export function optionGrants(text: string): { weapons: string[]; armor: string[]
   if (armorMatch) armor.push(`${capitalize(armorMatch[1])} armor`);
   const cantrip = /know (\w+) extra cantrips?/i.exec(text);
   const extraCantrips = cantrip ? (wordNumber(cantrip[1]) ?? 1) : 0;
-  return { weapons, armor, extraCantrips };
+  return { weapons, armor, extraCantrips, skillBonus: skillCheckBonus(text) };
+}
+
+/**
+ * "…a bonus to your Intelligence (Arcana or Religion) checks. The bonus equals your Wisdom modifier
+ * (minimum of +1)" -> Arcana and Religion get WIS (min +1). Null when the text grants no such bonus.
+ */
+export function skillCheckBonus(text: string): Omit<SkillBonus, 'source'> | null {
+  const match = /bonus to your \w+ \(([^)]+)\) checks\.?\s*The bonus equals your (\w+) modifier(?: \(minimum(?: bonus)? of \+?(\d+)\))?/i.exec(text);
+  if (!match) return null;
+  const skills = match[1]
+    .split(/\s*(?:,|\bor\b|\band\b)\s*/)
+    .map(skillFromName)
+    .filter((s): s is Skill => Boolean(s));
+  const ability = ABILITIES.find((a) => ABILITY_NAMES[a].toLowerCase() === match[2].toLowerCase());
+  if (!skills.length || !ability) return null;
+  return { skills, ability, ...(match[3] ? { minimum: Number(match[3]) } : {}) };
 }
 
 /** Languages a class grants at level 1 (Thieves' Cant, Druidic) and extra language picks. */

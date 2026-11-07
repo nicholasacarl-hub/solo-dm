@@ -1,9 +1,13 @@
 /**
- * Rules tools: searching and reading the compendium (SRD 5.2.1 + enabled imports + homebrew),
+ * Rules tools: searching and reading the compendium (SRD 5.2.1 + the player's imports + homebrew),
  * and creating or revising homebrew within the campaign's homebrew-freedom setting.
+ *
+ * Text from an imported book is wrapped with wrapImported(), so exported saves and cloud sync can
+ * leave it out of the copy (it stays in the live session).
  */
 import type { RulesIndex, SearchHit } from '@/data';
 import { nameKey } from '@/lib/id';
+import { wrapImported } from '@/lib/importedContent';
 import {
   HOMEBREW_SOURCE_ID,
   SRD_SOURCE_ID,
@@ -27,9 +31,56 @@ function isSpoiler(entries: readonly CompendiumEntry[], kinds?: readonly string[
 export const RULES_OUTPUT_LIMIT = 6000;
 export const RULES_HIT_LIMIT = 1800;
 
-/** Sources the DM may consult in this campaign: the SRD, the campaign's enabled imports, homebrew. */
-export function allowedSources(campaign: Campaign): string[] {
-  return [...new Set([SRD_SOURCE_ID, ...campaign.settings.enabledSources, HOMEBREW_SOURCE_ID])];
+/**
+ * Sources the DM may consult: the SRD, every import switched on in the player's Library (the rules
+ * index holds exactly those), any import this campaign enabled, and homebrew (the index shows only
+ * shared homebrew and this campaign's).
+ */
+export function allowedSources(campaign: Campaign, index?: Pick<RulesIndex, 'sources'>): string[] {
+  const indexed = index ? index.sources().map((s) => s.id) : [];
+  return [...new Set([SRD_SOURCE_ID, ...campaign.settings.enabledSources, ...indexed, HOMEBREW_SOURCE_ID])];
+}
+
+/** Content from the player's imported books (not the SRD, not homebrew). */
+function isImported(entry: CompendiumEntry): boolean {
+  return entry.sourceId !== SRD_SOURCE_ID && entry.sourceId !== HOMEBREW_SOURCE_ID;
+}
+
+/** Imported text is marked so saves and sync can leave it out (see src/lib/importedContent.ts). */
+function shielded(entry: CompendiumEntry, text: string): string {
+  return isImported(entry) ? wrapImported(entry.sourceName, text) : text;
+}
+
+/** 0 = this campaign's homebrew, 1 = shared homebrew, 2 = imports, 3 = SRD (as the index ranks them). */
+function sourceRank(entry: CompendiumEntry): number {
+  if (entry.sourceId === HOMEBREW_SOURCE_ID) return (entry as Partial<HomebrewEntry>).campaignId ? 0 : 1;
+  return entry.sourceId === SRD_SOURCE_ID ? 3 : 2;
+}
+
+/**
+ * One entry by name from the sources the DM may consult. The index's name lookup ranks every
+ * source it holds, so when its pick is off-limits here, the best allowed entry with that name wins
+ * instead (an SRD spell is never hidden behind an import of the same name).
+ */
+export function findAllowedEntry(
+  index: RulesIndex,
+  name: string,
+  opts: { kind?: ContentKind; campaign: Campaign },
+): CompendiumEntry | undefined {
+  const { campaign } = opts;
+  const sources = allowedSources(campaign, index);
+  const found = index.findByName(name, { kind: opts.kind, campaignId: campaign.id });
+  if (!found || sources.includes(found.sourceId)) return found;
+  const keys = new Set([nameKey(name), nameKey(found.name)]);
+  const visible = (e: CompendiumEntry) => {
+    const owner = (e as Partial<HomebrewEntry>).campaignId ?? null;
+    return e.sourceId !== HOMEBREW_SOURCE_ID || owner === null || owner === campaign.id;
+  };
+  const candidates = sources
+    .flatMap((sourceId) => index.list({ kind: opts.kind, sourceId }))
+    .filter((e) => keys.has(nameKey(e.name)) && visible(e));
+  candidates.sort((a, b) => sourceRank(a) - sourceRank(b) || Number(b.kind === found.kind) - Number(a.kind === found.kind));
+  return candidates[0];
 }
 
 async function loadIndex(ctx: ToolContext): Promise<RulesIndex> {
@@ -64,11 +115,11 @@ function formatHits(hits: readonly SearchHit[]): string {
     const block = [`## ${entryHeading(e)}`, e.summary ?? '', clip(e.text, RULES_HIT_LIMIT)].filter(Boolean).join('\n');
     if (used + block.length > RULES_OUTPUT_LIMIT) {
       const room = RULES_OUTPUT_LIMIT - used;
-      if (room > 400) parts.push(clip(block, room));
+      if (room > 400) parts.push(shielded(e, clip(block, room)));
       parts.push(`(…${hits.length - parts.length} more result(s) omitted — narrow the query or use get_entry)`);
       break;
     }
-    parts.push(block);
+    parts.push(shielded(e, block));
     used += block.length;
   }
   return parts.join('\n\n');
@@ -79,7 +130,7 @@ export async function lookupRulesTool(input: ToolInput<'lookup_rules'>, ctx: Too
   const index = await loadIndex(ctx);
   const hits = index.search(input.query, {
     kinds: input.kinds as ContentKind[] | undefined,
-    sourceIds: allowedSources(campaign),
+    sourceIds: allowedSources(campaign, index),
     campaignId: campaign.id,
     limit: input.limit ?? 5,
   });
@@ -97,9 +148,9 @@ export async function getEntryTool(input: ToolInput<'get_entry'>, ctx: ToolConte
   const campaign = requireCampaign(ctx.deps.store());
   const index = await loadIndex(ctx);
   const kind = input.kind as ContentKind | undefined;
-  const sources = allowedSources(campaign);
-  const found = index.findByName(input.name, { kind, campaignId: campaign.id });
-  if (!found || !sources.includes(found.sourceId)) {
+  const found = findAllowedEntry(index, input.name, { kind, campaign });
+  if (!found) {
+    const sources = allowedSources(campaign, index);
     const near = index.search(input.name, { kinds: kind ? [kind] : undefined, sourceIds: sources, campaignId: campaign.id, limit: 5 });
     const names = near.map((h) => `${h.entry.name} (${h.entry.kind})`).join(', ');
     return ok(`No entry named "${input.name}"${kind ? ` (${kind})` : ''}.${names ? ` Closest matches: ${names}.` : ''}`);
@@ -108,7 +159,7 @@ export async function getEntryTool(input: ToolInput<'get_entry'>, ctx: ToolConte
   const body = [`# ${entryHeading(found)}`, found.summary ?? '', clip(found.text, RULES_OUTPUT_LIMIT)].filter(Boolean);
   const hb = found as Partial<HomebrewEntry>;
   if (hb.balanceNotes) body.push(`Balance notes: ${hb.balanceNotes}`);
-  return ok(body.join('\n\n'));
+  return ok(shielded(found, body.join('\n\n')));
 }
 
 // ---------------------------------------------------------------------------
@@ -136,11 +187,11 @@ function ownNotes(notes: string | undefined): string {
     .trim();
 }
 
-async function basedOnRef(ctx: ToolContext, name: string | undefined, campaignId: string): Promise<HomebrewEntry['basedOn']> {
+async function basedOnRef(ctx: ToolContext, name: string | undefined, campaign: Campaign): Promise<HomebrewEntry['basedOn']> {
   if (!name) return undefined;
   try {
     const index = await ctx.deps.rulesIndex();
-    const id = index.findByName(name, { campaignId })?.id;
+    const id = findAllowedEntry(index, name, { campaign })?.id;
     return id ? { name, id } : { name };
   } catch {
     return { name };
@@ -175,7 +226,7 @@ export async function createHomebrewTool(input: ToolInput<'create_homebrew'>, ct
     status: 'active',
     createdAt: now,
     updatedAt: now,
-    ...defined({ basedOn: await basedOnRef(ctx, input.based_on, campaign.id) }),
+    ...defined({ basedOn: await basedOnRef(ctx, input.based_on, campaign) }),
   };
   await store.saveHomebrew(entry);
   ctx.deps.invalidateRulesIndex();

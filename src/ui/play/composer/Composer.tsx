@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, type KeyboardEvent } from 'react';
 import { MessageCircle, SendHorizontal, Square } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useGame } from '@/state/gameStore';
@@ -20,9 +20,11 @@ const MAX_HEIGHT_PX = 208;
 export function Composer() {
   const busy = useGame((s) => isBusyPhase(s.dm.phase));
   const prefill = usePlayView((s) => s.prefill);
+  // The draft lives in the view store so it survives a remount (crossing the desktop breakpoint).
+  const text = usePlayView((s) => s.draft);
+  const ooc = usePlayView((s) => s.ooc);
+  const { setDraft: setText, setOoc } = usePlayView.getState();
   const isTouch = useIsTouch();
-  const [text, setText] = useState('');
-  const [ooc, setOoc] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const inputId = useId();
   const hintId = useId();
@@ -38,8 +40,7 @@ export function Composer() {
   // "Ask a rules question" and friends put text in the box and focus it (one-shot requests).
   useEffect(() => {
     if (!prefill) return;
-    setText(prefill.text);
-    usePlayView.setState({ prefill: null });
+    usePlayView.setState({ draft: prefill.text, prefill: null });
     const el = textareaRef.current;
     if (!el) return;
     el.focus();
@@ -53,7 +54,7 @@ export function Composer() {
     setText('');
     const ok = await sendToDm(ooc ? withOocPrefix(words) : words);
     // The DM refused the message (e.g. no session yet): give the words back.
-    if (!ok) setText((current) => current || words);
+    if (!ok && !usePlayView.getState().draft) setText(words);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -85,14 +86,18 @@ export function Composer() {
         placeholder={ooc ? 'Ask the DM out of character…' : 'What do you do?'}
         enterKeyHint={isTouch ? 'enter' : 'send'}
         aria-describedby={isTouch ? undefined : hintId}
-        className="block max-h-52 min-h-12 w-full resize-none bg-transparent px-4 pt-3 pb-1 text-[0.9375rem] leading-relaxed text-text outline-none placeholder:text-faint"
+        className={cn(
+          'block max-h-52 min-h-12 w-full resize-none bg-transparent px-4 pt-3 pb-1 leading-relaxed text-text outline-none placeholder:text-faint',
+          // 16px on phones and touch screens: iOS Safari zooms the page into any smaller focused field.
+          isTouch ? 'text-base' : 'text-base sm:text-[0.9375rem]',
+        )}
       />
       <div className="flex items-center gap-1 px-2 pb-2">
         <QuickActions busy={busy} />
         <button
           type="button"
           aria-pressed={ooc}
-          onClick={() => setOoc((v) => !v)}
+          onClick={() => setOoc(!ooc)}
           title="Out of character: talk to the DM, not the world"
           className={cn(
             'inline-flex h-8 shrink-0 items-center gap-1 rounded-lg px-2 text-xs font-semibold tracking-wide whitespace-nowrap transition-colors',

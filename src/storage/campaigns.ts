@@ -6,6 +6,7 @@ import type { Campaign, Character, UsageTotals } from '@/types';
 import { newId } from '@/lib/id';
 import { db } from './db';
 import { deleteCampaignData, readCampaignData, writeCampaignData } from './campaignData';
+import { assertCampaignNotOpenElsewhere } from './campaignLock';
 import { emitCampaignChange } from './events';
 import { remapCampaignData } from './remap';
 import { markCampaignDeleted } from './syncState';
@@ -79,6 +80,8 @@ export async function createCampaign(input: NewCampaignInput): Promise<Campaign>
 }
 
 export async function deleteCampaign(id: string): Promise<void> {
+  // Never pull a campaign out from under the table of another tab.
+  await assertCampaignNotOpenElsewhere(id);
   await deleteCampaignData(id);
   markCampaignDeleted(id);
   emitCampaignChange({ type: 'deleted', campaignId: id });

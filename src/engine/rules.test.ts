@@ -1,16 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type { Attack, Character, EquipmentOption, InventoryItem, PlayerRollRequest } from '@/types';
+import type { Attack, Character, EquipmentOption, Feature, InventoryItem, PlayerRollRequest, SkillBonus } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
+import { applyAttackRollRules, manualD20Result } from './dice';
 import {
   abilityCheckModifier,
   abilityModifier,
   attackAbilityModifier,
   attackBonus,
+  attackCritRange,
   attackDamageExpression,
+  attackScaling,
   characterLevel,
   computeArmorClass,
   deathSaveModifier,
   effectiveSpeed,
+  eldritchBlastBeams,
   exhaustionPenalty,
   formatModifier,
   initiativeModifier,
@@ -24,6 +28,8 @@ import {
   spellAttackBonus,
   spellSaveDC,
   spellcastingAbility,
+  syncArmorClass,
+  weaponCritRange,
 } from './rules';
 
 const mira = (overrides: Partial<Character> = {}) => sampleCharacter(overrides);
@@ -296,5 +302,211 @@ describe('rollRequestExpression', () => {
     expect(rollRequestExpression(c, request({ rollType: 'hit-die' }))).toBe('1d6+1');
     expect(rollRequestExpression(c, request({ rollType: 'custom', expression: 'd%' }))).toBe('1d100');
     expect(() => rollRequestExpression(c, request({ rollType: 'damage' }))).toThrow(/needs an attack/);
+  });
+});
+
+describe('skill bonuses (SRD 5.2.1 Cleric: Divine Order — Thaumaturge; Druid: Primal Order — Magician)', () => {
+  const cleric = (overrides: Partial<Character> = {}) =>
+    mira({
+      abilityScores: { str: 10, dex: 12, con: 14, int: 10, wis: 17, cha: 8 },
+      classes: [{ classId: 'srd:class:cleric', name: 'Cleric', level: 1, hitDie: 8, casterType: 'full', spellcastingAbility: 'wis' }],
+      skills: { religion: 1 },
+      features: [],
+      ...overrides,
+    });
+  const thaumaturge: SkillBonus = { skills: ['arcana', 'religion'], ability: 'wis', minimum: 1, source: 'Thaumaturge (Divine Order)' };
+  const order = (name: string): Feature => ({ id: name, name, source: 'class', sourceName: 'Cleric 1', description: '' });
+
+  it('adds the WIS modifier (minimum +1) to Arcana and Religion checks', () => {
+    const c = cleric({ skillBonuses: [thaumaturge] });
+    expect(skillModifier(c, 'religion')).toBe(5); // INT +0, PB +2, WIS +3 (the review's WIS 17 / INT 10 Cleric)
+    expect(skillModifier(c, 'arcana')).toBe(3);
+    expect(skillModifier(c, 'history')).toBe(0);
+    const unwise = cleric({ abilityScores: { ...c.abilityScores, wis: 8 }, skillBonuses: [thaumaturge] });
+    expect(skillModifier(unwise, 'arcana')).toBe(1); // minimum of +1
+  });
+
+  it('derives Thaumaturge and Magician from the feature on older sheets, without counting them twice', () => {
+    const legacy = cleric({ features: [order('Divine Order (Thaumaturge)')] });
+    expect(skillModifier(legacy, 'religion')).toBe(5);
+    expect(skillModifier({ ...legacy, skillBonuses: [thaumaturge] }, 'religion')).toBe(5);
+    expect(skillModifier({ ...legacy, skillBonuses: [thaumaturge, { ...thaumaturge }] }, 'religion')).toBe(5);
+    const druid = cleric({ features: [order('Primal Order (Magician)')] });
+    expect(skillModifier(druid, 'nature')).toBe(3);
+    expect(skillModifier(druid, 'religion')).toBe(2);
+    expect(skillModifier(cleric({ features: [order('Divine Order (Protector)')] }), 'religion')).toBe(2);
+  });
+
+  it("applies to Intelligence checks only, so not when the DM calls for another ability", () => {
+    const c = cleric({ abilityScores: { str: 10, dex: 12, con: 14, int: 12, wis: 17, cha: 8 }, skillBonuses: [thaumaturge] });
+    expect(rollRequestModifier(c, request({ skill: 'religion' }))).toEqual({ modifier: 6, label: 'Religion check (INT)' });
+    expect(rollRequestModifier(c, request({ skill: 'religion', ability: 'int' })).modifier).toBe(6);
+    expect(rollRequestModifier(c, request({ skill: 'religion', ability: 'wis' })).modifier).toBe(5); // WIS 3 + PB 2, no bonus
+    expect(rollRequestModifier({ ...c, exhaustion: 1 }, request({ skill: 'arcana' })).modifier).toBe(2); // 1 + 3 − 2
+  });
+
+  it('flat bonuses count in passive scores too', () => {
+    const hawk = mira({ skillBonuses: [{ skills: ['perception'], flat: 2, source: 'Hawk-eyed (homebrew)' }] });
+    expect(skillModifier(hawk, 'perception')).toBe(5);
+    expect(passivePerception(hawk)).toBe(15);
+  });
+});
+
+describe('damage dice that grow with level', () => {
+  const wizard = (level: number, extra: Partial<Character> = {}) => mira({ classes: [{ ...mira().classes[0], level }], ...extra });
+  const blast: Attack = {
+    id: 'eb',
+    name: 'Eldritch Blast',
+    ability: 'spell',
+    proficient: true,
+    damage: '1d10',
+    damageType: 'force',
+    addAbilityToDamage: false,
+    notes: 'Cantrip',
+    scaling: 'cantrip',
+  };
+
+  it('cantrip dice ×2 at character level 5, ×3 at 11, ×4 at 17 (SRD 5.2.1 Fire Bolt, "Cantrip Upgrade")', () => {
+    const levels = [1, 4, 5, 10, 11, 16, 17, 20];
+    expect(levels.map((l) => attackDamageExpression(wizard(l), fireBolt(wizard(l))))).toEqual([
+      '1d10', '1d10', '2d10', '2d10', '3d10', '3d10', '4d10', '4d10',
+    ]);
+    const rayOfFrost: Attack = { ...blast, id: 'rof', name: 'Ray of Frost', damage: '1d8', damageType: 'cold' };
+    expect(attackDamageExpression(wizard(5), rayOfFrost)).toBe('2d8');
+    expect(attackDamageExpression(wizard(5), rayOfFrost, true)).toBe('4d8');
+    expect(rollRequestExpression(wizard(11), request({ rollType: 'damage', attackName: 'Fire Bolt' }))).toBe('3d10');
+    expect(attackDamageExpression(wizard(5), dagger(wizard(5)))).toBe('1d4+2'); // weapons don't scale
+  });
+
+  it('uses the character level across classes; older sheets are recognised but never scaled twice', () => {
+    const multi = mira({ classes: [...mira().classes, { classId: 'srd:class:fighter', name: 'Fighter', level: 2, hitDie: 10, casterType: 'none' }] });
+    expect(attackScaling(multi, fireBolt(multi))).toBe('cantrip'); // a known cantrip of the same name
+    expect(attackDamageExpression(multi, fireBolt(multi))).toBe('2d10');
+    const noted: Attack = { ...fireBolt(multi), name: 'Chill Touch', notes: 'Cantrip' };
+    expect(attackDamageExpression(multi, noted)).toBe('2d10');
+    expect(attackDamageExpression(multi, { ...fireBolt(multi), damage: '2d10' })).toBe('2d10'); // already scaled by hand
+    expect(attackScaling(multi, { ...fireBolt(multi), name: 'Scorching Ray' })).toBeUndefined(); // a level 2 spell
+    // Newer sheets mark every scaling attack, so a cantrip left unmarked doesn't gain dice.
+    const newer = { ...multi, attacks: [{ ...fireBolt(multi), scaling: 'cantrip' as const }, { ...noted, name: 'Magic Stone', damage: '1d6' }] };
+    expect(attackDamageExpression(newer, newer.attacks[0])).toBe('2d10');
+    expect(attackDamageExpression(newer, newer.attacks[1])).toBe('1d6');
+  });
+
+  it('Eldritch Blast gains beams, not dice (SRD 5.2.1 Eldritch Blast, "Cantrip Upgrade")', () => {
+    expect(attackDamageExpression(wizard(11), blast)).toBe('1d10');
+    expect([1, 5, 11, 17].map((l) => eldritchBlastBeams(wizard(l), blast))).toEqual([1, 2, 3, 4]);
+    expect(eldritchBlastBeams(wizard(5), fireBolt(wizard(5)))).toBeNull();
+  });
+
+  it("a Monk's Unarmed Strike rolls the Martial Arts die for the Monk level (SRD 5.2.1 Monk Features table)", () => {
+    const strike: Attack = { id: 'us', name: 'Unarmed Strike', ability: 'finesse', proficient: true, damage: '1d6', damageType: 'bludgeoning', scaling: 'martial-arts' };
+    const monk = (level: number, extra: Partial<Character> = {}) =>
+      mira({
+        abilityScores: { str: 10, dex: 16, con: 12, int: 8, wis: 16, cha: 10 },
+        classes: [{ classId: 'srd:class:monk', name: 'Monk', level, hitDie: 8, casterType: 'none' }],
+        spellcasting: undefined,
+        attacks: [strike],
+        ...extra,
+      });
+    const levels = [1, 4, 5, 10, 11, 16, 17, 20];
+    expect(levels.map((l) => attackDamageExpression(monk(l), strike))).toEqual([
+      '1d6+3', '1d6+3', '1d8+3', '1d8+3', '1d10+3', '1d10+3', '1d12+3', '1d12+3',
+    ]);
+    expect(attackDamageExpression(monk(5), strike, true)).toBe('2d8+3');
+    expect(rollRequestExpression(monk(11), request({ rollType: 'damage', attackName: 'Unarmed Strike' }))).toBe('1d10+3');
+    // Martial Arts works only without armor or a Shield.
+    const armored = monk(5, { inventory: [{ id: 'la', name: 'Leather Armor', quantity: 1, equipped: true, category: 'armor' }] });
+    expect(attackDamageExpression(armored, strike)).toBe('1d6+3');
+    // Older sheets: the Unarmed Strike of a Monk is recognised by name.
+    expect(attackDamageExpression(monk(5), { ...strike, scaling: undefined })).toBe('1d8+3');
+    // A bigger weapon die is kept ("in place of the normal damage" only when that's better).
+    expect(attackDamageExpression(monk(5), { ...strike, damage: '1d10' })).toBe('1d10+3');
+  });
+
+  it('Martial Arts follows the Monk level, not the character level, and replaces the flat 1', () => {
+    const fighterMonk = mira({
+      abilityScores: { ...mira().abilityScores, str: 16 },
+      classes: [
+        { classId: 'srd:class:fighter', name: 'Fighter', level: 5, hitDie: 10, casterType: 'none' },
+        { classId: 'srd:class:monk', name: 'Monk', level: 1, hitDie: 8, casterType: 'none' },
+      ],
+      spellcasting: undefined,
+      inventory: [],
+      attacks: [{ id: 'us', name: 'Unarmed Strike', ability: 'str', proficient: true, damage: '1', damageType: 'bludgeoning' }],
+    });
+    expect(attackDamageExpression(fighterMonk, fighterMonk.attacks[0])).toBe('1d6+3');
+    const notAMonk = { ...fighterMonk, classes: [fighterMonk.classes[0]] };
+    expect(attackDamageExpression(notAMonk, notAMonk.attacks[0])).toBe('4'); // 1 + STR 3
+  });
+});
+
+describe('critical range (SRD 5.2.1 Fighter Subclass: Champion — Improved Critical, Superior Critical)', () => {
+  const longsword: Attack = { id: 'ls', name: 'Longsword', ability: 'str', proficient: true, damage: '1d8', damageType: 'slashing' };
+  const champion = (level: number, extra: Partial<Character> = {}) =>
+    mira({
+      classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level, hitDie: 10, casterType: 'none', subclass: 'Champion' }],
+      attacks: [longsword, ...mira().attacks],
+      ...extra,
+    });
+
+  it('19–20 from Champion 3, 18–20 from Champion 15', () => {
+    expect(weaponCritRange(mira())).toBe(20);
+    expect(weaponCritRange(champion(2))).toBe(20);
+    expect(weaponCritRange(champion(3))).toBe(19);
+    expect(weaponCritRange(champion(14))).toBe(19);
+    expect(weaponCritRange(champion(15))).toBe(18);
+    const feature = (name: string): Feature => ({ id: name, name, source: 'subclass', sourceName: 'Champion 3', description: '' });
+    expect(weaponCritRange(mira({ features: [feature('Improved Critical')] }))).toBe(19);
+    expect(weaponCritRange(mira({ features: [feature('Improved Critical'), feature('Superior Critical')] }))).toBe(18);
+  });
+
+  it('covers weapon and Unarmed Strike attack rolls only', () => {
+    const c = champion(3);
+    expect(attackCritRange(c, { rollType: 'attack', attackName: 'Longsword' })).toBe(19);
+    expect(attackCritRange(c, { rollType: 'attack', attackName: 'Unarmed Strike' })).toBe(19);
+    expect(attackCritRange(c, { rollType: 'attack', attackName: 'Longbow' })).toBe(19); // a weapon not on the sheet
+    expect(attackCritRange(c, { rollType: 'attack', attackName: 'Fire Bolt' })).toBe(20); // spell attack on the sheet
+    expect(attackCritRange(c, { rollType: 'attack', attackName: 'Scorching Ray' })).toBe(20); // a known spell
+    expect(attackCritRange(c, { rollType: 'skill' })).toBe(20);
+    expect(attackCritRange(mira(), { rollType: 'attack', attackName: 'Dagger' })).toBe(20);
+  });
+
+  it("makes a Champion's natural 19 a Critical Hit, which hits", () => {
+    const critRange = attackCritRange(champion(3), { rollType: 'attack', attackName: 'Longsword' });
+    expect(applyAttackRollRules(manualD20Result(19, 5, { dc: 30 }), { critRange })).toMatchObject({ isCritical: true, success: true });
+    expect(applyAttackRollRules(manualD20Result(18, 5, { dc: 15 }), { critRange })).toMatchObject({ isCritical: false, success: true });
+  });
+});
+
+describe('syncArmorClass (SRD 5.2.1 Armor table, Armor Class; Ring of Protection)', () => {
+  const fighter = mira({ armorTraining: ['Light armor', 'Medium armor', 'Heavy armor', 'Shields'] });
+
+  it('replaces an AC that was worked out from gear and features', () => {
+    const r = syncArmorClass(fighter, wearing(fighter, { name: 'Chain Mail', category: 'armor' }));
+    expect(r.character).toMatchObject({ armorClass: 16, acFormula: 'Chain Mail 16' });
+    expect(r.events).toEqual([{ type: 'combat', message: 'AC 12 → 16 (Chain Mail 16)' }]);
+  });
+
+  it('keeps an AC set by hand (e.g. Mage Armor) and reports the computed value', () => {
+    const mageArmor = { ...fighter, armorClass: 15 };
+    const r = syncArmorClass(mageArmor, wearing(mageArmor, { name: 'Ring of Protection', category: 'magic-item', attuned: true }));
+    expect(r.character.armorClass).toBe(15);
+    expect(r.events).toHaveLength(1);
+    expect(r.events[0].type).toBe('warning');
+    expect(r.events[0].message).toMatch(/^AC kept at 15: .*Gear and features now give AC 13 \(10 \+ DEX 2 \+ Ring of Protection 1\)/);
+  });
+
+  it("is silent when the computed AC doesn't change, and flags armor it can't identify", () => {
+    expect(syncArmorClass(fighter, { ...fighter, notes: 'new notes' })).toEqual({ character: { ...fighter, notes: 'new notes' }, events: [] });
+    const mystery = syncArmorClass(fighter, wearing(fighter, { name: 'Dragonhide Coat', category: 'armor' }));
+    expect(mystery.character.armorClass).toBe(12);
+    expect(mystery.events[0].message).toBe("AC kept at 12: Dragonhide Coat's armor stats are unknown, so set the AC by hand.");
+  });
+
+  it('uses the catalog when one is given', () => {
+    const catalog: EquipmentOption[] = [{ id: 'hb:armor:mithral', name: 'Mithral Plate', category: 'armor', armorClass: 18, dexCap: 0, armorType: 'heavy' }];
+    const worn = wearing(fighter, { name: 'Mithral Plate', category: 'armor', compendiumId: 'hb:armor:mithral' });
+    expect(syncArmorClass(fighter, worn, catalog).character.armorClass).toBe(18);
+    expect(syncArmorClass(fighter, worn).character.armorClass).toBe(12); // unknown without the catalog: kept
   });
 });

@@ -228,7 +228,7 @@ const cleric: ClassOption = {
       level: 1,
       name: 'Divine Order',
       description:
-        'You have dedicated yourself to one of the following sacred roles of your choice.\n\n_**Protector.**_ Trained for battle, you gain proficiency with Martial weapons and training with Heavy armor.\n\n_**Thaumaturge.**_ You know one extra cantrip from the Cleric spell list.',
+        'You have dedicated yourself to one of the following sacred roles of your choice.\n\n_**Protector.**_ Trained for battle, you gain proficiency with Martial weapons and training with Heavy armor.\n\n_**Thaumaturge.**_ You know one extra cantrip from the Cleric spell list. In addition, your mystical connection to the divine gives you a bonus to your Intelligence (Arcana or Religion) checks. The bonus equals your Wisdom modifier (minimum of +1).',
     },
   ],
   levelTable: spellcastingTable(3, [4, 5, 6, 7], [[2], [3], [4, 2], [4, 3]]),
@@ -495,8 +495,8 @@ function spell(name: string, level: number, school: string, classes: string[], t
 /** Spells for tests and the dev preview (abridged SRD 5.2.1 text). */
 export function spellFixture(): CompendiumEntry[] {
   return [
-    spell('Fire Bolt', 0, 'Evocation', ['Sorcerer', 'Wizard'], 'You hurl a mote of fire. Make a ranged spell attack against the target. On a hit, the target takes 1d10 Fire damage.', { range: '120 feet' }),
-    spell('Ray of Frost', 0, 'Evocation', ['Sorcerer', 'Wizard'], 'Make a ranged spell attack against the target. On a hit, it takes 1d8 Cold damage, and its Speed is reduced by 10 feet.', { range: '60 feet' }),
+    spell('Fire Bolt', 0, 'Evocation', ['Sorcerer', 'Wizard'], 'You hurl a mote of fire. Make a ranged spell attack against the target. On a hit, the target takes 1d10 Fire damage.\n\n_**Cantrip Upgrade.**_ The damage increases by 1d10 when you reach levels 5 (2d10), 11 (3d10), and 17 (4d10).', { range: '120 feet' }),
+    spell('Ray of Frost', 0, 'Evocation', ['Sorcerer', 'Wizard'], 'Make a ranged spell attack against the target. On a hit, it takes 1d8 Cold damage, and its Speed is reduced by 10 feet.\n\n_**Cantrip Upgrade.**_ The damage increases by 1d8 when you reach levels 5 (2d8), 11 (3d8), and 17 (4d8).', { range: '60 feet' }),
     spell('Light', 0, 'Evocation', ['Bard', 'Cleric', 'Sorcerer', 'Wizard'], 'You touch one Large or smaller object. The object sheds Bright Light in a 20-foot radius.'),
     spell('Mage Hand', 0, 'Conjuration', ['Bard', 'Sorcerer', 'Warlock', 'Wizard'], 'A spectral, floating hand appears at a point you choose within range.'),
     spell('Prestidigitation', 0, 'Transmutation', ['Bard', 'Sorcerer', 'Warlock', 'Wizard'], 'You create a magical effect within range: a harmless sensory effect.'),

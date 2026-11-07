@@ -31,6 +31,15 @@ export function isTurnStart(param: BetaMessageParam): boolean {
   return param.role === 'user' && (firstText(param)?.startsWith(GAME_STATE_OPEN) ?? false);
 }
 
+/** The text of a turn start after its <game_state> block: the player's words (or an app request). */
+export function turnWords(param: BetaMessageParam): string[] {
+  if (!isTurnStart(param)) return [];
+  return (blocksOf(param) ?? [])
+    .slice(1)
+    .filter((b): b is Extract<BetaContentBlockParam, { type: 'text' }> => b.type === 'text')
+    .map((b) => b.text);
+}
+
 /** The app-authored kind of a turn start, if any ("session_start" / "session_end"). */
 export function appRequestKind(param: BetaMessageParam): string | null {
   if (!isTurnStart(param)) return null;

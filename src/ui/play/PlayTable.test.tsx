@@ -11,6 +11,7 @@ import { PlayTable } from './PlayTable';
 import { resetDmMock } from './testing/dmMock';
 import { seedGame } from './testing/seed';
 import { DESKTOP, setMatchMedia } from './testing/setup';
+import { resetMediaQueryCache } from './useMediaQuery';
 
 vi.mock('@/dm', () => import('./testing/dmMock'));
 vi.mock('@/engine', () => import('./testing/engineMock'));
@@ -180,5 +181,58 @@ describe('PlayTable — mobile', () => {
       await spies.appendLog({ kind: 'dm', text: 'A gull screams.' });
     });
     expect(within(tabs).getByRole('tab', { name: /Story/ })).toHaveTextContent('(new)');
+  });
+});
+
+/** A matchMedia whose desktop breakpoint can be crossed mid-test (rotating an iPad, resizing). */
+function liveBreakpoint(desktop: boolean): (next: boolean) => void {
+  let isDesktop = desktop;
+  const listeners = new Set<() => void>();
+  resetMediaQueryCache();
+  Object.defineProperty(window, 'matchMedia', {
+    configurable: true,
+    writable: true,
+    value: (query: string) => ({
+      get matches() {
+        return query.includes('min-width: 1024px') && isDesktop;
+      },
+      media: query,
+      onchange: null,
+      addEventListener: (_type: string, listener: () => void) => listeners.add(listener),
+      removeEventListener: (_type: string, listener: () => void) => listeners.delete(listener),
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }),
+  });
+  return (next) => {
+    isDesktop = next;
+    act(() => listeners.forEach((listener) => listener()));
+  };
+}
+
+describe('PlayTable — crossing the desktop breakpoint', () => {
+  it('keeps the unsent draft and the OOC toggle when the layout switches', async () => {
+    const setDesktop = liveBreakpoint(true);
+    const { user } = renderTable();
+    expect(screen.getByRole('complementary', { name: 'Character' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'OOC' }));
+    await user.type(
+      screen.getByRole('textbox', { name: 'Out-of-character message to the DM' }),
+      'Can I climb the lighthouse in the fog?',
+    );
+
+    setDesktop(false);
+    expect(screen.queryByRole('complementary', { name: 'Character' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tablist', { name: 'Table views' })).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Out-of-character message to the DM' })).toHaveValue(
+      'Can I climb the lighthouse in the fog?',
+    );
+    expect(screen.getByRole('button', { name: 'OOC' })).toHaveAttribute('aria-pressed', 'true');
+
+    setDesktop(true);
+    expect(screen.getByRole('textbox', { name: 'Out-of-character message to the DM' })).toHaveValue(
+      'Can I climb the lighthouse in the fog?',
+    );
   });
 });

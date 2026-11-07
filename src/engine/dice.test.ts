@@ -13,6 +13,7 @@ import {
   normalizeDice,
   parseDice,
   randomInt,
+  rerollNaturalOne,
   rollD20Test,
   rollDamage,
   rollDice,
@@ -205,6 +206,29 @@ describe('d20 tests', () => {
     expect(d20Expression(5, 'advantage')).toBe('2d20kh1+5');
     expect(d20Expression(-1)).toBe('1d20-1');
     expect(d20Expression(0, 'disadvantage')).toBe('2d20kl1');
+  });
+});
+
+describe('rerollNaturalOne (SRD 5.2.1 Halfling: Luck)', () => {
+  it('rerolls a natural 1 once and uses the new roll', () => {
+    const first = rollD20Test(3, { dc: 10, rng: faces([1, 20]) });
+    expect(first).toMatchObject({ natural: 1, isFumble: true, success: false });
+    const lucky = rerollNaturalOne(first, { rng: faces([12, 20]) });
+    expect(lucky).toMatchObject({ natural: 12, total: 15, dc: 10, success: true, isFumble: false, isCritical: false, modifier: 3 });
+    expect(lucky.breakdown).toBe('d20 (~~1~~ → 12, Luck) + 3 = 15');
+    expect(lucky.dice).toEqual([{ sides: 20, value: 12 }]);
+    expect(rerollNaturalOne(lucky, { rng: faces([1, 20]) })).toBe(lucky); // only a 1 is rerolled
+  });
+
+  it('with Disadvantage the other die still counts; with Advantage both dice were 1s', () => {
+    const dis = rollD20Test(0, { advantage: 'disadvantage', rng: faces([1, 20], [8, 20]) });
+    const better = rerollNaturalOne(dis, { rng: faces([15, 20]) });
+    expect(better).toMatchObject({ natural: 8, total: 8, advantage: 'disadvantage' });
+    expect(better.breakdown).toBe('2d20 (~~1~~ → ~~15~~, 8, Luck) = 8');
+    const adv = rollD20Test(-1, { advantage: 'advantage', rng: faces([1, 20], [1, 20]) });
+    const saved = rerollNaturalOne(adv, { rng: faces([20, 20]) });
+    expect(saved).toMatchObject({ natural: 20, total: 19, isCritical: true });
+    expect(saved.breakdown).toBe('2d20 (~~1~~ → 20, ~~1~~, Luck) − 1 = 19');
   });
 });
 

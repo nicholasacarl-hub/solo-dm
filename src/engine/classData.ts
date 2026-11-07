@@ -3,7 +3,7 @@
  * prerequisites and the class-feature names per level (from each class's features table).
  * Used for level-up reminders and multiclassing; full feature text lives in the compendium.
  */
-import type { Ability, CasterType, ClassLevel, HitDie } from '@/types';
+import type { Ability, CasterType, ClassLevel, FeatureScale, HitDie } from '@/types';
 import { nameKey } from '@/lib/id';
 
 export interface SrdClassInfo {
@@ -203,6 +203,26 @@ export const SRD_CLASSES: readonly SrdClassInfo[] = CLASSES;
 
 /** Eldritch Invocations known by Warlock level (index 0 = level 1). */
 export const WARLOCK_INVOCATIONS: readonly number[] = [1, 3, 3, 3, 5, 5, 6, 6, 7, 7, 7, 8, 8, 8, 9, 9, 9, 10, 10, 10];
+
+const table = (className: string, values: number[]): FeatureScale => ({ by: 'table', className, values });
+
+/**
+ * SRD 5.2.1 class features whose number of uses grows with class level: the class tables' Rages,
+ * Second Wind, Channel Divinity, Wild Shape, Favored Enemy, Focus Points and Sorcery Points columns
+ * (0 = not gained yet), and Lay On Hands (a pool of 5 × Paladin level). Used for features saved
+ * before FeatureUses.scale existed.
+ */
+export const SRD_FEATURE_USE_SCALES: ReadonlyArray<{ className: string; feature: string; scale: FeatureScale }> = [
+  { className: 'Barbarian', feature: 'Rage', scale: table('Barbarian', [2, 2, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6]) },
+  { className: 'Fighter', feature: 'Second Wind', scale: table('Fighter', [2, 2, 2, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4]) },
+  { className: 'Cleric', feature: 'Channel Divinity', scale: table('Cleric', [0, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4]) },
+  { className: 'Paladin', feature: 'Channel Divinity', scale: table('Paladin', [0, 0, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3]) },
+  { className: 'Druid', feature: 'Wild Shape', scale: table('Druid', [0, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4]) },
+  { className: 'Ranger', feature: 'Favored Enemy', scale: table('Ranger', [2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6]) },
+  { className: 'Paladin', feature: 'Lay On Hands', scale: { by: 'class-level', className: 'Paladin', multiplier: 5 } },
+  { className: 'Monk', feature: "Monk's Focus", scale: { by: 'class-level', className: 'Monk' } },
+  { className: 'Sorcerer', feature: 'Font of Magic', scale: { by: 'class-level', className: 'Sorcerer' } },
+];
 
 /** Look up an SRD class by name ("wizard") or compendium id ("srd:class:wizard"). */
 export function findSrdClass(nameOrId: string | undefined): SrdClassInfo | undefined {

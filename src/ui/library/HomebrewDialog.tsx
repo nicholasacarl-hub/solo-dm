@@ -101,7 +101,7 @@ export function HomebrewDialog({
     if (!draft.text.trim()) return setError('Describe what it does.');
     setError(null);
     const next = homebrewFromDraft(draft, entry);
-    const ok = await run(() => saveHomebrewEntry(next, entry ? 'edited' : 'created'), `Saved “${next.name}”.`);
+    const ok = await run(() => saveHomebrewEntry(next, entry ? 'edited' : 'created', entry), `Saved “${next.name}”.`);
     if (ok) onClose();
   };
 
@@ -109,7 +109,7 @@ export function HomebrewDialog({
     if (!entry) return;
     const next = { ...entry, status, updatedAt: Date.now() };
     const ok = await run(
-      () => saveHomebrewEntry(next, status === 'retired' ? 'retired' : 'restored'),
+      () => saveHomebrewEntry(next, status === 'retired' ? 'retired' : 'restored', entry),
       status === 'retired' ? `Retired “${entry.name}”.` : `Restored “${entry.name}”.`,
     );
     if (ok) onClose();

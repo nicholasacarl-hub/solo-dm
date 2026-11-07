@@ -1,6 +1,6 @@
 /**
  * View-only state of the Play screen (not persisted, not seen by the DM): the mobile tab,
- * spoiler toggles and composer prefill requests. Reset whenever the table unmounts.
+ * spoiler toggles, the composer's draft and prefill requests. Reset whenever the table unmounts.
  */
 import { create } from 'zustand';
 
@@ -19,11 +19,19 @@ interface PlayViewState {
   /** Journal toggle: show DM-only journal entries, clocks, notes and secret log lines. */
   showSpoilers: boolean;
   prefill: ComposerPrefill | null;
+  /**
+   * The composer's unsent text and OOC toggle. Kept here, not in the composer, so they survive the
+   * composer remounting when the window crosses the desktop breakpoint (an iPad rotating).
+   */
+  draft: string;
+  ooc: boolean;
   setMobileTab(tab: MobileTab): void;
   setRevealAllDmRolls(value: boolean): void;
   setShowSpoilers(value: boolean): void;
   /** Put text in the composer (and bring the story into view on mobile). */
   prefillComposer(text: string): void;
+  setDraft(text: string): void;
+  setOoc(value: boolean): void;
   reset(): void;
 }
 
@@ -32,6 +40,8 @@ const initial = {
   revealAllDmRolls: false,
   showSpoilers: false,
   prefill: null,
+  draft: '',
+  ooc: false,
 };
 
 let nonce = 0;
@@ -42,5 +52,7 @@ export const usePlayView = create<PlayViewState>()((set) => ({
   setRevealAllDmRolls: (revealAllDmRolls) => set({ revealAllDmRolls }),
   setShowSpoilers: (showSpoilers) => set({ showSpoilers }),
   prefillComposer: (text) => set({ prefill: { text, nonce: ++nonce }, mobileTab: 'story' }),
+  setDraft: (draft) => set({ draft }),
+  setOoc: (ooc) => set({ ooc }),
   reset: () => set(initial),
 }));

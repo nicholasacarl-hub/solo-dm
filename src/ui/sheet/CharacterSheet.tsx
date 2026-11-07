@@ -1,7 +1,7 @@
 /**
  * Full or compact character sheet. With `editable`, every player edit goes through
  * useGame().updateCharacter and queues a DM notice describing the change; small roll buttons let the
- * player roll checks, saves and attacks unprompted (logged as "(unprompted)").
+ * player roll checks, saves and attacks unprompted (logged as "(unprompted)" and told to the DM).
  *
  * Built with container queries so it works in a ~360 px rail and in a full-width mobile tab.
  */
@@ -101,11 +101,10 @@ export function CharacterSheet({ character, variant = 'full', editable = false }
   };
 
   const finishRoll = (roll: SheetRoll, result: D20TestResult, manual: boolean) => {
-    void logRoll(roll, result, manual);
-    if (roll.label === DEATH_SAVE_LABEL && result.natural !== undefined) {
-      const natural = result.natural;
-      void edit((c) => deathSaveRollChange(c, natural, result.total));
-    }
+    const deathSave = roll.label === DEATH_SAVE_LABEL ? result.natural : undefined;
+    // A death save already tells the DM through its sheet change; every other roll queues its own notice.
+    void logRoll(roll, result, manual, { tellDm: deathSave === undefined });
+    if (deathSave !== undefined) void edit((c) => deathSaveRollChange(c, deathSave, result.total));
   };
 
   const onRoll = editable

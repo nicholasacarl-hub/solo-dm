@@ -373,6 +373,48 @@ describe('inventory', () => {
   });
 });
 
+describe('inventory changes keep the AC in step (SRD 5.2.1 Armor; Ring of Protection)', () => {
+  const fighter = mira({
+    armorTraining: ['Light armor', 'Medium armor', 'Heavy armor', 'Shields'],
+    inventory: [
+      ...mira().inventory,
+      { id: 'cm', name: 'Chain Mail', quantity: 1, weight: 55, category: 'armor' },
+      { id: 'sh', name: 'Shield', quantity: 1, weight: 6, category: 'shield' },
+    ],
+  });
+  const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
+
+  it('equipping armor and a Shield, attuning a Ring of Protection and dropping the Shield', () => {
+    const armored = updateItem(fighter, 'Chain Mail', { equipped: true });
+    expect(armored.character).toMatchObject({ armorClass: 16, acFormula: 'Chain Mail 16' });
+    expect(messages(armored)).toEqual(['Updated Chain Mail: equipped', 'AC 12 → 16 (Chain Mail 16)']);
+    const shielded = updateItem(armored.character, 'Shield', { equipped: true });
+    expect(shielded.character.armorClass).toBe(18);
+    const ring = addItem(shielded.character, { name: 'Ring of Protection', quantity: 1, magic: true, category: 'magic-item', equipped: true });
+    expect(ring.character.armorClass).toBe(18); // not attuned yet
+    const attuned = updateItem(ring.character, 'Ring of Protection', { attuned: true });
+    expect(attuned.character.armorClass).toBe(19);
+    const dropped = removeItem(attuned.character, 'Shield');
+    expect(dropped.character).toMatchObject({ armorClass: 17, acFormula: 'Chain Mail 16 + Ring of Protection 1' });
+    expect(updateItem(dropped.character, 'Chain Mail', { quantity: 0 }).character.armorClass).toBe(13);
+  });
+
+  it('keeps an AC set by hand (Mage Armor) and warns with the computed value', () => {
+    const mageArmor = { ...fighter, armorClass: 15 };
+    const r = updateItem(mageArmor, 'Shield', { equipped: true });
+    expect(r.character.armorClass).toBe(15);
+    expect(r.events.at(-1)?.type).toBe('warning');
+    expect(r.events.at(-1)?.message).toMatch(/^AC kept at 15: .*now give AC 14/);
+  });
+
+  it("leaves the AC alone for items that don't affect it", () => {
+    const r = updateItem(fighter, 'Robe', { equipped: true });
+    expect(r.character.armorClass).toBe(12);
+    expect(messages(r)).toEqual(['Updated Robe: equipped']);
+    expect(messages(removeItem(fighter, 'Potion of Healing', 1))).toEqual(['Removed 1 × Potion of Healing (1 left)']);
+  });
+});
+
 describe('currency', () => {
   it('totals wealth in gp', () => {
     expect(totalGp(mira().currency)).toBe(26.14);

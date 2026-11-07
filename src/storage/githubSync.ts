@@ -33,6 +33,10 @@ const INLINE_CONTENT_LIMIT = 1_000_000;
 export const PUBLIC_REPO_ERROR =
   'Saves can only sync to a PRIVATE repository. Make this repository private on GitHub, or choose a private one.';
 
+/** Internal repositories are readable by everyone in the enterprise, so they are refused too. */
+export const INTERNAL_REPO_ERROR =
+  'This is an internal repository: everyone in your enterprise can read it. Saves can only sync to a PRIVATE repository, so choose a private one.';
+
 export class GithubSyncError extends Error {
   readonly status: number;
 
@@ -180,7 +184,8 @@ async function readJson(res: Response): Promise<unknown> {
 // ---------------------------------------------------------------------------
 
 interface RepoInfo {
-  isPrivate: boolean;
+  /** 'private', 'internal' (readable across the enterprise) or 'public'; only 'private' may hold saves. */
+  visibility: string;
   defaultBranch: string;
   /** Whether the token's user may push (null when GitHub doesn't say). */
   canPush: boolean | null;
@@ -192,18 +197,33 @@ async function fetchRepo(c: Credentials): Promise<RepoInfo> {
   const body = await readJson(res);
   if (!isRecord(body)) throw new GithubSyncError('GitHub sent a response Solo DM could not read.');
   const permissions = isRecord(body.permissions) ? body.permissions : null;
+  // `private` is also true for internal repositories, so the visibility field decides; `private`
+  // is only a fallback for responses without it.
+  const visibility =
+    typeof body.visibility === 'string' && body.visibility
+      ? body.visibility.toLowerCase()
+      : body.private === true
+        ? 'private'
+        : 'public';
   return {
-    isPrivate: body.private === true,
+    visibility,
     defaultBranch: typeof body.default_branch === 'string' && body.default_branch ? body.default_branch : 'main',
     canPush: typeof permissions?.push === 'boolean' ? permissions.push : null,
   };
+}
+
+/** Why saves can't go to this repository (anything but a private one), or null. */
+function visibilityError(info: RepoInfo): string | null {
+  if (info.visibility === 'private') return null;
+  return info.visibility === 'internal' ? INTERNAL_REPO_ERROR : PUBLIC_REPO_ERROR;
 }
 
 /** Resolve the settings to a repository context, refusing anything that isn't private. */
 async function openRepo(settings: GithubSyncSettings): Promise<RepoContext> {
   const c = readSettings(settings);
   const info = await fetchRepo(c);
-  if (!info.isPrivate) throw new GithubSyncError(PUBLIC_REPO_ERROR);
+  const refusal = visibilityError(info);
+  if (refusal) throw new GithubSyncError(refusal);
   const branch = c.branch || info.defaultBranch;
   return { ...c, branch, stateKey: syncTargetKey(c.owner, c.repo, branch, c.dir) };
 }
@@ -361,7 +381,9 @@ export async function testGithubConnection(
   try {
     const c = readSettings(settings);
     const info = await fetchRepo(c);
-    if (!info.isPrivate) return { ok: false, private: false, error: PUBLIC_REPO_ERROR };
+    // An internal repository is neither public nor private: report the specific reason only.
+    if (info.visibility === 'internal') return { ok: false, error: INTERNAL_REPO_ERROR };
+    if (info.visibility !== 'private') return { ok: false, private: false, error: PUBLIC_REPO_ERROR };
     if (info.canPush === false) {
       return {
         ok: false,

@@ -53,7 +53,7 @@ export function WelcomeCard({ onImport }: { onImport: () => void }) {
           <h2 id="welcome-title" className="font-display text-xl font-semibold tracking-wide">
             Welcome to the table
           </h2>
-          <p className="text-sm text-muted">Solo campaigns with Claude as your Dungeon Master.</p>
+          <p className="text-sm text-muted">Solo campaigns with Claude as your Game Master.</p>
         </div>
       </div>
 

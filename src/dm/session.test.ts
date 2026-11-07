@@ -281,9 +281,13 @@ describe('player rolls and cancellation', () => {
 
     expect(statuses).toContain('waiting-player');
     const [result] = toolResults(h.s().transcript[2].param);
-    // Mira's Stealth: DEX +2, not proficient → 16 vs DC 15.
+    // Mira's Stealth: DEX +2, not proficient → 16 vs DC 15. The DM gets the verdict…
     expect(String(result.content)).toMatch(/16.*DC 15.*success/);
-    expect(h.s().log.find((e) => e.kind === 'roll')).toMatchObject({ actor: 'player', roll: { total: 16, success: true } });
+    // …but the DC wasn't revealed, so the player's roll card shows the total without target or verdict.
+    const card = h.s().log.find((e) => e.kind === 'roll');
+    expect(card).toMatchObject({ actor: 'player', roll: { total: 16, natural: 14 } });
+    expect(card?.kind === 'roll' && card.roll).not.toHaveProperty('dc');
+    expect(card?.kind === 'roll' && card.roll).not.toHaveProperty('success');
   });
 
   it('cancel() while the player is rolling cancels the dialog and keeps the transcript valid', async () => {
@@ -340,6 +344,90 @@ describe('player rolls and cancellation', () => {
     expect(result).toMatchObject({ is_error: true });
     expect(String(result.content)).toMatch(/dismissed/);
     expect(h.s().transcript.at(-1)?.param.role).toBe('assistant');
+  });
+});
+
+describe('stopping a turn', () => {
+  it('a send right after Stop waits for the stopped run to unwind instead of failing (the X-card mid-stream)', async () => {
+    const h = setupHarness({ withSession: true });
+    let xCard: Promise<void> | undefined;
+    let phaseAfterCancel: string | undefined;
+    const idleWhileBusy: string[] = [];
+    const unsubscribe = h.store.subscribe((s) => {
+      if (s.dm.phase === 'idle' && h.controller.isBusy()) idleWhileBusy.push(s.dm.activity ?? '');
+    });
+    h.client.push({
+      message: end('A hooded figure waits beyond, a knife in one hand and something worse in the other.'),
+      stream: {
+        chunkSize: 6,
+        beforeEvent: (index) => {
+          if (index !== 4) return;
+          h.controller.cancel();
+          phaseAfterCancel = h.s().dm.phase;
+          xCard = h.controller.sendPlayerMessage('[X-card] Please steer away from the current content.');
+        },
+      },
+    });
+    h.client.push(end('The moment passes. You are back at the bar, the fire crackling.'));
+    await h.controller.sendPlayerMessage('I open the door.');
+    await xCard;
+    unsubscribe();
+
+    // The DM never looked idle while it was still unwinding, and the X-card was not refused.
+    expect(phaseAfterCancel).not.toBe('idle');
+    expect(idleWhileBusy).toEqual([]);
+    expect(h.client.requests).toHaveLength(2);
+    const second = h.client.requests[1].messages;
+    expect(second.map((m) => m.role)).toEqual(['user', 'assistant', 'user', 'system']);
+    // The DM sees what was on screen when the player played the X-card.
+    expect(JSON.stringify(second[1])).toContain('A hooded fig');
+    expect(textOfUser(second[2], 1)).toBe('[X-card] Please steer away from the current content.');
+    expect(JSON.stringify(second[3])).toContain('stopped your last reply partway');
+    expect(h.s().dm.phase).toBe('idle');
+    expect(h.controller.isBusy()).toBe(false);
+  });
+});
+
+describe('notices at a session start', () => {
+  it('delivers notices queued between sessions with the opening request instead of discarding them', async () => {
+    const h = setupHarness({ steps: [end('Session two opens on the docks.')] });
+    h.s().queueDmNotice('The player vetoed the homebrew "Lantern-Touched". Retire or rework it.');
+    await h.controller.beginOrResume();
+    const t = h.s().transcript;
+    expect(t.map((m) => m.param.role)).toEqual(['user', 'system', 'assistant']);
+    expect(textOfUser(t[0].param, 1)).toContain('<app_request type="session_start"');
+    expect(JSON.stringify(t[1].param)).toContain('Lantern-Touched');
+    expect(JSON.stringify(t[1].param)).toContain('since the last session');
+    expect(h.s().pendingDmNotices).toEqual([]);
+  });
+
+  it('keeps an unanswered opening (and its notices) when the player speaks first', async () => {
+    const h = setupHarness();
+    h.s().queueDmNotice('Narration length is now brief.');
+    h.client.push({
+      message: makeMessage([thinkingBlock('Plan the opening.', 'sig-o'), textBlock('The fog parts.')], 'end_turn'),
+      stream: {
+        beforeEvent: (index) => {
+          if (index === 2) h.controller.cancel();
+        },
+      },
+    });
+    await h.controller.beginOrResume();
+    expect(h.s().transcript.map((m) => m.param.role)).toEqual(['user', 'system']);
+
+    h.client.push(end('The fog parts, and you step onto the pier.'));
+    await h.controller.sendPlayerMessage('I look around.');
+    const t = h.s().transcript;
+    expect(t.map((m) => m.param.role)).toEqual(['user', 'user', 'system', 'assistant']);
+    expect(textOfUser(t[0].param, 1)).toContain('<app_request type="session_start"');
+    expect(textOfUser(t[1].param, 1)).toBe('I look around.');
+    expect(JSON.stringify(t[2].param)).toContain('Narration length is now brief.');
+  });
+
+  it("lists the imported books switched on in the player's Library in the prompt", async () => {
+    const h = setupHarness({ libraryImports: [{ id: 'lib-phb', name: 'My PHB notes' }], steps: [end('Hello.')] });
+    await h.controller.beginOrResume();
+    expect(h.s().activeSession?.systemPrompt).toContain('- My PHB notes (imported by the player');
   });
 });
 

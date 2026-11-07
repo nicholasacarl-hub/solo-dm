@@ -30,12 +30,16 @@ vi.mock('@/storage', () => ({
   useHomebrewList: vi.fn(),
   useCampaignList: () => [],
   useLibrarySources: () => [],
+  listCampaigns: vi.fn(async () => []),
   putHomebrew: vi.fn(),
   deleteHomebrewRecord: vi.fn(),
   setLibrarySourceEnabled: vi.fn(),
   deleteLibrarySource: vi.fn(),
 }));
-vi.mock('@/state/gameStore', () => ({ useGame: { getState: () => ({ campaignId: null }) } }));
+vi.mock('@/state/gameStore', () => ({
+  useGame: { getState: () => ({ campaignId: null }) },
+  queueCampaignNotice: vi.fn(),
+}));
 
 const data = await import('@/data');
 const storage = await import('@/storage');

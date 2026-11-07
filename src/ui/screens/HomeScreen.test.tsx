@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
@@ -15,6 +15,7 @@ vi.mock('@/storage', () => ({
   getCampaign: vi.fn(),
   parseCampaignBundle: vi.fn(),
   importCampaignBundle: vi.fn(),
+  requestPersistentStorage: vi.fn(),
 }));
 vi.mock('@/state/gameStore', () => ({
   useGame: { getState: () => ({ campaignId: null, unloadCampaign: vi.fn() }) },
@@ -44,6 +45,11 @@ describe('HomeScreen', () => {
     vi.mocked(storage.getCampaign).mockReset();
     vi.mocked(storage.parseCampaignBundle).mockReset();
     vi.mocked(storage.importCampaignBundle).mockReset();
+    vi.mocked(storage.requestPersistentStorage).mockReset().mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window.navigator, 'storage');
   });
 
   it('welcomes a first-time player and can switch on the demo DM', async () => {
@@ -84,6 +90,33 @@ describe('HomeScreen', () => {
       'href',
       '/campaign/camp-2/character',
     );
+  });
+
+  it('asks the browser to keep saves when the player continues a campaign', async () => {
+    vi.mocked(storage.useCampaignList).mockReturnValue([summary()]);
+    const user = userEvent.setup();
+    renderHome();
+    await user.click(screen.getByRole('link', { name: 'Continue The Drowned Lantern' }));
+    expect(storage.requestPersistentStorage).toHaveBeenCalledTimes(1);
+    expect(await screen.findByTestId('location')).toHaveTextContent('/play/camp-1');
+  });
+
+  it('suggests a backup while the browser may clear saves and nothing syncs them', async () => {
+    Object.defineProperty(window.navigator, 'storage', {
+      configurable: true,
+      value: { persisted: async () => false, persist: async () => false },
+    });
+    vi.mocked(storage.useCampaignList).mockReturnValue([summary()]);
+    const { unmount } = renderHome();
+    expect(await screen.findByText(/Saves live in this browser only/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'cloud saves in Settings' })).toHaveAttribute('href', '/settings');
+    unmount();
+
+    useSettings.getState().updateGithubSync({ enabled: true, token: 'github_pat_x', owner: 'me', repo: 'saves' });
+    renderHome();
+    await waitFor(() => expect(screen.getByRole('article', { name: 'The Drowned Lantern' })).toBeInTheDocument());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(screen.queryByText(/Saves live in this browser only/)).not.toBeInTheDocument();
   });
 
   it('nudges for an API key only when play would fail', async () => {

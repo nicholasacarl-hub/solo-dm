@@ -278,9 +278,13 @@ export function autoRespond(store: FakeGameStore, respond: (request: Interaction
   return store.subscribe((state) => {
     const request = state.interaction;
     if (!request || handled.has(request.id)) return;
-    const response = respond(request);
-    if (!response) return;
+    // Marked first: a responder may update the store itself (e.g. spend Heroic Inspiration).
     handled.add(request.id);
+    const response = respond(request);
+    if (!response) {
+      handled.delete(request.id);
+      return;
+    }
     queueMicrotask(() => store.getState().resolveInteraction(request.id, response));
   });
 }

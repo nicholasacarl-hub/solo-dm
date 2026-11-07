@@ -216,19 +216,23 @@ function conditionText(c: Combatant): string {
 
 function combatantLine(c: Combatant, position: number, current: boolean, forPlayer: boolean): string {
   const bits = [`Init ${c.initiative}`];
-  if (c.ac !== undefined) bits.push(`AC ${c.ac}`);
+  // A creature whose HP the DM hides keeps its AC hidden from the player too.
+  if (c.ac !== undefined && !(forPlayer && c.hideHp && !c.isPlayer)) bits.push(`AC ${c.ac}`);
   if (c.hp) bits.push(hpText(c, c.hp, forPlayer));
   const conditions = conditionText(c);
   if (conditions) bits.push(conditions);
   if (c.defeated) bits.push('defeated');
-  const kind = c.statBlockName && nameKey(c.statBlockName) !== nameKey(c.name.replace(/\s+\d+$/, '')) ? ` [${c.statBlockName}]` : '';
+  // The stat block behind a name is DM knowledge (a "Hooded Stranger" may be a Vampire Spawn).
+  const showKind = !forPlayer && c.statBlockName && nameKey(c.statBlockName) !== nameKey(c.name.replace(/\s+\d+$/, ''));
+  const kind = showKind ? ` [${c.statBlockName}]` : '';
   const notes = c.notes?.trim() && !forPlayer ? ` — ${c.notes.trim()}` : '';
   return `${current ? '→' : ' '} ${position}. ${c.name} (${sideLabel(c, forPlayer)})${kind} · ${bits.join(' · ')}${notes}`;
 }
 
 /**
  * Text summary of the tracker: round, turn order with initiative, HP, AC, conditions.
- * forPlayer = true hides exact HP of hideHp combatants (uses healthDescriptor).
+ * forPlayer = true is safe to show the player: no stat block names or DM notes, and for hideHp
+ * combatants a health descriptor instead of exact HP and no AC.
  */
 export function summarizeCombat(state: CombatState, opts: { forPlayer?: boolean } = {}): string {
   if (!state.active) return `Combat ended${state.encounterName ? `: ${state.encounterName}` : ''}.`;

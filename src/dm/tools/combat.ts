@@ -20,8 +20,9 @@ import {
   updateCombatant,
   xpToNextLevel,
 } from '@/engine';
-import type { ActiveCondition, Combatant, CombatState } from '@/types';
+import type { ActiveCondition, Campaign, Combatant, CombatState } from '@/types';
 import { nameKey } from '@/lib/id';
+import { findAllowedEntry } from './rules';
 import type { ToolInput } from './definitions';
 import {
   defined,
@@ -56,11 +57,11 @@ function groupNames(spec: CombatantSpec, taken: Set<string>): string[] {
   return names;
 }
 
-async function statBlockId(ctx: ToolContext, name: string | undefined, campaignId: string): Promise<string | undefined> {
+async function statBlockId(ctx: ToolContext, name: string | undefined, campaign: Campaign): Promise<string | undefined> {
   if (!name) return undefined;
   try {
     const index = await ctx.deps.rulesIndex();
-    return index.findByName(name, { kind: 'monster', campaignId })?.id;
+    return findAllowedEntry(index, name, { kind: 'monster', campaign })?.id;
   } catch {
     return undefined;
   }
@@ -70,13 +71,13 @@ async function buildGroup(
   ctx: ToolContext,
   spec: CombatantSpec,
   taken: Set<string>,
-  campaignId: string,
+  campaign: Campaign,
 ): Promise<{ combatants: Combatant[]; line: string }> {
   const roll = rollD20Test(spec.initiative_bonus, {
     advantage: spec.surprised ? 'disadvantage' : 'normal',
     rng: ctx.deps.rng,
   });
-  const blockId = await statBlockId(ctx, spec.stat_block, campaignId);
+  const blockId = await statBlockId(ctx, spec.stat_block, campaign);
   const names = groupNames(spec, taken);
   const combatants = names.map(
     (name): Combatant => ({
@@ -133,7 +134,7 @@ export async function startCombatTool(input: ToolInput<'start_combat'>, ctx: Too
   const others: Combatant[] = [];
   const lines: string[] = [`${character.name}: initiative ${heroRoll.result.total}`];
   for (const spec of input.combatants) {
-    const group = await buildGroup(ctx, spec, taken, campaign.id);
+    const group = await buildGroup(ctx, spec, taken, campaign);
     others.push(...group.combatants);
     lines.push(group.line);
   }
@@ -180,13 +181,15 @@ interface CombatChange {
   summary: string;
   /** Extra lines for Claude. */
   notes?: string[];
+  /** Log the line behind the DM screen (combatant notes are DM-only). */
+  secret?: boolean;
 }
 
 async function addReinforcements(ctx: ToolContext, state: CombatState, input: ToolInput<'update_combat'>): Promise<CombatChange> {
   if (!input.combatant) throw new ToolInputError('update_combat add needs `combatant`.');
   const campaign = requireCampaign(ctx.deps.store());
   const taken = new Set(state.combatants.map((c) => nameKey(c.name)));
-  const group = await buildGroup(ctx, input.combatant, taken, campaign.id);
+  const group = await buildGroup(ctx, input.combatant, taken, campaign);
   let next = state;
   for (const c of group.combatants) next = addCombatant(next, c);
   return { state: next, summary: `Joined the fight: ${group.combatants.map((c) => c.name).join(', ')}`, notes: [group.line] };
@@ -248,7 +251,12 @@ async function applyAction(ctx: ToolContext, state: CombatState, input: ToolInpu
     case 'note': {
       const target = requireTarget(state, input.target, 'note');
       if (!input.note) throw new ToolInputError('update_combat note needs `note`.');
-      return { state: updateCombatant(state, target.id, { notes: input.note }), summary: `${target.name}: ${input.note}` };
+      // Notes are the DM's (the tracker and summaries hide them), so the log line is secret too.
+      return {
+        state: updateCombatant(state, target.id, { notes: input.note }),
+        summary: `DM note on ${target.name}: ${input.note}`,
+        secret: true,
+      };
     }
   }
 }
@@ -258,7 +266,9 @@ export async function updateCombatTool(input: ToolInput<'update_combat'>, ctx: T
   if (!state?.active) return fail('No combat is active. Use start_combat first.');
   const change = await applyAction(ctx, state, input);
   await ctx.deps.store().setCombat(change.state);
-  await logTool(ctx, 'update_combat', input.action === 'damage' ? 'hp' : input.action === 'heal' ? 'heal' : 'combat', change.summary);
+  await logTool(ctx, 'update_combat', input.action === 'damage' ? 'hp' : input.action === 'heal' ? 'heal' : 'combat', change.summary, {
+    secret: change.secret,
+  });
   const lines = [change.summary, ...(change.notes ?? []), '', summarizeCombat(change.state)];
   if (input.action !== 'next_turn') lines.push(turnLine(change.state));
   const standing = change.state.combatants.filter((c) => !c.isPlayer && !c.defeated && c.side === 'enemy');

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { Character, PlayerRollRequest } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
-import { combineAdvantage, rollSituation } from './situation';
+import { combineAdvantage, hasLuckTrait, rollSituation } from './situation';
 
 const mira = (overrides: Partial<Character> = {}) => sampleCharacter(overrides);
 const req = (patch: Partial<PlayerRollRequest>): PlayerRollRequest => ({ rollType: 'skill', revealDc: false, advantage: 'normal', reason: 'test', ...patch });
@@ -49,6 +49,24 @@ describe('rollSituation', () => {
     const untrained = { ...plate, armorTraining: [] };
     expect(rollSituation(untrained, req({ rollType: 'attack', attackName: 'Dagger' })).disadvantage).toEqual(['Plate Armor (untrained)']);
     expect(rollSituation(untrained, req({ rollType: 'save', ability: 'wis' })).disadvantage).toEqual([]);
+  });
+
+  it("a Champion's weapon attacks score a Critical Hit on 19–20 (SRD 5.2.1 Champion: Improved Critical)", () => {
+    const champion = mira({ classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level: 3, hitDie: 10, casterType: 'none', subclass: 'Champion' }] });
+    expect(rollSituation(champion, req({ rollType: 'attack', attackName: 'Dagger' })).critRange).toBe(19);
+    expect(rollSituation(champion, req({ rollType: 'attack', attackName: 'Fire Bolt' })).critRange).toBeUndefined();
+    expect(rollSituation(champion, req({ skill: 'athletics' })).critRange).toBeUndefined();
+    expect(rollSituation(mira(), req({ rollType: 'attack', attackName: 'Dagger' })).critRange).toBeUndefined();
+  });
+
+  it('Halfling Luck on every D20 Test, death saves included (SRD 5.2.1 Halfling)', () => {
+    const halfling = mira({ species: 'Halfling', features: [{ id: 'luck', name: 'Luck', source: 'species', sourceName: 'Halfling', description: '' }] });
+    expect(rollSituation(halfling, req({ skill: 'stealth' })).luck).toMatch(/^Luck \(Halfling\)/);
+    expect(rollSituation(halfling, req({ rollType: 'save', ability: 'dex' })).luck).toBeDefined();
+    expect(rollSituation(halfling, req({ rollType: 'death-save' })).luck).toBeDefined();
+    expect(rollSituation(halfling, req({ rollType: 'damage', attackName: 'Dagger' })).luck).toBeUndefined();
+    expect(hasLuckTrait(mira({ species: 'Halfling', features: [] }))).toBe(true); // no traits recorded
+    expect(hasLuckTrait(mira())).toBe(false);
   });
 
   it('ignores rolls that are not d20 tests', () => {

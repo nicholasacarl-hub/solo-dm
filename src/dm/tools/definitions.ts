@@ -1,6 +1,8 @@
 /**
  * The DM's tool catalog: one Zod schema per tool (validated client-side — eager input streaming
- * means the API does not validate) and the static `tools` array sent with every request.
+ * means the API does not validate) and the static `tools` array sent with every request. Every
+ * object is strict, matching the `additionalProperties: false` the JSON schema advertises: an
+ * unknown or misspelled field is an error Claude can fix, never silently dropped.
  *
  * The array is built once, in a fixed order, and never changes during a session: tools render at
  * the start of the prompt, so any change would invalidate the prompt cache and preserved thinking.
@@ -90,13 +92,13 @@ const contentKindEnum = z.enum(CONTENT_KINDS);
 const int = (min: number, max: number) => z.number().int().min(min).max(max);
 const str = (max: number) => z.string().min(1).max(max);
 
-const conditionInput = z.object({
+const conditionInput = z.strictObject({
   condition: str(60).describe('A condition such as "poisoned", "prone", "frightened", or a homebrew condition name.'),
   source: str(120).optional().describe('What caused it, e.g. "Giant spider venom".'),
   duration: str(120).optional().describe('Free text: "1 minute", "until the end of your next turn", "until cured".'),
 });
 
-const combatantSpec = z.object({
+const combatantSpec = z.strictObject({
   name: str(80).describe('Display name, e.g. "Goblin" (numbered automatically when count > 1) or "Captain Vell".'),
   side: z.enum(NPC_SIDES),
   count: int(1, 20).optional().describe('How many identical creatures (default 1). They share one initiative roll.'),
@@ -114,7 +116,7 @@ const combatantSpec = z.object({
 // ---------------------------------------------------------------------------
 
 export const TOOL_SCHEMAS = {
-  roll_dice: z.object({
+  roll_dice: z.strictObject({
     expression: str(60).describe('Dice expression: NdM terms, keep-highest/lowest and flat modifiers, e.g. "1d20+5", "2d6+3", "4d6kh3", "1d100".'),
     purpose: str(120).describe('What the roll is for, shown in the log: "Bandit 2 attacks Mira", "Goblin Stealth".'),
     dc: int(1, 50).optional().describe('For a d20 test: the DC, or the target\'s AC for an attack roll.'),
@@ -124,7 +126,7 @@ export const TOOL_SCHEMAS = {
     secret: z.boolean().optional().describe('Keep the result behind the DM screen (hidden from the player unless they reveal DM rolls).'),
   }),
 
-  request_player_roll: z.object({
+  request_player_roll: z.strictObject({
     roll_type: z.enum(ROLL_TYPES),
     ability: abilityEnum.optional().describe('Ability for ability checks and saving throws; for skill checks, an unusual ability to pair with the skill.'),
     skill: skillEnum.optional().describe('Skill for skill checks.'),
@@ -137,7 +139,7 @@ export const TOOL_SCHEMAS = {
     critical: z.boolean().optional().describe('Damage after a Critical Hit: double the dice.'),
   }),
 
-  update_character: z.object({
+  update_character: z.strictObject({
     hp: z
       .object({
         amount: int(0, 9999),
@@ -150,19 +152,19 @@ export const TOOL_SCHEMAS = {
     conditions_remove: z.array(str(60)).max(10).optional(),
     exhaustion_change: int(-6, 6).optional().describe('Change in Exhaustion level (+1 gains a level, −1 removes one).'),
     spell_slots_spend: z
-      .array(z.object({ level: int(1, 9), pact: z.boolean().optional().describe('Spend a Pact Magic slot.') }))
+      .array(z.strictObject({ level: int(1, 9), pact: z.boolean().optional().describe('Spend a Pact Magic slot.') }))
       .max(5)
       .optional(),
-    spell_slots_restore: z.array(z.object({ level: int(1, 9), pact: z.boolean().optional() })).max(9).optional(),
+    spell_slots_restore: z.array(z.strictObject({ level: int(1, 9), pact: z.boolean().optional() })).max(9).optional(),
     concentration: z
       .union([str(80), z.null()])
       .optional()
       .describe('Spell the hero starts concentrating on, or null when concentration ends.'),
-    features_use: z.array(z.object({ name: str(80), amount: int(1, 20).optional() })).max(10).optional(),
-    features_restore: z.array(z.object({ name: str(80), amount: int(1, 20).optional() })).max(10).optional(),
+    features_use: z.array(z.strictObject({ name: str(80), amount: int(1, 20).optional() })).max(10).optional(),
+    features_restore: z.array(z.strictObject({ name: str(80), amount: int(1, 20).optional() })).max(10).optional(),
     features_add: z
       .array(
-        z.object({
+        z.strictObject({
           name: str(80),
           description: str(2000),
           source: z.enum(FEATURE_SOURCES),
@@ -174,7 +176,7 @@ export const TOOL_SCHEMAS = {
       .optional(),
     inventory_add: z
       .array(
-        z.object({
+        z.strictObject({
           name: str(80),
           quantity: int(1, 9999),
           description: str(1000).optional(),
@@ -186,12 +188,12 @@ export const TOOL_SCHEMAS = {
       .max(20)
       .optional(),
     inventory_remove: z
-      .array(z.object({ name: str(80), quantity: int(1, 9999).optional().describe('Default: all of them.') }))
+      .array(z.strictObject({ name: str(80), quantity: int(1, 9999).optional().describe('Default: all of them.') }))
       .max(20)
       .optional(),
     inventory_update: z
       .array(
-        z.object({
+        z.strictObject({
           name: str(80),
           equipped: z.boolean().optional(),
           attuned: z.boolean().optional(),
@@ -215,7 +217,7 @@ export const TOOL_SCHEMAS = {
     heroic_inspiration: z.boolean().optional().describe('true to award Heroic Inspiration, false when it is spent.'),
     spells_add: z
       .array(
-        z.object({
+        z.strictObject({
           name: str(80),
           level: int(0, 9).describe('0 for a cantrip.'),
           prepared: z.boolean().optional(),
@@ -233,12 +235,12 @@ export const TOOL_SCHEMAS = {
     reason: str(200).optional().describe('Why, shown in the log: "Goblin scimitar", "Bought a rope".'),
   }),
 
-  take_rest: z.object({
+  take_rest: z.strictObject({
     kind: z.enum(['short', 'long']),
     reason: str(200).optional().describe('Where and how the hero rests, shown to the player.'),
   }),
 
-  level_up: z.object({
+  level_up: z.strictObject({
     class_name: str(60).describe('Class to gain a level in: an existing class, or a new one for multiclassing.'),
     subclass: str(80).optional().describe('Subclass chosen at this level (usually level 3).'),
     hp_method: z.enum(['average', 'roll']).optional().describe('Hit points: the fixed average (default) or a roll.'),
@@ -247,7 +249,7 @@ export const TOOL_SCHEMAS = {
     spellcasting_ability: abilityEnum.optional().describe('For a new spellcasting class.'),
     new_features: z
       .array(
-        z.object({
+        z.strictObject({
           name: str(80),
           description: str(2000),
           uses_max: int(1, 20).optional(),
@@ -259,13 +261,13 @@ export const TOOL_SCHEMAS = {
       .describe('Class features gained at this level (look them up with get_entry if unsure).'),
   }),
 
-  start_combat: z.object({
+  start_combat: z.strictObject({
     encounter_name: str(80).optional(),
     combatants: z.array(combatantSpec).min(1).max(12).describe('Everyone except the hero, who is added automatically.'),
     player_surprised: z.boolean().optional().describe('The hero is surprised: Disadvantage on their Initiative roll.'),
   }),
 
-  update_combat: z.object({
+  update_combat: z.strictObject({
     action: z.enum(['next_turn', 'damage', 'heal', 'add', 'remove', 'conditions', 'defeat', 'note']),
     target: str(80).optional().describe('Combatant name ("Goblin 2") or id. Required for every action except next_turn and add.'),
     amount: int(0, 9999).optional().describe('Damage or healing (from a roll).'),
@@ -275,25 +277,25 @@ export const TOOL_SCHEMAS = {
     note: str(400).optional(),
   }),
 
-  end_combat: z.object({
+  end_combat: z.strictObject({
     summary: str(300).describe('How the fight ended, in a sentence.'),
     xp_award: int(0, 1_000_000).optional().describe('Total XP for the encounter (XP campaigns only).'),
   }),
 
-  lookup_rules: z.object({
+  lookup_rules: z.strictObject({
     query: str(200),
     kinds: z.array(contentKindEnum).max(6).optional().describe('Limit to kinds of content, e.g. ["spell"] or ["monster"].'),
     limit: int(1, 8).optional().describe('Number of results (default 5).'),
   }),
 
-  get_entry: z.object({
+  get_entry: z.strictObject({
     name: str(120),
     kind: contentKindEnum.optional(),
   }),
 
-  get_character_sheet: z.object({}),
+  get_character_sheet: z.strictObject({}),
 
-  create_homebrew: z.object({
+  create_homebrew: z.strictObject({
     kind: contentKindEnum.describe('What it is: spell, magic-item, item, monster, boon, feat, condition, rule…'),
     name: str(100),
     summary: str(300).describe('One line, e.g. "Level 2 Evocation (homebrew)" or "Uncommon wondrous item".'),
@@ -304,7 +306,7 @@ export const TOOL_SCHEMAS = {
     balance_notes: str(1500).describe('Why it is balanced against the comparables; its costs and limits.'),
   }),
 
-  update_homebrew: z.object({
+  update_homebrew: z.strictObject({
     name: str(100).describe('Current name of the homebrew entry.'),
     new_name: str(100).optional(),
     summary: str(300).optional(),
@@ -316,10 +318,10 @@ export const TOOL_SCHEMAS = {
     reason: str(300).describe('Why it changed, shown to the player.'),
   }),
 
-  update_journal: z.object({
+  update_journal: z.strictObject({
     entries: z
       .array(
-        z.object({
+        z.strictObject({
           kind: z.enum(JOURNAL_KINDS),
           name: str(100),
           summary: str(400).describe('One or two sentences.'),
@@ -333,24 +335,24 @@ export const TOOL_SCHEMAS = {
       .max(12),
   }),
 
-  update_quest: z.object({
+  update_quest: z.strictObject({
     title: str(120),
     status: z.enum(QUEST_STATUSES).optional(),
     summary: str(600).optional(),
     giver: str(100).optional(),
     reward: str(200).optional(),
     objectives: z
-      .array(z.object({ text: str(200), done: z.boolean().optional() }))
+      .array(z.strictObject({ text: str(200), done: z.boolean().optional() }))
       .max(12)
       .optional()
       .describe('Objectives to add or update, matched by text.'),
     secret_notes: str(2000).optional().describe('DM-only notes (hidden from the player).'),
   }),
 
-  update_clocks: z.object({
+  update_clocks: z.strictObject({
     clocks: z
       .array(
-        z.object({
+        z.strictObject({
           name: str(100),
           segments: int(2, 12).optional().describe('Size of a new clock (4, 6 or 8 is typical).'),
           advance: int(-12, 12).optional().describe('Segments to fill (negative to roll back).'),
@@ -365,12 +367,12 @@ export const TOOL_SCHEMAS = {
       .max(8),
   }),
 
-  search_memory: z.object({
+  search_memory: z.strictObject({
     query: str(200),
     limit: int(1, 10).optional(),
   }),
 
-  set_scene: z.object({
+  set_scene: z.strictObject({
     location: str(120).optional(),
     region: str(120).optional(),
     time_of_day: str(60).optional(),
@@ -381,7 +383,7 @@ export const TOOL_SCHEMAS = {
     tension_change: int(-1, 1).optional().describe('+1 when the last scene slipped out of the hero\'s control, −1 when they took charge.'),
   }),
 
-  consult_oracle: z.object({
+  consult_oracle: z.strictObject({
     question: str(200).describe('A yes/no question about the world.'),
     likelihood: z.enum(LIKELIHOODS),
     secret: z.boolean().optional().describe('Hide it from the player when the question itself would spoil something.'),

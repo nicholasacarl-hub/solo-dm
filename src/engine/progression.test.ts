@@ -289,3 +289,125 @@ describe('applyLongRest (SRD 5.2.1)', () => {
     expect(r.character.hp.current).toBe(0);
   });
 });
+
+describe('levelUp: feature uses that grow with level', () => {
+  const paladin = (level: number, features: Feature[]) =>
+    mira({
+      abilityScores: { str: 16, dex: 10, con: 14, int: 8, wis: 10, cha: 14 },
+      classes: [asClass('Paladin', level)],
+      hitDice: [{ die: 10, total: level, spent: 0 }],
+      spellcasting: undefined,
+      features,
+    });
+  const legacy = (name: string, sourceName: string, max: number, used = 0): Feature => ({
+    id: name,
+    name,
+    source: 'class',
+    sourceName,
+    description: '',
+    uses: { max, used, recharge: 'long' },
+  });
+  const usesOf = (c: Character, name: string) => c.features.find((f) => f.name === name)?.uses;
+
+  it('recomputes FeatureUses.scale: Lay On Hands 5 → 10 at Paladin 2 (SRD 5.2.1 Paladin: five times your Paladin level)', () => {
+    const layOnHands: Feature = {
+      ...legacy('Lay On Hands', 'Paladin 1', 5, 3),
+      uses: { max: 5, used: 3, recharge: 'long', scale: { by: 'class-level', className: 'Paladin', multiplier: 5 } },
+    };
+    const r = levelUp(paladin(1, [layOnHands]), { className: 'Paladin', hpMethod: 'average' });
+    expect(usesOf(r.character, 'Lay On Hands')).toEqual({ ...layOnHands.uses, max: 10, used: 3 });
+    expect(r.events.map((e) => e.message)).toContain('Feature uses now: Lay On Hands 5 → 10.');
+  });
+
+  it('table scales, and older sheets via the SRD 5.2.1 Barbarian, Fighter, Cleric and Paladin Features tables (Rages, Second Wind, Channel Divinity)', () => {
+    const barbarian = mira({ classes: [asClass('Barbarian', 2)], spellcasting: undefined, features: [legacy('Rage', 'Barbarian 1', 2, 1)] });
+    expect(usesOf(levelUp(barbarian, { className: 'Barbarian', hpMethod: 'average' }).character, 'Rage')).toMatchObject({ max: 3, used: 1 });
+    const fighter = mira({ classes: [asClass('Fighter', 3)], spellcasting: undefined, features: [legacy('Second Wind', 'Fighter 1', 2)] });
+    expect(usesOf(levelUp(fighter, { className: 'Fighter', hpMethod: 'average' }).character, 'Second Wind')?.max).toBe(3);
+    const cleric = mira({ classes: [asClass('Cleric', 5)], features: [legacy('Channel Divinity', 'Cleric 2', 2)] });
+    expect(usesOf(levelUp(cleric, { className: 'Cleric', hpMethod: 'average' }).character, 'Channel Divinity')?.max).toBe(3);
+    const oath = paladin(10, [legacy('Channel Divinity', 'Paladin 3', 2)]);
+    expect(usesOf(levelUp(oath, { className: 'Paladin', hpMethod: 'average' }).character, 'Channel Divinity')?.max).toBe(3);
+    const rage: Feature = { ...legacy('Rage', 'Barbarian 1', 2), uses: { max: 2, used: 0, recharge: 'long', scale: { by: 'table', className: 'Barbarian', values: [2, 2, 3, 3, 3, 4] } } };
+    const tableBarbarian = { ...barbarian, features: [rage] };
+    expect(usesOf(levelUp(tableBarbarian, { className: 'Barbarian', hpMethod: 'average' }).character, 'Rage')?.max).toBe(3);
+  });
+
+  it("only the leveled class's level counts, and homebrew features are left alone", () => {
+    const multi = mira({
+      classes: [asClass('Barbarian', 2), asClass('Fighter', 3)],
+      spellcasting: undefined,
+      features: [legacy('Rage', 'Barbarian 1', 2), legacy('Second Wind', 'Fighter 1', 2), legacy('Rage', 'Homebrew', 1)],
+    });
+    const r = levelUp(multi, { className: 'Fighter', hpMethod: 'average' }).character;
+    expect(r.features.map((f) => f.uses?.max)).toEqual([2, 3, 1]);
+  });
+
+  it('Proficiency Bonus uses grow at level 5 (SRD 5.2.1 Goliath: Giant Ancestry); spent uses stay spent, capped at the new maximum', () => {
+    const giant: Feature = {
+      id: 'ga',
+      name: 'Giant Ancestry (Stone Giant)',
+      source: 'species',
+      sourceName: 'Goliath',
+      description: '',
+      uses: { max: 2, used: 2, recharge: 'long', scale: { by: 'proficiency-bonus' } },
+    };
+    const shrinking: Feature = { ...giant, id: 'x', name: 'Odd', uses: { max: 3, used: 3, recharge: 'long', scale: { by: 'table', className: 'Wizard', values: [3, 3, 3, 3, 2] } } };
+    const four = mira({ classes: [asClass('Wizard', 4)], features: [giant, shrinking] });
+    const five = levelUp(four, { className: 'Wizard', hpMethod: 'average' }).character;
+    expect(five.features[0].uses).toMatchObject({ max: 3, used: 2 });
+    expect(five.features[1].uses).toMatchObject({ max: 2, used: 2 });
+  });
+
+  it('ignores scales it cannot read', () => {
+    const odd: Feature = { ...legacy('Odd', 'Wizard 1', 2), uses: { max: 2, used: 0, recharge: 'long', scale: { by: 'table', className: 'Cleric', values: [4] } } };
+    const zero: Feature = { ...odd, id: 'z', uses: { max: 1, used: 0, recharge: 'long', scale: { by: 'table', className: 'Wizard', values: [] } } };
+    const r = levelUp(mira({ features: [odd, zero] }), { className: 'Wizard', hpMethod: 'average' });
+    expect(r.character.features.map((f) => f.uses?.max)).toEqual([2, 1]);
+    expect(r.events.some((e) => e.message.startsWith('Feature uses now'))).toBe(false);
+  });
+});
+
+describe('levelUp: Armor Class', () => {
+  it('Draconic Sorcery at Sorcerer 3 gives Draconic Resilience: 10 + DEX + CHA (SRD 5.2.1 Sorcerer)', () => {
+    const sorcerer = mira({
+      abilityScores: { str: 8, dex: 14, con: 14, int: 10, wis: 12, cha: 15 },
+      classes: [asClass('Sorcerer', 2)],
+      features: [],
+    });
+    const r = levelUp(sorcerer, {
+      className: 'Sorcerer',
+      subclass: 'Draconic Sorcery',
+      hpMethod: 'average',
+      newFeatures: [{ name: 'Draconic Resilience', source: 'subclass', description: 'Your AC equals 10 + DEX + CHA while unarmored.' }],
+    });
+    expect(r.character).toMatchObject({ armorClass: 14, acFormula: 'Draconic Resilience: 10 + DEX 2 + CHA 2' });
+    expect(r.events.map((e) => e.message)).toContain('AC 12 → 14 (Draconic Resilience: 10 + DEX 2 + CHA 2)');
+  });
+
+  it('multiclassing into Barbarian adds Unarmored Defense (SRD 5.2.1 Barbarian; Multiclassing)', () => {
+    const r = levelUp(mira(), { className: 'Barbarian', hpMethod: 'average' });
+    expect(r.character).toMatchObject({ armorClass: 13, acFormula: 'Unarmored Defense: 10 + DEX 2 + CON 1' });
+  });
+
+  it('keeps an AC set by hand (Mage Armor) and reminds the player what gear and features give', () => {
+    const r = levelUp(mira({ armorClass: 15 }), { className: 'Barbarian', hpMethod: 'average' });
+    expect(r.character.armorClass).toBe(15);
+    expect(r.reminders.some((m) => /^AC kept at 15: .*now give AC 13/.test(m))).toBe(true);
+  });
+
+  it("leaves the AC alone when the level doesn't change it, and reads the equipment catalog", () => {
+    expect(levelUp(mira(), { className: 'Wizard', hpMethod: 'average' }).character).toMatchObject({ armorClass: 12, acFormula: '10 + DEX' });
+    const catalog = [{ id: 'hb:armor:mithral', name: 'Mithral Plate', category: 'armor' as const, armorClass: 18, dexCap: 0, armorType: 'heavy' as const }];
+    const knight = mira({
+      classes: [asClass('Paladin', 1)],
+      spellcasting: undefined,
+      armorClass: 18,
+      armorTraining: ['Heavy armor'],
+      inventory: [{ id: 'mp', name: 'Mithral Plate', quantity: 1, equipped: true, category: 'armor', compendiumId: 'hb:armor:mithral' }],
+    });
+    const defense = { newFeatures: [{ name: 'Defense', source: 'feat' as const, description: '+1 AC while wearing armor' }] };
+    expect(levelUp(knight, { className: 'Paladin', hpMethod: 'average', equipment: catalog, ...defense }).character.armorClass).toBe(19);
+    expect(levelUp(knight, { className: 'Paladin', hpMethod: 'average', ...defense }).character.armorClass).toBe(18); // unknown armor: kept
+  });
+});

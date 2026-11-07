@@ -47,6 +47,8 @@ interface MockContext {
   previous: BetaToolUseBlockParam[];
   /** The first tool the demo DM called this turn (decides which script the turn follows). */
   firstTool: string | undefined;
+  /** Text of the tool results the app returned for the previous reply (empty at the start of a turn). */
+  results: string[];
   heroName: string;
 }
 
@@ -55,9 +57,17 @@ function blocks(param: BetaMessageParam): BetaContentBlockParam[] {
   return param.content;
 }
 
+/** The player's words: the turn's last text block (an earlier unanswered message may come before it). */
 function playerWords(turnStart: BetaMessageParam): string {
   const texts = blocks(turnStart).filter((b): b is Extract<BetaContentBlockParam, { type: 'text' }> => b.type === 'text');
-  return texts.slice(1).map((b) => b.text).join('\n');
+  return texts.length > 1 ? (texts.at(-1)?.text ?? '') : '';
+}
+
+function resultsOf(message: BetaMessageParam | undefined): string[] {
+  if (!message || message.role !== 'user') return [];
+  return blocks(message)
+    .filter((b): b is Extract<BetaContentBlockParam, { type: 'tool_result' }> => b.type === 'tool_result')
+    .map((b) => (typeof b.content === 'string' ? b.content : (b.content ?? []).map((c) => (c.type === 'text' ? c.text : '')).join('\n')));
 }
 
 function isInCharacter(text: string): boolean {
@@ -92,8 +102,14 @@ function readContext(deps: DmDeps, params: MessageCreateParamsBase): MockContext
     playerTurn,
     previous,
     firstTool,
+    results: previous.length ? resultsOf(messages.at(-1)) : [],
     heroName: store.character?.name ?? 'traveler',
   };
+}
+
+/** Whether the player's last roll succeeded, from the tool result (the log hides unrevealed DCs). */
+function playerSucceeded(ctx: MockContext): boolean {
+  return /→ (success|hit|CRITICAL HIT)/.test(ctx.results.at(-1) ?? '');
 }
 
 function lastTool(ctx: MockContext): BetaToolUseBlockParam | undefined {
@@ -198,8 +214,7 @@ function skillCheck(ctx: MockContext): Reply {
       },
     });
   }
-  const success = lastRoll(ctx, 'player')?.roll.success ?? false;
-  return success
+  return playerSucceeded(ctx)
     ? say(
         'It clicks into place: a hooded figure by the hearth has stopped pretending to drink. Their reflection in the window is watching *you*, and one hand rests beneath the cloak.\n\n"The lantern lit itself three nights ago," Wren murmurs. "Since then, people have been asking about anyone who came asking about it."',
         ['Confront the hooded figure', 'Keep talking to Wren', 'Slip out the back'],
@@ -270,8 +285,9 @@ function combatResolve(ctx: MockContext): Reply {
   switch (prev.name) {
     case 'request_player_roll': {
       const roll = lastRoll(ctx, 'player');
-      if (inputField(prev, 'roll_type') === 'attack' && roll?.roll.success && attack) {
-        return call(ctx, null, { name: 'request_player_roll', input: { roll_type: 'damage', attack_name: attack.name, critical: roll.roll.isCritical === true, reason: 'Damage to the cutpurse' } });
+      if (inputField(prev, 'roll_type') === 'attack' && playerSucceeded(ctx) && attack) {
+        const critical = /CRITICAL HIT/.test(ctx.results.at(-1) ?? '');
+        return call(ctx, null, { name: 'request_player_roll', input: { roll_type: 'damage', attack_name: attack.name, critical, reason: 'Damage to the cutpurse' } });
       }
       if (inputField(prev, 'roll_type') === 'damage') {
         return call(ctx, null, { name: 'update_combat', input: { action: 'damage', target: ENEMY, amount: roll?.roll.total ?? 1 } });

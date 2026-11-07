@@ -25,6 +25,8 @@ import type {
 } from '@/types';
 import * as backup from './backup';
 import * as campaigns from './campaigns';
+import * as lock from './campaignLock';
+import type { CampaignLock } from './campaignLock';
 import * as database from './db';
 import * as github from './githubSync';
 import * as library from './library';
@@ -76,6 +78,15 @@ export const requestPersistentStorage: () => Promise<boolean> = database.request
 
 export const loadCampaignRecords: (campaignId: string) => Promise<CampaignRecords | null> = records.loadCampaignRecords;
 export const putCampaign: (c: Campaign) => Promise<void> = records.putCampaign;
+/**
+ * putCampaign that keeps DM notices queued elsewhere since the caller last saw the record (stored
+ * notices in neither `seen` nor `c`). Returns the notices now stored.
+ */
+export const putCampaignKeepingNotices: (c: Campaign, seen: readonly string[]) => Promise<string[]> =
+  records.putCampaignKeepingNotices;
+/** Add a DM notice to a stored campaign (bumps updatedAt). Resolves the stored notices, or null if it doesn't exist. */
+export const addPendingDmNotice: (campaignId: string, notice: string, updatedAt?: number) => Promise<string[] | null> =
+  records.addPendingDmNotice;
 export const putCharacter: (c: Character) => Promise<void> = records.putCharacter;
 /** Remove one character record (the game store calls it when a campaign's character is replaced). */
 export const deleteCharacterRecord: (id: string) => Promise<void> = records.deleteCharacterRecord;
@@ -140,6 +151,8 @@ export const importCampaignBundle: (bundle: CampaignBundle, mode?: 'replace' | '
 
 /** The error every GitHub operation gives for a public repository. */
 export const PUBLIC_REPO_ERROR: string = github.PUBLIC_REPO_ERROR;
+/** The error every GitHub operation gives for an internal (enterprise-visible) repository. */
+export const INTERNAL_REPO_ERROR: string = github.INTERNAL_REPO_ERROR;
 
 /** Check the token and repo; reports whether the repo is private (public repos are refused for saves). */
 export const testGithubConnection: (
@@ -162,21 +175,23 @@ export const pullCampaignFromGithub: (save: RemoteSave, settings: GithubSyncSett
 export const syncWithGithub: (settings: GithubSyncSettings) => Promise<SyncReport> = github.syncWithGithub;
 
 // ---------------------------------------------------------------------------
-// One tab at a time per campaign (CONTRACT — implemented by the storage module)
+// One tab at a time per campaign (Web Locks)
 // ---------------------------------------------------------------------------
 
-export interface CampaignLock {
-  release(): void;
-  /** Resolves if another tab takes the campaign over (steal). */
-  lost: Promise<void>;
-}
+export type { CampaignLock } from './campaignLock';
 
 /**
  * Hold an exclusive per-campaign lock (Web Locks API) while the campaign is open at the table.
  * Resolves null when another tab already holds it (unless steal: true, which takes it over).
  * Where Web Locks are unavailable, resolves a lock that never conflicts.
+ * Holders in one tab share the lock; it is released when the last one calls release().
  */
 export const acquireCampaignLock: (campaignId: string, opts?: { steal?: boolean }) => Promise<CampaignLock | null> =
-  async () => {
-    throw new Error('storage: acquireCampaignLock not implemented');
-  };
+  lock.acquireCampaignLock;
+/**
+ * True when another tab or window holds the campaign's lock. The game store, imports that replace
+ * a campaign and deletes refuse to touch such a campaign (with OPEN_ELSEWHERE_ERROR).
+ */
+export const isCampaignOpenElsewhere: (campaignId: string) => Promise<boolean> = lock.isCampaignOpenElsewhere;
+/** The error for changes refused because the campaign is open at the table in another tab. */
+export const OPEN_ELSEWHERE_ERROR: string = lock.OPEN_ELSEWHERE_ERROR;

@@ -9,7 +9,7 @@ import type { LogEntry, ToolLogEntry } from '@/types';
 import { deps, resetDmDeps } from '../deps';
 import { fakeDice } from '../testing/fakeEngine';
 import { autoRespond } from '../testing/fakeStore';
-import { setupHarness, type Harness, type HarnessOptions } from '../testing/harness';
+import { dialogRoll, setupHarness, type Harness, type HarnessOptions } from '../testing/harness';
 import type { ToolContext } from './context';
 import { DM_TOOLS, TOOL_ORDER } from './definitions';
 import { runTool } from './handlers';
@@ -108,6 +108,120 @@ describe('request_player_roll', () => {
     const dmg = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'dagger', critical: true, reason: 'Crit!' });
     // Dagger 1d4 + DEX 2, dice doubled on a critical: 3 + 4 + 2.
     expect(dmg.content).toMatch(/: 9 /);
+  });
+});
+
+describe('request_player_roll: attacks that are not on the sheet', () => {
+  it('rolls a known leveled spell as a spell attack and a found weapon with `ability`', async () => {
+    fakeDice.queue(10, 10);
+    const h = setup();
+    const ray = await h.run('request_player_roll', { roll_type: 'attack', attack_name: 'scorching ray', dc: 13, reason: 'Ray at the cultist' });
+    expect(ray.isError).toBeUndefined();
+    // Mira: INT 17 (+3) + proficiency 2 = +5 → 15 vs AC 13.
+    expect(ray.content).toMatch(/Scorching Ray attack: 15 .*AC 13 → hit/);
+    const bow = await h.run('request_player_roll', { roll_type: 'attack', attack_name: 'Longbow', ability: 'dex', dc: 13, reason: 'Shoot the bow you found' });
+    expect(bow.isError).toBeUndefined();
+    // DEX 14 (+2) + proficiency 2 = +4 → 14.
+    expect(bow.content).toMatch(/Longbow attack \(DEX, not on sheet\): 14 .*→ hit/);
+  });
+
+  it('explains how to roll an off-sheet weapon when `ability` is missing', async () => {
+    const h = setup();
+    const out = await h.run('request_player_roll', { roll_type: 'attack', attack_name: 'Longbow', dc: 13, reason: 'Shoot' });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('Dagger, Fire Bolt');
+    expect(out.content).toMatch(/`ability`/);
+    const damage = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'Longbow', reason: 'Arrow' });
+    expect(damage.isError).toBe(true);
+    expect(damage.content).toMatch(/`expression`/);
+  });
+});
+
+describe('request_player_roll: hidden DCs stay hidden in the log', () => {
+  const lastRoll = (h: Harness) => h.s().log.filter((e) => e.kind === 'roll').at(-1);
+
+  it('logs the target and verdict only when the DC is revealed; the DM always gets the verdict', async () => {
+    fakeDice.queue(12, 12);
+    const h = setup();
+    await h.run('request_player_roll', { roll_type: 'skill', skill: 'arcana', dc: 15, reveal_dc: true, reason: 'Read the runes' });
+    expect(lastRoll(h)).toMatchObject({ roll: { total: 17, dc: 15, success: true } });
+
+    const stab = await h.run('request_player_roll', { roll_type: 'attack', attack_name: 'Dagger', dc: 12, reason: 'Stab the guard' });
+    expect(stab.content).toMatch(/vs AC 12 → hit/);
+    const card = lastRoll(h);
+    expect(card?.kind === 'roll' && card.roll.total).toBe(16);
+    expect(card?.kind === 'roll' && card.roll).not.toHaveProperty('dc');
+    expect(card?.kind === 'roll' && card.roll).not.toHaveProperty('success');
+  });
+
+  it('shows the fixed DC 10 of a death saving throw', async () => {
+    fakeDice.queue(12);
+    const h = setup();
+    await h.s().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 0 } }));
+    await h.run('request_player_roll', { roll_type: 'death-save', reason: 'Cling to life' });
+    expect(lastRoll(h)).toMatchObject({ roll: { dc: 10, success: true } });
+  });
+});
+
+describe("request_player_roll: the hero's own conditions, traits and features", () => {
+  it('adds Disadvantage from a condition on the sheet and says so', async () => {
+    fakeDice.queue(15, 4);
+    const h = setup();
+    await h.s().updateCharacter((c) => ({ ...c, conditions: [{ id: 'poisoned' }] }));
+    const out = await h.run('request_player_roll', { roll_type: 'attack', attack_name: 'Dagger', dc: 12, reason: 'Stab' });
+    // Disadvantage keeps the 4: 4 + 4 = 8, a miss.
+    expect(out.content).toMatch(/Dagger attack: 8 .*→ miss/);
+    expect(out.content).toContain('Disadvantage (Poisoned)');
+    expect(h.s().log.at(-1)).toMatchObject({ kind: 'roll', roll: { advantage: 'disadvantage', natural: 4 } });
+  });
+
+  it('fails a Paralyzed hero\'s Dexterity save without rolling', async () => {
+    fakeDice.queue(20);
+    const h = setup({ campaignSettings: { playerRollMode: 'prompt' } });
+    await h.s().updateCharacter((c) => ({ ...c, conditions: [{ id: 'paralyzed' }] }));
+    const out = await h.run('request_player_roll', { roll_type: 'save', ability: 'dex', dc: 12, reason: 'Dodge the boulder' });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toMatch(/automatic failure vs DC 12 — Paralyzed/);
+    expect(fakeDice.remaining()).toBe(1);
+    expect(h.s().interaction).toBeNull();
+    expect(h.s().log.some((e) => e.kind === 'roll')).toBe(false);
+    expect(toolLines(h.s().log).at(-1)?.summary).toMatch(/automatic failure/);
+  });
+
+  it('rerolls a natural 1 for a Halfling with Luck (auto mode)', async () => {
+    fakeDice.queue(1, 17);
+    const h = setup();
+    await h.s().updateCharacter((c) => ({
+      ...c,
+      features: [...c.features, { id: 'f-luck', name: 'Luck', description: 'Reroll natural 1s.', source: 'species', sourceName: 'Halfling' }],
+    }));
+    const out = await h.run('request_player_roll', { roll_type: 'skill', skill: 'arcana', dc: 15, reason: 'Recall the rite' });
+    expect(out.content).toMatch(/Arcana check \(INT\): 22 .*→ success/);
+    expect(out.content).toContain('Luck (Halfling)');
+  });
+
+  it("treats a Champion's natural 19 as a Critical Hit", async () => {
+    fakeDice.queue(19);
+    const h = setup();
+    await h.s().updateCharacter((c) => ({
+      ...c,
+      features: [...c.features, { id: 'f-ic', name: 'Improved Critical', description: '19–20.', source: 'subclass', sourceName: 'Champion' }],
+    }));
+    const out = await h.run('request_player_roll', { roll_type: 'attack', attack_name: 'Dagger', dc: 30, reason: 'Stab' });
+    expect(out.content).toMatch(/CRITICAL HIT \(natural 19\)/);
+    expect(out.content).toContain('Roll damage with critical: true.');
+  });
+
+  it('tells the DM when the player spent Heroic Inspiration to reroll in the dialog', async () => {
+    const h = setup({ campaignSettings: { playerRollMode: 'prompt' } });
+    autoRespond(h.store, (req) => {
+      if (req.kind !== 'roll') return null;
+      // The dialog's "Reroll with Heroic Inspiration" spends it through the store before answering.
+      void h.s().updateCharacter((c) => ({ ...c, heroicInspiration: false }));
+      return { kind: 'roll', response: { result: dialogRoll(16, req.modifier, req.request.dc), manual: false } };
+    });
+    const out = await h.run('request_player_roll', { roll_type: 'skill', skill: 'athletics', dc: 15, reason: 'Climb the wall' });
+    expect(out.content).toMatch(/spent Heroic Inspiration to reroll/);
   });
 });
 

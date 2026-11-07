@@ -1,5 +1,5 @@
 import '../testing/setup';
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dm } from '@/dm';
@@ -78,6 +78,17 @@ describe('Composer', () => {
     const box = screen.getByRole('textbox', { name: 'Out-of-character message to the DM' });
     await user.type(box, 'Is Shield a reaction?{Enter}');
     expect(dm.sendPlayerMessage).toHaveBeenCalledWith('OOC: Is Shield a reaction?');
+  });
+
+  it('uses 16px text on phones and touch screens, so iOS Safari does not zoom in on focus', () => {
+    const { box } = setup();
+    // Below the sm breakpoint everywhere; 15px from sm up on pointer devices only.
+    expect(box).toHaveClass('text-base', 'sm:text-[0.9375rem]');
+    cleanup();
+    setMatchMedia(TOUCH);
+    const touch = setup().box;
+    expect(touch).toHaveClass('text-base');
+    expect(touch).not.toHaveClass('sm:text-[0.9375rem]');
   });
 
   it('gives the words back if the DM refuses the message', async () => {

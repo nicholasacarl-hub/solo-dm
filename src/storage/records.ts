@@ -52,6 +52,42 @@ export async function putCampaign(c: Campaign): Promise<void> {
   await db.campaigns.put(c);
 }
 
+/**
+ * Save a campaign record without losing DM notices queued elsewhere (the Library, another tab)
+ * since the caller last saw the record: stored notices that are neither in `seen` nor in the
+ * record being saved are kept. Returns the notices now stored.
+ */
+export function putCampaignKeepingNotices(c: Campaign, seen: readonly string[]): Promise<string[]> {
+  return db.transaction('rw', db.campaigns, async () => {
+    const stored = await db.campaigns.get(c.id);
+    const own = c.pendingDmNotices ?? [];
+    const queuedElsewhere = (stored?.pendingDmNotices ?? []).filter((n) => !seen.includes(n) && !own.includes(n));
+    const next: Campaign = queuedElsewhere.length > 0 ? { ...c, pendingDmNotices: [...own, ...queuedElsewhere] } : c;
+    await db.campaigns.put(next);
+    return next.pendingDmNotices ?? [];
+  });
+}
+
+/**
+ * Add a note for the DM to a stored campaign (once), bumping its updatedAt to at least `updatedAt`.
+ * Returns the notices now stored, or null when the campaign doesn't exist (it is never created).
+ */
+export function addPendingDmNotice(campaignId: string, notice: string, updatedAt = Date.now()): Promise<string[] | null> {
+  return db.transaction('rw', db.campaigns, async () => {
+    const stored = await db.campaigns.get(campaignId);
+    if (!stored) return null;
+    const notices = stored.pendingDmNotices ?? [];
+    if (notices.includes(notice)) return notices;
+    const next: Campaign = {
+      ...stored,
+      pendingDmNotices: [...notices, notice],
+      updatedAt: Math.max(updatedAt, stored.updatedAt + 1),
+    };
+    await db.campaigns.put(next);
+    return [...notices, notice];
+  });
+}
+
 export async function putCharacter(c: Character): Promise<void> {
   await db.characters.put(c);
 }

@@ -163,13 +163,27 @@ describe('summarizeCombat', () => {
     expect(summarizeCombat(sampleCombat())).toBe(text);
   });
 
-  it('hides hidden HP from the player', () => {
+  it('hides hidden HP, and the AC of creatures with hidden HP, from the player', () => {
     const text = summarizeCombat(sampleCombat(), { forPlayer: true });
-    expect(text).toContain('Bandit 1 (enemy) · Init 14 · AC 12 · bloodied');
+    expect(text).toContain('Bandit 1 (enemy) · Init 14 · bloodied');
     expect(text).not.toContain('4/11');
+    expect(text).not.toContain('AC 12 · bloodied');
     expect(text).toContain('Old Tam (ally) · Init 5 · AC 11 · HP 9/9');
     expect(text).toContain('1. Mira Voss (you) · Init 17 · AC 12');
     expect(summarizeCombat(sampleCombat())).toContain('1. Mira Voss (PC) · Init 17 · AC 12');
     expect(summarizeCombat({ ...sampleCombat(), active: false })).toBe('Combat ended: Ambush on the docks.');
+  });
+
+  it('never names the stat block behind a disguise in the player view', () => {
+    const stranger = npc('s', 'Hooded Stranger', 14, { statBlockName: 'Vampire Spawn', ac: 15, hideHp: true, notes: 'Thirsty' });
+    const guard = npc('g', 'Captain Rhea', 9, { side: 'ally', statBlockName: 'Guard', ac: 16 });
+    const state = createCombat([stranger, guard], 'The crypt');
+    const dm = summarizeCombat(state);
+    expect(dm).toContain('Hooded Stranger (enemy) [Vampire Spawn] · Init 14 · AC 15 · HP 10/10 — Thirsty');
+    expect(dm).toContain('Captain Rhea (ally) [Guard]');
+    const player = summarizeCombat(state, { forPlayer: true });
+    expect(player).toContain('Hooded Stranger (enemy) · Init 14 · unhurt');
+    expect(player).toContain('Captain Rhea (ally) · Init 9 · AC 16 · HP 10/10');
+    expect(player).not.toMatch(/Vampire Spawn|\[Guard\]|AC 15|Thirsty/);
   });
 });

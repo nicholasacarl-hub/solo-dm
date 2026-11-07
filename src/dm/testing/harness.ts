@@ -42,6 +42,8 @@ export interface HarnessOptions {
   withSession?: boolean;
   steps?: ScriptStep[];
   state?: Partial<GameStoreState>;
+  /** Imported books switched on in the Library (default: none). */
+  libraryImports?: { id: string; name: string }[];
 }
 
 export interface Harness {
@@ -82,6 +84,7 @@ export function setupHarness(opts: HarnessOptions = {}): Harness {
     keyClient: () => ({ models: { list: async () => ({ data: [] }) } }),
     rulesIndex: async () => index,
     invalidateRulesIndex: invalidate,
+    libraryImports: async () => opts.libraryImports ?? [],
     rng: undefined,
     now: () => 1_700_000_000_000,
     newId: () => `id-${++ids}`,

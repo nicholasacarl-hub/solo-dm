@@ -46,8 +46,8 @@ export function HomebrewTab() {
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <p className="max-w-2xl text-sm text-muted">
-          Spells, items, monsters and boons your DM invented, or that you wrote. Edit, retire or delete any of them;
-          if a campaign is open, the DM is told on your next turn.
+          Spells, items, monsters and boons your DM invented, or that you wrote. Edit, retire or delete any of them.
+          If a campaign has a session in progress, its DM hears about the change on your next turn there.
         </p>
         <Button variant="arcane" icon={<Plus className="size-4" aria-hidden />} onClick={() => open(null)}>
           New homebrew

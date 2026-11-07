@@ -1,8 +1,10 @@
 /** Route: #/ — save slots (one card per campaign), first-run welcome, import/export. */
 import { useState } from 'react';
-import { Plus, Upload } from 'lucide-react';
+import { Link } from 'react-router';
+import { HardDrive, Plus, Upload } from 'lucide-react';
 import { deleteCampaign, useCampaignList, type CampaignSummary } from '@/storage';
 import { useGame } from '@/state/gameStore';
+import { useSettings } from '@/state/settingsStore';
 import { Button, Dialog } from '@/ui/components/ui';
 import { ButtonLink } from '@/ui/components/ButtonLink';
 import { ErrorBoundary } from '@/ui/components/ErrorBoundary';
@@ -11,6 +13,7 @@ import { CampaignCard, CampaignCardSkeleton } from '@/ui/shell/CampaignCard';
 import { Page, PageHeader, useDocumentTitle } from '@/ui/shell/Page';
 import { PlayReadinessBanner, WelcomeCard } from '@/ui/shell/Welcome';
 import { errorMessage } from '@/ui/shell/format';
+import { useStoragePersistence } from '@/ui/shell/persistentStorage';
 import { useSaveFileImport } from '@/ui/shell/useSaveFileImport';
 
 export function HomeScreen() {
@@ -64,8 +67,30 @@ function CampaignSlots({ onImport }: { onImport: () => void }) {
           </li>
         ))}
       </ul>
+      <BackupHint />
       <DeleteCampaignDialog summary={toDelete} onClose={() => setToDelete(null)} />
     </>
+  );
+}
+
+/** A quiet reminder while the browser hasn't promised to keep the saves and nothing syncs them. */
+function BackupHint() {
+  const { status } = useStoragePersistence();
+  const syncing = useSettings(
+    ({ githubSync: gh }) => gh.enabled && gh.token.trim() !== '' && gh.repo.trim() !== '',
+  );
+  if (status !== 'best-effort' || syncing) return null;
+  return (
+    <p className="mt-6 flex items-start gap-2 text-sm text-muted">
+      <HardDrive className="mt-0.5 size-4 shrink-0" aria-hidden />
+      <span>
+        Saves live in this browser only. To keep a backup, export a campaign from its card or turn on{' '}
+        <Link to="/settings" className="text-accent underline underline-offset-2">
+          cloud saves in Settings
+        </Link>
+        .
+      </span>
+    </p>
   );
 }
 

@@ -190,11 +190,16 @@ function mapItem(c: Character, itemId: string, patch: Partial<InventoryItem>): C
   return { ...c, inventory: c.inventory.map((i) => (i.id === itemId ? { ...i, ...patch } : i)) };
 }
 
+/**
+ * Change a stack's size. It never goes below 1: taking an item off the sheet loses its details, so
+ * that is removeItemChange, behind the sheet's "Remove?" confirmation.
+ */
 export function itemQuantityChange(c: Character, itemId: string, quantity: number): SheetChange {
   const item = c.inventory.find((i) => i.id === itemId);
-  const qty = Math.max(0, Math.floor(quantity));
-  if (!item || qty === item.quantity) return unchanged(c);
-  if (qty === 0) return removeItemChange(c, itemId);
+  if (!item || !Number.isFinite(quantity)) return unchanged(c);
+  const qty = Math.floor(quantity);
+  if (qty < 1) return unchanged(c, `Use Remove to take ${item.name} off your sheet.`);
+  if (qty === item.quantity) return unchanged(c);
   return { character: mapItem(c, itemId, { quantity: qty }), notice: `Player changed ${item.name} quantity ${item.quantity} → ${qty}` };
 }
 

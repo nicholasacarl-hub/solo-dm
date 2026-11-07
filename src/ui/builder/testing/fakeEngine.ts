@@ -132,7 +132,7 @@ function updateItem(c: Character, name: string, patch: Partial<Omit<InventoryIte
   return { character: bump({ ...c, inventory: c.inventory.map((i) => (i === found ? { ...i, ...patch } : i)) }), events: [] };
 }
 
-function computeArmorClass(c: Character, catalog: EquipmentOption[]): { ac: number; formula: string } {
+function computeArmorClass(c: Character, catalog: readonly EquipmentOption[] = []): { ac: number; formula: string } {
   const find = (item: InventoryItem) => catalog.find((o) => o.id === item.compendiumId || o.name.toLowerCase() === item.name.toLowerCase());
   const armorItem = c.inventory.find((i) => i.equipped && find(i)?.category === 'armor');
   const shieldItem = c.inventory.find((i) => i.equipped && find(i)?.category === 'shield');

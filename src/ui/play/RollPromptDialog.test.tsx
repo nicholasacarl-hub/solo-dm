@@ -3,7 +3,9 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { manualD20Result, manualRollResult, rollD20Test, rollDice } from '@/engine';
+import { useGame } from '@/state/gameStore';
 import { useSettings } from '@/state/settingsStore';
+import { sampleCharacter } from '@/test/fixtures';
 import type { InteractionRequest, PlayerRollRequest } from '@/types';
 import { RESULT_HOLD_MS, RollPromptDialog, ROLL_ANIMATION_MS } from './RollPromptDialog';
 import { queueD20, resetEngineMock } from './testing/engineMock';
@@ -35,13 +37,19 @@ function interaction(
   };
 }
 
-function renderPrompt(i: RollInteraction, mode: 'prompt' | 'physical' | 'auto' = 'physical') {
+function renderPrompt(
+  i: RollInteraction,
+  mode: 'prompt' | 'physical' | 'auto' = 'physical',
+  { inspiration = false }: { inspiration?: boolean } = {},
+) {
   const onResolve = vi.fn();
   const onCancelTurn = vi.fn();
-  seedGame();
+  const spies = seedGame({ character: { ...sampleCharacter(), heroicInspiration: inspiration } });
   render(<RollPromptDialog interaction={i} mode={mode} onResolve={onResolve} onCancelTurn={onCancelTurn} />);
-  return { onResolve, onCancelTurn, user: userEvent.setup() };
+  return { onResolve, onCancelTurn, spies, user: userEvent.setup() };
 }
+
+const REROLL = 'Reroll with Heroic Inspiration';
 
 beforeEach(() => {
   resetEngineMock();
@@ -245,5 +253,140 @@ describe('RollPromptDialog — tap to roll', () => {
   it('treats the "auto" mode as tap-to-roll if a prompt reaches the UI anyway', () => {
     renderPrompt(interaction(), 'auto');
     expect(screen.getByRole('button', { name: 'Roll' })).toBeInTheDocument();
+  });
+});
+
+describe('RollPromptDialog — Heroic Inspiration', () => {
+  it('is offered only to a hero who has it', async () => {
+    queueD20(5);
+    const { user } = renderPrompt(interaction(), 'prompt');
+    await user.click(screen.getByRole('button', { name: 'Roll' }));
+    expect(screen.queryByRole('button', { name: REROLL })).not.toBeInTheDocument();
+  });
+
+  it('waits for the choice instead of continuing on its own', () => {
+    vi.useFakeTimers();
+    queueD20(5);
+    const { onResolve } = renderPrompt(interaction(), 'prompt', { inspiration: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Roll' }));
+    act(() => {
+      vi.advanceTimersByTime(RESULT_HOLD_MS * 3);
+    });
+    expect(onResolve).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: REROLL })).toBeInTheDocument();
+  });
+
+  it('rerolls once with the engine, must use the new roll, and spends Inspiration before the DM gets it', async () => {
+    queueD20(5, 18);
+    const { onResolve, spies, user } = renderPrompt(interaction(), 'prompt', { inspiration: true });
+    await user.click(screen.getByRole('button', { name: 'Roll' }));
+    expect(screen.getByText('Failure')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: REROLL }));
+    expect(screen.getByText(/18 \+ 2 = 20/)).toBeInTheDocument();
+    expect(screen.getByText('Success')).toBeInTheDocument();
+    expect(screen.getByText('Heroic Inspiration: rerolled from 7. The new roll stands.')).toBeInTheDocument();
+    // One reroll, and the first roll can't be taken back.
+    expect(screen.queryByRole('button', { name: REROLL })).not.toBeInTheDocument();
+    expect(onResolve).not.toHaveBeenCalled();
+
+    // The roll tool reads the sheet as soon as it has the result: Inspiration must already be spent.
+    let inspirationWhenResolved: boolean | undefined;
+    onResolve.mockImplementation(() => {
+      inspirationWhenResolved = useGame.getState().character?.heroicInspiration;
+    });
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(inspirationWhenResolved).toBe(false);
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(onResolve).toHaveBeenCalledWith({
+      result: expect.objectContaining({ natural: 18, total: 20, dc: 13, success: true }),
+      manual: false,
+    });
+    expect(spies.updateCharacter).toHaveBeenCalledTimes(1);
+    expect(spies.queueDmNotice).toHaveBeenCalledWith(
+      'Player spent Heroic Inspiration to reroll Stealth check (DEX): the first roll (7) was replaced by the reroll (20), which stands.',
+    );
+  });
+
+  it('continues on its own after the reroll, like any tapped roll', () => {
+    vi.useFakeTimers();
+    queueD20(3, 11);
+    const { onResolve } = renderPrompt(interaction(), 'prompt', { inspiration: true });
+    fireEvent.click(screen.getByRole('button', { name: 'Roll' }));
+    fireEvent.click(screen.getByRole('button', { name: REROLL }));
+    act(() => {
+      vi.advanceTimersByTime(RESULT_HOLD_MS + 10);
+    });
+    expect(onResolve).toHaveBeenCalledWith({ result: expect.objectContaining({ natural: 11 }), manual: false });
+  });
+
+  it('with Advantage rerolls only the lower d20', async () => {
+    queueD20(16, 4, 19);
+    const { onResolve, user } = renderPrompt(interaction({ advantage: 'advantage' }), 'prompt', { inspiration: true });
+    await user.click(screen.getByRole('button', { name: 'Roll' }));
+    expect(screen.getByText('4', { selector: 's' })).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: REROLL }));
+    // The 16 stays; the 4 became a 19, which is kept.
+    expect(screen.getByText('16', { selector: 's' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(onResolve).toHaveBeenCalledWith({
+      result: expect.objectContaining({
+        natural: 19,
+        total: 21,
+        dice: [
+          { sides: 20, value: 16, dropped: true },
+          { sides: 20, value: 19 },
+        ],
+      }),
+      manual: false,
+    });
+  });
+
+  it('lets a physical-dice player reroll their own die, and the turn can no longer be cancelled', async () => {
+    const { onResolve, spies, user } = renderPrompt(interaction(), 'physical', { inspiration: true });
+    await user.type(screen.getByLabelText('Your d20'), '3');
+    await user.click(screen.getByRole('button', { name: 'Use this roll' }));
+    await user.click(screen.getByRole('button', { name: REROLL }));
+
+    expect(screen.getByText('Roll your d20 again and enter the new number.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Cancel turn' })).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('Your d20'), '15');
+    await user.click(screen.getByRole('button', { name: 'Use this roll' }));
+    expect(screen.queryByRole('button', { name: REROLL })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(onResolve).toHaveBeenCalledWith({
+      result: expect.objectContaining({ natural: 15, total: 17 }),
+      manual: true,
+    });
+    expect(useGame.getState().character?.heroicInspiration).toBe(false);
+    expect(spies.queueDmNotice).toHaveBeenCalledWith(
+      'Player spent Heroic Inspiration to reroll Stealth check (DEX): the first roll (5) was replaced by the reroll (17), which stands.',
+    );
+  });
+
+  it('rerolls one damage die', async () => {
+    const { onResolve, user } = renderPrompt(
+      interaction({ rollType: 'damage', expression: '2d6+2', dc: undefined, revealDc: false }, 0, 'Shortsword damage'),
+      'prompt',
+      { inspiration: true },
+    );
+    await user.click(screen.getByRole('button', { name: 'Roll' }));
+    await user.click(screen.getByRole('button', { name: REROLL }));
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    // The engine mock's other dice show 3; one of them was rolled again.
+    expect(onResolve).toHaveBeenCalledWith({ result: expect.objectContaining({ total: 8 }), manual: false });
+  });
+
+  it('does not spend Inspiration when the player keeps the first roll', async () => {
+    queueD20(19);
+    const { onResolve, spies, user } = renderPrompt(interaction(), 'prompt', { inspiration: true });
+    await user.click(screen.getByRole('button', { name: 'Roll' }));
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(onResolve).toHaveBeenCalledWith({ result: expect.objectContaining({ natural: 19 }), manual: false });
+    expect(spies.updateCharacter).not.toHaveBeenCalled();
+    expect(spies.queueDmNotice).not.toHaveBeenCalled();
+    expect(useGame.getState().character?.heroicInspiration).toBe(true);
   });
 });

@@ -1,7 +1,8 @@
 /**
  * Manual level-up from the sheet (the DM can also level the character with its level_up tool).
  * Choose the class (or multiclass, with the 2024 13+ primary-ability prerequisite), the HP method,
- * and a subclass at level 3; see the features gained; apply through the engine's levelUp.
+ * and a subclass at level 3; see the features gained; apply through the engine's levelUp, then
+ * re-read every feature's uses at the new level (Rage, Lay on Hands, Breath Weapon…).
  */
 import { useId, useState, type ReactNode } from 'react';
 import { ArrowBigUpDash, Check, TriangleAlert } from 'lucide-react';
@@ -10,12 +11,13 @@ import { useBuilderData } from '@/data';
 import { nameKey } from '@/lib/id';
 import { cn } from '@/lib/cn';
 import { useGame } from '@/state/gameStore';
-import { ABILITY_NAMES, type Ability, type Character, type ClassFeatureDef, type ClassLevel, type ClassOption, type Feature } from '@/types';
+import { ABILITY_NAMES, type Ability, type Character, type ClassFeatureDef, type ClassOption, type Feature } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
 import { Badge, Button, Dialog, EmptyState, Input, Segmented, Select, Spinner } from '@/ui/components/ui';
 import { RadioCards } from '@/ui/builder/BuilderParts';
 import { featuresAtLevel, subclassFeaturesAtLevel } from '@/ui/builder/classFeatures';
 import { inferFeatureUses } from '@/ui/builder/featureUses';
+import { classOptionFor, featureUseChanges, refreshFeatureUses } from '@/ui/builder/leveling';
 import { useSheetEdit } from './useSheetActions';
 
 export interface LevelUpDialogProps {
@@ -43,10 +45,6 @@ export function meetsPrimary(cls: Pick<ClassOption, 'name' | 'primaryAbilities'>
   return nameKey(cls.name) === 'fighter' ? cls.primaryAbilities.some(ok) : cls.primaryAbilities.every(ok);
 }
 
-export function classOptionFor(cl: ClassLevel, classes: ClassOption[]): ClassOption | undefined {
-  return classes.find((o) => o.id === cl.classId) ?? classes.find((o) => nameKey(o.name) === nameKey(cl.name));
-}
-
 /** The features gained at a class level, as sheet features (placeholder "Subclass feature" rows skipped). */
 export function gainedFeatures(
   cls: ClassOption,
@@ -68,26 +66,18 @@ export function gainedFeatures(
   ];
 }
 
-/** Re-read scaling uses (Rage, Second Wind, Lay on Hands…) of the class's existing features at the new level. */
-export function refreshFeatureUses(c: Character, cls: ClassOption | undefined, classLevel: number): Character {
-  if (!cls) return c;
-  const usesCtx = { level: classLevel, proficiencyBonus: proficiencyBonus(characterLevel(c)), scores: c.abilityScores, cls };
-  const prefix = nameKey(cls.name);
-  let changed = false;
-  const features = c.features.map((f) => {
-    if (!f.uses || f.source !== 'class' || !nameKey(f.sourceName ?? '').startsWith(prefix)) return f;
-    const fresh = inferFeatureUses(f.name, f.description, usesCtx);
-    if (!fresh || fresh.max === f.uses.max) return f;
-    changed = true;
-    return { ...f, uses: { ...f.uses, max: fresh.max, used: Math.min(f.uses.used, fresh.max) } };
-  });
-  return changed ? { ...c, features } : c;
-}
-
-function levelUpNotice(r: LevelUpResult, className: string, classLevel: number, subclass: string | undefined, added: string[]): string {
+function levelUpNotice(
+  r: LevelUpResult,
+  className: string,
+  classLevel: number,
+  subclass: string | undefined,
+  added: string[],
+  uses: string[],
+): string {
   const parts = [`Player leveled up to ${className} ${classLevel} (character level ${r.newLevel}): +${r.hpGained} HP (max ${r.character.hp.max})`];
   if (subclass) parts.push(`subclass ${subclass}`);
   if (added.length) parts.push(`new features: ${added.join(', ')}`);
+  if (uses.length) parts.push(`feature uses now: ${uses.join(', ')}`);
   if (r.reminders.length) parts.push(`still to choose: ${r.reminders.join(' ')}`);
   return parts.join('; ');
 }
@@ -126,7 +116,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Summary({ result, onClose }: { result: LevelUpResult; onClose: () => void }) {
+function Summary({ result, uses, onClose }: { result: LevelUpResult; uses: string[]; onClose: () => void }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3 rounded-xl bg-gold-soft px-4 py-3">
@@ -138,6 +128,15 @@ function Summary({ result, onClose }: { result: LevelUpResult; onClose: () => vo
           </p>
         </div>
       </div>
+      {uses.length > 0 && (
+        <Section title="Feature uses">
+          <ul className="list-disc pl-5 text-sm">
+            {uses.map((u) => (
+              <li key={u}>{u}</li>
+            ))}
+          </ul>
+        </Section>
+      )}
       {result.reminders.length > 0 && (
         <Section title="Still to do">
           <ul className="list-disc pl-5 text-sm">
@@ -169,11 +168,11 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
   const [subclass, setSubclass] = useState('');
   const [allowAnyway, setAllowAnyway] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<LevelUpResult | null>(null);
+  const [result, setResult] = useState<{ level: LevelUpResult; uses: string[] } | null>(null);
   const faceId = useId();
   const multiId = useId();
 
-  if (result) return <Summary result={result} onClose={onClose} />;
+  if (result) return <Summary result={result.level} uses={result.uses} onClose={onClose} />;
   if (!character) return <EmptyState title="No character loaded" />;
   const level = characterLevel(character);
   if (level >= 20) return <EmptyState title="Level 20 — the summit">There are no more levels to gain; ask the DM about Epic Boons.</EmptyState>;
@@ -227,18 +226,24 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
       hpMethod: hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll',
       newFeatures: features,
     };
-    const outcome: { result: LevelUpResult | null } = { result: null };
+    const outcome: { result: LevelUpResult | null; uses: string[] } = { result: null, uses: [] };
     const saved = await edit((c) => {
       const r = levelUp(c, opts);
       if (r.character === c) {
         return { character: c, notice: null, warning: r.events.find((e) => e.type === 'warning')?.message ?? 'Could not level up.' };
       }
-      const refreshed = refreshFeatureUses(r.character, option, classLevel);
+      // Existing features grow too: Rage, Second Wind, Lay on Hands, Breath Weapon, Draconic Flight at 5…
+      const refreshed = refreshFeatureUses(r.character, builder.data);
+      const uses = featureUseChanges(c, refreshed);
       outcome.result = { ...r, character: refreshed };
-      return { character: refreshed, notice: levelUpNotice(r, className, classLevel, needsSubclass ? subclass : undefined, features.map((f) => f.name)) };
+      outcome.uses = uses;
+      return {
+        character: refreshed,
+        notice: levelUpNotice(r, className, classLevel, needsSubclass ? subclass : undefined, features.map((f) => f.name), uses),
+      };
     });
     setBusy(false);
-    if (saved && outcome.result) setResult({ ...outcome.result, character: saved });
+    if (saved && outcome.result) setResult({ level: { ...outcome.result, character: saved }, uses: outcome.uses });
   };
 
   const existingOptions = character.classes.map((cl, index) => ({

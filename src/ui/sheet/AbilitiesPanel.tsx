@@ -83,6 +83,8 @@ function Line({ label, items }: { label: string; items: string[] }) {
   );
 }
 
+const capitalized = (list: string[] | undefined) => (list ?? []).map((t) => t.charAt(0).toUpperCase() + t.slice(1));
+
 export function ProficienciesList({ character: c }: { character: Character }) {
   const senses = [c.darkvision ? `Darkvision ${c.darkvision} ft.` : null, `Size ${c.size}`].filter((s): s is string => Boolean(s));
   const otherSpeeds = Object.entries(c.otherSpeeds ?? {}).map(([kind, ft]) => `${kind} ${ft} ft.`);
@@ -94,6 +96,10 @@ export function ProficienciesList({ character: c }: { character: Character }) {
       <Line label="Tools" items={c.tools} />
       <Line label="Languages" items={c.languages} />
       <Line label="Senses & size" items={[...senses, ...otherSpeeds]} />
+      {/* The engine halves (or ignores, or doubles) damage of these types automatically. */}
+      <Line label="Damage resistances" items={capitalized(c.damageResistances)} />
+      <Line label="Immunities" items={[...capitalized(c.damageImmunities), ...(c.conditionImmunities ?? [])]} />
+      <Line label="Vulnerabilities" items={capitalized(c.damageVulnerabilities)} />
     </dl>
   );
 }

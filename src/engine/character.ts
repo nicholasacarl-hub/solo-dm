@@ -11,6 +11,7 @@ import type {
   ActiveCondition,
   Character,
   Currency,
+  EquipmentOption,
   Feature,
   FeatureUses,
   GameEvent,
@@ -21,7 +22,15 @@ import type {
 import { nameKey, newId } from '@/lib/id';
 import { CONDITIONS, INCAPACITATING_CONDITIONS, conditionKey, conditionName, matchStandardCondition } from './conditions';
 import { levelForXp } from './progression';
-import { abilityModifier, characterLevel, deathSaveModifier, exhaustionLevel, hasCondition, spellcastingAbility } from './rules';
+import {
+  abilityModifier,
+  characterLevel,
+  deathSaveModifier,
+  exhaustionLevel,
+  hasCondition,
+  spellcastingAbility,
+  syncArmorClass,
+} from './rules';
 import { clamp, formatInt, gameEvent, lookupProblem, matchByName, toInt, touch, warning } from './util';
 
 export interface EngineResult {
@@ -559,13 +568,33 @@ export function setHeroicInspiration(c: Character, value: boolean): EngineResult
 const itemName = (i: InventoryItem) => i.name;
 const MAX_ATTUNED = 3;
 
+/** Options for inventory changes. */
+export interface InventoryOptions {
+  /** Equipment catalog (BuilderData.equipment) for the AC recompute; the SRD armor table is used without it. */
+  catalog?: readonly EquipmentOption[];
+}
+
+/**
+ * After an inventory change, keep the stored AC in step with worn armor, shields and attuned
+ * protection items (syncArmorClass: an AC set by hand is kept, with a warning giving the computed one).
+ */
+function withArmorClass(before: Character, result: EngineResult, opts: InventoryOptions): EngineResult {
+  if (result.character === before) return result;
+  const ac = syncArmorClass(before, result.character, opts.catalog ?? []);
+  if (ac.character === result.character && ac.events.length === 0) return result;
+  return { character: ac.character, events: [...result.events, ...ac.events] };
+}
+
 /** Find an inventory item by (fuzzy, case-insensitive) name. */
 export function findItem(c: Character, name: string): InventoryItem | undefined {
   return matchByName(c.inventory, name, itemName).match;
 }
 
-/** Add an item; stacks onto an existing item with the same name (non-magic, no charges). */
-export function addItem(c: Character, item: Omit<InventoryItem, 'id'> & { id?: string }): EngineResult {
+/**
+ * Add an item; stacks onto an existing item with the same name (non-magic, no charges). An item added
+ * equipped or attuned updates the AC (see syncArmorClass).
+ */
+export function addItem(c: Character, item: Omit<InventoryItem, 'id'> & { id?: string }, opts: InventoryOptions = {}): EngineResult {
   const name = item.name?.trim();
   if (!name) return unchanged(c, 'An item needs a name.');
   const quantity = Math.max(1, toInt(item.quantity, 1));
@@ -582,14 +611,21 @@ export function addItem(c: Character, item: Omit<InventoryItem, 'id'> & { id?: s
     };
   }
   const added: InventoryItem = { ...item, id: item.id ?? newId(), name, quantity };
-  return {
-    character: touch({ ...c, inventory: [...c.inventory, added] }),
-    events: [gameEvent('item-added', `Added ${quantity > 1 ? `${quantity} × ` : ''}${name}`)],
-  };
+  return withArmorClass(
+    c,
+    {
+      character: touch({ ...c, inventory: [...c.inventory, added] }),
+      events: [gameEvent('item-added', `Added ${quantity > 1 ? `${quantity} × ` : ''}${name}`)],
+    },
+    opts,
+  );
 }
 
-/** Remove `quantity` (default all) of an item. Warns if the item is missing or the quantity is too high. */
-export function removeItem(c: Character, name: string, quantity?: number): EngineResult {
+/**
+ * Remove `quantity` (default all) of an item. Warns if the item is missing or the quantity is too high.
+ * Removing worn armor, a Shield or an attuned protection item updates the AC (see syncArmorClass).
+ */
+export function removeItem(c: Character, name: string, quantity?: number, opts: InventoryOptions = {}): EngineResult {
   const found = matchByName(c.inventory, name, itemName);
   const item = found.match;
   if (!item) return unchanged(c, lookupProblem('item', name, found, itemName));
@@ -597,10 +633,14 @@ export function removeItem(c: Character, name: string, quantity?: number): Engin
   if (n > item.quantity) return unchanged(c, `Only ${item.quantity} × ${item.name} — can't remove ${n}.`);
   const left = item.quantity - n;
   const inventory = left > 0 ? c.inventory.map((i) => (i.id === item.id ? { ...i, quantity: left } : i)) : c.inventory.filter((i) => i.id !== item.id);
-  return {
-    character: touch({ ...c, inventory }),
-    events: [gameEvent('item-removed', `Removed ${n} × ${item.name}${left > 0 ? ` (${left} left)` : ''}`)],
-  };
+  return withArmorClass(
+    c,
+    {
+      character: touch({ ...c, inventory }),
+      events: [gameEvent('item-removed', `Removed ${n} × ${item.name}${left > 0 ? ` (${left} left)` : ''}`)],
+    },
+    opts,
+  );
 }
 
 function describePatch(patch: Partial<Omit<InventoryItem, 'id'>>): string {
@@ -617,9 +657,15 @@ function describePatch(patch: Partial<Omit<InventoryItem, 'id'>>): string {
 
 /**
  * Patch an item. Setting quantity below 1 removes it. Attuning a 4th item is refused (a creature can
- * be attuned to at most three magic items).
+ * be attuned to at most three magic items). Equipping or attuning (or the reverse) updates the AC when
+ * it was worked out from gear (see syncArmorClass); an AC set by hand is kept, with a warning.
  */
-export function updateItem(c: Character, name: string, patch: Partial<Omit<InventoryItem, 'id'>>): EngineResult {
+export function updateItem(
+  c: Character,
+  name: string,
+  patch: Partial<Omit<InventoryItem, 'id'>>,
+  opts: InventoryOptions = {},
+): EngineResult {
   const found = matchByName(c.inventory, name, itemName);
   const item = found.match;
   if (!item) return unchanged(c, lookupProblem('item', name, found, itemName));
@@ -630,16 +676,24 @@ export function updateItem(c: Character, name: string, patch: Partial<Omit<Inven
   }
   const updated: InventoryItem = { ...item, ...patch, id: item.id, ...(patch.name ? { name: patch.name.trim() } : {}) };
   if (updated.quantity < 1) {
-    return {
-      character: touch({ ...c, inventory: c.inventory.filter((i) => i.id !== item.id) }),
-      events: [gameEvent('item-removed', `Removed ${item.name} (quantity 0)`)],
-    };
+    return withArmorClass(
+      c,
+      {
+        character: touch({ ...c, inventory: c.inventory.filter((i) => i.id !== item.id) }),
+        events: [gameEvent('item-removed', `Removed ${item.name} (quantity 0)`)],
+      },
+      opts,
+    );
   }
   const change = describePatch(patch);
-  return {
-    character: touch({ ...c, inventory: c.inventory.map((i) => (i.id === item.id ? updated : i)) }),
-    events: [gameEvent('item-added', `Updated ${item.name}${change ? `: ${change}` : ''}`)],
-  };
+  return withArmorClass(
+    c,
+    {
+      character: touch({ ...c, inventory: c.inventory.map((i) => (i.id === item.id ? updated : i)) }),
+      events: [gameEvent('item-added', `Updated ${item.name}${change ? `: ${change}` : ''}`)],
+    },
+    opts,
+  );
 }
 
 // ---------------------------------------------------------------------------

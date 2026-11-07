@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useSettings } from '@/state/settingsStore';
@@ -13,11 +13,20 @@ vi.mock('@/storage', () => ({
   listRemoteSaves: vi.fn(),
   pushCampaignToGithub: vi.fn(),
   pullCampaignFromGithub: vi.fn(),
+  requestPersistentStorage: vi.fn(),
   useCampaignList: () => [],
 }));
 
 const { testApiKey } = await import('@/dm');
-const { testGithubConnection, syncWithGithub } = await import('@/storage');
+const { testGithubConnection, syncWithGithub, requestPersistentStorage } = await import('@/storage');
+
+/** jsdom has no StorageManager; stand one in with the browser's answer to persisted(). */
+function stubStorageManager(persisted: () => boolean) {
+  Object.defineProperty(window.navigator, 'storage', {
+    configurable: true,
+    value: { persisted: vi.fn(async () => persisted()), persist: vi.fn(async () => persisted()) },
+  });
+}
 
 autoCleanup();
 
@@ -34,6 +43,11 @@ describe('SettingsScreen', () => {
     vi.mocked(testApiKey).mockReset();
     vi.mocked(testGithubConnection).mockReset();
     vi.mocked(syncWithGithub).mockReset();
+    vi.mocked(requestPersistentStorage).mockReset().mockResolvedValue(false);
+  });
+
+  afterEach(() => {
+    Reflect.deleteProperty(window.navigator, 'storage');
   });
 
   it('saves the key as you type and reports a successful test', async () => {
@@ -146,6 +160,43 @@ describe('SettingsScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Sync now' }));
     expect(await screen.findByText('1 uploaded · 0 downloaded · 1 already up to date')).toBeInTheDocument();
     await waitFor(() => expect(useSettings.getState().githubSync.lastSyncedAt).not.toBeNull());
+  });
+
+  it('shows whether saves may be cleared and can ask the browser to keep them', async () => {
+    let persisted = false;
+    stubStorageManager(() => persisted);
+    vi.mocked(requestPersistentStorage).mockImplementation(async () => {
+      persisted = true;
+      return true;
+    });
+    const user = userEvent.setup();
+    renderSettings();
+
+    expect(await screen.findByText(/Storage: may be cleared by the browser/)).toBeInTheDocument();
+    expect(screen.getByText(/export a save file from a campaign’s card/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Ask the browser to keep them' }));
+
+    expect(requestPersistentStorage).toHaveBeenCalledTimes(1);
+    expect(await screen.findByText(/Storage: persistent/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Ask the browser to keep them' })).not.toBeInTheDocument();
+  });
+
+  it('takes a refusal calmly and points to backups', async () => {
+    stubStorageManager(() => false);
+    useSettings.getState().updateGithubSync({ lastSyncedAt: Date.now() - 2 * 86_400_000 });
+    const user = userEvent.setup();
+    renderSettings();
+
+    await user.click(await screen.findByRole('button', { name: 'Ask the browser to keep them' }));
+    expect(await screen.findByText(/The browser makes this call itself/)).toBeInTheDocument();
+    expect(screen.getByText(/Storage: may be cleared by the browser/)).toBeInTheDocument();
+    expect(screen.getByText(/Last synced to GitHub 2 days ago/)).toBeInTheDocument();
+  });
+
+  it('says so when the browser cannot report how it stores saves', async () => {
+    renderSettings();
+    expect(await screen.findByText('This browser doesn’t say whether it will keep your saves.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Ask the browser to keep them' })).not.toBeInTheDocument();
   });
 
   it('only deletes everything after typing DELETE', async () => {

@@ -80,11 +80,14 @@ function ItemRow({ item, editable, onEdit, catalog }: { item: InventoryItem; edi
         </div>
         {editable ? (
           <div className="flex shrink-0 items-center rounded-lg border border-border" role="group" aria-label={`${item.name} quantity`}>
+            {/* At 1 the last one goes through Remove and its confirmation, so its details aren't lost by a stray tap. */}
             <button
               type="button"
               aria-label={`One fewer ${item.name}`}
+              disabled={item.quantity <= 1}
+              title={item.quantity <= 1 ? 'Use Remove to take the last one off your sheet' : undefined}
               onClick={() => onEdit((c) => itemQuantityChange(c, item.id, item.quantity - 1))}
-              className="grid size-7 place-items-center text-muted hover:text-text"
+              className="grid size-7 place-items-center text-muted hover:text-text disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:text-muted"
             >
               <Minus className="size-3.5" aria-hidden />
             </button>

@@ -4,9 +4,11 @@ import { Clock, Copy, Download, Loader2, Play, ScrollText, Trash2 } from 'lucide
 import { downloadCampaign, duplicateCampaign, type CampaignSummary } from '@/storage';
 import { Badge, IconButton } from '@/ui/components/ui';
 import { ButtonLink } from '@/ui/components/ButtonLink';
+import { portraitDisplay } from '@/ui/components/portrait';
 import { toast } from '@/ui/components/toast';
 import { DEFAULT_COVER_COLOR, DEFAULT_COVER_EMOJI, coverTint } from './campaignOptions';
 import { characterLine, errorMessage, formatRelativeTime, plural } from './format';
+import { askToKeepSaves } from './persistentStorage';
 
 /** Where "Continue" goes: the table if there's a character, otherwise the builder. */
 export function continuePath(campaign: CampaignSummary['campaign']): string {
@@ -14,15 +16,15 @@ export function continuePath(campaign: CampaignSummary['campaign']): string {
 }
 
 function Portrait({ portrait }: { portrait?: string }) {
-  if (!portrait) return null;
-  // Portraits are an emoji or an embedded image; never fetch remote URLs from a save file.
-  if (portrait.startsWith('data:image/')) {
-    return <img src={portrait} alt="" className="size-5 shrink-0 rounded-full object-cover" />;
+  // An emoji or an embedded image; never fetch remote URLs from a save file.
+  const shown = portraitDisplay(portrait);
+  if (!shown) return null;
+  if (shown.kind === 'image') {
+    return <img src={shown.src} alt="" className="size-5 shrink-0 rounded-full object-cover" />;
   }
-  if (portrait.length > 16 || /^[a-z]+:/i.test(portrait)) return null;
   return (
     <span aria-hidden className="shrink-0 text-base leading-none">
-      {portrait}
+      {shown.text}
     </span>
   );
 }
@@ -98,6 +100,7 @@ export function CampaignCard({ summary, onDelete }: { summary: CampaignSummary; 
           size="sm"
           aria-label={`Continue ${campaign.name}`}
           icon={<Play className="size-3.5" aria-hidden />}
+          onClick={askToKeepSaves}
         >
           Continue
         </ButtonLink>

@@ -7,10 +7,11 @@ import { NewCampaignScreen, newCampaignDraft, toCampaignInput, validatePremiseSt
 
 vi.mock('@/storage', () => ({
   createCampaign: vi.fn(),
+  requestPersistentStorage: vi.fn(),
   useLibrarySources: () => [],
 }));
 
-const { createCampaign } = await import('@/storage');
+const { createCampaign, requestPersistentStorage } = await import('@/storage');
 
 autoCleanup();
 
@@ -24,6 +25,7 @@ const stepHeading = (name: string) => screen.getByRole('heading', { level: 2, na
 describe('NewCampaignScreen', () => {
   beforeEach(() => {
     vi.mocked(createCampaign).mockReset();
+    vi.mocked(requestPersistentStorage).mockReset().mockResolvedValue(false);
   });
 
   it('requires a campaign name before moving on', async () => {
@@ -100,6 +102,8 @@ describe('NewCampaignScreen', () => {
       }),
     });
     expect(await screen.findByTestId('location')).toHaveTextContent('/campaign/camp-new/character');
+    // The new save is the only copy: ask the browser not to evict it (a refusal changes nothing).
+    expect(requestPersistentStorage).toHaveBeenCalledTimes(1);
   });
 
   it('lets the player go back without losing choices', async () => {
@@ -136,6 +140,7 @@ describe('NewCampaignScreen', () => {
     await waitFor(() => expect(createCampaign).toHaveBeenCalled());
     expect(stepHeading('Safety')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create campaign' })).toBeEnabled();
+    expect(requestPersistentStorage).not.toHaveBeenCalled();
   });
 });
 

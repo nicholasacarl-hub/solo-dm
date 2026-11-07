@@ -3,13 +3,19 @@ import type { InteractionResponse, LogEntry } from '@/types';
 import { sampleCharacter, sampleSession, sampleSettings, zeroUsage } from '@/test/fixtures';
 import * as storage from '@/storage';
 import { db } from '@/storage/db';
+import { emitCampaignChange } from '@/storage/events';
 import { resetDatabase, seedCampaign } from '@/storage/testData';
-import { useGame, whenPersisted } from './gameStore';
+import { queueCampaignNotice, STREAM_CHECKPOINT_MS, useGame, whenPersisted } from './gameStore';
 
 // Real storage (fake-indexeddb), with putLog wrapped so a test can make one write fail.
 vi.mock('@/storage', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/storage')>();
-  return { ...actual, putLog: vi.fn(actual.putLog) };
+  return {
+    ...actual,
+    putLog: vi.fn(actual.putLog),
+    putTranscript: vi.fn(actual.putTranscript),
+    isCampaignOpenElsewhere: vi.fn(actual.isCampaignOpenElsewhere),
+  };
 });
 
 const game = () => useGame.getState();
@@ -447,7 +453,8 @@ describe('write-through behaviour', () => {
     expect(game().loading).toBe(false);
 
     await storage.deleteCampaign('a-camp');
-    expect(game().campaignId).toBeNull();
+    // The id stays, so a table still showing it can explain what happened.
+    expect(game()).toMatchObject({ campaignId: 'a-camp', campaign: null, log: [], loadError: 'This campaign has been deleted.' });
   });
 });
 
@@ -507,5 +514,174 @@ describe('interactions and DM notices', () => {
     game().setDmStatus({ activity: 'Rolling for the goblins…' });
     expect(game().dm).toEqual({ phase: 'thinking', activity: 'Rolling for the goblins…', error: null, retryable: false });
     game().setDmStatus({ phase: 'idle', activity: null });
+  });
+});
+
+describe('DM notices are saved with the campaign', () => {
+  const stored = async (id = 'a-camp') => (await storage.getCampaign(id))?.pendingDmNotices;
+
+  it('survive leaving the table and a reload, and come back with the campaign', async () => {
+    await loadSeeded('a');
+    game().queueDmNotice('Safety: the player added "spiders" to the lines.');
+    game().queueDmNotice('Safety: the player added "spiders" to the lines.');
+    await whenPersisted('a-camp');
+    expect(await stored()).toEqual(['Safety: the player added "spiders" to the lines.']);
+
+    game().unloadCampaign();
+    expect(game().pendingDmNotices).toEqual([]);
+    await game().loadCampaign('a-camp');
+    expect(game().pendingDmNotices).toEqual(['Safety: the player added "spiders" to the lines.']);
+    expect(game().campaign?.pendingDmNotices).toEqual(['Safety: the player added "spiders" to the lines.']);
+  });
+
+  it('are cleared from storage by the save that delivers them; a failed append keeps them', async () => {
+    await loadSeeded('a');
+    game().queueDmNotice('The player edited their HP: 12 → 17.');
+    await whenPersisted('a-camp');
+
+    expect(game().takeDmNotices()).toEqual(['The player edited their HP: 12 → 17.']);
+    expect(game().pendingDmNotices).toEqual([]);
+    expect(await stored()).toEqual(['The player edited their HP: 12 → 17.']);
+
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.mocked(storage.putTranscript).mockRejectedValueOnce(new Error('QuotaExceededError'));
+    await expect(game().appendTranscript([{ role: 'user', content: 'turn' }])).rejects.toThrow(/QuotaExceededError/);
+    expect(await stored()).toEqual(['The player edited their HP: 12 → 17.']);
+
+    await game().appendTranscript([{ role: 'user', content: 'turn, again' }]);
+    expect(await stored()).toEqual([]);
+  });
+
+  it('queueCampaignNotice saves to a campaign that is not loaded, and goes through the store when it is', async () => {
+    const b = await seedCampaign('b');
+    await loadSeeded('a');
+    const notice = 'The player retired the homebrew “Tidecaller’s Boon” in the Library.';
+
+    await queueCampaignNotice('b-camp', `  ${notice} `);
+    await queueCampaignNotice('b-camp', notice);
+    expect(await stored('b-camp')).toEqual([notice]);
+    expect((await storage.getCampaign('b-camp'))?.updatedAt).toBeGreaterThan(b.campaign.updatedAt);
+    expect(game().pendingDmNotices).toEqual([]);
+
+    await queueCampaignNotice('a-camp', 'The player edited the homebrew “Fireblade” in the Library.');
+    expect(game().pendingDmNotices).toEqual(['The player edited the homebrew “Fireblade” in the Library.']);
+    expect(await stored()).toEqual(['The player edited the homebrew “Fireblade” in the Library.']);
+
+    await game().loadCampaign('b-camp');
+    expect(game().pendingDmNotices).toEqual([notice]);
+
+    // A campaign that doesn't exist is ignored, never created.
+    await queueCampaignNotice('missing', 'Hello?');
+    expect(await storage.getCampaign('missing')).toBeUndefined();
+  });
+
+  it('keeps notices queued elsewhere (the Library, another tab) when the store saves, and picks them up', async () => {
+    await loadSeeded('a');
+    game().queueDmNotice('Mine.');
+    await whenPersisted('a-camp');
+    await storage.addPendingDmNotice('a-camp', 'From the Library in another tab.');
+
+    await game().appendLog({ kind: 'player', text: 'I look around.' });
+
+    expect(await stored()).toEqual(['Mine.', 'From the Library in another tab.']);
+    expect(game().pendingDmNotices).toEqual(['Mine.', 'From the Library in another tab.']);
+    expect(game().takeDmNotices()).toEqual(['Mine.', 'From the Library in another tab.']);
+    await game().appendTranscript([{ role: 'user', content: 'turn' }]);
+    expect(await stored()).toEqual([]);
+  });
+
+  it('stay in memory when nothing is loaded', () => {
+    game().queueDmNotice('Loose note.');
+    expect(game().pendingDmNotices).toEqual(['Loose note.']);
+  });
+});
+
+describe('one tab at a time', () => {
+  it('refuses to write a campaign another tab has open at the table, and leaves storage alone', async () => {
+    await loadSeeded('a');
+    const { exportedAt: _before, ...before } = await storage.exportCampaignBundle('a-camp');
+    vi.mocked(storage.isCampaignOpenElsewhere).mockResolvedValue(true);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    await expect(game().appendLog({ kind: 'player', text: 'from a stale tab' })).rejects.toThrow(storage.OPEN_ELSEWHERE_ERROR);
+    await expect(game().updateCharacter((c) => ({ ...c, xp: 0 }))).rejects.toThrow(/open at the table in another tab/);
+    await expect(game().appendTranscript([{ role: 'user', content: 'stale' }])).rejects.toThrow(/another tab/);
+
+    expect(warn).toHaveBeenCalled();
+    const { exportedAt: _after, ...after } = await storage.exportCampaignBundle('a-camp');
+    expect(after).toEqual(before);
+
+    // A note for the DM is only added to the stored record: the tab at the table picks it up.
+    game().queueDmNotice('From the stale tab.');
+    await whenPersisted('a-camp');
+    expect((await storage.getCampaign('a-camp'))?.pendingDmNotices).toEqual(['From the stale tab.']);
+  });
+
+  it('drops writes queued before the campaign was replaced (another tab pulled or imported it)', async () => {
+    await loadSeeded('a');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const realPutLog = vi.mocked(storage.putLog).getMockImplementation();
+    let open = () => {};
+    const gate = new Promise<void>((resolve) => (open = resolve));
+    vi.mocked(storage.putLog).mockImplementationOnce(async (entries) => {
+      await gate;
+      await realPutLog?.(entries);
+    });
+
+    const first = game().appendLog({ kind: 'player', text: 'already saving' });
+    const second = game().appendLog({ kind: 'player', text: 'still queued' });
+    emitCampaignChange({ type: 'replaced', campaignId: 'a-camp' });
+    open();
+
+    await first;
+    await expect(second).rejects.toThrow(/replaced or deleted/);
+    const texts = (await db.log.where('campaignId').equals('a-camp').toArray()).flatMap((e) => (e.kind === 'player' ? [e.text] : []));
+    expect(texts).toContain('already saving');
+    expect(texts).not.toContain('still queued');
+    await vi.waitFor(() => expect(game().loading).toBe(false));
+  });
+});
+
+describe('narration cut off mid-stream', () => {
+  it('is settled (no longer streaming) when the campaign is opened fresh, and saved that way', async () => {
+    await loadSeeded('a');
+    const entry = await game().appendLog({ kind: 'dm', text: 'The cellar door', streaming: true });
+    // The tab went away mid-stream: the entry was saved once, still streaming.
+    game().unloadCampaign();
+
+    await game().loadCampaign('a-camp');
+
+    expect(game().log.find((e) => e.id === entry.id)).toMatchObject({ text: 'The cellar door', streaming: false });
+    await whenPersisted('a-camp');
+    expect(await db.log.get(entry.id)).toMatchObject({ text: 'The cellar door', streaming: false });
+  });
+
+  it('is left alone by a reload of the campaign this tab shows (it may still be streaming here)', async () => {
+    await loadSeeded('a');
+    const entry = await game().appendLog({ kind: 'dm', text: 'The cellar door', streaming: true });
+    await game().reload();
+    expect(game().log.find((e) => e.id === entry.id)).toMatchObject({ streaming: true });
+    await game().updateLog(entry.id, { text: 'The cellar door creaks open.', streaming: false } as Partial<LogEntry>);
+    expect(await db.log.get(entry.id)).toMatchObject({ text: 'The cellar door creaks open.', streaming: false });
+  });
+
+  it('is saved every few seconds while it streams', async () => {
+    await loadSeeded('a');
+    let clock = 1_800_000_000_000;
+    vi.spyOn(Date, 'now').mockImplementation(() => clock);
+    const entry = await game().appendLog({ kind: 'dm', text: 'The', streaming: true });
+    const patch = (text: string) => game().updateLog(entry.id, { text } as Partial<LogEntry>, { persist: false });
+
+    await patch('The fog');
+    clock += STREAM_CHECKPOINT_MS - 1;
+    await patch('The fog parts');
+    await whenPersisted('a-camp');
+    expect(await db.log.get(entry.id)).toMatchObject({ text: 'The', streaming: true });
+
+    clock += 1;
+    await patch('The fog parts, and');
+    await whenPersisted('a-camp');
+    expect(await db.log.get(entry.id)).toMatchObject({ text: 'The fog parts, and', streaming: true });
+    expect((await storage.getCampaign('a-camp'))?.updatedAt).toBe(game().campaign?.updatedAt);
   });
 });

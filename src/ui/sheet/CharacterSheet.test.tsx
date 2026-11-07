@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useGame } from '@/state/gameStore';
 import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
+import { builderFixture } from '@/ui/builder/testing/builderFixture';
 import { clearRolls, queueRolls } from '@/ui/builder/testing/fakeEngine';
 import { installDialogPolyfill, resetFakeGame } from '@/ui/builder/testing/fakeGameStore';
 import { CharacterSheet } from './CharacterSheet';
@@ -87,7 +88,7 @@ describe('CharacterSheet', () => {
     expect(notices()).toEqual(['Player spent Heroic Inspiration', 'Player changed exhaustion 0 → 2']);
   });
 
-  it('logs unprompted rolls without queueing a notice', async () => {
+  it('logs unprompted rolls and tells the DM the result', async () => {
     const user = userEvent.setup();
     queueRolls(15);
     render(<Harness />);
@@ -98,7 +99,8 @@ describe('CharacterSheet', () => {
     expect(entry).toMatchObject({ kind: 'roll', actor: 'player', secret: false });
     expect(entry.kind === 'roll' && entry.purpose).toMatch(/\(unprompted\)$/);
     expect(entry.kind === 'roll' && entry.roll.total).toBe(15 + 5);
-    expect(notices()).toEqual([]);
+    // The DM reads the transcript, not the log, so the roll reaches it as a notice.
+    expect(notices()).toEqual(['The player rolled arcana check on their own: 20 (d20 (15) + 5 = 20).']);
   });
 
   it('asks for the die face in physical-dice mode', async () => {
@@ -112,6 +114,17 @@ describe('CharacterSheet', () => {
     const entry = vi.mocked(useGame.getState().appendLog).mock.calls[0][0];
     expect(entry).toMatchObject({ kind: 'roll', manual: true });
     expect(entry.kind === 'roll' && entry.roll.total).toBe(11 + 5);
+    expect(notices()).toEqual(['The player rolled INT save on their own: 16 (d20 (11) + 5 = 16), on physical dice.']);
+  });
+
+  it('tells the DM about a death save once, through the death-save change', async () => {
+    const user = userEvent.setup();
+    queueRolls(12);
+    resetFakeGame({ campaign: sampleCampaign(), character: sampleCharacter({ hp: { max: 17, current: 0, temp: 0 } }) });
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'Roll death save' }));
+    expect(vi.mocked(useGame.getState().appendLog)).toHaveBeenCalledTimes(1);
+    expect(notices()).toEqual(['Player rolled a death saving throw: 12 — success (1 successes, 0 failures)']);
   });
 
   it('removes inventory items after confirming', async () => {
@@ -122,6 +135,26 @@ describe('CharacterSheet', () => {
     await user.click(screen.getByRole('button', { name: 'Confirm removing Robe' }));
     expect(useGame.getState().character?.inventory.some((i) => i.name === 'Robe')).toBe(false);
     expect(notices()).toEqual(['Player removed Robe from their inventory']);
+  });
+
+  it('never removes the last of an item with the minus button', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Inventory/ }));
+    await user.click(screen.getByRole('button', { name: 'One fewer Dagger' }));
+    expect(useGame.getState().character?.inventory.find((i) => i.name === 'Dagger')?.quantity).toBe(1);
+    // At 1 the minus button is off; only Remove (with its confirmation) takes the item away.
+    expect(screen.getByRole('button', { name: 'One fewer Dagger' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'One fewer Robe' })).toBeDisabled();
+    await user.click(screen.getByRole('button', { name: 'One fewer Robe' }));
+    expect(useGame.getState().character?.inventory.some((i) => i.name === 'Robe')).toBe(true);
+    expect(notices()).toEqual(['Player changed Dagger quantity 2 → 1']);
+  });
+
+  it('lists the hero’s damage resistances with the proficiencies', () => {
+    resetFakeGame({ campaign: sampleCampaign(), character: sampleCharacter({ damageResistances: ['poison'] }) });
+    render(<Harness />);
+    expect(screen.getByText('Damage resistances').nextSibling).toHaveTextContent('Poison');
   });
 
   it('is read-only without editable', () => {
@@ -149,6 +182,34 @@ describe('LevelUpDialog', () => {
     expect(useGame.getState().character?.classes[0].level).toBe(4);
     expect(notices()[0]).toMatch(/^Player leveled up to Wizard 4 \(character level 4\): \+5 HP/);
     expect(await screen.findByText('Level 4!')).toBeInTheDocument();
+  });
+
+  it('grows the uses of existing features from the class table and tells the DM', async () => {
+    const user = userEvent.setup();
+    const fighter = builderFixture().classes.find((c) => c.name === 'Fighter')!;
+    const secondWind = fighter.features.find((f) => f.name === 'Second Wind')!;
+    resetFakeGame({
+      campaign: sampleCampaign(),
+      character: sampleCharacter({
+        classes: [{ classId: fighter.id, name: 'Fighter', level: 3, hitDie: 10, subclass: 'Champion', casterType: 'none' }],
+        spellcasting: undefined,
+        features: [
+          // Built before uses had a scale: the refresh both grows it and attaches the table.
+          { id: 'f-sw', name: 'Second Wind', source: 'class', sourceName: 'Fighter 1', description: secondWind.description, uses: { max: 2, used: 1, recharge: 'long' } },
+        ],
+      }),
+    });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    // SRD 5.2.1 Fighter table: Second Wind 2 at levels 1-3, 3 at level 4.
+    expect(useGame.getState().character?.features.find((f) => f.id === 'f-sw')?.uses).toEqual({
+      max: 3,
+      used: 1,
+      recharge: 'long',
+      scale: { by: 'table', className: 'Fighter', values: [2, 2, 2, 3] },
+    });
+    expect(notices()[0]).toContain('feature uses now: Second Wind 2 → 3');
+    expect(await screen.findByText('Second Wind 2 → 3')).toBeInTheDocument();
   });
 
   it('shows multiclass prerequisites', async () => {

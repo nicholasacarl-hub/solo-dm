@@ -440,9 +440,44 @@ export function diceRange(expression: string): { min: number; max: number } {
 }
 
 /**
+ * Halfling Luck (SRD 5.2.1 Halfling): when the d20 of a D20 Test shows a 1, reroll that die once and
+ * use the new roll (with Disadvantage the other die still counts if it is lower). Returns the result
+ * unchanged when the natural roll isn't a 1. For digital rolls; a physical roll is rerolled by the player.
+ */
+export function rerollNaturalOne(result: D20TestResult, opts: { rng?: Rng } = {}): D20TestResult {
+  if (result.natural !== 1) return result;
+  const index = result.dice.findIndex((d) => d.sides === 20 && !d.dropped && d.value === 1);
+  if (index < 0) return result;
+  const rerolled = rollDie(20, opts.rng ?? cryptoRng);
+  const values = result.dice.map((d, i) => (i === index ? rerolled : d.value));
+  const d20s = result.dice.flatMap((d, i) => (d.sides === 20 ? [i] : []));
+  const mode = result.advantage === 'advantage' ? 'kh' : result.advantage === 'disadvantage' ? 'kl' : null;
+  const keptAt = mode ? d20s.reduce((best, i) => ((mode === 'kh' ? values[i] > values[best] : values[i] < values[best]) ? i : best)) : index;
+  const dice = result.dice.map((d, i) => (d.sides !== 20 ? d : i === keptAt ? { sides: 20, value: values[i] } : { sides: 20, value: values[i], dropped: true }));
+  const natural = values[keptAt];
+  const total = natural + result.modifier;
+  const face = (i: number) => (dice[i].dropped ? `~~${values[i]}~~` : String(values[i]));
+  const faces = d20s.map((i) => (i === index ? `~~1~~ → ${face(i)}` : face(i))).join(', ');
+  const parts: BreakdownPart[] = [{ sign: 1, text: `${d20s.length > 1 ? `${d20s.length}d20` : 'd20'} (${faces}, Luck)`, flat: false }];
+  if (result.modifier !== 0) parts.push({ sign: result.modifier < 0 ? -1 : 1, text: String(Math.abs(result.modifier)), flat: true });
+  const next: RollResult = {
+    expression: result.expression,
+    total,
+    dice,
+    modifier: result.modifier,
+    breakdown: joinBreakdown(parts, total),
+    natural,
+    isCritical: natural === 20,
+    isFumble: natural === 1,
+    ...(result.advantage ? { advantage: result.advantage } : {}),
+  };
+  return withDc(next, result.dc);
+}
+
+/**
  * Attack-roll rules on top of a d20 test against AC (SRD 5.2.1 "Rolling 1s and 20s"): a natural 20
  * always hits and is a Critical Hit, a natural 1 always misses. `critRange` (e.g. 19 for a Champion's
- * Improved Critical) widens the critical range.
+ * Improved Critical — see attackCritRange) widens the critical range; a Critical Hit always hits.
  */
 export function applyAttackRollRules(result: D20TestResult, opts: { critRange?: number } = {}): D20TestResult {
   if (result.natural === undefined) return result;

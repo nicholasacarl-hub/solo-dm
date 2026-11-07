@@ -63,6 +63,17 @@ describe('CombatTracker', () => {
     expect(rows[3]).toHaveTextContent('Defeated');
   });
 
+  it("hides the AC of creatures whose numbers the DM keeps hidden (a disguised foe's stat block)", () => {
+    seedGame();
+    render(<CombatTracker />);
+    const rows = initiativeRows();
+    // Bandits 1 and 2 hide their HP, so their AC stays hidden too; the hero's and Old Tam's show.
+    expect(rows[1]).not.toHaveTextContent('Armor Class');
+    expect(rows[2]).not.toHaveTextContent('Armor Class');
+    expect(rows[0]).toHaveTextContent('Armor Class 12');
+    expect(rows[3]).toHaveTextContent('Armor Class 11');
+  });
+
   it('renders nothing outside combat', () => {
     seedGame({ combat: null });
     const { container } = render(<CombatTracker />);

@@ -144,6 +144,53 @@ export function cantripNames(text: string): string[] {
   return names;
 }
 
+/**
+ * The part of a trait that applies whichever option is chosen: the text before its first bold
+ * option or table row ("Choose one of the following benefits …; you can use the chosen benefit a
+ * number of times equal to your Proficiency Bonus …").
+ */
+export function traitPreamble(description: string): string {
+  const cut = description.search(/\n\s*(?:_?\*\*[^*\n]+?\.\*\*|\|)/);
+  return (cut >= 0 ? description.slice(0, cut) : description).trim();
+}
+
+/** The lineage trait as it applies to the chosen lineage: its preamble plus that lineage's text only. */
+export function lineageFeatureText(trait: SpeciesTrait, lineage: LineageOption): string {
+  return `${traitPreamble(trait.description)}\n\n**${lineage.name}.** ${lineage.description}`;
+}
+
+const DAMAGE_TYPES = ['acid', 'bludgeoning', 'cold', 'fire', 'force', 'lightning', 'necrotic', 'piercing', 'poison', 'psychic', 'radiant', 'slashing', 'thunder'];
+
+/** Damage types named in a text, lowercase, in the order they appear ("Acid damage" -> ["acid"]). */
+export function damageTypesIn(text: string): string[] {
+  const lower = text.toLowerCase();
+  return DAMAGE_TYPES.map((t) => ({ t, at: lower.search(new RegExp(`\\b${t}\\b`)) }))
+    .filter((x) => x.at >= 0)
+    .sort((a, b) => a.at - b.at)
+    .map((x) => x.t);
+}
+
+/**
+ * Damage Resistances a species gives (SRD 5.2.1 Dwarven Resilience, Dragonborn Damage Resistance,
+ * Tiefling legacies): sentences starting "You have Resistance to …" in its traits and the chosen
+ * lineage. "…the damage type determined by your Draconic Ancestry trait" reads the lineage's type.
+ */
+export function speciesResistances(species: SpeciesOption | undefined, lineage: LineageOption | undefined): string[] {
+  if (!species) return [];
+  const lineageTrait = speciesChoices(species).lineageTrait;
+  const texts = species.traits.map((t) => (t === lineageTrait ? traitPreamble(t.description) : t.description));
+  if (lineage) texts.push(lineage.description);
+  const out: string[] = [];
+  for (const text of texts) {
+    for (const m of text.matchAll(/(?:^|[.!?]\s+|\n\s*|\*\*_?\s*)You have Resistance to ([^.;\n]+)/g)) {
+      const named = damageTypesIn(m[1]);
+      const types = named.length ? named : lineage && /determined by/i.test(m[1]) ? damageTypesIn(lineage.description) : [];
+      for (const t of types) if (!out.includes(t)) out.push(t);
+    }
+  }
+  return out;
+}
+
 /** Extra HP per character level from traits such as Dwarven Toughness. */
 export function hpBonusPerLevel(traits: { description: string }[]): number {
   return traits.filter((t) => /Hit Point maximum increases by 1, and it increases by 1 again whenever you gain a level/i.test(t.description)).length;

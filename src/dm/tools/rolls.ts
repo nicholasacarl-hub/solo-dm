@@ -1,17 +1,26 @@
 /**
  * Dice: the DM's own rolls (roll_dice) and the player's rolls (request_player_roll), which
- * resolve per the campaign's roll mode — instantly, or through the roll dialog.
+ * resolve per the campaign's roll mode — instantly, or through the roll dialog. Player d20 tests
+ * take the sheet into account (engine rollSituation): the hero's conditions and armor add
+ * Advantage / Disadvantage or fail a save outright, Halfling Luck rerolls a natural 1, and a
+ * Champion's wider critical range applies to weapon attacks.
  */
 import {
+  applyAttackRollRules,
   attackDamageExpression,
+  combineAdvantage,
+  findAttack,
   isValidDice,
   parseDice,
   recordDeathSave,
+  rerollNaturalOne,
   rollD20Test,
   rollDice,
   rollRequestModifier,
+  rollSituation,
+  type RollSituation,
 } from '@/engine';
-import type { AdvantageState, Attack, Character, D20TestResult, PlayerRollRequest } from '@/types';
+import type { AdvantageState, Character, D20TestResult, KnownSpell, PlayerRollRequest } from '@/types';
 import { nameKey } from '@/lib/id';
 import { truncate } from '../narration';
 import type { ToolInput } from './definitions';
@@ -35,8 +44,13 @@ export interface PlayerRollOutcome {
   request: PlayerRollRequest;
   label: string;
   modifier: number;
+  /** The full result, verdict included (for the DM). */
   result: D20TestResult;
   manual: boolean;
+  /** Why the roll failed without being rolled (e.g. a Paralyzed hero's Dexterity save). */
+  autoFail?: string;
+  /** What the sheet changed about the roll, and situational effects for the DM to judge. */
+  notes: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -47,7 +61,7 @@ function verdict(rollType: string, result: D20TestResult): string {
   if (result.dc === undefined || result.success === undefined) return '';
   const target = rollType === 'attack' ? `AC ${result.dc}` : `DC ${result.dc}`;
   if (rollType === 'attack') {
-    if (result.isCritical) return ` vs ${target} → CRITICAL HIT (natural 20)`;
+    if (result.isCritical) return ` vs ${target} → CRITICAL HIT (natural ${result.natural ?? 20})`;
     if (result.isFumble) return ` vs ${target} → miss (natural 1)`;
     return ` vs ${target} → ${result.success ? 'hit' : 'miss'}`;
   }
@@ -81,14 +95,23 @@ export function withVerdict(rollType: string, result: D20TestResult, dc: number 
 // The player's rolls
 // ---------------------------------------------------------------------------
 
-function findAttack(c: Character, name: string): Attack {
+function sheetAttacks(c: Character): string {
+  return c.attacks.map((a) => a.name).join(', ') || 'none';
+}
+
+/** A spell the hero knows, by (case- and punctuation-insensitive) name. */
+function findKnownSpell(c: Character, name: string): KnownSpell | undefined {
+  const spells = c.spellcasting?.spells ?? [];
   const key = nameKey(name);
-  const attack = c.attacks.find((a) => nameKey(a.name) === key) ?? c.attacks.find((a) => nameKey(a.name).includes(key));
-  if (!attack) {
-    const known = c.attacks.map((a) => a.name).join(', ') || 'none';
-    throw new ToolInputError(`"${name}" is not an attack on the hero's sheet (attacks: ${known}). Use expression for other damage.`);
-  }
-  return attack;
+  const exact = spells.find((s) => nameKey(s.name) === key);
+  if (exact) return exact;
+  const words = key.split('-').filter(Boolean);
+  const loose = spells.filter((s) => words.every((w) => nameKey(s.name).split('-').includes(w)));
+  return loose.length === 1 ? loose[0] : undefined;
+}
+
+function isUnarmedName(name: string): boolean {
+  return /\b(unarmed|punch|kick|fist|headbutt)/i.test(name);
 }
 
 /** Check the request makes sense for its roll type and fill in what the sheet knows. */
@@ -102,8 +125,23 @@ function prepareRequest(c: Character, req: PlayerRollRequest): PlayerRollRequest
       if (!req.ability) throw new ToolInputError(`A ${req.rollType === 'save' ? 'saving throw' : 'ability check'} needs \`ability\`.`);
       return req;
     case 'attack': {
-      if (!req.attackName) throw new ToolInputError('An attack roll needs `attack_name` (an attack on the sheet).');
-      return { ...req, attackName: findAttack(c, req.attackName).name };
+      // The engine prices each kind: a sheet attack's own bonus, a known spell's spell attack bonus,
+      // an unarmed strike, or `ability` + proficiency for any other weapon.
+      const name = req.attackName?.trim();
+      if (!name) {
+        if (req.ability) return req;
+        throw new ToolInputError(
+          'An attack roll needs `attack_name`: an attack on the sheet, a spell the hero knows, or another weapon together with `ability`.',
+        );
+      }
+      const attack = findAttack(c, name);
+      if (attack) return { ...req, attackName: attack.name };
+      const spell = findKnownSpell(c, name);
+      if (spell) return { ...req, attackName: spell.name };
+      if (req.ability || isUnarmedName(name)) return { ...req, attackName: name };
+      throw new ToolInputError(
+        `"${name}" is not an attack on the hero's sheet (attacks: ${sheetAttacks(c)}) or a spell they know. For another weapon, call again with \`ability\` ("str", or "dex" for a ranged or finesse weapon); for a spell attack, use the spell's name.`,
+      );
     }
     case 'damage': {
       if (req.expression) {
@@ -112,6 +150,12 @@ function prepareRequest(c: Character, req: PlayerRollRequest): PlayerRollRequest
       }
       if (!req.attackName) throw new ToolInputError('A damage roll needs `attack_name` or `expression`.');
       const attack = findAttack(c, req.attackName);
+      if (!attack) {
+        if (isUnarmedName(req.attackName)) return req;
+        throw new ToolInputError(
+          `"${req.attackName}" is not an attack on the hero's sheet (attacks: ${sheetAttacks(c)}). For a spell or another weapon, give its damage dice in \`expression\` (e.g. "2d6" for one Scorching Ray, "1d8+2" for a longbow).`,
+        );
+      }
       // The critical flag doubles the dice once, at roll time.
       return { ...req, attackName: attack.name, expression: attackDamageExpression(c, attack, false) };
     }
@@ -125,7 +169,8 @@ function prepareRequest(c: Character, req: PlayerRollRequest): PlayerRollRequest
       if (c.deathSaves.dead) throw new ToolInputError('The hero is dead; there are no death saves to make.');
       if (c.hp.current > 0) throw new ToolInputError('The hero is not at 0 HP, so no death saving throw is needed.');
       if (c.deathSaves.stable) throw new ToolInputError('The hero is stable; they no longer make death saving throws.');
-      return { ...req, dc: 10 };
+      // The DC is fixed by the rules, so the player sees it.
+      return { ...req, dc: 10, revealDc: true };
     default:
       return req;
   }
@@ -160,23 +205,86 @@ async function rollWithPlayer(
   }
 }
 
-/** Roll for the hero per the campaign's roll mode, log the roll card, and return the result. */
+const ADV_LABEL: Record<AdvantageState, string> = { normal: 'a normal roll', advantage: 'Advantage', disadvantage: 'Disadvantage' };
+
+/** What the sheet changed about the roll, for the DM: "The sheet adds Disadvantage (Poisoned)…". */
+function situationNotes(requested: AdvantageState, final: AdvantageState, situation: RollSituation): string[] {
+  const sources = [
+    situation.advantage.length ? `Advantage (${situation.advantage.join(', ')})` : '',
+    situation.disadvantage.length ? `Disadvantage (${situation.disadvantage.join(', ')})` : '',
+  ].filter(Boolean);
+  const lines: string[] = [];
+  if (sources.length) {
+    const asked = requested === 'normal' ? '' : `; you asked for ${ADV_LABEL[requested]}`;
+    lines.push(`The hero's sheet adds ${sources.join(' and ')}${asked}, so this is rolled with ${ADV_LABEL[final]} (they don't stack; one of each cancels out).`);
+  }
+  for (const note of situation.notes) lines.push(`Check: ${note}`);
+  return lines;
+}
+
+/** A hidden DC stays hidden in the log: the player's roll card shows no target and no verdict. */
+function forLog(result: D20TestResult, revealDc: boolean): D20TestResult {
+  if (revealDc || result.dc === undefined) return result;
+  const { dc: _dc, success: _success, ...shown } = result;
+  return shown;
+}
+
+/**
+ * Roll for the hero per the campaign's roll mode, log the roll card, and return the result.
+ * Applies the sheet first (conditions, armor, Luck, critical range — engine rollSituation).
+ */
 export async function performPlayerRoll(ctx: ToolContext, input: PlayerRollRequest): Promise<PlayerRollOutcome> {
   const store = ctx.deps.store();
   const campaign = requireCampaign(store);
   const character = requireCharacter(store);
-  const request = prepareRequest(character, input);
+  const prepared = prepareRequest(character, input);
+  const d20 = D20_TYPES.has(prepared.rollType);
+  const situation = rollSituation(character, prepared);
+  const request: PlayerRollRequest = d20 ? { ...prepared, advantage: combineAdvantage(prepared.advantage, situation) } : prepared;
   const { modifier, label } = rollRequestModifier(character, request);
+  const notes = d20 ? situationNotes(prepared.advantage, request.advantage, situation) : [];
 
-  const rolled =
-    campaign.settings.playerRollMode === 'auto'
-      ? { result: rollLocally(ctx, request, modifier), manual: false }
-      : await rollWithPlayer(ctx, request, modifier, label);
+  if (d20 && situation.autoFail) {
+    const result: D20TestResult = {
+      expression: '',
+      total: 0,
+      dice: [],
+      modifier,
+      breakdown: 'automatic failure (not rolled)',
+      ...(request.dc !== undefined ? { dc: request.dc } : {}),
+      success: false,
+    };
+    await logTool(ctx, 'request_player_roll', 'condition', `${label}: automatic failure — ${situation.autoFail}`);
+    return { request, label, modifier, result, manual: false, autoFail: situation.autoFail, notes };
+  }
 
-  const result = withVerdict(request.rollType, rolled.result, request.dc);
+  const auto = campaign.settings.playerRollMode === 'auto';
+  const rolled = auto ? { result: rollLocally(ctx, request, modifier), manual: false } : await rollWithPlayer(ctx, request, modifier, label);
+  let result = rolled.result;
+
+  // The player spent Heroic Inspiration in the roll dialog to reroll: this is the roll that counts.
+  if (character.heroicInspiration && ctx.deps.store().character?.heroicInspiration === false) {
+    notes.push(
+      'The player spent Heroic Inspiration to reroll: this is the new roll, which must be used (the first is discarded). Heroic Inspiration is already marked spent — don\'t spend it again.',
+    );
+  }
+  if (d20 && situation.luck && result.natural === 1 && !/\bLuck\b/.test(result.breakdown)) {
+    if (rolled.manual) {
+      notes.push(`${situation.luck} The player rolled physical dice: ask them to reroll that d20, then call request_player_roll again with the same parameters.`);
+    } else {
+      result = rerollNaturalOne(result, { rng: ctx.deps.rng });
+      notes.push(`${situation.luck} The natural 1 was rerolled; the result above is the new roll.`);
+    }
+  }
+
+  result = withVerdict(request.rollType, result, request.dc);
+  if (request.rollType === 'attack') result = applyAttackRollRules(result, { critRange: situation.critRange });
+  if (request.rollType === 'attack' && result.isCritical && (result.natural ?? 20) < 20) {
+    notes.push(`A natural ${result.natural} is a Critical Hit for this hero (wider critical range).`);
+  }
   const purpose = request.reason ? `${label} — ${truncate(request.reason, 60)}` : label;
-  await logRoll(ctx, { actor: 'player', purpose, result, manual: rolled.manual, rollType: request.rollType });
-  return { request, label, modifier, result, manual: rolled.manual };
+  await logRoll(ctx, { actor: 'player', purpose, result: forLog(result, request.revealDc), manual: rolled.manual, rollType: request.rollType });
+  return { request, label, modifier, result, manual: rolled.manual, notes };
 }
 
 function toRequest(input: ToolInput<'request_player_roll'>): PlayerRollRequest {
@@ -206,13 +314,22 @@ async function applyDeathSave(ctx: ToolContext, natural: number): Promise<string
 
 export async function requestPlayerRoll(input: ToolInput<'request_player_roll'>, ctx: ToolContext): Promise<ToolOutcome> {
   const outcome = await performPlayerRoll(ctx, toRequest(input));
-  const lines = [describeRoll(outcome.label, outcome.request.rollType, outcome.result)];
-  if (outcome.manual) lines.push('(Rolled on the player\'s physical dice.)');
-  if (outcome.request.rollType === 'death-save') {
-    lines.push(await applyDeathSave(ctx, outcome.result.natural ?? outcome.result.total));
+  const { request, result } = outcome;
+  if (outcome.autoFail) {
+    const target = request.dc === undefined ? '' : ` vs ${request.rollType === 'attack' ? 'AC' : 'DC'} ${request.dc}`;
+    return ok([`${outcome.label}: automatic failure${target} — ${outcome.autoFail} No dice were rolled.`, ...outcome.notes].join('\n'));
   }
-  if (outcome.request.rollType === 'attack' && outcome.result.isCritical) {
+  const lines = [describeRoll(outcome.label, request.rollType, result)];
+  if (outcome.manual) lines.push('(Rolled on the player\'s physical dice.)');
+  lines.push(...outcome.notes);
+  if (request.rollType === 'death-save') {
+    lines.push(await applyDeathSave(ctx, result.natural ?? result.total));
+  }
+  if (request.rollType === 'attack' && result.isCritical) {
     lines.push('Roll damage with critical: true.');
+  }
+  if (result.dc !== undefined && !request.revealDc) {
+    lines.push('(The DC was hidden: the player sees their total but not the target or the verdict until you narrate it.)');
   }
   return ok(lines.join('\n'));
 }

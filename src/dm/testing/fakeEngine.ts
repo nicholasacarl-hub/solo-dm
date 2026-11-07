@@ -154,6 +154,67 @@ export const manualRollResult: typeof Engine.manualRollResult = (expression, tot
 
 export const averageRoll: typeof Engine.averageRoll = () => 0;
 
+export const applyAttackRollRules: typeof Engine.applyAttackRollRules = (result, opts) => {
+  if (result.natural === undefined) return result;
+  const isCritical = result.natural >= (opts?.critRange ?? 20);
+  if (result.dc === undefined) return { ...result, isCritical };
+  return { ...result, isCritical, success: result.natural === 1 ? false : isCritical ? true : result.total >= result.dc };
+};
+
+export const rerollNaturalOne: typeof Engine.rerollNaturalOne = (result) => {
+  if (result.natural !== 1) return result;
+  const natural = die(20);
+  const total = natural + result.modifier;
+  const next: D20TestResult = {
+    ...result,
+    natural,
+    total,
+    dice: [...result.dice.map((d) => (d.sides === 20 && d.value === 1 ? { ...d, dropped: true } : d)), { sides: 20, value: natural }],
+    breakdown: `d20 (~~1~~ → ${natural}, Luck) ${result.modifier >= 0 ? '+' : '-'} ${Math.abs(result.modifier)} = ${total}`,
+    isCritical: natural === 20,
+    isFumble: natural === 1,
+  };
+  return result.dc === undefined ? next : { ...next, success: total >= result.dc };
+};
+
+// ---------------------------------------------------------------------------
+// The roll situation (simplified: a few conditions, Luck, Improved Critical)
+// ---------------------------------------------------------------------------
+
+export const combineAdvantage: typeof Engine.combineAdvantage = (...states) => {
+  let adv = false;
+  let dis = false;
+  for (const s of states) {
+    if (!s) continue;
+    if (typeof s === 'string') {
+      adv ||= s === 'advantage';
+      dis ||= s === 'disadvantage';
+    } else {
+      adv ||= s.advantage.length > 0;
+      dis ||= s.disadvantage.length > 0;
+    }
+  }
+  return adv === dis ? 'normal' : adv ? 'advantage' : 'disadvantage';
+};
+
+export const rollSituation: typeof Engine.rollSituation = (c, req) => {
+  const situation: Engine.RollSituation = { advantage: [], disadvantage: [], autoFail: null, notes: [] };
+  const has = (id: string) => c.conditions.some((x) => x.id === id);
+  const d20 = ['ability', 'skill', 'save', 'attack', 'initiative', 'death-save'].includes(req.rollType);
+  if (d20 && c.features.some((f) => key(f.name) === 'luck' && f.source === 'species')) {
+    situation.luck = 'Luck (Halfling): a natural 1 is rerolled once, and the new roll must be used.';
+  }
+  if ((req.rollType === 'attack' || req.rollType === 'skill' || req.rollType === 'ability') && has('poisoned')) situation.disadvantage.push('Poisoned');
+  if (req.rollType === 'attack' && has('frightened')) situation.notes.push('Frightened: Disadvantage while the source of fear is in sight.');
+  if (req.rollType === 'save' && (req.ability === 'str' || req.ability === 'dex')) {
+    const failing = ['paralyzed', 'petrified', 'stunned', 'unconscious'].find(has);
+    if (failing) situation.autoFail = `${conditionName(failing)}: automatically fails Strength and Dexterity saving throws.`;
+  }
+  const spell = c.spellcasting?.spells.some((s) => key(s.name) === key(req.attackName ?? ''));
+  if (req.rollType === 'attack' && !spell && c.features.some((f) => key(f.name) === 'improved critical')) situation.critRange = 19;
+  return situation;
+};
+
 // ---------------------------------------------------------------------------
 // Derived stats
 // ---------------------------------------------------------------------------
@@ -178,6 +239,19 @@ export const attackDamageExpression: typeof Engine.attackDamageExpression = (c, 
   return bonus === 0 ? attack.damage : `${attack.damage}${bonus > 0 ? '+' : '-'}${Math.abs(bonus)}`;
 };
 
+const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+export const findAttack: typeof Engine.findAttack = (c, name) =>
+  c.attacks.find((a) => key(a.name) === key(name)) ?? c.attacks.find((a) => key(a.name).includes(key(name)));
+
+/** Off-sheet attacks: a known spell uses the spellcasting ability; anything else `ability` (default STR); plus proficiency. */
+function offSheetAttack(c: Character, req: PlayerRollRequest): { modifier: number; label: string } {
+  const spell = c.spellcasting?.spells.find((s) => key(s.name) === key(req.attackName ?? ''));
+  if (spell) return { modifier: mod(c, c.spellcasting?.ability ?? 'int') + pb(c), label: `${spell.name} attack` };
+  const ability = req.ability ?? 'str';
+  return { modifier: mod(c, ability) + pb(c), label: req.attackName ? `${req.attackName} attack (${ability.toUpperCase()}, not on sheet)` : 'Attack roll' };
+}
+
 export const rollRequestModifier: typeof Engine.rollRequestModifier = (c, req: PlayerRollRequest) => {
   switch (req.rollType) {
     case 'skill': {
@@ -193,7 +267,8 @@ export const rollRequestModifier: typeof Engine.rollRequestModifier = (c, req: P
       return { modifier: mod(c, req.ability ?? 'str'), label: `${(req.ability ?? 'str').toUpperCase()} check` };
     case 'attack': {
       const attack = c.attacks.find((a) => a.name === req.attackName);
-      return { modifier: attack ? attackMod(c, attack) + (attack.proficient ? pb(c) : 0) : 0, label: `${req.attackName ?? 'Attack'} attack` };
+      if (!attack) return offSheetAttack(c, req);
+      return { modifier: attackMod(c, attack) + (attack.proficient ? pb(c) : 0), label: `${attack.name} attack` };
     }
     case 'initiative':
       return { modifier: initiativeModifier(c), label: 'Initiative' };

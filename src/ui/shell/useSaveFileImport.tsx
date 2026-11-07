@@ -8,6 +8,7 @@ import type { Campaign } from '@/types';
 import { Button, Dialog } from '@/ui/components/ui';
 import { toast } from '@/ui/components/toast';
 import { errorMessage, formatRelativeTime } from './format';
+import { askToKeepSaves } from './persistentStorage';
 
 interface Conflict {
   bundle: CampaignBundle;
@@ -32,6 +33,7 @@ export function useSaveFileImport(): { openPicker: () => void; busy: boolean; el
     setBusy(true);
     try {
       const campaign = await importCampaignBundle(bundle, mode);
+      askToKeepSaves();
       toast.success(mode === 'copy' ? `Imported a copy of “${campaign.name}”.` : `Imported “${campaign.name}”.`);
       setConflict(null);
     } catch (error) {
