@@ -130,10 +130,17 @@ export const TOOL_SCHEMAS = {
     roll_type: z.enum(ROLL_TYPES),
     ability: abilityEnum.optional().describe('Ability for ability checks and saving throws; for skill checks, an unusual ability to pair with the skill.'),
     skill: skillEnum.optional().describe('Skill for skill checks.'),
-    attack_name: str(80).optional().describe('Name of an attack on the hero\'s sheet, for attack and damage rolls.'),
+    attack_name: str(80)
+      .optional()
+      .describe(
+        'For attack and damage rolls: an attack on the hero\'s sheet, a spell the hero knows (rolled as a spell attack), or another weapon — then also give `ability` ("str", or "dex" for a ranged or finesse weapon). For damage from a spell or an off-sheet weapon, give `expression` instead.',
+      ),
     expression: str(60).optional().describe('Dice for damage or custom rolls when no sheet attack applies, e.g. "8d6" for Fireball damage.'),
     dc: int(1, 50).optional().describe('DC, or the target\'s AC for an attack roll. Omit for damage.'),
-    reveal_dc: z.boolean().optional().describe('Show the DC to the player before they roll (when the hero would know how hard it is).'),
+    reveal_dc: z
+      .boolean()
+      .optional()
+      .describe('Show the DC to the player, before the roll and on their roll card (when the hero would know how hard it is). Otherwise they see only their total until you narrate the outcome.'),
     advantage: z.enum(ADVANTAGE).optional(),
     reason: str(200).describe('What is at stake, shown to the player: "Leap the chasm — on a failure you fall 20 feet".'),
     critical: z.boolean().optional().describe('Damage after a Critical Hit: double the dice.'),
@@ -141,7 +148,7 @@ export const TOOL_SCHEMAS = {
 
   update_character: z.strictObject({
     hp: z
-      .object({
+      .strictObject({
         amount: int(0, 9999),
         kind: z.enum(['damage', 'healing', 'temp']),
         damage_type: str(30).optional(),
@@ -204,7 +211,7 @@ export const TOOL_SCHEMAS = {
       .max(20)
       .optional(),
     currency_change: z
-      .object({
+      .strictObject({
         cp: int(-1_000_000, 1_000_000).optional(),
         sp: int(-1_000_000, 1_000_000).optional(),
         ep: int(-1_000_000, 1_000_000).optional(),
@@ -230,6 +237,29 @@ export const TOOL_SCHEMAS = {
       .max(10)
       .optional(),
     spells_remove: z.array(str(80)).max(10).optional(),
+    ability_scores: z
+      .array(
+        z.strictObject({
+          ability: abilityEnum,
+          change: int(-10, 10).describe('Points to add (negative to lower), e.g. 2 for an Ability Score Improvement.'),
+          max: int(1, 30).optional().describe('Highest the score may reach: 20 (default) for Ability Score Improvements and feats, 30 for an Epic Boon.'),
+        }),
+      )
+      .max(6)
+      .optional()
+      .describe(
+        "Ability score changes the rules grant: an Ability Score Improvement (+2 to one score or +1 to two), a feat's +1, an Epic Boon. A Constitution change also changes the HP maximum as if the new modifier had applied from level 1; Armor Class is recomputed when it depends on the score.",
+      ),
+    skill_proficiencies: z
+      .array(z.strictObject({ skill: skillEnum, level: z.enum(['none', 'half', 'proficient', 'expertise']) }))
+      .max(18)
+      .optional()
+      .describe(
+        'Set skill proficiency levels: "proficient", "expertise" (double proficiency: Bard or Rogue Expertise), "half" (half the Proficiency Bonus, rounded down — Jack of All Trades: set it for each skill the hero lacks) or "none".',
+      ),
+    saving_throws_add: z.array(abilityEnum).max(6).optional().describe('Gain saving throw proficiency (e.g. the Resilient feat).'),
+    tools_add: z.array(str(80)).max(10).optional().describe('Gain tool proficiencies.'),
+    languages_add: z.array(str(60)).max(10).optional().describe('Learn languages.'),
     armor_class: int(1, 40).optional().describe('New Armor Class (e.g. after donning armor or a spell like Shield of Faith ends).'),
     speed: int(0, 200).optional().describe('New walking speed in feet.'),
     reason: str(200).optional().describe('Why, shown in the log: "Goblin scimitar", "Bought a rope".'),
@@ -274,7 +304,7 @@ export const TOOL_SCHEMAS = {
     conditions_add: z.array(conditionInput).max(6).optional(),
     conditions_remove: z.array(str(60)).max(6).optional(),
     combatant: combatantSpec.optional().describe('For action "add": the newcomers.'),
-    note: str(400).optional(),
+    note: str(400).optional().describe('For action "note": a private note for yourself (never shown to the player).'),
   }),
 
   end_combat: z.strictObject({
@@ -401,9 +431,9 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   roll_dice:
     "Roll dice for the DM's side of the table: NPC and monster attacks, damage, saving throws and checks; random tables; secret checks. The app rolls with real randomness and logs the result (secret rolls go behind the DM screen). For a d20 test give the full expression with its modifier (\"1d20+4\") plus `dc` (the DC, or the target's AC) and `advantage` if any; the result says whether it meets the target. Do NOT use it for the hero's own checks, saves, attacks, damage or initiative — use request_player_roll so the player rolls. Never narrate a result before this returns.",
   request_player_roll:
-    "Ask the player to roll for their hero: ability checks, skill checks, saving throws, attack rolls, damage, death saving throws (and initiative outside start_combat). The app applies the sheet's modifiers and rolls per the player's roll mode — instantly, after they tap Roll, or from their physical dice — and returns the total and, with `dc`, success or failure. Call it only when the outcome is uncertain and failure matters; decide the DC and the stakes first and put the stakes in `reason`. For attacks set `dc` to the target's AC (a natural 20 is a Critical Hit, a natural 1 always misses). Don't use it for NPC or monster rolls (roll_dice), and don't roll initiative when a fight starts — start_combat does that.",
+    "Ask the player to roll for their hero: ability checks, skill checks, saving throws, attack rolls, damage, death saving throws (and initiative outside start_combat). The app applies the sheet's modifiers and the hero's own conditions, armor and traits (e.g. Disadvantage while Poisoned, an automatic failure for a Paralyzed hero's Dexterity save, Halfling Luck, a Champion's wider critical range — the result says what it applied), rolls per the player's roll mode — instantly, after they tap Roll, or from their physical dice — and returns the total and, with `dc`, success or failure. Call it only when the outcome is uncertain and failure matters; decide the DC and the stakes first and put the stakes in `reason`. For attacks set `dc` to the target's AC (a natural 20 is a Critical Hit, a natural 1 always misses); `attack_name` can be a sheet attack, a spell the hero knows, or another weapon with `ability`. Don't use it for NPC or monster rolls (roll_dice), and don't roll initiative when a fight starts — start_combat does that.",
   update_character:
-    "Change the hero's character sheet: HP (damage, healing, temporary HP), conditions, exhaustion, spell slots, concentration, limited-use features, inventory, money, XP, Heroic Inspiration, spells, AC and speed. Batch several sections in one call. Amounts must come from rolls (roll_dice / request_player_roll results) or fixed rules values — never invented. Returns what changed, warnings (no slot left, not enough gold, item not found) and the hero's new status. Don't use it for NPCs or monsters (update_combat), rests (take_rest) or leveling up (level_up).",
+    "Change the hero's character sheet: HP (damage, healing, temporary HP), conditions, exhaustion, spell slots, concentration, limited-use features, inventory, money, XP, Heroic Inspiration, spells, ability scores (Ability Score Improvements, feats), skill / saving throw / tool proficiencies, languages, AC and speed. Batch several sections in one call. Amounts must come from rolls (roll_dice / request_player_roll results) or fixed rules values — never invented. Returns what changed, warnings (no slot left, not enough gold, item not found) and the hero's new status. Don't use it for NPCs or monsters (update_combat), rests (take_rest) or leveling up (level_up).",
   take_rest:
     "The hero takes a Short Rest (1 hour: may spend Hit Dice to heal; short-rest features recharge) or a Long Rest (8 hours: all HP, spent Hit Dice and spell slots return; one Exhaustion level is removed). For a short rest the player chooses which Hit Dice to spend unless their dice roll automatically. Use only when the hero actually rests and the time passes; never during combat. Narrate any interruption yourself — don't call this if the rest is interrupted early.",
   level_up:
@@ -411,11 +441,11 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   start_combat:
     'Start an encounter when a fight actually begins. Adds the hero automatically, adds each group of combatants ("Goblin" with count 3 becomes Goblin 1–3), rolls NPC initiative, has the player roll the hero\'s initiative, and returns the turn order. Use real values (AC, HP, initiative bonus) from the stat block — get_entry it if unsure. Don\'t use it for a single blow that settles a scene without a fight. Only one combat can be active.',
   update_combat:
-    'Change the active combat. `next_turn` when the current turn ends; `damage` / `heal` an NPC or monster by `amount` (from a roll); `conditions` to add or remove conditions on an NPC; `defeat` when a combatant falls, flees or surrenders; `remove` to take one out of the order; `add` reinforcements via `combatant`; `note` to record something about a combatant. Targets are names ("Goblin 2") or ids. The hero\'s HP and conditions are NOT changed here — use update_character.',
+    'Change the active combat. `next_turn` when the current turn ends; `damage` / `heal` an NPC or monster by `amount` (from a roll); `conditions` to add or remove conditions on an NPC; `defeat` when a combatant falls, flees or surrenders; `remove` to take one out of the order; `add` reinforcements via `combatant`; `note` to record a private DM note about a combatant (never shown to the player). Targets are names ("Goblin 2") or ids. The hero\'s HP and conditions are NOT changed here — use update_character.',
   end_combat:
     'End the active combat as soon as the fighting stops (foes defeated, fled or surrendered, or the hero escaped), with a one-line summary. In XP campaigns pass `xp_award` (total XP for the defeated foes); it is ignored in milestone campaigns.',
   lookup_rules:
-    "Search the rules: SRD 5.2.1, the player's imported books enabled for this campaign, and this campaign's homebrew. Returns matching rules sections, spells, monsters, items and more, with excerpts. Use it whenever you're unsure of a rule, spell, monster or item — especially imported content you may not know. Don't use it for story facts (search_memory) or the hero's own abilities (get_character_sheet).",
+    "Search the rules: SRD 5.2.1, the player's imported books (every one switched on in their Library), and this campaign's homebrew. Returns matching rules sections, spells, monsters, items and more, with excerpts. Use it whenever you're unsure of a rule, spell, monster or item — especially imported content you may not know. Don't use it for story facts (search_memory) or the hero's own abilities (get_character_sheet).",
   get_entry:
     'Get the full text of one rules entry by name: a spell, monster stat block, magic item, feat, condition, class feature, rules section, or homebrew. Use when you know the name; use lookup_rules to search.',
   get_character_sheet:

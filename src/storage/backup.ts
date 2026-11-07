@@ -1,10 +1,13 @@
 /**
  * Save files: export a campaign to a JSON bundle, validate one, and import it back.
- * Bundles hold one campaign and what it owns — never the imported library, never shared homebrew.
+ * Bundles hold one campaign and what it owns — never the imported library, never shared homebrew,
+ * and never text from the player's imported books (the DM's rules lookups are redacted in exports).
  */
 import { z } from 'zod';
+import { findSrdClass } from '@/engine/classData';
 import { slugify } from '@/lib/id';
-import type { Campaign } from '@/types';
+import { hasImported, redactImported } from '@/lib/importedContent';
+import type { Campaign, HitDiceEntry, HitDie } from '@/types';
 import { campaignTables, db } from './db';
 import { deleteCampaignData, normalizeCampaignData, readCampaignData, writeCampaignData } from './campaignData';
 import { isCampaignOpenElsewhere, OPEN_ELSEWHERE_ERROR } from './campaignLock';
@@ -20,10 +23,43 @@ export const BUNDLE_EXTENSION = '.solodm.json';
 // Export
 // ---------------------------------------------------------------------------
 
+/**
+ * A copy of `value` in which every passage of imported-book text (wrapped by the DM's rules lookups,
+ * see src/lib/importedContent.ts) is replaced by a short placeholder. Unchanged parts are shared;
+ * the input is never modified.
+ */
+export function redactImportedDeep<T>(value: T): T {
+  if (typeof value === 'string') return (hasImported(value) ? redactImported(value) : value) as T;
+  if (Array.isArray(value)) {
+    let changed = false;
+    const items = value.map((item: unknown) => {
+      const redacted = redactImportedDeep(item);
+      if (redacted !== item) changed = true;
+      return redacted;
+    });
+    return (changed ? items : value) as T;
+  }
+  if (typeof value === 'object' && value !== null) {
+    let changed = false;
+    const entries = Object.entries(value).map(([key, item]: [string, unknown]) => {
+      const redacted = redactImportedDeep(item);
+      if (redacted !== item) changed = true;
+      return [key, redacted] as const;
+    });
+    return (changed ? Object.fromEntries(entries) : value) as T;
+  }
+  return value;
+}
+
+/**
+ * The campaign as a save file (used for downloads and GitHub pushes). Imported-book text that the
+ * DM looked up is replaced by a placeholder in the transcript and everywhere else; tool_use ids and
+ * the rest of the transcript are kept. The stored campaign is not changed.
+ */
 export async function exportCampaignBundle(campaignId: string): Promise<CampaignBundle> {
   const data = await readCampaignData(campaignId);
   if (!data) throw new Error('That campaign no longer exists, so it could not be exported.');
-  return { format: BUNDLE_FORMAT, version: BUNDLE_VERSION, exportedAt: Date.now(), ...data };
+  return { format: BUNDLE_FORMAT, version: BUNDLE_VERSION, exportedAt: Date.now(), ...redactImportedDeep(data) };
 }
 
 /** The file text of a bundle (pretty-printed so saves diff nicely in git). */
@@ -54,7 +90,9 @@ export async function downloadCampaign(campaignId: string): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// Validation (lenient: key fields are checked, sensible defaults fill gaps, unknown fields pass through)
+// Validation (lenient: key fields are checked, sensible defaults fill gaps — including everything the
+// rules engine reads from a character — unknown fields pass through, and display-log entries that
+// can't be shown are dropped)
 // ---------------------------------------------------------------------------
 
 const id = z.string().min(1);
@@ -111,39 +149,103 @@ const campaignSchema = z.looseObject({
   lastPlayedAt: timestamp.nullable().default(null),
 });
 
-const characterSchema = z.looseObject({
-  id,
-  campaignId: z.string().optional(),
-  name: z.string(),
-  species: z.string().default(''),
-  background: z.string().default(''),
-  classes: z.array(z.looseObject({ name: z.string(), level: z.number().int().min(0) })),
-  abilityScores: z.looseObject({
-    str: z.number(),
-    dex: z.number(),
-    con: z.number(),
-    int: z.number(),
-    wis: z.number(),
-    cha: z.number(),
-  }),
-  hp: z.looseObject({ max: z.number(), current: z.number(), temp: z.number().default(0) }),
-  xp: z.number().default(0),
-  savingThrows: strings,
-  tools: strings,
-  languages: strings,
-  weaponProficiencies: strings,
-  armorTraining: strings,
-  conditions: z.array(z.looseObject({ id: z.string() })).default([]),
-  hitDice: z.array(z.looseObject({})).default([]),
-  features: z.array(z.looseObject({ id, name: z.string() })).default([]),
-  attacks: z.array(z.looseObject({ id, name: z.string() })).default([]),
-  inventory: z.array(z.looseObject({ id, name: z.string(), quantity: z.number() })).default([]),
-  exhaustion: z.number().default(0),
-  heroicInspiration: z.boolean().default(false),
-  notes: z.string().default(''),
-  createdAt: timestamp.default(0),
-  updatedAt: timestamp.default(0),
-});
+const abilitySchema = z.enum(['str', 'dex', 'con', 'int', 'wis', 'cha']);
+const hitDieSchema = z.union([z.literal(6), z.literal(8), z.literal(10), z.literal(12)]);
+
+/** A class entry; ids, hit die and caster type come from the SRD class of that name when missing. */
+const classLevelSchema = z
+  .looseObject({
+    name: z.string(),
+    level: z.number().int().min(0),
+    classId: z.string().min(1).optional().catch(undefined),
+    hitDie: hitDieSchema.optional().catch(undefined),
+    casterType: z.enum(['full', 'half', 'third', 'pact', 'none']).optional().catch(undefined),
+    spellcastingAbility: abilitySchema.optional().catch(undefined),
+  })
+  .transform((cl) => {
+    const srd = findSrdClass(cl.classId) ?? findSrdClass(cl.name);
+    return {
+      ...cl,
+      classId: cl.classId ?? srd?.id ?? `class:${slugify(cl.name) || 'unknown'}`,
+      hitDie: cl.hitDie ?? srd?.hitDie ?? 8,
+      casterType: cl.casterType ?? srd?.casterType ?? 'none',
+    };
+  });
+
+/** One hit die pool per die size, as many dice as levels in those classes (none spent). */
+function hitDiceFromClasses(classes: { level: number; hitDie: HitDie }[]): HitDiceEntry[] {
+  const totals = new Map<HitDie, number>();
+  for (const cl of classes) totals.set(cl.hitDie, (totals.get(cl.hitDie) ?? 0) + cl.level);
+  return [...totals].filter(([, total]) => total > 0).map(([die, total]) => ({ die, total, spent: 0 }));
+}
+
+const coin = z.number().default(0);
+
+const characterSchema = z
+  .looseObject({
+    id,
+    campaignId: z.string().optional(),
+    name: z.string(),
+    species: z.string().default(''),
+    background: z.string().default(''),
+    classes: z.array(classLevelSchema),
+    abilityScores: z.looseObject({
+      str: z.number(),
+      dex: z.number(),
+      con: z.number(),
+      int: z.number(),
+      wis: z.number(),
+      cha: z.number(),
+    }),
+    hp: z.looseObject({ max: z.number(), current: z.number(), temp: z.number().default(0) }),
+    xp: z.number().default(0),
+    savingThrows: strings,
+    skills: z.record(z.string(), z.number()).default(() => ({})),
+    tools: strings,
+    languages: strings,
+    weaponProficiencies: strings,
+    armorTraining: strings,
+    armorClass: z.number().default(10),
+    speed: z.number().default(30),
+    size: z.enum(['Tiny', 'Small', 'Medium', 'Large', 'Huge', 'Gargantuan']).catch('Medium'),
+    deathSaves: z
+      .looseObject({
+        successes: z.number().default(0),
+        failures: z.number().default(0),
+        stable: z.boolean().default(false),
+        dead: z.boolean().default(false),
+      })
+      .default(() => ({ successes: 0, failures: 0, stable: false, dead: false })),
+    conditions: z.array(z.looseObject({ id: z.string() })).default([]),
+    hitDice: z.array(z.looseObject({ die: hitDieSchema, total: z.number(), spent: z.number().default(0) })).optional(),
+    spellcasting: z
+      .looseObject({
+        ability: abilitySchema.optional().catch(undefined),
+        slots: z.record(z.string(), z.looseObject({ max: z.number(), used: z.number().default(0) })).default(() => ({})),
+        spells: z.array(z.looseObject({ name: z.string() })).default([]),
+      })
+      .optional(),
+    features: z.array(z.looseObject({ id, name: z.string() })).default([]),
+    attacks: z.array(z.looseObject({ id, name: z.string() })).default([]),
+    inventory: z.array(z.looseObject({ id, name: z.string(), quantity: z.number() })).default([]),
+    currency: z.looseObject({ cp: coin, sp: coin, ep: coin, gp: coin, pp: coin }).default(() => ({ cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 })),
+    exhaustion: z.number().default(0),
+    heroicInspiration: z.boolean().default(false),
+    personality: z.looseObject({}).default(() => ({})),
+    notes: z.string().default(''),
+    createdAt: timestamp.default(0),
+    updatedAt: timestamp.default(0),
+  })
+  .transform(({ hitDice, spellcasting, ...character }) => ({
+    ...character,
+    hitDice: hitDice ?? hitDiceFromClasses(character.classes),
+    ...(spellcasting && {
+      spellcasting: {
+        ...spellcasting,
+        ability: spellcasting.ability ?? character.classes.find((cl) => cl.spellcastingAbility)?.spellcastingAbility ?? 'int',
+      },
+    }),
+  }));
 
 const sessionSchema = z.looseObject({
   id,
@@ -176,6 +278,41 @@ const logSchema = z.looseObject({
   kind: z.enum(['player', 'dm', 'roll', 'tool', 'system', 'session', 'recap', 'error']),
   createdAt: timestamp,
 });
+
+/** What each kind of display-log entry needs to be shown (defaults fill what can be guessed). */
+const logKindSchemas = {
+  player: z.looseObject({ text: z.string() }),
+  dm: z.looseObject({
+    text: z.string(),
+    choices: z.array(z.string()).optional().catch(undefined),
+    streaming: z.boolean().optional().catch(undefined),
+  }),
+  roll: z.looseObject({
+    actor: z.enum(['player', 'dm']).catch('player'),
+    purpose: z.string().default(''),
+    roll: z.looseObject({
+      total: z.number(),
+      expression: z.string().default(''),
+      dice: z.array(z.looseObject({ sides: z.number(), value: z.number() })).default([]),
+      modifier: z.number().default(0),
+      breakdown: z.string().default(''),
+    }),
+    secret: z.boolean().default(false),
+  }),
+  tool: z.looseObject({ tool: z.string().default(''), icon: z.string().min(1).catch('info'), summary: z.string() }),
+  system: z.looseObject({ text: z.string(), level: z.enum(['info', 'warning']).catch('info') }),
+  session: z.looseObject({ event: z.enum(['start', 'end']), sessionNumber: z.number() }),
+  recap: z.looseObject({ sessionNumber: z.number().default(0), text: z.string() }),
+  error: z.looseObject({ text: z.string(), retryable: z.boolean().default(false) }),
+} as const;
+
+/** Display-log entries lacking what their kind needs can't be shown, so they are left out. */
+function showableLogEntries(entries: z.infer<typeof logSchema>[]): unknown[] {
+  return entries.flatMap((entry) => {
+    const parsed = logKindSchemas[entry.kind].safeParse(entry);
+    return parsed.success ? [parsed.data] : [];
+  });
+}
 
 const journalSchema = z.looseObject({
   id,
@@ -245,7 +382,7 @@ const bundleSchema = z.looseObject({
   character: characterSchema.nullable().default(null),
   sessions: z.array(sessionSchema).default([]),
   transcript: z.array(transcriptSchema).default([]),
-  log: z.array(logSchema).default([]),
+  log: z.array(logSchema).default([]).transform(showableLogEntries),
   combat: combatSchema.nullable().default(null),
   journal: z.array(journalSchema).default([]),
   quests: z.array(questSchema).default([]),

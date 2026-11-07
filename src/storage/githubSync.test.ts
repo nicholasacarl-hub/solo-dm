@@ -13,6 +13,7 @@ import {
   syncWithGithub,
   testGithubConnection,
 } from '@/storage';
+import { wrapImported } from '@/lib/importedContent';
 import { db } from './db';
 import { serializeBundle } from './backup';
 import { base64ToUtf8, decideSync, utf8ToBase64 } from './githubSync';
@@ -238,6 +239,26 @@ describe('testGithubConnection', () => {
     expect((await testGithubConnection(settings({ token: ' ' }))).error).toMatch(/token/);
     expect((await testGithubConnection(settings({ repo: '' }))).error).toMatch(/owner and name/);
     expect(github.calls).toHaveLength(0);
+  });
+});
+
+describe('pushCampaignToGithub', () => {
+  it("never uploads the player's imported-book text from the DM's rules lookups", async () => {
+    await seedCampaign('a');
+    await db.transcript.put({
+      id: 'a-t6',
+      sessionId: 'a-sess-2',
+      seq: 4,
+      createdAt: 6,
+      param: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: wrapImported('My Book', 'COPYRIGHTED TEXT') }] },
+    });
+
+    await pushCampaignToGithub('a-camp', settings());
+
+    const uploaded = github.files.get('saves/a-camp.solodm.json')?.text ?? '';
+    expect(uploaded).toContain('toolu_1');
+    expect(uploaded).not.toContain('COPYRIGHTED TEXT');
+    expect(uploaded).toContain('was left out of this copy');
   });
 });
 

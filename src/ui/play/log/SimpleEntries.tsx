@@ -1,4 +1,4 @@
-import { Info, OctagonX, RotateCcw, TriangleAlert } from 'lucide-react';
+import { Clock, Info, OctagonX, RotateCcw, Square, TriangleAlert } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { dm } from '@/dm';
 import { useGame } from '@/state/gameStore';
@@ -9,12 +9,16 @@ import { Button } from '@/ui/components/ui';
 import { isBusyPhase, runDm } from '../dmStatus';
 import { isOoc, isXCard } from '../format';
 
-export function PlayerEntry({ entry }: { entry: PlayerLogEntry }) {
+/**
+ * The player's words. `pending`: the DM hasn't answered them (its reply was stopped before it said
+ * anything, or failed); the DM gets them again with the next message.
+ */
+export function PlayerEntry({ entry, pending = false }: { entry: PlayerLogEntry; pending?: boolean }) {
   const ooc = isOoc(entry.text);
   const xcard = isXCard(entry.text);
   const text = ooc ? entry.text.replace(/^\s*ooc\s*:\s*/i, '') : entry.text;
   return (
-    <div className="flex justify-end">
+    <div className="flex flex-col items-end">
       <div
         className={cn(
           'max-w-[85%] rounded-2xl rounded-br-md px-4 py-2.5 text-[0.9375rem] leading-relaxed break-words whitespace-pre-wrap',
@@ -34,7 +38,23 @@ export function PlayerEntry({ entry }: { entry: PlayerLogEntry }) {
         <span className="sr-only">You: </span>
         {text}
       </div>
+      {pending && (
+        <p className="mt-1.5 flex items-center gap-1.5 text-right text-xs text-muted">
+          <Clock className="size-3.5 shrink-0" aria-hidden />
+          Not answered yet. It goes to the DM with your next message.
+        </p>
+      )}
     </div>
+  );
+}
+
+/** The DM's note under a reply the player stopped: a small marker on that narration. */
+export function StoppedMarker({ entry }: { entry: SystemLogEntry }) {
+  return (
+    <p className="flex items-center gap-1.5 text-xs text-muted">
+      <Square className="size-3 shrink-0 fill-current" aria-hidden />
+      <span>{entry.text}</span>
+    </p>
   );
 }
 

@@ -440,10 +440,27 @@ export const removeSpell: typeof Engine.removeSpell = (c, name) =>
     ? { character: { ...c, spellcasting: { ...c.spellcasting, spells: c.spellcasting.spells.filter((s) => s.name !== name) } }, events: [ev('slot-spent', `Forgot ${name}`)] }
     : warn(c, 'Not a spellcaster');
 
+/** Like the engine: features whose uses scale (FeatureUses.scale) get their new maximum. */
+function rescaleUses(c: Character): Character {
+  const level = (name: string) => c.classes.find((k) => k.name === name)?.level ?? 0;
+  const features = c.features.map((f) => {
+    const scale = f.uses?.scale;
+    if (!f.uses || !scale) return f;
+    const max =
+      scale.by === 'proficiency-bonus'
+        ? pb(c)
+        : scale.by === 'class-level'
+          ? level(scale.className) * (scale.multiplier ?? 1)
+          : (scale.values[Math.max(0, level(scale.className) - 1)] ?? f.uses.max);
+    return { ...f, uses: { ...f.uses, max, used: Math.min(f.uses.used, max) } };
+  });
+  return { ...c, features };
+}
+
 export const levelUp: typeof Engine.levelUp = (c, opts) => {
   const classes = c.classes.map((k) => (k.name === opts.className ? { ...k, level: k.level + 1 } : k));
   const hpGained = 4;
-  const character = { ...c, classes, hp: { ...c.hp, max: c.hp.max + hpGained, current: c.hp.current + hpGained } };
+  const character = rescaleUses({ ...c, classes, hp: { ...c.hp, max: c.hp.max + hpGained, current: c.hp.current + hpGained } });
   return { character, events: [ev('level-up', `Level ${characterLevel(character)}`)], newLevel: characterLevel(character), hpGained, reminders: ['Choose a new spell'] };
 };
 
@@ -574,4 +591,8 @@ export const spellAttackBonus: typeof Engine.spellAttackBonus = () => null;
 export const attackAbilityModifier: typeof Engine.attackAbilityModifier = (c, a) => attackMod(c, a);
 export const attackBonus: typeof Engine.attackBonus = (c, a) => attackMod(c, a) + (a.proficient ? pb(c) : 0);
 export const effectiveSpeed: typeof Engine.effectiveSpeed = (c) => c.speed;
-export const computeArmorClass: typeof Engine.computeArmorClass = (c) => ({ ac: c.armorClass, formula: 'fake' });
+/** Unarmored: 10 + DEX; with armor or a shield equipped the sheet's AC is kept (as the engine does for unknown armor). */
+export const computeArmorClass: typeof Engine.computeArmorClass = (c) =>
+  c.inventory.some((i) => i.equipped && (i.category === 'armor' || i.category === 'shield'))
+    ? { ac: c.armorClass, formula: 'armor (fake)' }
+    : { ac: 10 + mod(c, 'dex'), formula: `10 + DEX ${mod(c, 'dex')}` };

@@ -34,6 +34,8 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  // Back to the real implementations (restoreAllMocks only undoes vi.spyOn).
+  for (const fn of [storage.putLog, storage.putTranscript, storage.isCampaignOpenElsewhere]) vi.mocked(fn).mockReset();
 });
 
 describe('loading', () => {
@@ -630,6 +632,7 @@ describe('one tab at a time', () => {
 
     const first = game().appendLog({ kind: 'player', text: 'already saving' });
     const second = game().appendLog({ kind: 'player', text: 'still queued' });
+    await vi.waitFor(() => expect(storage.putLog).toHaveBeenCalled());
     emitCampaignChange({ type: 'replaced', campaignId: 'a-camp' });
     open();
 

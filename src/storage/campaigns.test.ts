@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { sampleSettings } from '@/test/fixtures';
 import {
   createCampaign,
@@ -6,7 +6,9 @@ import {
   duplicateCampaign,
   exportCampaignBundle,
   getCampaign,
+  importCampaignBundle,
   listCampaigns,
+  OPEN_ELSEWHERE_ERROR,
   putHomebrew,
 } from '@/storage';
 import { db } from './db';
@@ -181,5 +183,36 @@ describe('duplicateCampaign', () => {
 
   it('rejects for a missing campaign', async () => {
     await expect(duplicateCampaign('missing')).rejects.toThrow(/no longer exists/);
+  });
+});
+
+describe('a campaign open at the table in another tab', () => {
+  beforeEach(() => {
+    // Another tab holds the campaign's Web Lock.
+    Object.defineProperty(window.navigator, 'locks', {
+      configurable: true,
+      value: {
+        request: () => new Promise(() => {}),
+        query: async () => ({ held: [{ name: 'solo-dm:campaign:a-camp', mode: 'exclusive' }], pending: [] }),
+      },
+    });
+  });
+  afterEach(() => {
+    Reflect.deleteProperty(window.navigator, 'locks');
+  });
+
+  it('is not deleted or replaced from here (that tab would write it back); copies and other campaigns are fine', async () => {
+    await seedCampaign('a');
+    await seedCampaign('b');
+    const bundle = await exportCampaignBundle('a-camp');
+
+    await expect(deleteCampaign('a-camp')).rejects.toThrow(OPEN_ELSEWHERE_ERROR);
+    await expect(importCampaignBundle(bundle, 'replace')).rejects.toThrow(OPEN_ELSEWHERE_ERROR);
+    expect(await getCampaign('a-camp')).toEqual(bundle.campaign);
+
+    const copy = await importCampaignBundle(bundle, 'copy');
+    expect(copy.id).not.toBe('a-camp');
+    await deleteCampaign('b-camp');
+    expect(await getCampaign('b-camp')).toBeUndefined();
   });
 });

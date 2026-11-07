@@ -11,6 +11,8 @@ import {
   saveLibrarySource,
   type CampaignBundle,
 } from '@/storage';
+import { wrapImported } from '@/lib/importedContent';
+import type { LogEntry, TranscriptMessage } from '@/types';
 import { db } from './db';
 import { serializeBundle } from './backup';
 import { onCampaignChange, type CampaignChange } from './events';
@@ -49,6 +51,68 @@ describe('exportCampaignBundle', () => {
 
   it('rejects for a missing campaign', async () => {
     await expect(exportCampaignBundle('missing')).rejects.toThrow(/no longer exists/);
+  });
+
+  it("leaves the player's imported-book text out of the file, but keeps it on this device", async () => {
+    await seedCampaign('a');
+    const book = 'COPYRIGHTED TEXT: Fireball. A bright streak flashes from your pointing finger…';
+    const lookups: TranscriptMessage[] = [
+      {
+        id: 'a-t6',
+        sessionId: 'a-sess-2',
+        seq: 4,
+        createdAt: 6,
+        param: {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'toolu_1', name: 'get_entry', input: { name: 'Fireball' } },
+            { type: 'tool_use', id: 'toolu_2', name: 'lookup_rules', input: { query: 'grapple' } },
+          ],
+        },
+      },
+      {
+        id: 'a-t7',
+        sessionId: 'a-sess-2',
+        seq: 5,
+        createdAt: 7,
+        param: {
+          role: 'user',
+          content: [
+            { type: 'tool_result', tool_use_id: 'toolu_1', content: `Found it.\n${wrapImported('My Book', book)}` },
+            { type: 'tool_result', tool_use_id: 'toolu_2', content: [{ type: 'text', text: wrapImported('My Book', book) }] },
+          ],
+        },
+      },
+    ];
+    await db.transcript.bulkPut(lookups);
+    const toolLine: LogEntry = {
+      id: 'a-log-book',
+      campaignId: 'a-camp',
+      sessionId: 'a-sess-2',
+      seq: 13,
+      createdAt: 8,
+      kind: 'tool',
+      tool: 'get_entry',
+      icon: 'rules',
+      summary: 'Looked up Fireball',
+      detail: wrapImported('My Book', book),
+    };
+    await db.log.put(toolLine);
+
+    const bundle = await exportCampaignBundle('a-camp');
+
+    const text = serializeBundle(bundle);
+    expect(text).not.toContain('COPYRIGHTED TEXT');
+    expect(text).toContain('Text from the player\'s imported book \\"My Book\\" was left out of this copy.');
+    const results = bundle.transcript.find((m) => m.id === 'a-t7')?.param.content;
+    expect(results).toEqual([
+      expect.objectContaining({ type: 'tool_result', tool_use_id: 'toolu_1', content: expect.stringMatching(/^Found it\.\n\[Text from/) }),
+      expect.objectContaining({ type: 'tool_result', tool_use_id: 'toolu_2' }),
+    ]);
+    // Everything else is exported unchanged, and the stored records keep the full text.
+    expect(bundle.transcript.find((m) => m.id === 'a-t3')).toEqual(campaignGraph('a').transcript[2]);
+    expect(JSON.stringify(await db.transcript.get('a-t7'))).toContain('COPYRIGHTED TEXT');
+    expect((await db.log.get('a-log-book'))).toEqual(toolLine);
   });
 });
 

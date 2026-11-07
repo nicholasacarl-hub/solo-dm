@@ -172,6 +172,34 @@ describe('NarrativeLog', () => {
     expect(dropped.tagName).toBe('S');
   });
 
+  it('shows a roll against a hidden DC or AC without the target, the verdict or a telling colour', () => {
+    const roll = (id: string, patch: Partial<Extract<LogEntry, { kind: 'roll' }>>): LogEntry =>
+      ({ ...meta, id, seq: 61, kind: 'roll', actor: 'player', secret: false, ...patch }) as LogEntry;
+    const d20 = (natural: number, modifier: number) => ({
+      expression: `1d20+${modifier}`,
+      total: natural + modifier,
+      dice: [{ sides: 20, value: natural }],
+      modifier,
+      breakdown: `d20 (${natural}) + ${modifier} = ${natural + modifier}`,
+      natural,
+      isCritical: natural === 20,
+      isFumble: natural === 1,
+    });
+    const { log } = renderLog([
+      // The DM side leaves a hidden DC (and so the verdict) out of the logged roll.
+      roll('insight', { rollType: 'skill', purpose: 'Insight check — read the stranger', roll: d20(8, 1) }),
+      roll('swing', { rollType: 'attack', purpose: 'Greatsword attack', roll: d20(20, 5) }),
+      // A verdict that somehow arrives without its target is not shown either.
+      roll('save', { rollType: 'save', purpose: 'Wisdom saving throw', roll: { ...d20(14, 2), success: true } }),
+    ]);
+    expect(within(log).queryByText(/^vs /)).not.toBeInTheDocument();
+    expect(within(log).queryByText(/^(Success|Failure|Hit|Miss)$/)).not.toBeInTheDocument();
+    // Natural 20s are rules facts, not the DM's verdict.
+    expect(within(log).getByText('Critical hit')).toBeInTheDocument();
+    expect(within(log).getByText('9')).toHaveClass('text-text');
+    expect(within(log).getByText('16')).toHaveClass('text-text');
+  });
+
   it('expands tool details and offers View and Veto on homebrew lines', async () => {
     const user = userEvent.setup();
     const line: LogEntry = {

@@ -112,8 +112,8 @@ function addMissing<T>(list: readonly T[] | undefined, items: T[], same: (a: T, 
 
 /**
  * Re-read the uses of every feature at the character's current levels (call it after levelUp), with
- * the repairs described above. Returns the same object when nothing changed. Without builder data,
- * features are re-read from their own text (no class tables, no species data).
+ * the repairs described above. Returns the same object when nothing changed. Without builder data
+ * only feats are re-read (from their own text); class and species features are left as they are.
  */
 export function refreshFeatureUses(c: Character, data: LevelingData | null | undefined): Character {
   const level = characterLevel(c);
@@ -126,7 +126,9 @@ export function refreshFeatureUses(c: Character, data: LevelingData | null | und
     let next = f;
     if (f.source === 'class' || f.source === 'subclass') {
       const owner = featureOwner(c, f, data);
-      if (owner) {
+      // Without the class's data (it failed to load) the text alone could undo what its table gives:
+      // "You can use this feature twice" for a Fighter 4's three Second Winds. Leave those alone.
+      if (owner?.cls) {
         const refreshed = refreshClassFeature(f, owner, { ...base, level: owner.cl.level, cls: owner.cls });
         next = refreshed.feature;
         if (refreshed.skillBonus) skillBonuses.push(refreshed.skillBonus);

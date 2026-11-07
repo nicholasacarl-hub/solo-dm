@@ -3,7 +3,9 @@ import { ArrowDown, ScrollText } from 'lucide-react';
 import { useGame } from '@/state/gameStore';
 import type { DmLogEntry, LogEntry } from '@/types';
 import { EmptyState } from '@/ui/components/ui';
+import { isBusyPhase } from '../dmStatus';
 import { stripMarkdown } from '../format';
+import { dmContextGaps } from './dmContext';
 import { LogEntryView } from './LogEntryView';
 import { useStickToBottom } from './useStickToBottom';
 
@@ -63,11 +65,16 @@ function useFinishedNarrationAnnouncement(log: LogEntry[]): string {
 
 export function NarrativeLog() {
   const log = useGame((s) => s.log);
+  const transcript = useGame((s) => s.transcript);
+  const sessionId = useGame((s) => s.activeSession?.id ?? null);
+  const busy = useGame((s) => isBusyPhase(s.dm.phase));
   const [limit, setLimit] = useState(PAGE_SIZE);
   const hiddenCount = Math.max(0, log.length - limit);
   const visible = hiddenCount > 0 ? log.slice(hiddenCount) : log;
   const choicesId = useMemo(() => activeChoicesEntryId(log), [log]);
   const errorId = useMemo(() => latestErrorEntryId(log), [log]);
+  // What the DM missed: cut-off narration, and the player's words it hasn't answered yet.
+  const gaps = useMemo(() => dmContextGaps(log, transcript, sessionId, busy), [log, transcript, sessionId, busy]);
   const { scrollRef, contentRef, atBottom, onScroll, scrollToBottom } = useStickToBottom(log.length);
   const announcement = useFinishedNarrationAnnouncement(log);
 
@@ -112,6 +119,8 @@ export function NarrativeLog() {
                 entry={entry}
                 showChoices={entry.id === choicesId}
                 latestError={entry.id === errorId}
+                cutOff={gaps.cutOffIds.has(entry.id)}
+                pending={entry.id === gaps.pendingPlayerId}
               />
             ))
           )}

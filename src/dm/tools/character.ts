@@ -4,6 +4,7 @@
  */
 import {
   abilityModifier,
+  computeArmorClass,
   addCondition,
   addFeature,
   addItem,
@@ -34,15 +35,20 @@ import {
   xpToNextLevel,
   type EngineResult,
 } from '@/engine';
-import type {
-  Character,
-  Currency,
-  GameEvent,
-  HitDie,
-  InventoryItem,
-  RollResult,
-  SpellSlotLevel,
-  ToolActivityIcon,
+import {
+  ABILITY_NAMES,
+  SKILL_NAMES,
+  type Ability,
+  type Character,
+  type Currency,
+  type GameEvent,
+  type HitDie,
+  type InventoryItem,
+  type ProficiencyLevel,
+  type RollResult,
+  type Skill,
+  type SpellSlotLevel,
+  type ToolActivityIcon,
 } from '@/types';
 import type { ToolInput } from './definitions';
 import {
@@ -220,6 +226,122 @@ function statSteps(input: ToolInput<'update_character'>): ((c: Character) => Eng
   return steps;
 }
 
+// -- abilities and proficiencies ---------------------------------------------
+
+/**
+ * Change one ability score (SRD 5.2.1 Ability Score Improvement: max 20 unless a feature says
+ * otherwise). A Constitution modifier change also changes the HP maximum as though the new modifier
+ * had applied from level 1 (SRD 5.2.1 "Hit Points": Constitution changes) — current HP moves with it.
+ */
+export function changeAbilityScore(c: Character, ability: Ability, change: number, max = 20): EngineResult {
+  const before = c.abilityScores[ability];
+  const target = Math.max(1, change > 0 ? Math.min(max, before + change) : before + change);
+  const name = ABILITY_NAMES[ability];
+  if (target === before) {
+    return { character: c, events: [{ type: 'warning', message: `${name} is already ${before}${change > 0 ? ` (the most it can reach here is ${max})` : ''}.` }] };
+  }
+  const events: GameEvent[] = [statEvent(`${name} ${before} → ${target}`)];
+  if (change > 0 && before + change > max) events.push({ type: 'warning', message: `${name} is capped at ${max}.` });
+  let character: Character = { ...c, abilityScores: { ...c.abilityScores, [ability]: target } };
+  if (ability === 'con') {
+    const perLevel = abilityModifier(target) - abilityModifier(before);
+    const hpChange = perLevel * characterLevel(c);
+    if (hpChange !== 0) {
+      const maxHp = Math.max(1, c.hp.max + hpChange);
+      const current = c.hp.current > 0 ? Math.min(maxHp, Math.max(1, c.hp.current + hpChange)) : 0;
+      character = { ...character, hp: { ...c.hp, max: maxHp, current } };
+      events.push({ type: 'hp-changed', message: `HP maximum ${c.hp.max} → ${maxHp} (Constitution modifier ${perLevel > 0 ? '+' : ''}${perLevel} per level)` });
+    }
+  }
+  return { character, events };
+}
+
+const PROFICIENCY: Record<'none' | 'half' | 'proficient' | 'expertise', ProficiencyLevel> = { none: 0, half: 0.5, proficient: 1, expertise: 2 };
+const PROFICIENCY_NAME: Record<number, string> = { 0: 'not proficient', 0.5: 'half proficiency', 1: 'proficient', 2: 'expertise' };
+
+export function setSkillProficiency(c: Character, skill: Skill, level: keyof typeof PROFICIENCY): EngineResult {
+  const before = c.skills[skill] ?? 0;
+  const next = PROFICIENCY[level];
+  if (before === next) return { character: c, events: [] };
+  const skills = { ...c.skills };
+  if (next === 0) delete skills[skill];
+  else skills[skill] = next;
+  return { character: { ...c, skills }, events: [statEvent(`${SKILL_NAMES[skill]}: ${PROFICIENCY_NAME[before]} → ${PROFICIENCY_NAME[next]}`)] };
+}
+
+/** Add strings to a list (case-insensitively new ones only). */
+function addTo(list: readonly string[], items: readonly string[]): string[] {
+  const out = [...list];
+  for (const item of items) {
+    const clean = item.trim();
+    if (clean && !out.some((x) => x.toLowerCase() === clean.toLowerCase())) out.push(clean);
+  }
+  return out;
+}
+
+function proficiencySteps(input: ToolInput<'update_character'>): ((c: Character) => EngineResult)[] {
+  const steps: ((c: Character) => EngineResult)[] = [];
+  for (const a of input.ability_scores ?? []) steps.push((c) => changeAbilityScore(c, a.ability, a.change, a.max ?? 20));
+  for (const p of input.skill_proficiencies ?? []) steps.push((c) => setSkillProficiency(c, p.skill, p.level));
+  if (input.saving_throws_add?.length) {
+    const saves = input.saving_throws_add;
+    steps.push((c) => {
+      const added = saves.filter((a) => !c.savingThrows.includes(a));
+      if (!added.length) return { character: c, events: [] };
+      return {
+        character: { ...c, savingThrows: [...c.savingThrows, ...added] },
+        events: [statEvent(`Saving throw proficiency: ${added.map((a) => ABILITY_NAMES[a]).join(', ')}`)],
+      };
+    });
+  }
+  if (input.tools_add?.length) {
+    const tools = input.tools_add;
+    steps.push((c) => {
+      const next = addTo(c.tools, tools);
+      return next.length === c.tools.length ? { character: c, events: [] } : { character: { ...c, tools: next }, events: [statEvent(`Tool proficiency: ${next.slice(c.tools.length).join(', ')}`)] };
+    });
+  }
+  if (input.languages_add?.length) {
+    const languages = input.languages_add;
+    steps.push((c) => {
+      const next = addTo(c.languages, languages);
+      return next.length === c.languages.length
+        ? { character: c, events: [] }
+        : { character: { ...c, languages: next }, events: [statEvent(`Languages: ${next.slice(c.languages.length).join(', ')}`)] };
+    });
+  }
+  return steps;
+}
+
+/** The change may affect Armor Class: an ability score, or what is equipped or attuned. */
+function mayChangeArmorClass(input: ToolInput<'update_character'>): boolean {
+  return Boolean(input.ability_scores?.length) || (input.inventory_update ?? []).some((i) => i.equipped !== undefined || i.attuned !== undefined);
+}
+
+/**
+ * Recompute AC after a change that may affect it (engine computeArmorClass). The sheet's AC is
+ * replaced only when it matched the computed value before (no hand-set AC like Mage Armor's);
+ * otherwise it stays, with a note of what the armor and scores now give.
+ */
+export function refreshArmorClass(before: Character, after: Character): EngineResult {
+  if (after.armorClass !== before.armorClass) return { character: after, events: [] };
+  const was = computeArmorClass(before, []);
+  const now = computeArmorClass(after, []);
+  if (now.ac === was.ac) return { character: after, events: [] };
+  if (before.armorClass !== was.ac) {
+    return {
+      character: after,
+      events: [
+        {
+          type: 'warning',
+          message: `AC stays ${after.armorClass} (set by hand); by armor and ability scores it would now be ${now.ac} (${now.formula}). Set armor_class if that is right.`,
+        },
+      ],
+    };
+  }
+  return { character: { ...after, armorClass: now.ac, acFormula: now.formula }, events: [statEvent(`AC ${before.armorClass} → ${now.ac} (${now.formula})`)] };
+}
+
 function buildSections(input: ToolInput<'update_character'>): Section[] {
   const sections: Section[] = [];
   const add = (icon: ToolActivityIcon, steps: ((c: Character) => EngineResult)[]) => {
@@ -249,6 +371,7 @@ function buildSections(input: ToolInput<'update_character'>): Section[] {
       }),
     ]);
   }
+  add('level', proficiencySteps(input));
   add('info', statSteps(input));
   return sections;
 }
@@ -277,12 +400,18 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   const sections = buildSections(input);
   if (sections.length === 0) throw new ToolInputError('Nothing to change: include at least one section (hp, conditions_add, inventory_add, …).');
   let results: SectionResult[] = [];
+  const checkAc = mayChangeArmorClass(input);
   const change = await mutateCharacter(ctx, (start) => {
     results = [];
     let current = start;
     for (const section of sections) {
       const r = section.apply(current);
       results.push({ section, before: current, after: r.character, events: r.events });
+      current = r.character;
+    }
+    if (checkAc) {
+      const r = refreshArmorClass(start, current);
+      if (r.events.length) results.push({ section: { icon: 'info', apply: () => r }, before: current, after: r.character, events: r.events });
       current = r.character;
     }
     return { character: current };
@@ -399,6 +528,17 @@ export async function takeRestTool(input: ToolInput<'take_rest'>, ctx: ToolConte
 // level_up
 // ---------------------------------------------------------------------------
 
+/** Features whose maximum uses changed in a level-up ("Rage: 2 → 3 uses"). */
+function updatedUses(before: Character, after: Character): string[] {
+  const lines: string[] = [];
+  for (const feature of after.features) {
+    const old = before.features.find((f) => f.id === feature.id);
+    if (!old?.uses || !feature.uses || old.uses.max === feature.uses.max) continue;
+    lines.push(`${feature.name}: ${old.uses.max} → ${feature.uses.max} uses`);
+  }
+  return lines;
+}
+
 export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext): Promise<ToolOutcome> {
   const store = ctx.deps.store();
   const campaign = requireCampaign(store);
@@ -432,8 +572,10 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
     }),
   );
   const summary = `Level up! Level ${change.newLevel} (${input.class_name}) · HP +${change.hpGained} (max ${change.character.hp.max})`;
-  await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...change.reminders].join('\n') || undefined });
+  const uses = updatedUses(before, change.character);
+  await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...change.reminders].join('\n') || undefined });
   const lines = [summary, ...eventLines(change.events)];
+  if (uses.length) lines.push('Limited-use features that grew with the level (already on the sheet):', ...uses.map((u) => `- ${u}`));
   if (change.reminders.length) lines.push('Choices the player still needs to make:', ...change.reminders.map((r) => `- ${r}`));
   lines.push(`Status: ${characterStatusLine(change.character)}`);
   return ok(lines.join('\n'));

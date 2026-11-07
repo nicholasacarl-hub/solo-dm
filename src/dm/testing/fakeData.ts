@@ -8,6 +8,7 @@ import type { CompendiumEntry, ContentKind } from '@/types';
 export const SRD_ATTRIBUTION = 'SRD 5.2.1 attribution (test)';
 
 const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const rank = (e: CompendiumEntry) => (e.sourceId === 'homebrew' ? 0 : e.sourceId === 'srd-5.2.1' ? 2 : 1);
 
 export function createFakeRulesIndex(entries: CompendiumEntry[]): RulesIndex {
   const allowed = (e: CompendiumEntry, opts?: SearchOptions) =>
@@ -25,8 +26,11 @@ export function createFakeRulesIndex(entries: CompendiumEntry[]): RulesIndex {
       return hits.sort((a, b) => b.score - a.score).slice(0, opts?.limit ?? 10);
     },
     get: (id) => entries.find((e) => e.id === id),
+    // Like the real index: homebrew, then imports, then the SRD.
     findByName: (name, opts?: { kind?: ContentKind }) =>
-      entries.find((e) => key(e.name) === key(name) && (!opts?.kind || e.kind === opts.kind)),
+      entries
+        .filter((e) => key(e.name) === key(name) && (!opts?.kind || e.kind === opts.kind))
+        .sort((a, b) => rank(a) - rank(b))[0],
     list: (opts) => entries.filter((e) => (!opts?.kind || e.kind === opts.kind) && (!opts?.sourceId || e.sourceId === opts.sourceId)),
     sources: () => [
       { id: 'srd-5.2.1', name: 'SRD 5.2.1', count: entries.filter((e) => e.sourceId === 'srd-5.2.1').length },

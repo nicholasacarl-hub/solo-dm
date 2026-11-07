@@ -69,13 +69,13 @@ export function findAllowedEntry(
 ): CompendiumEntry | undefined {
   const { campaign } = opts;
   const sources = allowedSources(campaign, index);
-  const found = index.findByName(name, { kind: opts.kind, campaignId: campaign.id });
-  if (!found || sources.includes(found.sourceId)) return found;
-  const keys = new Set([nameKey(name), nameKey(found.name)]);
   const visible = (e: CompendiumEntry) => {
     const owner = (e as Partial<HomebrewEntry>).campaignId ?? null;
     return e.sourceId !== HOMEBREW_SOURCE_ID || owner === null || owner === campaign.id;
   };
+  const found = index.findByName(name, { kind: opts.kind, campaignId: campaign.id });
+  if (!found || (sources.includes(found.sourceId) && visible(found))) return found;
+  const keys = new Set([nameKey(name), nameKey(found.name)]);
   const candidates = sources
     .flatMap((sourceId) => index.list({ kind: opts.kind, sourceId }))
     .filter((e) => keys.has(nameKey(e.name)) && visible(e));

@@ -6,7 +6,9 @@ vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
 import { sampleCombat } from '@/test/fixtures';
 import type { LogEntry, ToolLogEntry } from '@/types';
-import { deps, resetDmDeps } from '../deps';
+import type { CompendiumEntry } from '@/types';
+import { deps, resetDmDeps, setDmDeps } from '../deps';
+import { createFakeRulesIndex, SAMPLE_RULES } from '../testing/fakeData';
 import { fakeDice } from '../testing/fakeEngine';
 import { autoRespond } from '../testing/fakeStore';
 import { dialogRoll, setupHarness, type Harness, type HarnessOptions } from '../testing/harness';
@@ -263,6 +265,70 @@ describe('update_character', () => {
     const h = setup();
     expect(await h.run('update_character', { reason: 'nothing' })).toMatchObject({ isError: true });
   });
+
+  it('refuses unknown fields instead of silently dropping them', async () => {
+    const h = setup();
+    const out = await h.run('update_character', { hp: { amount: 7, kind: 'damage' }, temp_hp: 5 });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('unknown field "temp_hp"');
+    expect(h.s().character?.hp.current).toBe(12);
+    const roll = await h.run('request_player_roll', { roll_type: 'save', ability: 'dex', DC: 15, reason: 'Dodge' });
+    expect(roll.isError).toBe(true);
+    expect(roll.content).toContain('"DC"');
+    const nested = await h.run('update_character', { hp: { amount: 3, kind: 'damage', type: 'fire' } });
+    expect(nested.content).toContain('hp: unknown field "type"');
+  });
+});
+
+describe('update_character: ability scores and proficiencies (Ability Score Improvements, feats, Expertise)', () => {
+  it('raises a score with the cap of 20, and a Constitution change moves HP as if from level 1', async () => {
+    const h = setup();
+    // Mira, Wizard 3: CON 13 (+1) → 15 (+2): +1 HP per level = +3 (SRD 5.2.1: Constitution changes).
+    const out = await h.run('update_character', { ability_scores: [{ ability: 'con', change: 2 }], reason: 'Level 4 ASI' });
+    expect(out.isError).toBeUndefined();
+    expect(h.s().character?.abilityScores.con).toBe(15);
+    expect(h.s().character?.hp).toMatchObject({ max: 20, current: 15 });
+    expect(out.content).toContain('HP maximum 17 → 20');
+
+    await h.s().updateCharacter((c) => ({ ...c, abilityScores: { ...c.abilityScores, int: 19 } }));
+    const capped = await h.run('update_character', { ability_scores: [{ ability: 'int', change: 2 }] });
+    expect(h.s().character?.abilityScores.int).toBe(20);
+    expect(capped.content).toContain('capped at 20');
+  });
+
+  it('recomputes AC when a score it depends on changes, unless the AC was set by hand', async () => {
+    const h = setup();
+    await h.run('update_character', { ability_scores: [{ ability: 'dex', change: 2 }] });
+    // Unarmored: 10 + DEX (14 → 16).
+    expect(h.s().character?.armorClass).toBe(13);
+    expect(toolLines(h.s().log).at(-1)?.summary).toContain('AC 12 → 13');
+
+    const mageArmor = setup();
+    await mageArmor.s().updateCharacter((c) => ({ ...c, armorClass: 15 }));
+    const out = await mageArmor.run('update_character', { ability_scores: [{ ability: 'dex', change: 2 }] });
+    expect(mageArmor.s().character?.armorClass).toBe(15);
+    expect(out.content).toMatch(/AC stays 15 \(set by hand\).*13/);
+  });
+
+  it('sets skill proficiency levels and adds saves, tools and languages', async () => {
+    const h = setup();
+    await h.run('update_character', {
+      skill_proficiencies: [
+        { skill: 'arcana', level: 'expertise' },
+        { skill: 'history', level: 'none' },
+        { skill: 'athletics', level: 'half' },
+      ],
+      saving_throws_add: ['con', 'int'],
+      tools_add: ["Calligrapher's Supplies"],
+      languages_add: ['Draconic'],
+    });
+    const c = h.s().character;
+    expect(c?.skills).toMatchObject({ arcana: 2, athletics: 0.5 });
+    expect(c?.skills).not.toHaveProperty('history');
+    expect(c?.savingThrows).toEqual(['int', 'wis', 'con']);
+    expect(c?.tools).toContain("Calligrapher's Supplies");
+    expect(c?.languages).toContain('Draconic');
+  });
 });
 
 describe('rests and leveling', () => {
@@ -293,6 +359,26 @@ describe('rests and leveling', () => {
     await h.s().setCombat(null);
     await h.run('take_rest', { kind: 'long' });
     expect(h.s().character?.hp.current).toBe(17);
+  });
+
+  it('reports the limited-use features whose uses grew with the level', async () => {
+    const h = setup();
+    await h.s().updateCharacter((c) => ({
+      ...c,
+      features: [
+        ...c.features,
+        {
+          id: 'f-tides',
+          name: 'Tidal Surge',
+          description: 'Test feature.',
+          source: 'class',
+          uses: { max: 2, used: 1, recharge: 'long', scale: { by: 'table', className: 'Wizard', values: [2, 2, 2, 3] } },
+        },
+      ],
+    }));
+    const out = await h.run('level_up', { class_name: 'Wizard' });
+    expect(out.content).toContain('Tidal Surge: 2 → 3 uses');
+    expect(h.s().character?.features.find((f) => f.id === 'f-tides')?.uses).toMatchObject({ max: 3, used: 1 });
   });
 
   it('levels up in milestone campaigns but needs the XP in XP campaigns', async () => {
@@ -339,6 +425,13 @@ describe('combat', () => {
     expect(unknown.content).toContain('Combatants: Mira Voss, Bandit 1, Bandit 2, Old Tam');
   });
 
+  it('keeps combatant notes behind the DM screen', async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    const out = await h.run('update_combat', { action: 'note', target: 'Bandit 2', note: 'Actually the missing keeper Halvard' });
+    expect(out.content).toContain('Halvard');
+    expect(toolLines(h.s().log).at(-1)).toMatchObject({ secret: true });
+  });
+
   it('advances turns and ends combat, awarding XP only in XP campaigns', async () => {
     const h = setup({ state: { combat: sampleCombat() }, campaignSettings: { milestoneLeveling: false } });
     const next = await h.run('update_combat', { action: 'next_turn' });
@@ -375,6 +468,33 @@ describe('rules and homebrew', () => {
     // Monster lookups could spoil a surprise: they stay behind the DM screen.
     await h.run('get_entry', { name: 'Bandit', kind: 'monster' });
     expect(toolLines(h.s().log).at(-1)).toMatchObject({ summary: 'Looked up: Bandit', secret: true });
+  });
+
+  it("searches every import switched on in the Library, and marks imported text so saves can leave it out", async () => {
+    const h = setup();
+    const imported = { id: 'lib:phb:fireball', sourceId: 'lib-phb', sourceName: 'My PHB notes', kind: 'spell' as const, name: 'Fireball', text: 'Imported Fireball text.' };
+    setDmDeps({ rulesIndex: async () => createFakeRulesIndex([...SAMPLE_RULES, imported]) });
+    const run = (name: string, input: unknown) => runTool(name, input, { ...h.ctx, deps: deps() });
+    // The campaign enables only the SRD; the import is on in the Library (so it is in the index).
+    expect(h.s().campaign?.settings.enabledSources).toEqual(['srd-5.2.1']);
+    const search = await run('lookup_rules', { query: 'imported fireball' });
+    expect(search.content).toContain('<imported-content source="My PHB notes">\n## Fireball (spell · My PHB notes)\nImported Fireball text.\n</imported-content>');
+    const entry = await run('get_entry', { name: 'Fireball', kind: 'spell' });
+    expect(entry.content).toMatch(/^<imported-content source="My PHB notes">[\s\S]*Imported Fireball text\.[\s\S]*<\/imported-content>$/);
+    // SRD text is not marked.
+    const srd = await run('get_entry', { name: 'Bandit' });
+    expect(srd.content).not.toContain('<imported-content');
+  });
+
+  it('never hides an allowed SRD entry behind an off-limits entry of the same name', async () => {
+    const h = setup();
+    const offLimits: CompendiumEntry = { id: 'lib:off:fireball', sourceId: 'lib-off', sourceName: 'Switched-off notes', kind: 'spell', name: 'Fireball', text: 'Off-limits Fireball.' };
+    const index = createFakeRulesIndex([...SAMPLE_RULES, offLimits]);
+    // The index's name lookup prefers the import, but this campaign may not use that source.
+    setDmDeps({ rulesIndex: async () => ({ ...index, sources: () => [{ id: 'srd-5.2.1', name: 'SRD 5.2.1', count: 3 }] }) });
+    const out = await runTool('get_entry', { name: 'Fireball', kind: 'spell' }, { ...h.ctx, deps: deps() });
+    expect(out.content).toContain('8d6 Fire damage');
+    expect(out.content).not.toContain('Off-limits');
   });
 
   it('refuses homebrew when the campaign disables it', async () => {

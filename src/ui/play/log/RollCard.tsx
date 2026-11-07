@@ -43,7 +43,10 @@ function VisibleRoll({ entry }: { entry: RollLogEntry }) {
   const { roll } = entry;
   const attack = entry.rollType ? entry.rollType === 'attack' : isAttackPurpose(entry.purpose);
   const natural = naturalOf(roll);
-  const badges = outcomeBadges(roll, attack);
+  // A hidden DC or AC is left out of the logged roll: then there is no verdict to show either, only
+  // natural 20s and 1s — and the die and total are coloured from those alone, so no colour gives
+  // the outcome away before the DM narrates it.
+  const badges = outcomeBadges(roll.dc === undefined ? { ...roll, success: undefined } : roll, attack);
   const tone = primaryTone(badges);
   const advantage = advantageLabel(roll);
   const isPlayer = entry.actor === 'player';

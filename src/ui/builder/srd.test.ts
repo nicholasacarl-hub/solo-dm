@@ -203,6 +203,13 @@ describe('refreshing uses after a level-up', () => {
     expect(refreshed?.uses).toBeUndefined();
   });
 
+  it('leaves class features alone when the builder data is unavailable', () => {
+    // The engine's level-up already set three Second Winds; "You can use this feature twice" must not undo it.
+    const fighter = atLevel(build('Fighter', 'Human'), 4);
+    const scaled = { ...fighter, features: fighter.features.map((f) => (f.name === 'Second Wind' ? { ...f, uses: { ...f.uses!, max: 3 } } : f)) };
+    expect(refreshFeatureUses(scaled, null)).toBe(scaled);
+  });
+
   it('adds what an older builder never recorded: skill bonuses and Resistances', () => {
     const cleric = build('Cleric', 'Dwarf', { classOptions: { 'Divine Order': 'Thaumaturge' } });
     const legacy = { ...cleric, skillBonuses: undefined, damageResistances: undefined };

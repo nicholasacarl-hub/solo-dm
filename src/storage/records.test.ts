@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import type { CompendiumEntry, LibrarySource } from '@/types';
 import { sampleCombat } from '@/test/fixtures';
 import {
+  addPendingDmNotice,
   deleteHomebrewRecord,
   deleteLibrarySource,
   deleteTranscriptAfter,
@@ -11,6 +12,7 @@ import {
   listHomebrew,
   listLibrarySources,
   loadCampaignRecords,
+  putCampaignKeepingNotices,
   putCombat,
   putHomebrew,
   saveLibrarySource,
@@ -150,5 +152,32 @@ describe('library', () => {
     expect((await getLibraryEntries(['a-off', 'srd'])).map((e) => e.sourceId).sort()).toEqual(['a-off', 'srd']);
     expect(await getLibraryEntries([])).toEqual([]);
     expect((await listLibrarySources()).map((s) => s.id)).toEqual(['srd', 'a-off', 'b-on']);
+  });
+});
+
+describe('DM notices on the campaign record', () => {
+  it('addPendingDmNotice adds a notice once, bumps updatedAt, and never creates a campaign', async () => {
+    const { campaign } = await seedCampaign('a');
+    expect(await addPendingDmNotice('a-camp', 'Veto: Lantern-Touched.', 5)).toEqual(['Veto: Lantern-Touched.']);
+    expect(await addPendingDmNotice('a-camp', 'Veto: Lantern-Touched.')).toEqual(['Veto: Lantern-Touched.']);
+    const stored = await getCampaign('a-camp');
+    expect(stored?.pendingDmNotices).toEqual(['Veto: Lantern-Touched.']);
+    expect(stored?.updatedAt).toBe(campaign.updatedAt + 1);
+    expect(await addPendingDmNotice('missing', 'Hello?')).toBeNull();
+    expect(await getCampaign('missing')).toBeUndefined();
+  });
+
+  it('putCampaignKeepingNotices keeps notices queued since the caller last looked, and drops delivered ones', async () => {
+    const { campaign } = await seedCampaign('a');
+    await addPendingDmNotice('a-camp', 'Seen and delivered.');
+    await addPendingDmNotice('a-camp', 'Queued in another tab.');
+    // The caller saw only the first notice, delivered it, and queued one of its own.
+    const saved = await putCampaignKeepingNotices({ ...campaign, name: 'Renamed', pendingDmNotices: ['Mine.'] }, ['Seen and delivered.']);
+    expect(saved).toEqual(['Mine.', 'Queued in another tab.']);
+    expect(await getCampaign('a-camp')).toMatchObject({ name: 'Renamed', pendingDmNotices: ['Mine.', 'Queued in another tab.'] });
+
+    // Nothing new: saved exactly as given.
+    expect(await putCampaignKeepingNotices({ ...campaign, pendingDmNotices: [] }, saved)).toEqual([]);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual([]);
   });
 });

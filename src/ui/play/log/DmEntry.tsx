@@ -1,3 +1,4 @@
+import { Scissors } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { useGame } from '@/state/gameStore';
 import { useSettings } from '@/state/settingsStore';
@@ -5,26 +6,45 @@ import type { DmLogEntry } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
 import { isBusyPhase, sendToDm } from '../dmStatus';
 
-/** DM narration in the story style, with suggested actions and (optionally) the DM's notes. */
-export function DmEntry({ entry, showChoices }: { entry: DmLogEntry; showChoices: boolean }) {
+/**
+ * DM narration in the story style, with suggested actions and (optionally) the DM's notes.
+ * `cutOff`: the reply never reached the DM's transcript (a failed request, a reload mid-stream),
+ * so the DM doesn't know this text — said under it, in place of a caret that would never finish.
+ */
+export function DmEntry({
+  entry,
+  showChoices,
+  cutOff = false,
+}: {
+  entry: DmLogEntry;
+  showChoices: boolean;
+  cutOff?: boolean;
+}) {
   const serif = useSettings((s) => s.narrationFont === 'serif');
   const hasText = entry.text.trim().length > 0;
-  const choices = showChoices && !entry.streaming ? (entry.choices ?? []) : [];
+  const streaming = Boolean(entry.streaming) && !cutOff;
+  const choices = showChoices && !streaming ? (entry.choices ?? []) : [];
 
-  if (!hasText && !entry.streaming && !entry.reasoning && choices.length === 0) return null;
+  if (!hasText && !streaming && !entry.reasoning && choices.length === 0) return null;
 
   return (
-    <article aria-label="The DM" aria-busy={entry.streaming || undefined}>
-      {(hasText || entry.streaming) && (
+    <article aria-label="The DM" aria-busy={streaming || undefined}>
+      {(hasText || streaming) && (
         // While streaming, the last paragraph is made inline so the caret sits at the end of the text.
-        <div className={cn(entry.streaming && '[&>.narration]:inline [&>.narration>p:last-child]:inline')}>
+        <div className={cn(streaming && '[&>.narration]:inline [&>.narration>p:last-child]:inline')}>
           {hasText && (
             <Markdown variant="narration" className={cn(serif && 'narration-serif')}>
               {entry.text}
             </Markdown>
           )}
-          {entry.streaming && <StreamingCaret />}
+          {streaming && <StreamingCaret />}
         </div>
+      )}
+      {cutOff && (
+        <p className="mt-2 flex items-center gap-1.5 text-xs text-muted">
+          <Scissors className="size-3.5 shrink-0" aria-hidden />
+          Cut off. The DM never saw this text, so what comes next may not match it.
+        </p>
       )}
       {entry.reasoning && (
         <details className="group mt-3 rounded-xl border border-border bg-surface/60 text-sm">
