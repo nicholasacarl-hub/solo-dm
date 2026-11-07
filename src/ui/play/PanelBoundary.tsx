@@ -21,7 +21,10 @@ export class PanelBoundary extends Component<{ name: string; children: ReactNode
   render() {
     if (!this.state.error) return this.props.children;
     return (
-      <div role="alert" className="flex flex-col items-start gap-2 rounded-2xl border border-border bg-surface p-4 text-sm">
+      <div
+        role="alert"
+        className="flex flex-col items-start gap-2 rounded-2xl border border-border bg-surface p-4 text-sm"
+      >
         <p className="flex items-center gap-2 font-medium">
           <TriangleAlert className="size-4 text-danger" aria-hidden />
           The {this.props.name} hit a snag.

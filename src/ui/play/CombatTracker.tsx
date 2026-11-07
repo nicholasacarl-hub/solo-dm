@@ -46,7 +46,7 @@ export function CombatTracker({ className }: { className?: string }) {
       aria-labelledby={titleId}
       className={cn('overflow-hidden rounded-2xl border border-border bg-surface shadow-card', className)}
     >
-      <header className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+      <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
         <div className="flex min-w-0 items-center gap-2">
           <Swords className="size-4 shrink-0 text-danger" aria-hidden />
           <h2 id={titleId} className="truncate font-display text-sm font-semibold tracking-wide">
@@ -54,7 +54,7 @@ export function CombatTracker({ className }: { className?: string }) {
           </h2>
         </div>
         <Badge>Round {combat.round}</Badge>
-      </header>
+      </div>
       {yourTurn && (
         <p role="status" className="border-b border-border bg-accent-soft px-4 py-2 text-sm font-semibold text-accent">
           Your turn
@@ -62,7 +62,12 @@ export function CombatTracker({ className }: { className?: string }) {
       )}
       <ol aria-label="Initiative order" className="divide-y divide-border">
         {combat.combatants.map((c, i) => (
-          <CombatantRow key={c.id} combatant={c} current={i === combat.turnIndex} playerHp={c.isPlayer ? playerHp : null} />
+          <CombatantRow
+            key={c.id}
+            combatant={c}
+            current={i === combat.turnIndex}
+            playerHp={c.isPlayer ? playerHp : null}
+          />
         ))}
       </ol>
     </section>
@@ -89,7 +94,10 @@ function CombatantRow({
       )}
     >
       <span
-        className={cn('mt-0.5 w-7 shrink-0 text-center text-sm tabular-nums', current ? 'font-semibold text-accent' : 'text-muted')}
+        className={cn(
+          'mt-0.5 w-7 shrink-0 text-center text-sm tabular-nums',
+          current ? 'font-semibold text-accent' : 'text-muted',
+        )}
         title="Initiative"
       >
         <span className="sr-only">Initiative </span>
@@ -161,7 +169,11 @@ function ConditionChip({ condition }: { condition: ActiveCondition }) {
   const info = CONDITIONS[condition.id as ConditionId] as (typeof CONDITIONS)[ConditionId] | undefined;
   const name = info?.name ?? capitalize(condition.id);
   const level = condition.level ? ` ${condition.level}` : '';
-  const title = [info?.summary, condition.duration && `Duration: ${condition.duration}`, condition.source && `From ${condition.source}`]
+  const title = [
+    info?.summary,
+    condition.duration && `Duration: ${condition.duration}`,
+    condition.source && `From ${condition.source}`,
+  ]
     .filter(Boolean)
     .join(' · ');
   return (

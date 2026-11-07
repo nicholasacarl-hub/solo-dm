@@ -104,8 +104,9 @@ export function characterStatusLine(c: Character): string {
 const PROF_LABEL: Record<number, string> = { 0.5: ' (half)', 1: ' (prof)', 2: ' (expertise)' };
 
 function headerLines(c: Character): string[] {
-  const subclasses = c.classes.filter((cl) => cl.subclass).map((cl) => cl.subclass);
-  const title = `## ${c.name.trim() || 'Unnamed hero'} — Level ${characterLevel(c)} ${classText(c)}${subclasses.length ? ` (${subclasses.join(', ')})` : ''}`;
+  const classes = c.classes.map((cl) => `${cl.name} ${cl.level}${cl.subclass ? ` (${cl.subclass})` : ''}`).join(' / ') || 'no class yet';
+  const level = c.classes.length > 1 ? `Level ${characterLevel(c)}: ` : '';
+  const title = `## ${c.name.trim() || 'Unnamed hero'} — ${level}${classes}`;
   const origin = [c.species, c.background && `${c.background} background`, c.alignment, c.pronouns, c.size, xpSummary(c)].filter(
     (x): x is string => !!x && x.trim() !== '',
   );
@@ -186,7 +187,12 @@ function spellcastingLines(c: Character): string[] {
   const header = [stats.join('; '), `Slots: ${slotsText(c) ?? 'none'}`, `Concentrating: ${sc.concentratingOn ?? 'nothing'}`];
   const classNames = new Set(c.classes.map((cl) => cl.name.toLowerCase()));
   const byLevel = new Map<number, KnownSpell[]>();
-  for (const spell of [...sc.spells].sort((a, b) => a.level - b.level || a.name.localeCompare(b.name, 'en'))) {
+  const byName = (a: KnownSpell, b: KnownSpell) => {
+    const x = a.name.toLowerCase();
+    const y = b.name.toLowerCase();
+    return x < y ? -1 : x > y ? 1 : 0; // code-point order: identical in every browser
+  };
+  for (const spell of [...sc.spells].sort((a, b) => a.level - b.level || byName(a, b))) {
     byLevel.set(spell.level, [...(byLevel.get(spell.level) ?? []), spell]);
   }
   const lines = [...byLevel.entries()].map(
@@ -238,10 +244,24 @@ function personalityLines(c: Character): string[] {
 }
 
 /** Full character sheet as compact markdown for the DM (abilities, saves, skills, attacks, spells, features, inventory, money). */
+/** "**Defenses:** Resistance: fire · Condition immunity: Poisoned", or null when there are none. */
+function defensesLine(c: Character): string | null {
+  const parts = [
+    ['Resistance', c.damageResistances],
+    ['Immunity', c.damageImmunities],
+    ['Vulnerability', c.damageVulnerabilities],
+    ['Condition immunity', c.conditionImmunities],
+  ]
+    .filter((entry): entry is [string, string[]] => Array.isArray(entry[1]) && entry[1].length > 0)
+    .map(([label, list]) => `${label}: ${list.join(', ')}`);
+  return parts.length ? `**Defenses:** ${parts.join(' · ')}` : null;
+}
+
 export function characterSheetText(c: Character): string {
+  const defenses = defensesLine(c);
   const sections: string[][] = [
     [...headerLines(c), '', ...vitalsLines(c)],
-    [...abilityLines(c), proficiencyLine(c)],
+    [...abilityLines(c), proficiencyLine(c), ...(defenses ? [defenses] : [])],
     attackLines(c),
     spellcastingLines(c),
     c.features.length ? ['### Features', ...c.features.map(featureLine)] : [],

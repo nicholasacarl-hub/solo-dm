@@ -56,7 +56,12 @@ export function ClocksTab() {
 function ClockRow({ clock }: { clock: Clock }) {
   const kind = KIND_LABEL[clock.kind];
   return (
-    <article className={cn('flex items-start gap-3 rounded-xl border border-border bg-surface p-3', clock.resolved && 'opacity-60')}>
+    <article
+      className={cn(
+        'flex items-start gap-3 rounded-xl border border-border bg-surface p-3',
+        clock.resolved && 'opacity-60',
+      )}
+    >
       <ClockFace clock={clock} className="size-12" />
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-1.5">

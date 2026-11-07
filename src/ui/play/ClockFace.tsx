@@ -20,7 +20,13 @@ function wedgePath(a0: number, a1: number, r = 46, c = 50): string {
 }
 
 /** A segmented progress clock (Blades-style "fronts"): filled wedges clockwise from 12 o'clock. */
-export function ClockFace({ clock, className }: { clock: Pick<Clock, 'segments' | 'filled' | 'kind' | 'name'>; className?: string }) {
+export function ClockFace({
+  clock,
+  className,
+}: {
+  clock: Pick<Clock, 'segments' | 'filled' | 'kind' | 'name'>;
+  className?: string;
+}) {
   const segments = Math.max(1, Math.round(clock.segments));
   const filled = Math.min(segments, Math.max(0, Math.round(clock.filled)));
   const fill = KIND_FILL[clock.kind];
@@ -35,21 +41,19 @@ export function ClockFace({ clock, className }: { clock: Pick<Clock, 'segments' 
       className={cn('shrink-0', className)}
     >
       <circle cx={50} cy={50} r={47} fill="var(--surface-2)" stroke="var(--border)" strokeWidth={2} />
-      {segments === 1 ? (
-        filled === 1 && <circle cx={50} cy={50} r={46} fill={fill} />
-      ) : (
-        Array.from({ length: segments }, (_, i) => (
-          <path
-            key={i}
-            d={wedgePath(start + i * step, start + (i + 1) * step)}
-            fill={i < filled ? fill : 'transparent'}
-            fillOpacity={i < filled ? 0.85 : 0}
-            stroke="var(--surface)"
-            strokeWidth={3}
-            strokeLinejoin="round"
-          />
-        ))
-      )}
+      {segments === 1
+        ? filled === 1 && <circle cx={50} cy={50} r={46} fill={fill} />
+        : Array.from({ length: segments }, (_, i) => (
+            <path
+              key={i}
+              d={wedgePath(start + i * step, start + (i + 1) * step)}
+              fill={i < filled ? fill : 'transparent'}
+              fillOpacity={i < filled ? 0.85 : 0}
+              stroke="var(--surface)"
+              strokeWidth={3}
+              strokeLinejoin="round"
+            />
+          ))}
       <circle cx={50} cy={50} r={47} fill="none" stroke="var(--border)" strokeWidth={2} />
     </svg>
   );

@@ -57,7 +57,11 @@ export function TabStrip<T extends string>({
     <div
       role="tablist"
       aria-label={label}
-      className={cn(labels === 'selected' ? 'flex' : 'grid', variant === 'panel' && 'border-b border-border', className)}
+      className={cn(
+        labels === 'selected' ? 'flex' : 'grid',
+        variant === 'panel' && 'border-b border-border',
+        className,
+      )}
       style={labels === 'selected' ? undefined : { gridTemplateColumns: `repeat(${items.length}, minmax(0, 1fr))` }}
     >
       {items.map((item, index) => {

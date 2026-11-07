@@ -57,8 +57,12 @@ export const SRD_ARMOR: readonly ArmorStats[] = [
   heavy('Chain Mail', 16, 13),
   heavy('Splint Armor', 17, 15),
   heavy('Plate Armor', 18, 15),
-  { name: 'Shield', kind: 'shield', baseAc: 2, dexCap: 0 },
 ];
+
+const SHIELD: ArmorStats = { name: 'Shield', kind: 'shield', baseAc: 2, dexCap: 0 };
+
+/** SRD 5.2.1 armor plus the Shield. */
+export const SRD_ARMOR_AND_SHIELD: readonly ArmorStats[] = [...SRD_ARMOR, SHIELD];
 
 /** "+1 Chain Mail" / "Chain mail +2" -> 1 / 2. */
 export function magicBonus(name: string): number {
@@ -106,7 +110,7 @@ export function resolveArmor(item: InventoryItem, catalog: readonly EquipmentOpt
       if (stats) return stats;
     }
   }
-  return SRD_ARMOR.find((a) => armorKey(a.name) === key) ?? null;
+  return SRD_ARMOR_AND_SHIELD.find((a) => armorKey(a.name) === key) ?? null;
 }
 
 export interface WornArmor {
@@ -120,7 +124,7 @@ const MAYBE_ARMOR = new Set(['armor', 'shield', 'magic-item', 'other']);
 
 /**
  * Equipped items that are armor or a shield (weapons, gear and tools never count). `unknown` lists
- * equipped items categorized as armor/shield whose stats couldn't be found.
+ * equipped items categorized as armor whose stats couldn't be found.
  */
 export function wornArmor(
   items: readonly InventoryItem[],
@@ -130,9 +134,10 @@ export function wornArmor(
   const unknown: InventoryItem[] = [];
   for (const item of items) {
     if (!item.equipped || (item.category !== undefined && !MAYBE_ARMOR.has(item.category))) continue;
-    const stats = resolveArmor(item, catalog);
+    // Any equipped shield works like a Shield even when its name isn't in the tables ("Spiked Shield").
+    const stats = resolveArmor(item, catalog) ?? (item.category === 'shield' ? { ...SHIELD, name: item.name } : null);
     if (stats) known.push({ item, stats, bonus: magicBonus(item.name) });
-    else if (item.category === 'armor' || item.category === 'shield') unknown.push(item);
+    else if (item.category === 'armor') unknown.push(item);
   }
   return { known, unknown };
 }

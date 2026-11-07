@@ -47,6 +47,8 @@ function VisibleRoll({ entry }: { entry: RollLogEntry }) {
   const tone = primaryTone(badges);
   const advantage = advantageLabel(roll);
   const isPlayer = entry.actor === 'player';
+  // "20 = 20" says nothing: a lone d20 with no modifier just shows its total.
+  const plainD20 = natural !== undefined && roll.modifier === 0 && d20Dice(roll).length === 1;
 
   return (
     <div className={cn('flex', isPlayer ? 'justify-end' : 'justify-start')}>
@@ -60,14 +62,23 @@ function VisibleRoll({ entry }: { entry: RollLogEntry }) {
         )}
         <div className="min-w-0">
           <p className="flex flex-wrap items-center gap-x-2 text-sm font-medium">
-            <span className="truncate">{entry.purpose}</span>
+            <span className="line-clamp-2 break-words">{entry.purpose}</span>
             <span className="text-xs font-normal text-faint">{isPlayer ? 'You' : 'DM'}</span>
           </p>
           <p className="mt-0.5 flex flex-wrap items-baseline gap-x-1.5 text-sm text-muted">
-            {natural !== undefined ? <D20Values entry={entry} natural={natural} /> : <DiceValues entry={entry} />}
-            <span aria-hidden>=</span>
+            {!plainD20 && (
+              <>
+                {natural !== undefined ? <D20Values entry={entry} natural={natural} /> : <DiceValues entry={entry} />}
+                <span aria-hidden>=</span>
+              </>
+            )}
             <span className="sr-only">total</span>
-            <span className={cn('text-xl leading-none font-semibold tabular-nums', tone === 'neutral' ? 'text-text' : TONE_TEXT[tone])}>
+            <span
+              className={cn(
+                'text-xl leading-none font-semibold tabular-nums',
+                tone === 'neutral' ? 'text-text' : TONE_TEXT[tone],
+              )}
+            >
               {roll.total}
             </span>
             {roll.dc !== undefined && (

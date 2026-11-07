@@ -40,7 +40,10 @@ function DesktopTable() {
   const combatActive = useGame((s) => s.combat?.active ?? false);
   return (
     <div className="grid min-h-0 flex-1 grid-cols-[16rem_minmax(0,1fr)_20rem] xl:grid-cols-[18rem_minmax(0,1fr)_24rem] 2xl:grid-cols-[20rem_minmax(0,1fr)_28rem]">
-      <aside aria-label="Scene and journal" className="flex min-h-0 flex-col gap-3 overflow-y-auto border-r border-border p-3 scroll-thin xl:gap-4 xl:p-4">
+      <aside
+        aria-label="Scene and journal"
+        className="flex min-h-0 flex-col gap-3 overflow-y-auto border-r border-border p-3 scroll-thin xl:gap-4 xl:p-4"
+      >
         <PanelBoundary name="scene card">
           <SceneCard />
         </PanelBoundary>
@@ -51,7 +54,10 @@ function DesktopTable() {
       <main className="flex min-h-0 min-w-0 flex-col">
         <StoryColumn />
       </main>
-      <aside aria-label="Character" className="flex min-h-0 flex-col gap-3 overflow-y-auto border-l border-border p-3 scroll-thin xl:gap-4 xl:p-4">
+      <aside
+        aria-label="Character"
+        className="flex min-h-0 flex-col gap-3 overflow-y-auto border-l border-border p-3 scroll-thin xl:gap-4 xl:p-4"
+      >
         {combatActive && (
           <PanelBoundary name="combat tracker">
             <CombatTracker />
@@ -171,7 +177,9 @@ function NextSessionCard({ ended }: { ended: number }) {
   return (
     <div className="flex flex-col items-center gap-3 rounded-2xl border border-border bg-surface px-4 py-5 text-center shadow-card">
       <p className="text-sm text-muted">
-        {ended > 0 ? `Session ${ended} is over. Take a break, or pick up where you left off.` : 'Your first session is ready to begin.'}
+        {ended > 0
+          ? `Session ${ended} is over. Take a break, or pick up where you left off.`
+          : 'Your first session is ready to begin.'}
       </p>
       <Button variant="primary" onClick={() => void runDm(() => dm.beginOrResume())}>
         {ended > 0 ? `Start session ${ended + 1}` : 'Begin the adventure'}

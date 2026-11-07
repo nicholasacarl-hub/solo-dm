@@ -4,8 +4,8 @@
  */
 import { useDeferredValue, useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
-import { BookOpen, Search } from 'lucide-react';
-import { useRulesIndex, type RulesIndex } from '@/data';
+import { BookOpen, RotateCcw, Search, TriangleAlert } from 'lucide-react';
+import { invalidateRulesIndex, useRulesIndexState, type RulesIndex } from '@/data';
 import { CONTENT_KINDS, type CompendiumEntry, type ContentKind } from '@/types';
 import { cn } from '@/lib/cn';
 import { Button, EmptyState, Input, Select, Spinner } from '@/ui/components/ui';
@@ -44,16 +44,29 @@ export function findEntries(index: RulesIndex, query: string, kind: KindFilter, 
 }
 
 export function BrowseTab() {
-  const index = useRulesIndex();
-  if (!index) {
+  const { index, error } = useRulesIndexState();
+  if (index) return <BrowseView index={index} />;
+  if (error) {
     return (
-      <div className="flex items-center gap-3 py-16 text-sm text-muted">
-        <Spinner label="Loading the rules" />
-        <span aria-hidden>Opening the rulebook…</span>
-      </div>
+      <EmptyState
+        icon={<TriangleAlert className="size-8 text-danger" aria-hidden />}
+        title="The rules didn’t load"
+        action={
+          <Button icon={<RotateCcw className="size-4" aria-hidden />} onClick={() => invalidateRulesIndex()}>
+            Try again
+          </Button>
+        }
+      >
+        {error}
+      </EmptyState>
     );
   }
-  return <BrowseView index={index} />;
+  return (
+    <div className="flex items-center gap-3 py-16 text-sm text-muted">
+      <Spinner label="Loading the rules" />
+      <span aria-hidden>Opening the rulebook…</span>
+    </div>
+  );
 }
 
 function BrowseView({ index }: { index: RulesIndex }) {
@@ -155,6 +168,7 @@ function BrowseView({ index }: { index: RulesIndex }) {
             total={results.length}
             selectedId={entryId}
             query={deferredQuery}
+            showKind={kind === 'all'}
             onMore={() => setLimit((l) => l + PAGE_SIZE)}
           />
         )}
@@ -202,7 +216,7 @@ function KindOverview({ counts, onPick }: { counts: { kind: ContentKind; count: 
               >
                 <Icon className="size-4 shrink-0 text-muted" aria-hidden />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium">{info.plural}</span>
-                <span className="text-xs text-faint tabular-nums">{count}</span>
+                <span className="text-xs text-muted tabular-nums">{count}</span>
               </button>
             </li>
           );
@@ -221,12 +235,14 @@ function ResultList({
   total,
   selectedId,
   query,
+  showKind,
   onMore,
 }: {
   results: BrowseResult[];
   total: number;
   selectedId: string | null;
   query: string;
+  showKind: boolean;
   onMore: () => void;
 }) {
   if (total === 0) {
@@ -256,10 +272,10 @@ function ResultList({
               >
                 <span className="flex items-baseline justify-between gap-2">
                   <span className="min-w-0 truncate text-sm font-medium">{entry.name}</span>
-                  <span className="shrink-0 text-[11px] text-faint">{kindInfo(entry.kind).label}</span>
+                  {showKind && <span className="shrink-0 text-[11px] text-muted">{kindInfo(entry.kind).label}</span>}
                 </span>
                 {entry.summary && <span className="mt-0.5 block truncate text-xs text-muted">{entry.summary}</span>}
-                {snippet && <span className="mt-0.5 line-clamp-2 text-xs text-faint">{snippet}</span>}
+                {snippet && <span className="mt-0.5 line-clamp-2 text-xs text-muted">{snippet}</span>}
               </Link>
             </li>
           );

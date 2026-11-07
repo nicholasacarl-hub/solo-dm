@@ -17,7 +17,12 @@ export function QuickActions({ busy }: { busy: boolean }) {
   const prefillComposer = usePlayView((s) => s.prefillComposer);
 
   const items: MenuItem[] = [
-    { id: 'roll', label: 'Roll dice…', icon: <Dices className="size-4" aria-hidden />, onSelect: () => setRolling(true) },
+    {
+      id: 'roll',
+      label: 'Roll dice…',
+      icon: <Dices className="size-4" aria-hidden />,
+      onSelect: () => setRolling(true),
+    },
     {
       id: 'rules',
       label: 'Ask a rules question',

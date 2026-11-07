@@ -75,7 +75,9 @@ export function DmSettings() {
         onChange={(next) => update({ model: next })}
       />
       {!MODELS.some((m) => m.id === model) && (
-        <StatusLine tone="gold">Using a custom model id: {model}</StatusLine>
+        <StatusLine tone="gold" icon={<TriangleAlert className="size-4" aria-hidden />}>
+          Using a custom model id: {model}
+        </StatusLine>
       )}
 
       <OptionCards

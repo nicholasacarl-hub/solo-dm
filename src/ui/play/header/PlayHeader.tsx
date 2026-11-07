@@ -38,7 +38,11 @@ export function PlayHeader({ isDesktop }: { isDesktop: boolean }) {
   const [dialog, setDialog] = useState<OpenDialog>(null);
   const close = () => setDialog(null);
 
-  const sessionText = sessionNumber ? `Session ${sessionNumber}` : sessionCount > 0 ? `Session ${sessionCount} ended` : 'Not started';
+  const sessionText = sessionNumber
+    ? `Session ${sessionNumber}`
+    : sessionCount > 0
+      ? `Session ${sessionCount} ended`
+      : 'Not started';
   const where = sceneSummary(scene);
   const endDisabled = !hasSession || busy;
   const endTitle = !hasSession ? 'No session in progress' : busy ? 'Wait for the DM to finish' : 'End this session';
@@ -99,10 +103,22 @@ export function PlayHeader({ isDesktop }: { isDesktop: boolean }) {
                   {revealAll ? <Eye className="size-5" aria-hidden /> : <EyeOff className="size-5" aria-hidden />}
                 </button>
               )}
-              <button type="button" className={iconButton} onClick={() => setDialog('rules')} aria-label="Rules lookup" title="Rules lookup">
+              <button
+                type="button"
+                className={iconButton}
+                onClick={() => setDialog('rules')}
+                aria-label="Rules lookup"
+                title="Rules lookup"
+              >
                 <BookOpen className="size-5" aria-hidden />
               </button>
-              <button type="button" className={iconButton} onClick={() => setDialog('table')} aria-label="Table rules" title="Table rules">
+              <button
+                type="button"
+                className={iconButton}
+                onClick={() => setDialog('table')}
+                aria-label="Table rules"
+                title="Table rules"
+              >
                 <SlidersHorizontal className="size-5" aria-hidden />
               </button>
               <Button
@@ -175,9 +191,21 @@ function MobileMenu({
           <CostReadout />
           <ModelReadout />
         </div>
-        {showRevealToggle && <Switch checked={revealAll} onChange={onRevealAll} label="Reveal all DM rolls" description="Show the DM's secret rolls in this view." />}
+        {showRevealToggle && (
+          <Switch
+            checked={revealAll}
+            onChange={onRevealAll}
+            label="Reveal all DM rolls"
+            description="Show the DM's secret rolls in this view."
+          />
+        )}
         <div className="flex flex-col gap-1">
-          <Button variant="ghost" className="justify-start" onClick={() => choose('table')} icon={<SlidersHorizontal className="size-4" aria-hidden />}>
+          <Button
+            variant="ghost"
+            className="justify-start"
+            onClick={() => choose('table')}
+            icon={<SlidersHorizontal className="size-4" aria-hidden />}
+          >
             Table rules
           </Button>
           <Button

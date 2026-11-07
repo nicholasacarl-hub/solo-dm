@@ -72,7 +72,10 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
   // Focus the main control once the modal is showing (the dialog opens after children mount).
   useEffect(() => {
     if (stage === 'rolling') return;
-    const id = window.setTimeout(() => (stage === 'ready' && physical ? inputRef.current : primaryRef.current)?.focus(), 0);
+    const id = window.setTimeout(
+      () => (stage === 'ready' && physical ? inputRef.current : primaryRef.current)?.focus(),
+      0,
+    );
     return () => window.clearTimeout(id);
   }, [stage, physical]);
 
@@ -145,7 +148,12 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
       description={request.reason}
       footer={
         onCancelTurn && stage === 'ready' ? (
-          <Button variant="ghost" size="sm" onClick={onCancelTurn} title="Stop the DM's turn so you can rephrase your action">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onCancelTurn}
+            title="Stop the DM's turn so you can rephrase your action"
+          >
             Cancel turn
           </Button>
         ) : undefined
@@ -172,7 +180,13 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
         </div>
 
         {stage === 'result' && result && (
-          <RollResultSummary result={result} kind={kind} attack={request.rollType === 'attack'} showOutcome={showTarget} deathSave={request.rollType === 'death-save'} />
+          <RollResultSummary
+            result={result}
+            kind={kind}
+            attack={request.rollType === 'attack'}
+            showOutcome={showTarget}
+            deathSave={request.rollType === 'death-save'}
+          />
         )}
 
         <p className="sr-only" aria-live="polite">
@@ -217,7 +231,13 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
                 Change
               </Button>
             )}
-            <Button ref={primaryRef} variant="primary" size="lg" className="flex-1" onClick={() => finish(result, manual)}>
+            <Button
+              ref={primaryRef}
+              variant="primary"
+              size="lg"
+              className="flex-1"
+              onClick={() => finish(result, manual)}
+            >
               Continue
             </Button>
           </div>
@@ -250,18 +270,37 @@ function RollFace({
           'grid size-24 place-items-center rounded-3xl border-2 border-current bg-surface-2 text-3xl font-bold tabular-nums',
           TONE_TEXT[tone],
         )}
-        style={stage === 'rolling' ? { transform: `rotate(${tick * 47}deg)`, transition: 'transform 80ms linear' } : undefined}
+        style={
+          stage === 'rolling'
+            ? { transform: `rotate(${tick * 47}deg)`, transition: 'transform 80ms linear' }
+            : undefined
+        }
         aria-hidden
       >
-        {stage === 'result' && result ? result.total : stage === 'rolling' ? ((tick * 7) % 12) + 1 : <Dices className="size-9" />}
+        {stage === 'result' && result ? (
+          result.total
+        ) : stage === 'rolling' ? (
+          ((tick * 7) % 12) + 1
+        ) : (
+          <Dices className="size-9" />
+        )}
       </div>
     );
   }
-  const face = stage === 'result' && result?.natural !== undefined ? result.natural : stage === 'rolling' ? ((tick * 7 + 3) % 20) + 1 : '?';
+  const face =
+    stage === 'result' && result?.natural !== undefined
+      ? result.natural
+      : stage === 'rolling'
+        ? ((tick * 7 + 3) % 20) + 1
+        : '?';
   return (
     <div
       aria-hidden
-      style={stage === 'rolling' ? { transform: `rotate(${tick * 53}deg) scale(0.92)`, transition: 'transform 80ms linear' } : undefined}
+      style={
+        stage === 'rolling'
+          ? { transform: `rotate(${tick * 53}deg) scale(0.92)`, transition: 'transform 80ms linear' }
+          : undefined
+      }
       className={cn(stage === 'ready' && 'opacity-60')}
     >
       <D20Face value={face} className={cn('size-24', TONE_TEXT[tone])} />
@@ -322,7 +361,10 @@ function RollResultSummary({
         )}
       </p>
       {kind === 'dice' && result.dice.length > 0 && (
-        <p className="text-xs text-muted">Dice: {result.dice.map((d) => d.value).join(', ')}{result.modifier ? ` ${signed(result.modifier)}` : ''}</p>
+        <p className="text-xs text-muted">
+          Dice: {result.dice.map((d) => d.value).join(', ')}
+          {result.modifier ? ` ${signed(result.modifier)}` : ''}
+        </p>
       )}
       {badges.length > 0 && (
         <div className="flex flex-wrap justify-center gap-1.5">
@@ -340,7 +382,10 @@ function RollResultSummary({
 
 function announceResult(result: D20TestResult, kind: 'd20' | 'dice', showOutcome: boolean, attack: boolean): string {
   const badges = outcomeBadges(result, attack).filter((b) => showOutcome || isNatural(b));
-  const rolled = kind === 'd20' && result.natural !== undefined ? `Rolled ${result.natural}, total ${result.total}.` : `Total ${result.total}.`;
+  const rolled =
+    kind === 'd20' && result.natural !== undefined
+      ? `Rolled ${result.natural}, total ${result.total}.`
+      : `Total ${result.total}.`;
   return [rolled, ...badges.map((b) => `${b.label}.`)].join(' ');
 }
 
@@ -373,8 +418,12 @@ function PhysicalEntry({
     onSubmit(value);
   };
   return (
-    <form onSubmit={submit} className="flex w-full flex-col gap-3">
-      <p id={hintId} className="flex items-start gap-2 rounded-xl bg-surface-2 px-3 py-2.5 text-left text-sm text-muted">
+    // noValidate: our own messages (role="alert") explain out-of-range values.
+    <form onSubmit={submit} noValidate className="flex w-full flex-col gap-3">
+      <p
+        id={hintId}
+        className="flex items-start gap-2 rounded-xl bg-surface-2 px-3 py-2.5 text-left text-sm text-muted"
+      >
         <Hand className="mt-0.5 size-4 shrink-0 text-accent" aria-hidden />
         {instructions}
       </p>

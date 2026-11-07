@@ -35,10 +35,11 @@ export function Composer() {
     el.style.height = `${Math.min(el.scrollHeight, MAX_HEIGHT_PX)}px`;
   }, [text]);
 
-  // "Ask a rules question" and friends put text in the box and focus it.
+  // "Ask a rules question" and friends put text in the box and focus it (one-shot requests).
   useEffect(() => {
     if (!prefill) return;
     setText(prefill.text);
+    usePlayView.setState({ prefill: null });
     const el = textareaRef.current;
     if (!el) return;
     el.focus();

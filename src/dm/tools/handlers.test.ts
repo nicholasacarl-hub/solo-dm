@@ -1,0 +1,370 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('@/engine', () => import('../testing/fakeEngine'));
+vi.mock('@/data', () => import('../testing/fakeData'));
+vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
+
+import { sampleCombat } from '@/test/fixtures';
+import type { LogEntry, ToolLogEntry } from '@/types';
+import { deps, resetDmDeps } from '../deps';
+import { fakeDice } from '../testing/fakeEngine';
+import { autoRespond } from '../testing/fakeStore';
+import { setupHarness, type Harness, type HarnessOptions } from '../testing/harness';
+import type { ToolContext } from './context';
+import { DM_TOOLS, TOOL_ORDER } from './definitions';
+import { runTool } from './handlers';
+import { RULES_HIT_LIMIT, RULES_OUTPUT_LIMIT } from './rules';
+
+beforeEach(() => fakeDice.reset());
+afterEach(() => resetDmDeps());
+
+function setup(opts: HarnessOptions = {}): Harness & { run: (name: string, input: unknown) => ReturnType<typeof runTool>; ctx: ToolContext } {
+  const h = setupHarness({ withSession: true, campaignSettings: { playerRollMode: 'auto', ...opts.campaignSettings }, ...opts });
+  const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+  return { ...h, ctx, run: (name, input) => runTool(name, input, ctx) };
+}
+
+const toolLines = (log: LogEntry[]) => log.filter((e): e is ToolLogEntry => e.kind === 'tool');
+
+describe('tool definitions', () => {
+  it('sends every tool in a fixed order with eager input streaming and a clean object schema', () => {
+    expect(DM_TOOLS.map((t) => t.name)).toEqual(TOOL_ORDER);
+    for (const tool of DM_TOOLS) {
+      expect(tool.eager_input_streaming).toBe(true);
+      expect(tool.input_schema.type).toBe('object');
+      expect(tool.input_schema).not.toHaveProperty('$schema');
+      expect(tool.description?.length).toBeGreaterThan(80);
+    }
+    expect(JSON.stringify(DM_TOOLS)).toBe(JSON.stringify(DM_TOOLS.map((t) => ({ ...t }))));
+  });
+});
+
+describe('roll_dice', () => {
+  it('rolls a d20 test with advantage against a DC and logs a secret DM roll', async () => {
+    fakeDice.queue(5, 17);
+    const h = setup();
+    const out = await h.run('roll_dice', { expression: '1d20+3', purpose: 'Guard Perception', dc: 15, advantage: 'advantage', secret: true });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toMatch(/Guard Perception: 20 .*DC 15 → success/);
+    expect(h.s().log.at(-1)).toMatchObject({ kind: 'roll', actor: 'dm', secret: true, roll: { total: 20, success: true, natural: 17 } });
+  });
+
+  it('applies the natural-20 rule to attack rolls', async () => {
+    fakeDice.queue(20);
+    const h = setup();
+    const out = await h.run('roll_dice', { expression: '1d20+1', purpose: 'Rat bites', dc: 25, is_attack: true });
+    expect(out.content).toMatch(/CRITICAL HIT/);
+    expect(h.s().log.at(-1)).toMatchObject({ roll: { success: true, isCritical: true } });
+  });
+
+  it('rejects an invalid expression without logging a roll', async () => {
+    const h = setup();
+    const out = await h.run('roll_dice', { expression: '2q6', purpose: 'Oops' });
+    expect(out).toMatchObject({ isError: true });
+    expect(h.s().log).toHaveLength(0);
+  });
+});
+
+describe('request_player_roll', () => {
+  it('rolls immediately in auto mode with the sheet modifier', async () => {
+    fakeDice.queue(12);
+    const h = setup();
+    const out = await h.run('request_player_roll', { roll_type: 'skill', skill: 'arcana', dc: 15, reason: 'Recognize the sigil' });
+    // Mira: INT 17 (+3) + proficiency 2 = +5 → 17.
+    expect(out.content).toMatch(/Arcana check \(INT\): 17 .*DC 15 → success/);
+    expect(h.s().interaction).toBeNull();
+    expect(h.s().log.at(-1)).toMatchObject({ kind: 'roll', actor: 'player', purpose: 'Arcana check (INT) — Recognize the sigil' });
+  });
+
+  it('applies death saving throws to the sheet', async () => {
+    fakeDice.queue(4);
+    const h = setup();
+    await h.s().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 0 } }));
+    const out = await h.run('request_player_roll', { roll_type: 'death-save', reason: 'Cling to life' });
+    expect(out.content).toMatch(/Outcome: failure/);
+    expect(h.s().character?.deathSaves.failures).toBe(1);
+  });
+
+  it('refuses a death save while the hero has HP', async () => {
+    const h = setup();
+    expect(await h.run('request_player_roll', { roll_type: 'death-save', reason: 'x' })).toMatchObject({ isError: true });
+  });
+
+  it('checks attack names against the sheet and rolls damage from the attack', async () => {
+    const h = setup();
+    const missing = await h.run('request_player_roll', { roll_type: 'attack', attack_name: 'Greataxe', dc: 12, reason: 'Hit it' });
+    expect(missing.isError).toBe(true);
+    expect(missing.content).toContain('Dagger, Fire Bolt');
+
+    fakeDice.queue(3, 4);
+    const dmg = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'dagger', critical: true, reason: 'Crit!' });
+    // Dagger 1d4 + DEX 2, dice doubled on a critical: 3 + 4 + 2.
+    expect(dmg.content).toMatch(/: 9 /);
+  });
+});
+
+describe('update_character', () => {
+  it('applies batched sections in one update and logs one line per section', async () => {
+    const h = setup();
+    const out = await h.run('update_character', {
+      hp: { amount: 8, kind: 'damage', damage_type: 'slashing' },
+      inventory_remove: [{ name: 'Potion of Healing', quantity: 1 }],
+      currency_change: { gp: -5 },
+      reason: 'Goblin scimitar',
+    });
+    const s = h.s();
+    expect(s.character?.hp.current).toBe(4);
+    expect(s.character?.inventory.find((i) => i.name === 'Potion of Healing')?.quantity).toBe(1);
+    expect(s.character?.currency.gp).toBe(18);
+    const lines = toolLines(s.log);
+    expect(lines.map((l) => l.icon)).toEqual(['hp', 'item', 'coin']);
+    expect(lines[0].summary).toBe('HP 12 → 4 (8 slashing · Goblin scimitar)');
+    expect(out.content).toContain('Status: Mira Voss');
+  });
+
+  it('reports engine warnings without failing', async () => {
+    const h = setup();
+    await h.run('update_character', { spell_slots_spend: [{ level: 2 }] });
+    const out = await h.run('update_character', { spell_slots_spend: [{ level: 2 }, { level: 2 }] });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain('Warning: No level 2 spell slot left');
+  });
+
+  it('turns an "exhaustion" condition into an exhaustion level', async () => {
+    const h = setup();
+    await h.run('update_character', { conditions_add: [{ condition: 'Exhaustion' }, { condition: 'Poisoned', duration: '1 hour' }] });
+    expect(h.s().character?.exhaustion).toBe(1);
+    expect(h.s().character?.conditions).toEqual([{ id: 'poisoned', duration: '1 hour' }]);
+  });
+
+  it('rejects an empty change', async () => {
+    const h = setup();
+    expect(await h.run('update_character', { reason: 'nothing' })).toMatchObject({ isError: true });
+  });
+});
+
+describe('rests and leveling', () => {
+  it('spends Hit Dice automatically on a short rest in auto mode', async () => {
+    fakeDice.queue(4);
+    const h = setup();
+    const out = await h.run('take_rest', { kind: 'short' });
+    // One d6 (4) + CON 1 = 5 → 12 + 5 = 17 (full), so only one die is spent.
+    expect(h.s().character?.hp.current).toBe(17);
+    expect(h.s().character?.hitDice[0].spent).toBe(2);
+    expect(out.content).toMatch(/1 Hit Die spent, \+5 HP/);
+  });
+
+  it('asks the player which Hit Dice to spend in prompt mode', async () => {
+    const h = setup({ campaignSettings: { playerRollMode: 'prompt' } });
+    autoRespond(h.store, (req) =>
+      req.kind === 'short-rest'
+        ? { kind: 'short-rest', response: { spent: [{ die: 6, roll: { expression: '1d6', total: 2, dice: [{ sides: 6, value: 2 }], modifier: 0, breakdown: '2' }, healed: 3 }] } }
+        : null,
+    );
+    await h.run('take_rest', { kind: 'short', reason: 'Under the pier' });
+    expect(h.s().character?.hp.current).toBe(15);
+  });
+
+  it('refuses to rest during combat; long rests restore HP', async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    expect(await h.run('take_rest', { kind: 'long' })).toMatchObject({ isError: true });
+    await h.s().setCombat(null);
+    await h.run('take_rest', { kind: 'long' });
+    expect(h.s().character?.hp.current).toBe(17);
+  });
+
+  it('levels up in milestone campaigns but needs the XP in XP campaigns', async () => {
+    const xp = setup({ campaignSettings: { milestoneLeveling: false } });
+    expect(await xp.run('level_up', { class_name: 'Wizard' })).toMatchObject({ isError: true });
+
+    const milestone = setup();
+    const out = await milestone.run('level_up', { class_name: 'Wizard' });
+    expect(milestone.s().character?.classes[0].level).toBe(4);
+    expect(out.content).toContain('Choose a new spell');
+    expect(toolLines(milestone.s().log).at(-1)).toMatchObject({ icon: 'level' });
+  });
+});
+
+describe('combat', () => {
+  it('starts combat: numbers groups, rolls initiative, adds the hero', async () => {
+    fakeDice.queue(15, 11);
+    const h = setup();
+    const out = await h.run('start_combat', {
+      encounter_name: 'Dock ambush',
+      combatants: [{ name: 'Goblin', side: 'enemy', count: 3, ac: 15, hp_max: 7, initiative_bonus: 2, stat_block: 'Goblin Warrior' }],
+    });
+    const combat = h.s().combat;
+    expect(combat?.combatants.map((c) => c.name)).toEqual(['Mira Voss', 'Goblin 1', 'Goblin 2', 'Goblin 3']);
+    expect(combat?.combatants[0]).toMatchObject({ isPlayer: true, initiative: 17 });
+    expect(combat?.combatants[1]).toMatchObject({ initiative: 13, hideHp: true, hp: { max: 7, current: 7, temp: 0 } });
+    expect(out.content).toContain("Round 1: Mira Voss's turn.");
+    expect(await h.run('start_combat', { combatants: [{ name: 'Rat', side: 'enemy', ac: 10, hp_max: 1, initiative_bonus: 0 }] })).toMatchObject({ isError: true });
+  });
+
+  it('refuses to damage the hero through the tracker', async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    const out = await h.run('update_combat', { action: 'damage', target: 'Mira Voss', amount: 5 });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('update_character');
+  });
+
+  it('damages NPCs, hiding exact HP from the player but not from the DM', async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    const out = await h.run('update_combat', { action: 'damage', target: 'bandit 2', amount: 6 });
+    expect(out.content).toContain('Bandit 2: HP 5/11');
+    expect(toolLines(h.s().log).at(-1)?.summary).toBe('Bandit 2 takes 6 damage (bloodied)');
+    const unknown = await h.run('update_combat', { action: 'heal', target: 'Nobody', amount: 1 });
+    expect(unknown.content).toContain('Combatants: Mira Voss, Bandit 1, Bandit 2, Old Tam');
+  });
+
+  it('advances turns and ends combat, awarding XP only in XP campaigns', async () => {
+    const h = setup({ state: { combat: sampleCombat() }, campaignSettings: { milestoneLeveling: false } });
+    const next = await h.run('update_combat', { action: 'next_turn' });
+    expect(next.content).toContain("Round 2: Bandit 2's turn.");
+    await h.run('end_combat', { summary: 'The bandits fled.', xp_award: 50 });
+    expect(h.s().combat).toBeNull();
+    expect(h.s().character?.xp).toBe(950);
+
+    const milestone = setup({ state: { combat: sampleCombat() } });
+    const out = await milestone.run('end_combat', { summary: 'Done.', xp_award: 50 });
+    expect(out.content).toContain('milestone');
+    expect(milestone.s().character?.xp).toBe(900);
+  });
+});
+
+describe('rules and homebrew', () => {
+  it('caps rules output and only searches sources enabled for the campaign', async () => {
+    const h = setup();
+    const out = await h.run('lookup_rules', { query: 'fire opportunity attack', limit: 8 });
+    expect(out.content.length).toBeLessThanOrEqual(RULES_OUTPUT_LIMIT + 200);
+    expect(out.content).toContain('Opportunity Attacks');
+    expect(out.content).toContain('truncated');
+    expect(out.content.split('## ')[1].length).toBeLessThan(RULES_HIT_LIMIT + 300);
+    expect(out.content).not.toContain('Forbidden Fire');
+    expect(toolLines(h.s().log).at(-1)).toMatchObject({ icon: 'rules' });
+  });
+
+  it('gets one entry by name, and not from a disabled source', async () => {
+    const h = setup();
+    expect((await h.run('get_entry', { name: 'fireball' })).content).toContain('8d6 Fire damage');
+    expect((await h.run('get_entry', { name: 'Forbidden Fire' })).content).toMatch(/^No entry named/);
+  });
+
+  it('refuses homebrew when the campaign disables it', async () => {
+    const h = setup({ campaignSettings: { homebrewFreedom: 'none' } });
+    const out = await h.run('create_homebrew', {
+      kind: 'boon',
+      name: 'Sea Blessing',
+      summary: 'Minor boon',
+      text: 'Breathe water for 1 minute once per long rest.',
+      comparables: ['Water Breathing'],
+      balance_notes: 'Narrow and short.',
+    });
+    expect(out.isError).toBe(true);
+    expect(h.s().homebrew).toHaveLength(0);
+  });
+
+  it('saves homebrew to the campaign compendium and refreshes the rules index', async () => {
+    const h = setup();
+    const input = {
+      kind: 'magic-item',
+      name: 'Tidecaller Lantern',
+      summary: 'Uncommon wondrous item',
+      text: 'While lit, you can see through fog as if it were clear.',
+      based_on: 'Fireball',
+      comparables: ['Lantern of Revealing', 'Goggles of Night'],
+      power_tier: 'uncommon',
+      balance_notes: 'Situational vision; no damage.',
+    };
+    await h.run('create_homebrew', input);
+    const [entry] = h.s().homebrew;
+    expect(entry).toMatchObject({
+      name: 'Tidecaller Lantern',
+      kind: 'magic-item',
+      sourceId: 'homebrew',
+      origin: 'dm',
+      status: 'active',
+      campaignId: 'camp-1',
+      basedOn: { name: 'Fireball', id: 'srd:spell:fireball' },
+    });
+    expect(entry.balanceNotes).toContain('Compared with: Lantern of Revealing, Goggles of Night.');
+    expect(h.invalidateRulesIndex).toHaveBeenCalledTimes(1);
+    expect(await h.run('create_homebrew', input)).toMatchObject({ isError: true });
+
+    await h.run('update_homebrew', { name: 'tidecaller lantern', status: 'retired', reason: 'Player veto' });
+    expect(h.s().homebrew[0].status).toBe('retired');
+    expect(h.invalidateRulesIndex).toHaveBeenCalledTimes(2);
+    expect(toolLines(h.s().log).at(-1)?.summary).toBe('Homebrew retired: Tidecaller Lantern — Player veto');
+  });
+});
+
+describe('journal, quests, clocks, scene, oracle, memory', () => {
+  it('upserts journal entries, merging tags and marking secrets', async () => {
+    const h = setup();
+    await h.run('update_journal', {
+      entries: [
+        { kind: 'npc', name: 'old tam', summary: 'Now missing an eye and a boat.', tags: ['fisher'] },
+        { kind: 'faction', name: 'The Tidewardens', summary: 'Smugglers who run the breakwater.', secret: true },
+      ],
+    });
+    const tam = h.s().journal.find((j) => j.name.toLowerCase() === 'old tam');
+    expect(tam?.tags).toEqual(['dockhand', 'witness', 'fisher']);
+    const lines = toolLines(h.s().log);
+    expect(lines.map((l) => [l.summary, l.secret ?? false])).toEqual([
+      ['Journal: Old Tam (NPC) updated', false],
+      ['Journal: The Tidewardens (Faction) added', true],
+    ]);
+  });
+
+  it('creates quests and completes objectives by text', async () => {
+    const h = setup();
+    const out = await h.run('update_quest', { title: 'find keeper halvard', objectives: [{ text: 'Reach the lighthouse at low tide', done: true }, { text: 'Open the lantern room' }] });
+    const quest = h.s().quests.find((q) => q.id === 'q-1');
+    expect(quest?.objectives.map((o) => [o.text, o.done])).toEqual([
+      ['Question Old Tam', true],
+      ['Reach the lighthouse at low tide', true],
+      ['Open the lantern room', false],
+    ]);
+    expect(out.content).toContain('Open objectives: Open the lantern room');
+  });
+
+  it('creates and advances clocks, flagging the moment one fills', async () => {
+    const h = setup();
+    const created = await h.run('update_clocks', { clocks: [{ name: 'Storm front', consequence: 'The harbor floods.' }] });
+    expect(created.content).toContain('4 segments');
+    const filled = await h.run('update_clocks', { clocks: [{ name: 'the tide turns', advance: 3 }] });
+    expect(filled.content).toMatch(/FILLED\. Consequence: The causeway floods/);
+    const secret = await h.run('update_clocks', { clocks: [{ name: 'Something stirs below', advance: 1 }] });
+    expect(secret.content).toContain('3/6');
+    expect(toolLines(h.s().log).at(-1)).toMatchObject({ secret: true });
+  });
+
+  it('sets the scene, nudges tension within 1–9, and runs the scene check after the nudge', async () => {
+    fakeDice.queue(6);
+    const h = setup({ campaign: { tension: 9 } });
+    const out = await h.run('set_scene', { location: 'The breakwater', weather: 'gale', new_scene: true, tension_change: 1 });
+    expect(h.s().campaign?.tension).toBe(9);
+    expect(h.s().campaign?.scene).toMatchObject({ location: 'The breakwater', weather: 'gale', timeOfDay: 'dusk' });
+    expect(out.content).toMatch(/Scene check: d10 = 6 vs tension 9 → INTERRUPTED/);
+    expect(toolLines(h.s().log).map((l) => l.secret ?? false)).toEqual([false, true]);
+
+    const calm = setup({ campaign: { tension: 1 } });
+    await calm.run('set_scene', { tension_change: -1 });
+    expect(calm.s().campaign?.tension).toBe(1);
+  });
+
+  it('consults the oracle and searches the campaign memory', async () => {
+    fakeDice.queue(40);
+    const h = setup();
+    const oracle = await h.run('consult_oracle', { question: 'Is the keeper alive?', likelihood: 'likely' });
+    expect(oracle.content).toMatch(/likely, 70%.*d100 = 40 → Yes/);
+    const memory = await h.run('search_memory', { query: 'Keeper Halvard lighthouse' });
+    expect(memory.content).toContain('Keeper Halvard (NPC, missing, secret)');
+    expect(memory.content).toContain('Find Keeper Halvard (Quest, active)');
+  });
+
+  it('returns the full character sheet', async () => {
+    const h = setup();
+    expect((await h.run('get_character_sheet', {})).content).toContain('# Mira Voss');
+  });
+});

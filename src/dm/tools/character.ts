@@ -62,6 +62,7 @@ import {
   type ToolOutcome,
 } from './context';
 import { DmCancelledError } from '../errors';
+import { truncate } from '../narration';
 
 // ---------------------------------------------------------------------------
 // update_character
@@ -243,9 +244,7 @@ function buildSections(input: ToolInput<'update_character'>): Section[] {
       (c) => ({
         character: { ...c, heroicInspiration: value },
         events: [
-          value
-            ? { type: 'feature-restored', message: 'Heroic Inspiration gained' }
-            : { type: 'feature-used', message: 'Heroic Inspiration spent' },
+          { type: 'inspiration', message: value ? 'Heroic Inspiration gained' : 'Heroic Inspiration spent' },
         ],
       }),
     ]);
@@ -254,14 +253,19 @@ function buildSections(input: ToolInput<'update_character'>): Section[] {
   return sections;
 }
 
+/** One log line from several engine messages: "Spent a slot · Concentrating on Fly". */
+function joinMessages(events: readonly GameEvent[]): string {
+  return truncate(events.map((e) => e.message.trim().replace(/\.$/, '')).filter(Boolean).join(' · '), 160);
+}
+
 async function logSections(ctx: ToolContext, results: SectionResult[], reason?: string): Promise<void> {
   for (const r of results) {
     const changes = changesOf(r.events);
     const warnings = warningsOf(r.events).map((w) => w.message);
-    const summary = r.section.summary ? r.section.summary(r.before, r.after) : changes.map((e) => e.message).join('; ');
+    const summary = r.section.summary ? r.section.summary(r.before, r.after) : joinMessages(changes);
     if (!summary) continue;
     const detailParts = [
-      r.section.summary ? changes.map((e) => e.message).join('\n') : '',
+      r.section.summary || summary.endsWith('…') ? changes.map((e) => e.message).join('\n') : '',
       warnings.length ? `Warnings: ${warnings.join('; ')}` : '',
       reason && !r.section.summary ? `Reason: ${reason}` : '',
     ].filter(Boolean);

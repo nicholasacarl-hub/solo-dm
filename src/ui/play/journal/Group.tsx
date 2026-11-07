@@ -30,7 +30,8 @@ export function HiddenNote({ count, singular, plural }: { count: number; singula
   if (count === 0) return null;
   return (
     <p className="text-xs text-faint italic">
-      {count} secret {count === 1 ? singular : plural} hidden. Turn on “Show DM secrets” to see {count === 1 ? 'it' : 'them'}.
+      {count} secret {count === 1 ? singular : plural} hidden. Turn on “Show DM secrets” to see{' '}
+      {count === 1 ? 'it' : 'them'}.
     </p>
   );
 }

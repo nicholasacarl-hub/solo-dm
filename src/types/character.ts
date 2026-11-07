@@ -183,6 +183,11 @@ export interface FeatureUses {
   max: number;
   used: number;
   recharge: RechargeOn;
+  /**
+   * Uses regained on a Short Rest when the feature otherwise recharges on a Long Rest
+   * (2024: e.g. Channel Divinity and Wild Shape regain one use on a Short Rest).
+   */
+  shortRestRegain?: number;
 }
 
 export type FeatureSource =
@@ -366,6 +371,14 @@ export interface Character {
   passivePerceptionExtra?: number;
   /** Darkvision range in feet; 0 or undefined = none. */
   darkvision?: number;
+  /** Damage types the character resists (half damage), e.g. ["Fire"]. */
+  damageResistances?: string[];
+  /** Damage types the character is immune to. */
+  damageImmunities?: string[];
+  /** Damage types the character is vulnerable to (double damage). */
+  damageVulnerabilities?: string[];
+  /** Conditions the character can't be given, e.g. ["Poisoned"]. */
+  conditionImmunities?: string[];
   hp: HitPoints;
   hitDice: HitDiceEntry[];
   deathSaves: DeathSaves;

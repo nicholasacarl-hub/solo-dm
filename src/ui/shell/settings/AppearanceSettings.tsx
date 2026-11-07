@@ -58,7 +58,7 @@ export function AppearanceSettings() {
         />
       </div>
       <figure className="rounded-xl border border-border bg-surface-2 px-4 py-3">
-        <figcaption className="mb-1 text-xs text-faint">Preview</figcaption>
+        <figcaption className="mb-1 text-xs text-muted">Preview</figcaption>
         <p className={cn('narration', narrationFont === 'serif' && 'narration-serif')}>
           The lantern gutters as the door groans open. Somewhere below, water drips onto stone, slow and patient,
           like something counting.

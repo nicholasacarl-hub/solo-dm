@@ -3,13 +3,7 @@ import { cn } from '@/lib/cn';
 import { dm } from '@/dm';
 import { useGame } from '@/state/gameStore';
 import { useSettings } from '@/state/settingsStore';
-import type {
-  ErrorLogEntry,
-  PlayerLogEntry,
-  RecapLogEntry,
-  SessionLogEntry,
-  SystemLogEntry,
-} from '@/types';
+import type { ErrorLogEntry, PlayerLogEntry, RecapLogEntry, SessionLogEntry, SystemLogEntry } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
 import { Button } from '@/ui/components/ui';
 import { isBusyPhase, runDm } from '../dmStatus';
@@ -47,7 +41,12 @@ export function PlayerEntry({ entry }: { entry: PlayerLogEntry }) {
 export function SystemNote({ entry }: { entry: SystemLogEntry }) {
   const warning = entry.level === 'warning';
   return (
-    <p className={cn('flex items-start justify-center gap-1.5 px-2 text-center text-xs', warning ? 'text-gold' : 'text-muted')}>
+    <p
+      className={cn(
+        'flex items-start justify-center gap-1.5 px-2 text-center text-xs',
+        warning ? 'text-gold' : 'text-muted',
+      )}
+    >
       {warning ? (
         <TriangleAlert className="mt-px size-3.5 shrink-0" aria-hidden />
       ) : (

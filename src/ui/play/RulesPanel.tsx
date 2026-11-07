@@ -48,7 +48,10 @@ export function RulesPanel({ autoFocus, onAskDm }: { autoFocus?: boolean; onAskD
           <label htmlFor={inputId} className="sr-only">
             Search the rules
           </label>
-          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" aria-hidden />
+          <Search
+            className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint"
+            aria-hidden
+          />
           <Input
             ref={inputRef}
             id={inputId}
@@ -135,11 +138,15 @@ export function RulesPanel({ autoFocus, onAskDm }: { autoFocus?: boolean; onAskD
         footer={
           selected && (
             <>
-              <Button variant="ghost" icon={<MessageCircle className="size-4" aria-hidden />} onClick={() => askDm(selected)}>
+              <Button
+                variant="ghost"
+                icon={<MessageCircle className="size-4" aria-hidden />}
+                onClick={() => askDm(selected)}
+              >
                 Ask the DM about this
               </Button>
               <Button variant="primary" onClick={() => setSelected(null)}>
-                Close
+                Done
               </Button>
             </>
           )
@@ -147,7 +154,9 @@ export function RulesPanel({ autoFocus, onAskDm }: { autoFocus?: boolean; onAskD
       >
         {selected && (
           <div className="flex flex-col gap-3">
-            {selected.path && selected.path.length > 0 && <p className="text-xs text-faint">{selected.path.join(' › ')}</p>}
+            {selected.path && selected.path.length > 0 && (
+              <p className="text-xs text-faint">{selected.path.join(' › ')}</p>
+            )}
             <Markdown>{selected.text}</Markdown>
           </div>
         )}

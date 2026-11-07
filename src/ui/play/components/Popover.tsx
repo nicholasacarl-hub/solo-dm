@@ -11,7 +11,11 @@ export const PLACEMENT: Record<Placement, string> = {
 };
 
 /** Close on Escape and on pointer-down outside `ref`. */
-export function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, onDismiss: (reason: 'escape' | 'outside') => void) {
+export function useDismiss(
+  ref: RefObject<HTMLElement | null>,
+  open: boolean,
+  onDismiss: (reason: 'escape' | 'outside') => void,
+) {
   const dismissRef = useRef(onDismiss);
   useEffect(() => {
     dismissRef.current = onDismiss;
@@ -36,7 +40,8 @@ export function useDismiss(ref: RefObject<HTMLElement | null>, open: boolean, on
   }, [open, ref]);
 }
 
-const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const FOCUSABLE =
+  'button:not([disabled]), [href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export interface PopoverTriggerProps {
   'aria-expanded': boolean;
@@ -91,7 +96,9 @@ export function Popover({
 
   useEffect(() => {
     if (!open) return;
-    const first = panelRef.current?.querySelector<HTMLElement>('[data-autofocus]') ?? panelRef.current?.querySelector<HTMLElement>(FOCUSABLE);
+    const first =
+      panelRef.current?.querySelector<HTMLElement>('[data-autofocus]') ??
+      panelRef.current?.querySelector<HTMLElement>(FOCUSABLE);
     first?.focus();
   }, [open]);
 

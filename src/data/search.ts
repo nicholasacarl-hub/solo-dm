@@ -58,7 +58,10 @@ function sourcePriority(entry: CompendiumEntry): number {
   return entry.sourceId === SRD_SOURCE_ID ? 3 : 2;
 }
 
-/** Name keys an entry answers to besides its exact name: "Stone of Good Luck (Luckstone)" -> both parts. */
+/**
+ * Name keys an entry answers to besides its exact name: both parts of "Stone of Good Luck
+ * (Luckstone)", the natural order of "Clothes, Traveler's", and the name without punctuation.
+ */
 function aliasKeys(name: string): string[] {
   const keys = new Set<string>();
   const paren = /^(.*?)\s*\(([^)]+)\)\s*$/.exec(name);
@@ -66,6 +69,8 @@ function aliasKeys(name: string): string[] {
     keys.add(nameKey(paren[1]));
     keys.add(nameKey(paren[2]));
   }
+  const inverted = /^([^,(]+), ([^,(]+)$/.exec(name);
+  if (inverted) keys.add(nameKey(`${inverted[2]} ${inverted[1]}`));
   keys.add(nameKey(name).replace(/-/g, ''));
   keys.delete('');
   keys.delete(nameKey(name));
@@ -152,8 +157,11 @@ class MiniSearchRulesIndex implements RulesIndex {
         const entry = this.byId.get(result.id as string);
         return entry !== undefined && this.allowed(entry, opts);
       },
-      // An exact name match outranks entries that merely mention the words.
-      boostDocument: (id) => (this.keyById.get(id as string) === queryKey ? 2 : 1),
+      // A name that is (or starts with) the query outranks entries that merely mention the words.
+      boostDocument: (id) => {
+        const key = this.keyById.get(id as string) ?? '';
+        return key === queryKey ? 3 : key.startsWith(queryKey) ? 2 : 1;
+      },
     });
     return results.slice(0, Math.max(1, opts.limit ?? DEFAULT_LIMIT)).map((result) => {
       const entry = this.byId.get(result.id as string) as CompendiumEntry;
@@ -177,11 +185,13 @@ class MiniSearchRulesIndex implements RulesIndex {
   findByName(name: string, opts: { kind?: ContentKind; campaignId?: string | null } = {}): CompendiumEntry | undefined {
     const key = nameKey(name);
     if (!key) return undefined;
+    const compact = key.replace(/-/g, '');
     const tiers = [
       this.byName.get(key),
       this.byName.get(singularKey(key)),
       this.byAlias.get(key),
-      this.byAlias.get(key.replace(/-/g, '')),
+      this.byName.get(compact),
+      this.byAlias.get(compact),
     ];
     for (const tier of tiers) {
       const found = this.pick(tier ?? [], opts);

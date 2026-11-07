@@ -2,7 +2,7 @@
  * Route: #/new — a three-step wizard (premise & tone → table rules → safety), then on to the
  * character builder.
  */
-import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react';
 import { Link, useBlocker, useNavigate } from 'react-router';
 import { ArrowLeft, ArrowRight, Check, Dices, RefreshCw } from 'lucide-react';
 import { createCampaign, type NewCampaignInput } from '@/storage';
@@ -159,6 +159,7 @@ export function NewCampaignScreen() {
   };
 
   const create = async () => {
+    if (creating) return;
     if (hasErrors(validatePremiseStep(draft))) {
       goTo(0);
       return;
@@ -324,7 +325,7 @@ function PremiseStep({
 }: {
   draft: CampaignDraft;
   errors: CampaignDraftErrors;
-  nameRef: React.RefObject<HTMLInputElement | null>;
+  nameRef: RefObject<HTMLInputElement | null>;
   onDraft: (patch: Partial<CampaignDraft>) => void;
   onSettings: (settings: CampaignSettings) => void;
 }) {

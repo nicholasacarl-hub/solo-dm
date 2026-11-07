@@ -38,10 +38,11 @@ export function capitalize(text: string): string {
   return spaced.charAt(0).toUpperCase() + spaced.slice(1);
 }
 
-/** "Claude Opus 5.5" -> "Opus 5.5"; unknown ids are shown as-is. */
+/** "Claude Opus 5.5" -> "Opus 5.5"; the offline demo DM ("solo-dm-demo") -> "Demo DM"; other ids as-is. */
 export function modelLabel(id: string): string {
   const info = MODELS.find((m) => m.id === id);
-  return info ? info.label.replace(/^Claude\s+/, '') : id;
+  if (info) return info.label.replace(/^Claude\s+/, '');
+  return /demo|mock/i.test(id) ? 'Demo DM' : id;
 }
 
 /** The scene chip: "Saltmarsh Docks · dusk · fog rolling in". */

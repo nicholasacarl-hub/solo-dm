@@ -41,7 +41,7 @@ export function EntryDetail({ entry, onBack }: { entry: CompendiumEntry; onBack?
         {entry.name}
       </h2>
       {entry.summary && <p className="mt-1 text-sm text-muted italic">{entry.summary}</p>}
-      {entry.path && entry.path.length > 0 && <p className="mt-1 text-xs text-faint">{entry.path.join(' › ')}</p>}
+      {entry.path && entry.path.length > 0 && <p className="mt-1 text-xs text-muted">{entry.path.join(' › ')}</p>}
       <Markdown className="mt-4">{entry.text}</Markdown>
     </article>
   );

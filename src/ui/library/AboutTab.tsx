@@ -3,6 +3,8 @@ import { Fragment, type ReactNode } from 'react';
 import { ExternalLink } from 'lucide-react';
 import { SRD_ATTRIBUTION } from '@/data';
 import { Card, SectionTitle } from '@/ui/components/ui';
+import { plural } from '@/ui/shell/format';
+import { manifestEntryCount, useSrdManifest } from './useSrdManifest';
 
 const CC_BY_URL = 'https://creativecommons.org/licenses/by/4.0/';
 const URL_PATTERN = /https?:\/\/[^\s"]+[^\s".,;:)]/g;
@@ -46,6 +48,8 @@ function ExtLink({ href, children }: { href: string; children: ReactNode }) {
 }
 
 export function AboutTab() {
+  const manifest = useSrdManifest();
+  const total = manifestEntryCount(manifest);
   return (
     <div className="grid max-w-3xl grid-cols-1 gap-5">
       <Card className="p-5 sm:p-6">
@@ -63,6 +67,23 @@ export function AboutTab() {
           split into entries (one per rules section, spell, creature, item, class, species, background and feat), with
           short one-line summaries added.
         </p>
+        {manifest && (
+          <div className="mt-4 text-xs text-muted">
+            <p>
+              Bundled data: SRD {manifest.version}
+              {total ? `, ${plural(total, 'entry', 'entries')}` : ''}, generated {manifest.generatedAt}. Converted from
+              these CC-BY-4.0 sources:
+            </p>
+            <ul className="mt-1.5 flex flex-col gap-1">
+              {manifest.sources.map((source) => (
+                <li key={source.url}>
+                  <ExtLink href={source.url}>{source.name}</ExtLink>{' '}
+                  <span className="font-mono text-muted">@{source.commit.slice(0, 7)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </Card>
 
       <Card className="p-5 sm:p-6">

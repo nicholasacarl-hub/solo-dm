@@ -96,7 +96,10 @@ export interface SegmentOption<T extends string> {
   label: ReactNode;
 }
 
-/** Compact segmented control with a visible legend. */
+/**
+ * Compact segmented control with a visible legend. `stretch` makes equal-width segments that
+ * fill the row (labels stack their icon on top on phones).
+ */
 export function SegmentedField<T extends string>({
   legend,
   hint,
@@ -104,6 +107,7 @@ export function SegmentedField<T extends string>({
   onChange,
   options,
   name,
+  stretch = false,
   className,
 }: {
   legend: ReactNode;
@@ -112,6 +116,7 @@ export function SegmentedField<T extends string>({
   onChange: (value: T) => void;
   options: readonly SegmentOption<T>[];
   name?: string;
+  stretch?: boolean;
   className?: string;
 }) {
   const autoName = useId();
@@ -120,12 +125,18 @@ export function SegmentedField<T extends string>({
     <fieldset className={cn('min-w-0', className)}>
       <legend className="text-sm font-medium">{legend}</legend>
       {hint && <p className="mt-0.5 text-xs text-muted">{hint}</p>}
-      <div className="mt-2 inline-flex max-w-full flex-wrap rounded-xl border border-border bg-surface-2 p-0.5">
+      <div
+        className={cn(
+          'mt-2 max-w-full rounded-xl border border-border bg-surface-2 p-0.5',
+          stretch ? 'grid w-full auto-cols-fr grid-flow-col' : 'inline-flex flex-wrap',
+        )}
+      >
         {options.map((option) => (
           <label
             key={option.value}
             className={cn(
               'flex cursor-pointer items-center gap-1.5 rounded-[10px] px-3 py-1.5 text-sm font-medium text-muted transition-colors hover:text-text',
+              stretch && 'flex-col justify-center gap-0.5 px-1.5 text-center text-xs sm:flex-row sm:gap-1.5 sm:text-sm',
               'has-[:checked]:bg-surface has-[:checked]:text-text has-[:checked]:shadow-sm',
               'has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring',
             )}

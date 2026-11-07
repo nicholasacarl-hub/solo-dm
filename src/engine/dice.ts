@@ -117,7 +117,7 @@ function parseDiceGroup(sign: 1 | -1, match: RegExpExecArray): DiceGroup {
 /** Parse an expression into terms. Throws DiceError with a helpful message on bad input. */
 export function parseDice(expression: string): DiceTerm[] {
   const input = typeof expression === 'string' ? expression : '';
-  const source = input.toLowerCase().replace(/[−‒–—]/g, '-');
+  const source = input.toLowerCase().replace(/[\u2212\u2012\u2013\u2014]/g, '-');
   if (!source.trim()) throw new DiceError(`Nothing to roll — ${EXAMPLE}`);
 
   const terms: DiceTerm[] = [];
@@ -191,7 +191,7 @@ export function d20Expression(modifier: number, advantage: AdvantageState = 'nor
   return mod > 0 ? `${dice}+${mod}` : mod < 0 ? `${dice}${mod}` : dice;
 }
 
-const MINUS = '−';
+const MINUS = '\u2212';
 
 function keptIndexes(values: readonly number[], keep: DiceGroup['keep']): Set<number> {
   if (!keep) return new Set(values.map((_, i) => i));

@@ -167,7 +167,7 @@ function DeleteEverythingDialog({ open, onClose }: { open: boolean; onClose: () 
           />
         </Field>
         {state === 'blocked' && (
-          <p role="status" className="text-gold">
+          <p role="status" className="font-medium">
             Another Solo DM tab is still open. Close it to finish deleting.
           </p>
         )}

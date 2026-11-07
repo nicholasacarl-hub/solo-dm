@@ -29,15 +29,15 @@ async function fetchSrdJson(file: string): Promise<unknown> {
   try {
     response = await fetch(srdUrl(file));
   } catch (err) {
-    throw new Error(`Couldn't load the SRD rules (${file}): ${errorMessage(err)}. Check your connection and reload.`);
+    throw new Error(`Couldn't load the SRD rules (${file}): ${errorMessage(err)}. Check your connection and reload.`, { cause: err });
   }
   if (!response.ok) {
     throw new Error(`Couldn't load the SRD rules (${file}): the server answered ${response.status}.`);
   }
   try {
     return await response.json();
-  } catch {
-    throw new Error(`The SRD rules file ${file} is damaged (it isn't valid JSON). Try reloading the page.`);
+  } catch (err) {
+    throw new Error(`The SRD rules file ${file} is damaged (it isn't valid JSON). Try reloading the page.`, { cause: err });
   }
 }
 

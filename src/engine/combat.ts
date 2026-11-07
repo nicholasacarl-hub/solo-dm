@@ -91,7 +91,7 @@ function advanceFrom(state: CombatState, start: number): CombatState {
     const index = raw % n;
     if (!state.combatants[index].defeated) return { ...state, turnIndex: index, round: state.round + (raw >= n ? 1 : 0) };
   }
-  return state;
+  return { ...state, turnIndex: Math.min(Math.max(0, state.turnIndex), n - 1) };
 }
 
 /** Advance to the next non-defeated combatant; increments the round when wrapping. */
@@ -205,7 +205,10 @@ export function healCombatant(state: CombatState, id: string, amount: number): {
   return { state: { ...state, combatants }, events: [gameEvent('combat', message)] };
 }
 
-const SIDE_LABEL: Record<Combatant['side'], string> = { player: 'you', ally: 'ally', enemy: 'enemy', neutral: 'neutral' };
+function sideLabel(c: Combatant, forPlayer: boolean): string {
+  if (c.isPlayer || c.side === 'player') return forPlayer ? 'you' : 'PC';
+  return c.side;
+}
 
 function conditionText(c: Combatant): string {
   return c.conditions.map((x) => `${conditionName(x.id)}${x.level ? ` ${x.level}` : ''}`).join(', ');
@@ -220,7 +223,7 @@ function combatantLine(c: Combatant, position: number, current: boolean, forPlay
   if (c.defeated) bits.push('defeated');
   const kind = c.statBlockName && nameKey(c.statBlockName) !== nameKey(c.name.replace(/\s+\d+$/, '')) ? ` [${c.statBlockName}]` : '';
   const notes = c.notes?.trim() && !forPlayer ? ` — ${c.notes.trim()}` : '';
-  return `${current ? '→' : ' '} ${position}. ${c.name} (${SIDE_LABEL[c.side]})${kind} · ${bits.join(' · ')}${notes}`;
+  return `${current ? '→' : ' '} ${position}. ${c.name} (${sideLabel(c, forPlayer)})${kind} · ${bits.join(' · ')}${notes}`;
 }
 
 /**

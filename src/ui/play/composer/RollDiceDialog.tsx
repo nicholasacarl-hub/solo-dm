@@ -39,8 +39,16 @@ export function RollDiceDialog({ open, onClose }: { open: boolean; onClose: () =
     setRolling(true);
     try {
       const { appendLog, queueDmNotice } = useGame.getState();
-      await appendLog({ kind: 'roll', actor: 'player', purpose: what || `Rolled ${result.expression}`, roll: result, secret: false });
-      queueDmNotice(`The player rolled ${result.expression}${what ? ` for "${what}"` : ''} on their own: ${result.breakdown}.`);
+      await appendLog({
+        kind: 'roll',
+        actor: 'player',
+        purpose: what || `Rolled ${result.expression}`,
+        roll: result,
+        secret: false,
+      });
+      queueDmNotice(
+        `The player rolled ${result.expression}${what ? ` for "${what}"` : ''} on their own: ${result.breakdown}.`,
+      );
       setError(null);
       setPurpose('');
       onClose();
@@ -63,7 +71,13 @@ export function RollDiceDialog({ open, onClose }: { open: boolean; onClose: () =
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
-          <Button variant="primary" type="submit" form={formId} loading={rolling} icon={<Dices className="size-4" aria-hidden />}>
+          <Button
+            variant="primary"
+            type="submit"
+            form={formId}
+            loading={rolling}
+            icon={<Dices className="size-4" aria-hidden />}
+          >
             Roll
           </Button>
         </>

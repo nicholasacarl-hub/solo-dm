@@ -15,9 +15,11 @@ export function continuePath(campaign: CampaignSummary['campaign']): string {
 
 function Portrait({ portrait }: { portrait?: string }) {
   if (!portrait) return null;
-  if (/^(data:image\/|https?:)/.test(portrait)) {
+  // Portraits are an emoji or an embedded image; never fetch remote URLs from a save file.
+  if (portrait.startsWith('data:image/')) {
     return <img src={portrait} alt="" className="size-5 shrink-0 rounded-full object-cover" />;
   }
+  if (portrait.length > 16 || /^[a-z]+:/i.test(portrait)) return null;
   return (
     <span aria-hidden className="shrink-0 text-base leading-none">
       {portrait}
@@ -77,7 +79,7 @@ export function CampaignCard({ summary, onDelete }: { summary: CampaignSummary; 
             {character && <Portrait portrait={character.portrait} />}
             <span className="line-clamp-2 min-w-0">{character ? characterLine(character) : 'No character yet'}</span>
           </p>
-          <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-faint">
+          <p className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted">
             <span className="inline-flex items-center gap-1">
               <Clock className="size-3.5" aria-hidden />
               {lastPlayed}

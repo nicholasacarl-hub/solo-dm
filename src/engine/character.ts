@@ -33,7 +33,7 @@ function unchanged(c: Character, message: string): EngineResult {
   return { character: c, events: [warning(message)] };
 }
 
-const MINUS = '−';
+const MINUS = '\u2212';
 const FRESH_DEATH_SAVES = { successes: 0, failures: 0, stable: false, dead: false } as const;
 
 /** A blank level-1 character shell with sane defaults (used by the builder). */
@@ -116,8 +116,9 @@ function die(c: Character, deathSaves: Character['deathSaves'], message: string)
   return { character: touch(ended.character), events: [gameEvent('died', message), ...ended.events] };
 }
 
+/** "8 slashing", or "8 damage" when the type is unknown. */
 function damageLabel(amount: number, damageType?: string): string {
-  return `${amount}${damageType?.trim() ? ` ${damageType.trim()}` : ''}`;
+  return `${amount} ${damageType?.trim() || 'damage'}`;
 }
 
 /** Damage while already at 0 HP: one death-save failure (two on a critical hit); massive damage kills. */
@@ -148,11 +149,52 @@ function damageAtZero(c: Character, amount: number, temp: number, label: string,
 export function applyDamage(
   c: Character,
   amount: number,
-  opts: { critical?: boolean; damageType?: string } = {},
+  opts: { critical?: boolean; damageType?: string; applyDefenses?: boolean } = {},
 ): EngineResult {
-  const damage = Math.max(0, toInt(amount));
-  if (damage === 0) return { character: c, events: [] };
+  const rawDamage = Math.max(0, toInt(amount));
+  if (rawDamage === 0) return { character: c, events: [] };
   if (c.deathSaves.dead) return unchanged(c, 'Already dead — further damage has no effect.');
+  const defenses = opts.applyDefenses === false ? null : adjustForDefenses(c, rawDamage, opts.damageType);
+  if (defenses?.immune) return unchanged(c, `Immune to ${defenses.type} damage — no damage taken.`);
+  const damage = defenses ? defenses.amount : rawDamage;
+  if (damage === 0) return unchanged(c, defenses?.note ? `No damage taken (${defenses.note}).` : 'No damage taken.');
+  const result = applyAdjustedDamage(c, damage, opts);
+  if (!defenses?.note) return result;
+  const note = gameEvent('hp-changed', `Damage adjusted: ${defenses.note}.`);
+  return { character: result.character, events: [note, ...result.events] };
+}
+
+function listHas(list: readonly string[] | undefined, value: string): boolean {
+  return (list ?? []).some((entry) => entry.trim().toLowerCase() === value);
+}
+
+/**
+ * 2024 order of application: immunity → 0; otherwise Resistance halves (round down), then
+ * Vulnerability doubles. Matching is by damage type, case-insensitive.
+ */
+function adjustForDefenses(
+  c: Character,
+  damage: number,
+  damageType: string | undefined,
+): { amount: number; immune: boolean; type: string; note: string | null } {
+  const type = damageType?.trim().toLowerCase() ?? '';
+  if (!type) return { amount: damage, immune: false, type, note: null };
+  if (listHas(c.damageImmunities, type)) return { amount: 0, immune: true, type, note: null };
+  let amount = damage;
+  const notes: string[] = [];
+  if (listHas(c.damageResistances, type)) {
+    const halved = Math.floor(amount / 2);
+    notes.push(`Resistance to ${type} halves ${amount} → ${halved}`);
+    amount = halved;
+  }
+  if (listHas(c.damageVulnerabilities, type)) {
+    notes.push(`Vulnerability to ${type} doubles ${amount} → ${amount * 2}`);
+    amount *= 2;
+  }
+  return { amount, immune: false, type, note: notes.length ? notes.join('; ') : null };
+}
+
+function applyAdjustedDamage(c: Character, damage: number, opts: { critical?: boolean; damageType?: string }): EngineResult {
 
   const absorbed = Math.min(Math.max(0, c.hp.temp), damage);
   const temp = c.hp.temp - absorbed;
@@ -160,7 +202,10 @@ export function applyDamage(
   const label = damageLabel(damage, opts.damageType);
   const tempNote = absorbed ? `; ${absorbed} absorbed by temporary HP` : '';
   // RAW: damage absorbed by temporary HP is still damage taken, so it still costs a death save.
-  if (c.hp.current <= 0) return damageAtZero(c, damage, temp, `${label} damage${absorbed ? ` (${absorbed} absorbed by temporary HP)` : ''}`, !!opts.critical);
+  if (c.hp.current <= 0) {
+    const full = `${damage} ${opts.damageType?.trim() ? `${opts.damageType.trim()} ` : ''}damage`;
+    return damageAtZero(c, damage, temp, `${full}${absorbed ? ` (${absorbed} absorbed by temporary HP)` : ''}`, !!opts.critical);
+  }
 
   const remaining = c.hp.current - toHp;
   if (remaining > 0 || toHp === 0) {
@@ -325,6 +370,10 @@ export function addCondition(c: Character, condition: ActiveCondition): EngineRe
   if (standard?.id === 'exhaustion') return changeExhaustion(c, Math.max(1, toInt(condition.level, 1)));
   if (c.deathSaves.dead) return unchanged(c, "The dead don't gain conditions.");
   if (standard?.id === 'poisoned' && hasCondition(c, 'petrified')) return unchanged(c, 'Petrified creatures have Immunity to the Poisoned condition.');
+  const immuneKey = (standard?.id ?? raw).toLowerCase();
+  if ((c.conditionImmunities ?? []).some((x) => x.trim().toLowerCase() === immuneKey)) {
+    return unchanged(c, `Immune to the ${conditionName(standard?.id ?? raw)} condition.`);
+  }
 
   const id = standard?.id ?? raw;
   const entry: ActiveCondition = { ...condition, id };
@@ -359,6 +408,9 @@ export function removeCondition(c: Character, conditionId: string): EngineResult
   }
   const key = standard ? standard.id : exactKey;
   if (!c.conditions.some((x) => conditionKey(x.id) === key)) return unchanged(c, `Not ${conditionName(key)} — nothing to remove.`);
+  if (key === 'unconscious' && c.hp.current <= 0 && c.hp.max > 0 && !c.deathSaves.dead) {
+    return unchanged(c, 'At 0 HP a character stays Unconscious until they regain Hit Points — heal them instead.');
+  }
 
   let conditions = withoutCondition(c.conditions, key);
   let message = `No longer ${conditionName(key)}.`;

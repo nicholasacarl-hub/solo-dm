@@ -31,7 +31,7 @@ import {
 } from './dice';
 import { clamp, matchByName, toInt } from './util';
 
-const MINUS = '−';
+const MINUS = '\u2212';
 
 /** floor((score - 10) / 2) */
 export function abilityModifier(score: number): number {
@@ -198,7 +198,7 @@ function parseDamage(text: string): DiceTerm[] | null {
   } catch (err) {
     if (!(err instanceof DiceError)) throw err;
   }
-  const prefix = DAMAGE_PREFIX_RE.exec(text.replace(/[−–]/g, '-'));
+  const prefix = DAMAGE_PREFIX_RE.exec(text.replace(/[\u2212\u2013]/g, '-'));
   if (!prefix) return null;
   try {
     return parseDice(prefix[0]);
@@ -237,7 +237,7 @@ function heavyArmorNote(c: Character): string | null {
   const strength = abilityScore(c, 'str');
   for (const item of c.inventory) {
     if (!item.equipped) continue;
-    const stats = item.category === undefined || item.category === 'armor' ? resolveArmor(item) : null;
+    const stats = item.category === undefined || item.category === 'armor' || item.category === 'magic-item' ? resolveArmor(item) : null;
     if (stats?.strength && strength < stats.strength) return `${stats.name} needs Strength ${stats.strength}: ${MINUS}10 ft`;
   }
   return null;
@@ -273,7 +273,8 @@ export function effectiveSpeed(c: Character): number {
 // Armor Class
 // ---------------------------------------------------------------------------
 
-function trainedWith(c: Character, kind: 'light' | 'medium' | 'heavy' | 'shield'): boolean {
+/** Armor Training for an armor category or Shields ("Light armor", "Shields", "All armor"). */
+export function hasArmorTraining(c: Character, kind: 'light' | 'medium' | 'heavy' | 'shield'): boolean {
   return c.armorTraining.some((t) => {
     const text = t.toLowerCase();
     return kind === 'shield' ? text.includes('shield') : text.includes(kind) || text.includes('all armor');
@@ -363,11 +364,11 @@ export function computeArmorClass(c: Character, catalog: EquipmentOption[]): { a
 
   if (armors.length > 1) notes.push('only one suit of armor counts');
   const armorType = base.worn?.stats.armorType;
-  if (armorType && !trainedWith(c, armorType)) {
+  if (armorType && !hasArmorTraining(c, armorType)) {
     notes.push(`untrained in ${armorType} armor: Disadvantage on STR/DEX D20 Tests and no spellcasting`);
   }
   if (shield) {
-    if (trainedWith(c, 'shield')) {
+    if (hasArmorTraining(c, 'shield')) {
       const value = shield.stats.baseAc + shield.bonus;
       ac += value;
       parts.push(`Shield ${value}${shield.bonus ? ` (+${shield.bonus} magic)` : ''}`);
@@ -375,7 +376,7 @@ export function computeArmorClass(c: Character, catalog: EquipmentOption[]): { a
       notes.push('no Shield training: the Shield gives no AC');
     }
   }
-  if (armors.length && hasFeature(c, 'Defense')) {
+  if (armors.length && c.features.some((f) => /^(fighting-style-)?defense(-fighting-style)?$/.test(nameKey(f.name)))) {
     ac += 1;
     parts.push('Defense 1');
   }

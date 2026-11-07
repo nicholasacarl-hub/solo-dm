@@ -43,10 +43,14 @@ export function describeSettingsChanges(before: CampaignSettings, after: Campaig
     ...enumDiff('player rolls', ROLL_MODE[before.playerRollMode], ROLL_MODE[after.playerRollMode]),
   ];
   if (before.showDmRolls !== after.showDmRolls) {
-    lines.push(after.showDmRolls ? 'DM rolls are now shown to the player' : 'DM rolls are now hidden behind the screen');
+    lines.push(
+      after.showDmRolls ? 'DM rolls are now shown to the player' : 'DM rolls are now hidden behind the screen',
+    );
   }
   if (before.milestoneLeveling !== after.milestoneLeveling) {
-    lines.push(`leveling: ${before.milestoneLeveling ? 'milestone' : 'XP'} → ${after.milestoneLeveling ? 'milestone' : 'XP'}`);
+    lines.push(
+      `leveling: ${before.milestoneLeveling ? 'milestone' : 'XP'} → ${after.milestoneLeveling ? 'milestone' : 'XP'}`,
+    );
   }
   if (before.tone.trim() !== after.tone.trim()) lines.push(`tone is now ${quote(after.tone)}`);
   if (before.setting.trim() !== after.setting.trim()) lines.push(`setting notes are now ${quote(after.setting)}`);

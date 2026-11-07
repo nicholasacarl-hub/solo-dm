@@ -47,7 +47,8 @@ export interface RolledScore {
 
 /** Choices for a Magic Initiate feat (two cantrips and one level 1 spell from one class list). */
 export interface MagicInitiateChoice {
-  ability: Ability;
+  /** INT, WIS or CHA (null until chosen). */
+  ability: Ability | null;
   /** Spell entry ids. */
   cantrips: string[];
   spell: string | null;

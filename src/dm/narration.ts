@@ -92,6 +92,6 @@ export function truncate(text: string, max: number): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (clean.length <= max) return clean;
   const cut = clean.slice(0, max - 1);
-  const space = cut.lastIndexOf(' ');
+  const space = clean[max - 1] === ' ' ? cut.length : cut.lastIndexOf(' ');
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }

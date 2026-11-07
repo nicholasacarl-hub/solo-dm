@@ -150,7 +150,7 @@ function opening(ctx: MockContext): Reply {
       {
         name: 'set_scene',
         input: {
-          location: campaign?.scene.location || 'The Crooked Lantern Inn',
+          location: 'The Crooked Lantern Inn',
           time_of_day: 'dusk',
           weather: 'a thin, cold drizzle',
           mood: 'expectant',

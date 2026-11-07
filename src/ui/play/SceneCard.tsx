@@ -1,5 +1,19 @@
 import { useId } from 'react';
-import { Cloud, CloudFog, CloudLightning, CloudRain, Clock, Drama, MapPin, Moon, Snowflake, Sun, Sunrise, Sunset, Wind } from 'lucide-react';
+import {
+  Cloud,
+  CloudFog,
+  CloudLightning,
+  CloudRain,
+  Clock,
+  Drama,
+  MapPin,
+  Moon,
+  Snowflake,
+  Sun,
+  Sunrise,
+  Sunset,
+  Wind,
+} from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
 import { cn } from '@/lib/cn';
 import { useGame } from '@/state/gameStore';
@@ -53,7 +67,10 @@ export function SceneCard({ className }: { className?: string }) {
   const WeatherIcon = scene.weather ? weatherIcon(scene.weather) : Cloud;
 
   return (
-    <section aria-labelledby={titleId} className={cn('rounded-2xl border border-border bg-surface p-4 shadow-card', className)}>
+    <section
+      aria-labelledby={titleId}
+      className={cn('rounded-2xl border border-border bg-surface p-4 shadow-card', className)}
+    >
       <p className="flex items-center gap-1.5 font-display text-[0.6875rem] font-semibold tracking-[0.16em] text-muted uppercase">
         <MapPin className="size-3.5 text-info" aria-hidden />
         Scene

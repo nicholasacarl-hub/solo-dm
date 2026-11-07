@@ -58,7 +58,8 @@ export async function updateJournalTool(input: ToolInput<'update_journal'>, ctx:
     const prev = findExisting(e.kind, e.name);
     return {
       kind: e.kind,
-      name: e.name.trim(),
+      // Matching is case-insensitive; an update keeps the entry's established name.
+      name: prev?.name ?? e.name.trim(),
       summary: e.summary,
       secret: e.secret ?? prev?.secret ?? false,
       tags: mergeTags(prev?.tags, e.tags) ?? [],
@@ -124,7 +125,7 @@ export async function updateQuestTool(input: ToolInput<'update_quest'>, ctx: Too
   const prev = store.quests.find((q) => nameKey(q.title) === nameKey(input.title));
   const merged = mergeObjectives(ctx, prev?.objectives ?? [], input.objectives);
   const upsert: QuestUpsert = {
-    title: input.title.trim(),
+    title: prev?.title ?? input.title.trim(),
     status: input.status ?? prev?.status ?? 'active',
     summary: input.summary ?? prev?.summary ?? '',
     objectives: merged.objectives,
@@ -157,7 +158,7 @@ export async function updateClocksTool(input: ToolInput<'update_clocks'>, ctx: T
     const segments = spec.segments ?? prev?.segments ?? DEFAULT_SEGMENTS;
     const filled = clamp(spec.set_filled ?? (prev?.filled ?? 0) + (spec.advance ?? 0), 0, segments);
     const upsert: ClockUpsert = {
-      name: spec.name.trim(),
+      name: prev?.name ?? spec.name.trim(),
       segments,
       filled,
       kind: spec.kind ?? prev?.kind ?? 'threat',

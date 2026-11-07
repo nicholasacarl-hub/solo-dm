@@ -46,8 +46,8 @@ export async function extractPdfMarkdown(
     return pdfPagesToMarkdown(pages);
   } catch (err) {
     if (opts.signal?.aborted) throw abortError();
-    if (err instanceof Error && err.name === 'PasswordException') throw new Error('This PDF is password-protected.');
-    if (err instanceof Error && err.name === 'InvalidPDFException') throw new Error("This file isn't a valid PDF.");
+    if (err instanceof Error && err.name === 'PasswordException') throw new Error('This PDF is password-protected.', { cause: err });
+    if (err instanceof Error && err.name === 'InvalidPDFException') throw new Error("This file isn't a valid PDF.", { cause: err });
     throw err;
   } finally {
     opts.signal?.removeEventListener('abort', onAbort);

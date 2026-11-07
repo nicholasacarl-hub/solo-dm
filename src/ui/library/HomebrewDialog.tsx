@@ -295,7 +295,7 @@ function HomebrewForm({
           />
         ) : (
           <div className="min-h-40 rounded-xl border border-border bg-surface-2 px-3 py-2">
-            {draft.text.trim() ? <Markdown>{draft.text}</Markdown> : <p className="text-sm text-faint">Nothing to preview yet.</p>}
+            {draft.text.trim() ? <Markdown>{draft.text}</Markdown> : <p className="text-sm text-muted">Nothing to preview yet.</p>}
           </div>
         )}
       </div>

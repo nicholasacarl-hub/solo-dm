@@ -115,7 +115,7 @@ export async function startCombatTool(input: ToolInput<'start_combat'>, ctx: Too
     rollType: 'initiative',
     revealDc: false,
     advantage: input.player_surprised ? 'disadvantage' : 'normal',
-    reason: input.encounter_name ? `Initiative — ${input.encounter_name}` : 'Initiative',
+    reason: input.encounter_name ?? 'The fight begins',
   });
   const hero: Combatant = {
     id: ctx.deps.newId(),
@@ -199,10 +199,10 @@ function changeHp(state: CombatState, input: ToolInput<'update_combat'>, kind: '
   const r = kind === 'damage' ? damageCombatant(state, target.id, input.amount) : healCombatant(state, target.id, input.amount);
   const after = r.state.combatants.find((c) => c.id === target.id);
   const verb = kind === 'damage' ? `takes ${input.amount} damage` : `heals ${input.amount}`;
-  const down = after?.defeated && !target.defeated ? ' — down!' : '';
+  const outcome = after?.defeated && !target.defeated ? ' — down!' : ` (${hpText(after, true)})`;
   return {
     state: r.state,
-    summary: `${target.name} ${verb} (${hpText(after, true)})${down}`,
+    summary: `${target.name} ${verb}${outcome}`,
     notes: [`${target.name}: ${hpText(after, false)}`, ...eventLines(r.events)],
   };
 }

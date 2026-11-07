@@ -40,7 +40,9 @@ export function effectiveDc(req: PlayerRollRequest): number | undefined {
 function findAttack(c: Character, name: string | undefined) {
   if (!name) return undefined;
   const key = name.trim().toLowerCase();
-  return c.attacks.find((a) => a.name.toLowerCase() === key) ?? c.attacks.find((a) => a.name.toLowerCase().includes(key));
+  return (
+    c.attacks.find((a) => a.name.toLowerCase() === key) ?? c.attacks.find((a) => a.name.toLowerCase().includes(key))
+  );
 }
 
 /** The dice to roll for a non-d20 request (the request's expression, else derived from the sheet). */

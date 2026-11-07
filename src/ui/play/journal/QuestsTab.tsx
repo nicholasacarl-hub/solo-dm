@@ -63,7 +63,9 @@ export function QuestsTab() {
 function QuestCard({ quest }: { quest: Quest }) {
   const spoilers = usePlayView((s) => s.showSpoilers);
   const closed = quest.status !== 'active' && quest.status !== 'rumor';
-  const meta = [quest.giver && `From ${quest.giver}`, quest.reward && `Reward: ${quest.reward}`].filter(Boolean).join(' · ');
+  const meta = [quest.giver && `From ${quest.giver}`, quest.reward && `Reward: ${quest.reward}`]
+    .filter(Boolean)
+    .join(' · ');
   return (
     <article className={cn('rounded-xl border border-border bg-surface p-3', closed && 'opacity-75')}>
       <h4 className="text-sm font-semibold">{quest.title}</h4>

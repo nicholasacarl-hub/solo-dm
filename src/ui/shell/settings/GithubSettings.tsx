@@ -152,7 +152,7 @@ export function GithubSettings() {
             </div>
             {sync.status === 'done' && <SyncSummary report={sync.report} at={sync.at} gh={gh} onResolved={dropConflict} />}
             {gh.lastSyncedAt && sync.status !== 'done' && (
-              <p className="text-xs text-faint">Last synced {formatRelativeTime(gh.lastSyncedAt)}.</p>
+              <p className="text-xs text-muted">Last synced {formatRelativeTime(gh.lastSyncedAt)}.</p>
             )}
           </div>
         </>
@@ -183,7 +183,7 @@ function SetupSteps() {
         </li>
         <li>Paste the token below with your username and the repository name, then test the connection.</li>
       </ol>
-      <p className="mt-2 text-xs text-faint">The token is stored in this browser, like your API key.</p>
+      <p className="mt-2 text-xs text-muted">The token is stored in this browser, like your API key.</p>
     </div>
   );
 }
@@ -220,7 +220,10 @@ function ConnectionFields({ gh, onEdit }: { gh: GithubSyncSettings; onEdit: (pat
           autoCapitalize="off"
           spellCheck={false}
           placeholder="solo-dm-saves"
-          onChange={(e) => {
+          onChange={(e) => onEdit({ repo: e.target.value.trim() })}
+          onBlur={(e) => {
+            // Accept "owner/repo" or a github.com URL; split it once the player is done typing.
+            if (!e.target.value.includes('/')) return;
             const parsed = parseRepoInput(e.target.value);
             onEdit(parsed.owner ? { owner: parsed.owner, repo: parsed.repo } : { repo: parsed.repo });
           }}
@@ -311,9 +314,11 @@ function SyncSummary({
       {report.pulled.length > 0 && <p className="text-muted">Downloaded: {names(report.pulled)}</p>}
       {report.conflicts.length > 0 && (
         <div className="flex flex-col gap-2">
-          <p className="font-medium text-gold">
-            {plural(report.conflicts.length, 'campaign')} changed both here and on GitHub. Choose which copy to keep:
-          </p>
+          <StatusLine tone="gold" icon={<TriangleAlert className="size-4" aria-hidden />}>
+            <span className="font-medium">
+              {plural(report.conflicts.length, 'campaign')} changed both here and on GitHub. Choose which copy to keep:
+            </span>
+          </StatusLine>
           <ul className="flex flex-col gap-2">
             {report.conflicts.map((conflict) => (
               <ConflictRow key={conflict.campaignId} conflict={conflict} gh={gh} onResolved={onResolved} />

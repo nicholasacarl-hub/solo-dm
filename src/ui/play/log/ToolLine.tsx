@@ -120,21 +120,21 @@ function HomebrewActions({ entry }: { entry: ToolLogEntry }) {
     <>
       <span className="inline-flex items-center gap-1">
         <button
-        type="button"
-        onClick={() => setViewing(true)}
-        className="rounded-md px-1.5 text-xs font-medium text-arcane hover:bg-arcane-soft"
-        aria-label={`View homebrew ${name}`}
-      >
-        View
-      </button>
-      <button
-        type="button"
-        onClick={veto}
-        disabled={vetoed}
-        className="rounded-md px-1.5 text-xs font-medium text-muted hover:bg-danger-soft hover:text-danger disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent"
-        aria-label={vetoed ? `Vetoed homebrew ${name}` : `Veto homebrew ${name}`}
-      >
-        {vetoed ? 'Vetoed' : 'Veto'}
+          type="button"
+          onClick={() => setViewing(true)}
+          className="rounded-md px-1.5 text-xs font-medium text-arcane hover:bg-arcane-soft"
+          aria-label={`View homebrew ${name}`}
+        >
+          View
+        </button>
+        <button
+          type="button"
+          onClick={veto}
+          disabled={vetoed}
+          className="rounded-md px-1.5 text-xs font-medium text-muted hover:bg-danger-soft hover:text-danger disabled:cursor-default disabled:opacity-60 disabled:hover:bg-transparent"
+          aria-label={vetoed ? `Vetoed homebrew ${name}` : `Veto homebrew ${name}`}
+        >
+          {vetoed ? 'Vetoed' : 'Veto'}
         </button>
       </span>
       <HomebrewViewer

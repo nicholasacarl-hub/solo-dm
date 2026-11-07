@@ -31,16 +31,30 @@ function stopDm(): void {
   }
 }
 
+/**
+ * Resolve once dm.isBusy() is false (true) or the deadline passes (false). Waits on the store's
+ * reactive phase, re-checking the controller in case the two briefly disagree.
+ */
+async function whenDmIdle(timeoutMs: number, isCancelled: () => boolean): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (dmIsBusy()) {
+    if (isCancelled() || Date.now() >= deadline) return false;
+    await waitForDmIdle(Math.min(1000, deadline - Date.now()));
+    if (dmIsBusy()) await new Promise((resolve) => window.setTimeout(resolve, 200));
+  }
+  return !isCancelled();
+}
+
 /** Call dm.beginOrResume() once per loaded campaign (StrictMode-safe), after any in-flight DM work. */
 function useBeginOrResume(campaignId: string | null): void {
   const begunFor = useRef<string | null>(null);
   useEffect(() => {
     if (!campaignId || begunFor.current === campaignId) return;
-    begunFor.current = campaignId;
     let cancelled = false;
     void (async () => {
-      if (dmIsBusy()) await waitForDmIdle(30_000);
-      if (cancelled || dmIsBusy()) return;
+      if (!(await whenDmIdle(30_000, () => cancelled)) || begunFor.current === campaignId) return;
+      // Marked only when the call is made, so a cancelled wait (unmount, reload) can try again.
+      begunFor.current = campaignId;
       await runDm(() => dm.beginOrResume());
     })();
     return () => {

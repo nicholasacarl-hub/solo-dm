@@ -104,13 +104,20 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
   const isHeadingLine = (l: Line) =>
     l.fontSize >= body * HEADING_RATIO && l.text.length <= MAX_HEADING_CHARS && /\p{L}/u.test(l.text);
   const headingLines = lines.filter(isHeadingLine);
-  const useHeadings = headingLines.length > 0 && headingLines.length <= lines.length * MAX_HEADING_SHARE;
+  const chars = (ls: Line[]) => ls.reduce((n, l) => n + l.text.length, 0);
+  // Headings are a small share of the text; when "large" text dominates, sizes carry no structure.
+  const useHeadings = headingLines.length > 0 && chars(headingLines) <= chars(lines) * MAX_HEADING_SHARE;
   // Largest heading size = level 1, next = level 2, the rest = level 3.
   const sizes = [...new Set(headingLines.map((l) => roundSize(l.fontSize)))].sort((a, b) => b - a);
   const levelOf = (l: Line) => Math.min(3, sizes.indexOf(roundSize(l.fontSize)) + 1);
 
+  // A line much shorter than usual ends its paragraph (or is a stat line such as "Range: 60 feet").
+  const bodyLengths = lines.filter((l) => !useHeadings || !isHeadingLine(l)).map((l) => l.text.length).sort((a, b) => a - b);
+  const shortLine = (bodyLengths[Math.floor(bodyLengths.length / 2)] ?? 0) * 0.6;
+
   const out: string[] = [];
   let paragraph = '';
+  let lastBodyLength = 0;
   let heading: { level: number; text: string } | null = null;
   let prev: Line | null = null;
   const flushParagraph = () => {
@@ -139,11 +146,12 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
     } else {
       flushHeading();
       const gap = prev && !newPage ? prev.y - line.y : 0;
-      const paragraphBreak = !paragraph || newPage || gap > line.fontSize * 1.9 || gap < 0;
+      const paragraphBreak = !paragraph || newPage || gap > line.fontSize * 1.9 || gap < 0 || lastBodyLength < shortLine;
       if (paragraphBreak) {
         flushParagraph();
         paragraph = line.text;
       } else paragraph = joinLines(paragraph, line.text);
+      lastBodyLength = line.text.length;
     }
     prev = line;
   }

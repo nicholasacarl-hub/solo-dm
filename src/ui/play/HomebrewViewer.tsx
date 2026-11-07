@@ -46,7 +46,7 @@ export function HomebrewViewer({
             </Button>
           )}
           <Button variant="primary" onClick={onClose}>
-            Close
+            Done
           </Button>
         </>
       }

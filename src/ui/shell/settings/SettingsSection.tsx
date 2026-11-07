@@ -18,10 +18,10 @@ export function SettingsSection({
   tone?: 'default' | 'danger';
   children: ReactNode;
 }) {
-  const titleId = `settings-${id}-title`;
+  const titleId = `settings-section-${id}-title`;
   return (
     <section
-      id={`settings-${id}`}
+      id={`settings-section-${id}`}
       aria-labelledby={titleId}
       className={cn(
         'scroll-mt-20 rounded-2xl border bg-surface p-4 shadow-card sm:p-6',
@@ -40,20 +40,22 @@ export function SettingsSection({
   );
 }
 
-/** One-line status message (test results and the like), announced politely. */
+const STATUS_TEXT = { muted: 'text-muted', success: 'text-success', danger: 'text-danger', gold: 'text-text' } as const;
+const STATUS_ICON = { muted: 'text-muted', success: 'text-success', danger: 'text-danger', gold: 'text-gold' } as const;
+
+/** One-line status message (test results and the like). Warnings use body text with a gold icon for contrast. */
 export function StatusLine({
   tone,
   icon,
   children,
 }: {
-  tone: 'muted' | 'success' | 'danger' | 'gold';
+  tone: keyof typeof STATUS_TEXT;
   icon?: ReactNode;
   children: ReactNode;
 }) {
-  const color = { muted: 'text-muted', success: 'text-success', danger: 'text-danger', gold: 'text-gold' }[tone];
   return (
-    <p className={cn('flex items-start gap-2 text-sm', color)}>
-      {icon && <span className="mt-0.5 shrink-0">{icon}</span>}
+    <p className={cn('flex items-start gap-2 text-sm', STATUS_TEXT[tone])}>
+      {icon && <span className={cn('mt-0.5 shrink-0', STATUS_ICON[tone])}>{icon}</span>}
       <span className="min-w-0 [overflow-wrap:anywhere]">{children}</span>
     </p>
   );

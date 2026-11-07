@@ -44,7 +44,8 @@ export interface FriendlyError {
 
 export function isAbortError(err: unknown): boolean {
   if (err instanceof APIUserAbortError || err instanceof DmCancelledError) return true;
-  return err instanceof Error && err.name === 'AbortError';
+  // Structural check: an AbortError DOMException may come from another realm.
+  return typeof err === 'object' && err !== null && (err as { name?: unknown }).name === 'AbortError';
 }
 
 /**

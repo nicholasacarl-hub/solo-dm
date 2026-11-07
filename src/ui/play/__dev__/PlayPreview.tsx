@@ -24,7 +24,15 @@ function rollInteraction(kind: string | null): InteractionRequest | null {
     return {
       kind: 'roll',
       id: 'preview-roll',
-      request: { rollType: 'damage', attackName: 'Dagger', expression: '1d4+2', critical: true, revealDc: false, advantage: 'normal', reason: 'Your dagger finds the gap in his guard' },
+      request: {
+        rollType: 'damage',
+        attackName: 'Dagger',
+        expression: '1d4+2',
+        critical: true,
+        revealDc: false,
+        advantage: 'normal',
+        reason: 'Your dagger finds the gap in his guard',
+      },
       modifier: 0,
       label: 'Dagger damage',
     };
@@ -33,7 +41,14 @@ function rollInteraction(kind: string | null): InteractionRequest | null {
     return {
       kind: 'roll',
       id: 'preview-roll',
-      request: { rollType: 'skill', skill: 'stealth', dc: 13, revealDc: true, advantage: 'advantage', reason: 'Slip past the bandits on the wet planks' },
+      request: {
+        rollType: 'skill',
+        skill: 'stealth',
+        dc: 13,
+        revealDc: true,
+        advantage: 'advantage',
+        reason: 'Slip past the bandits on the wet planks',
+      },
       modifier: 2,
       label: 'Stealth check (DEX)',
     };
@@ -66,7 +81,10 @@ function withExtraEntries(log: LogEntry[]): LogEntry[] {
     sessionNumber: 1,
     text: 'You came home to **Saltmarsh** the night the drowned lantern relit itself. Old Tam swore he saw a figure on the gallery, and your mentor, Keeper Halvard, is nowhere to be found.',
   };
-  const narration = second?.kind === 'dm' ? { ...second, reasoning: 'Tam knows more than he says. If Mira presses him, reveal the smugglers.' } : second;
+  const narration =
+    second?.kind === 'dm'
+      ? { ...second, reasoning: 'Tam knows more than he says. If Mira presses him, reveal the smugglers.' }
+      : second;
   const extra: LogEntry[] = [
     { ...base, id: 'preview-ooc', seq: 900, kind: 'player', text: 'OOC: Does Shield work against this crit?' },
     {
@@ -101,7 +119,12 @@ function seed(params: URLSearchParams): void {
   } else if (dm === 'thinking') {
     state.dm = { phase: 'thinking', activity: null, error: null, retryable: false };
   } else if (dm === 'error') {
-    state.dm = { phase: 'error', activity: null, error: 'The DM could not be reached (network error).', retryable: true };
+    state.dm = {
+      phase: 'error',
+      activity: null,
+      error: 'The DM could not be reached (network error).',
+      retryable: true,
+    };
   }
   if (params.get('combat') === '0') state.combat = null;
   if (params.get('empty') === '1') state.log = [];

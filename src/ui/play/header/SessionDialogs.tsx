@@ -36,8 +36,8 @@ export function EndSessionDialog({ open, onClose }: { open: boolean; onClose: ()
       }
     >
       <p className="text-sm text-muted">
-        The DM records any last journal and quest updates, then writes a recap. The next session starts fresh from
-        that recap, which keeps long campaigns fast and affordable.
+        The DM records any last journal and quest updates, then writes a recap. The next session starts fresh from that
+        recap, which keeps long campaigns fast and affordable.
       </p>
     </Dialog>
   );
@@ -104,7 +104,13 @@ function TableRulesEditor({ onClose }: { onClose: () => void }) {
 /** Desktop rules lookup (mobile has the Rules tab). */
 export function RulesDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   return (
-    <Dialog open={open} onClose={onClose} size="lg" title="Rules lookup" description="SRD 5.2.1, your imports and this campaign's homebrew.">
+    <Dialog
+      open={open}
+      onClose={onClose}
+      size="lg"
+      title="Rules lookup"
+      description="SRD 5.2.1, your imports and this campaign's homebrew."
+    >
       <div className="min-h-[24rem]">
         <PanelBoundary name="rules lookup">
           <RulesPanel autoFocus onAskDm={onClose} />

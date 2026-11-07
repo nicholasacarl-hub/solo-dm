@@ -147,7 +147,7 @@ function HomebrewCard({ entry, campaignLabel, onOpen }: { entry: HomebrewEntry; 
         {retired ? <Badge>Retired</Badge> : <Badge tone="arcane">{entry.origin === 'dm' ? 'DM' : 'You'}</Badge>}
       </span>
       {entry.summary && <span className="line-clamp-2 text-xs text-muted">{entry.summary}</span>}
-      <span className="mt-auto pt-1 text-xs text-faint">{campaignLabel}</span>
+      <span className="mt-auto pt-1 text-xs text-muted">{campaignLabel}</span>
     </button>
   );
 }

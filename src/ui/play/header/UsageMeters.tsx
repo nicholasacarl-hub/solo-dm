@@ -7,6 +7,14 @@ import { useGame } from '@/state/gameStore';
 import { useSettings } from '@/state/settingsStore';
 import { formatTokens, formatUsd, modelLabel } from '../format';
 
+/** Who is running the table: the demo DM in demo mode, else this session's model (or the Settings choice). */
+function useModelName(): string {
+  const sessionModel = useGame((s) => s.activeSession?.model ?? null);
+  const settingsModel = useSettings((s) => s.model);
+  const mockMode = useSettings((s) => s.mockMode);
+  return mockMode ? 'Demo DM' : modelLabel(sessionModel ?? settingsModel);
+}
+
 /** How full this session's context is, against the soft limit in Settings. */
 export function ContextMeter({ className, showLabel = true }: { className?: string; showLabel?: boolean }) {
   const used = useGame((s) => s.activeSession?.contextTokens ?? 0);
@@ -68,14 +76,15 @@ export function CostReadout({ className }: { className?: string }) {
 
 /** The model this session runs on (sessions keep their model; otherwise the Settings choice). */
 export function ModelReadout({ className }: { className?: string }) {
-  const sessionModel = useGame((s) => s.activeSession?.model ?? null);
-  const settingsModel = useSettings((s) => s.model);
-  const model = sessionModel ?? settingsModel;
+  const model = useModelName();
   return (
-    <p className={cn('flex items-center gap-1 text-xs whitespace-nowrap text-muted', className)} title={`Model: ${model}`}>
+    <p
+      className={cn('flex items-center gap-1 text-xs whitespace-nowrap text-muted', className)}
+      title={`Model: ${model}`}
+    >
       <Cpu className="size-3.5" aria-hidden />
       <span className="sr-only">Model: </span>
-      {modelLabel(model)}
+      {model}
     </p>
   );
 }
@@ -88,12 +97,10 @@ export function UsagePill() {
   const used = useGame((s) => s.activeSession?.contextTokens ?? 0);
   const sessionCost = useGame((s) => s.activeSession?.usage.estimatedCostUsd ?? null);
   const campaignCost = useGame((s) => s.campaign?.usage.estimatedCostUsd ?? 0);
-  const sessionModel = useGame((s) => s.activeSession?.model ?? null);
-  const settingsModel = useSettings((s) => s.model);
   const limit = useSettings((s) => s.sessionSoftLimitTokens);
   const ratio = limit > 0 ? used / limit : 0;
   const over = ratio >= 1;
-  const model = modelLabel(sessionModel ?? settingsModel);
+  const model = useModelName();
   const cost = sessionCost ?? campaignCost;
   const label =
     `Usage: context ${formatTokens(used)} of ${formatTokens(limit)} tokens, ` +

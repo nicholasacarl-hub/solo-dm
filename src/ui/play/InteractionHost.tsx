@@ -40,7 +40,8 @@ export function InteractionHost() {
 }
 
 function ConfirmInteraction({ interaction }: { interaction: Extract<InteractionRequest, { kind: 'confirm' }> }) {
-  const answer = (confirmed: boolean) => useGame.getState().resolveInteraction(interaction.id, { kind: 'confirm', confirmed });
+  const answer = (confirmed: boolean) =>
+    useGame.getState().resolveInteraction(interaction.id, { kind: 'confirm', confirmed });
   return (
     <Dialog
       open

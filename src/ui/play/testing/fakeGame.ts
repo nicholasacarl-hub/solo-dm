@@ -45,7 +45,8 @@ export function fixtureState(): Partial<GameStoreState> {
     number: 1,
     status: 'ended',
     endedAt: 1_699_900_000_000,
-    recap: 'You arrived in **Saltmarsh** as the old lantern relit itself, and Old Tam swore he saw a figure on the gallery.',
+    recap:
+      'You arrived in **Saltmarsh** as the old lantern relit itself, and Old Tam swore he saw a figure on the gallery.',
     dmNotes: 'Halvard is alive, bound beneath the breakwater.',
   });
   return {
@@ -155,11 +156,24 @@ export function createFakeActions(): GameStoreActions {
       const journal = [...get().journal];
       const saved: JournalEntry[] = [];
       for (const upsert of entries) {
-        const index = journal.findIndex((e) => e.kind === upsert.kind && e.name.toLowerCase() === upsert.name.toLowerCase());
+        const index = journal.findIndex(
+          (e) => e.kind === upsert.kind && e.name.toLowerCase() === upsert.name.toLowerCase(),
+        );
         const base: JournalEntry =
           index >= 0
             ? journal[index]
-            : { id: `fake-j-${++seq}`, campaignId: 'camp-1', summary: '', tags: [], secret: false, firstSession: 1, lastSession: 1, createdAt: 0, updatedAt: 0, ...upsert };
+            : {
+                id: `fake-j-${++seq}`,
+                campaignId: 'camp-1',
+                summary: '',
+                tags: [],
+                secret: false,
+                firstSession: 1,
+                lastSession: 1,
+                createdAt: 0,
+                updatedAt: 0,
+                ...upsert,
+              };
         const next = { ...base, ...upsert, updatedAt: Date.now() } as JournalEntry;
         if (index >= 0) journal[index] = next;
         else journal.push(next);
@@ -173,10 +187,21 @@ export function createFakeActions(): GameStoreActions {
     },
     async upsertQuest(upsert) {
       const quests = get().quests;
-      const existing = quests.find((q) => (upsert.id && q.id === upsert.id) || q.title.toLowerCase() === upsert.title.toLowerCase());
+      const existing = quests.find(
+        (q) => (upsert.id && q.id === upsert.id) || q.title.toLowerCase() === upsert.title.toLowerCase(),
+      );
       const next: Quest = existing
         ? { ...existing, ...upsert, updatedAt: Date.now() }
-        : { id: `fake-q-${++seq}`, campaignId: 'camp-1', status: 'active', summary: '', objectives: [], createdAt: 0, updatedAt: 0, ...upsert };
+        : {
+            id: `fake-q-${++seq}`,
+            campaignId: 'camp-1',
+            status: 'active',
+            summary: '',
+            objectives: [],
+            createdAt: 0,
+            updatedAt: 0,
+            ...upsert,
+          };
       set({ quests: existing ? quests.map((q) => (q.id === next.id ? next : q)) : [...quests, next] });
       return next;
     },
@@ -185,10 +210,23 @@ export function createFakeActions(): GameStoreActions {
     },
     async upsertClock(upsert) {
       const clocks = get().clocks;
-      const existing = clocks.find((c) => (upsert.id && c.id === upsert.id) || c.name.toLowerCase() === upsert.name.toLowerCase());
+      const existing = clocks.find(
+        (c) => (upsert.id && c.id === upsert.id) || c.name.toLowerCase() === upsert.name.toLowerCase(),
+      );
       const next = existing
         ? { ...existing, ...upsert }
-        : { id: `fake-c-${++seq}`, campaignId: 'camp-1', segments: 4, filled: 0, kind: 'threat' as const, secret: false, resolved: false, createdAt: 0, updatedAt: 0, ...upsert };
+        : {
+            id: `fake-c-${++seq}`,
+            campaignId: 'camp-1',
+            segments: 4,
+            filled: 0,
+            kind: 'threat' as const,
+            secret: false,
+            resolved: false,
+            createdAt: 0,
+            updatedAt: 0,
+            ...upsert,
+          };
       set({ clocks: existing ? clocks.map((c) => (c.id === next.id ? next : c)) : [...clocks, next] });
       return next;
     },

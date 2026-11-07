@@ -105,7 +105,8 @@ function rollHitPoints(
 ): { hp: number; detail: string; roll?: RollResult } {
   const con = formatModifier(conMod);
   if (firstLevel) return { hp: Math.max(1, die + conMod), detail: `level 1: d${die} max ${die} ${con} CON` };
-  if (method === 'average') {
+  const isFixed = typeof method === 'object' && method !== null && Number.isFinite(method.fixed);
+  if (method === 'average' || (method !== 'roll' && !isFixed)) {
     const fixed = die / 2 + 1;
     return { hp: Math.max(1, fixed + conMod), detail: `fixed ${fixed} ${con} CON` };
   }
@@ -316,9 +317,11 @@ export function spendHitDie(
     hitDice: c.hitDice.map((h, i) => (i === index ? { ...h, spent: h.spent + 1 } : h)),
   });
   const left = character.hitDice[index].total - character.hitDice[index].spent;
+  const addedCon = opts.roll && opts.roll.modifier === 0 && conMod !== 0;
+  const shown = addedCon ? `${roll.breakdown}, ${formatModifier(conMod)} CON = ${rolledTotal}` : roll.breakdown;
   const event = gameEvent(
     'hp-changed',
-    `Spent a d${die} Hit Point Die: ${roll.breakdown}${amount !== rolledTotal ? ' (minimum 1)' : ''} → HP ${c.hp.current} → ${current} (${left} d${die} left)`,
+    `Spent a d${die} Hit Point Die: ${shown}${amount !== rolledTotal ? ' (minimum 1)' : ''} → HP ${c.hp.current} → ${current} (${left} d${die} left)`,
   );
   return { character, events: [event], roll, healed };
 }

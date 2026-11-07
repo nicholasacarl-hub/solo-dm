@@ -48,7 +48,7 @@ function PhysicalEntry({ die, onRoll }: { die: number; onRoll: (face: number) =>
     onRoll(n);
   };
   return (
-    <form onSubmit={submit} className="flex flex-col gap-1">
+    <form onSubmit={submit} noValidate className="flex flex-col gap-1">
       <div className="flex items-center gap-2">
         <label htmlFor={id} className="sr-only">
           Your d{die} result
@@ -68,7 +68,11 @@ function PhysicalEntry({ die, onRoll }: { die: number; onRoll: (face: number) =>
           Spend
         </Button>
       </div>
-      {error && <p className="text-xs text-danger">{error}</p>}
+      {error && (
+        <p role="alert" className="text-xs text-danger">
+          {error}
+        </p>
+      )}
     </form>
   );
 }

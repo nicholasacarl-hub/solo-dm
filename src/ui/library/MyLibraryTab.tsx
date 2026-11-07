@@ -8,6 +8,7 @@ import { toast } from '@/ui/components/toast';
 import { errorMessage, formatRelativeTime, plural } from '@/ui/shell/format';
 import { ImportDialog } from './ImportDialog';
 import { refreshRulesIndex } from './kinds';
+import { manifestEntryCount, useSrdManifest } from './useSrdManifest';
 
 const FORMAT_LABELS: Record<NonNullable<LibrarySource['format']>, string> = {
   text: 'Plain text',
@@ -18,6 +19,7 @@ const FORMAT_LABELS: Record<NonNullable<LibrarySource['format']>, string> = {
 
 export function MyLibraryTab() {
   const sources = useLibrarySources();
+  const manifest = useSrdManifest();
   const [importOpen, setImportOpen] = useState(false);
   const [importKey, setImportKey] = useState(0);
   const [toDelete, setToDelete] = useState<LibrarySource | null>(null);
@@ -58,7 +60,7 @@ export function MyLibraryTab() {
         </div>
       ) : (
         <ul aria-label="Library sources" className="flex flex-col gap-3">
-          <SrdRow entryCount={srd?.entryCount} />
+          <SrdRow entryCount={srd?.entryCount || manifestEntryCount(manifest)} />
           {imports.map((source) => (
             <SourceRow
               key={source.id}
@@ -139,7 +141,7 @@ function SourceRow({
         <div className="min-w-0">
           <p className="font-medium [overflow-wrap:anywhere]">{source.title}</p>
           <p className="mt-0.5 text-xs text-muted">{meta.join(' · ')}</p>
-          {source.notes && <p className="mt-1 text-xs text-faint [overflow-wrap:anywhere]">{source.notes}</p>}
+          {source.notes && <p className="mt-1 text-xs text-muted [overflow-wrap:anywhere]">{source.notes}</p>}
         </div>
       </div>
       <div className="flex items-center gap-3 sm:shrink-0">

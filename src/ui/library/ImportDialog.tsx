@@ -67,8 +67,14 @@ function progressText(p: ImportProgress): string {
 const METHOD_OPTIONS = [
   { value: 'paste' as const, label: <><ClipboardType className="size-4" aria-hidden />Paste text</> },
   { value: 'file' as const, label: <><FileUp className="size-4" aria-hidden />Upload a file</> },
-  { value: 'photos' as const, label: <><Camera className="size-4" aria-hidden />Photos of pages</> },
+  { value: 'photos' as const, label: <><Camera className="size-4" aria-hidden />Photos</> },
 ];
+
+const METHOD_HINTS: Record<Method, string> = {
+  paste: 'Copy text from a digital book or your own notes.',
+  file: 'A PDF with selectable text, or a Markdown, text or JSON file.',
+  photos: 'Photograph printed pages; Claude transcribes them.',
+};
 
 const PASTE_FORMATS = [
   { value: 'markdown' as const, label: 'Markdown' },
@@ -146,9 +152,10 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
     if (picked.length > 0 && !title.trim()) setTitle('Photographed pages');
   };
 
-  const pricing = (MODELS.find((m) => m.id === model) ?? MODELS[0]).pricing;
-  const perPage = (PHOTO_TOKENS.input * pricing.input + PHOTO_TOKENS.output * pricing.output) / 1_000_000;
-  const modelLabel = (MODELS.find((m) => m.id === model) ?? MODELS[0]).label;
+  // The importer transcribes with the model chosen in Settings.
+  const modelInfo = MODELS.find((m) => m.id === model) ?? MODELS[0];
+  const perPage =
+    (PHOTO_TOKENS.input * modelInfo.pricing.input + PHOTO_TOKENS.output * modelInfo.pricing.output) / 1_000_000;
 
   return (
     <Dialog
@@ -204,6 +211,8 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
 
           <SegmentedField
             legend="What are you importing?"
+            hint={METHOD_HINTS[method]}
+            stretch
             value={method}
             options={METHOD_OPTIONS}
             onChange={(m) => {
@@ -282,7 +291,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
               {apiKey.trim() ? (
                 <Note>
                   Photos are sent to Anthropic with your API key so Claude can transcribe them: roughly{' '}
-                  {formatUsd(perPage)} per page with {modelLabel}
+                  {formatUsd(perPage)} per page with {modelInfo.label}
                   {photos.length > 1 ? `, about ${formatUsd(perPage * photos.length)} for these ${photos.length}` : ''}.
                   Dense pages cost more.
                 </Note>
@@ -381,7 +390,7 @@ function SelectedFile({ name, size, onRemove }: { name: string; size: number; on
   return (
     <li className="flex items-center gap-2 rounded-lg border border-border bg-surface px-3 py-1.5 text-sm">
       <span className="min-w-0 flex-1 truncate">{name}</span>
-      <span className="shrink-0 text-xs text-faint">{formatBytes(size)}</span>
+      <span className="shrink-0 text-xs text-muted">{formatBytes(size)}</span>
       <IconButton label={`Remove ${name}`} size="sm" onClick={onRemove}>
         <Trash2 className="size-4" aria-hidden />
       </IconButton>

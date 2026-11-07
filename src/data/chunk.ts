@@ -132,7 +132,7 @@ const ATX_HEADING = /^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/;
 const FENCE = /^ {0,3}(```|~~~)/;
 
 function normalize(text: string): string {
-  return text.replace(/^﻿/, '').replace(/\r\n?/g, '\n').replace(/\t/g, '    ');
+  return text.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n').replace(/\t/g, '    ');
 }
 
 /** Parse ATX and setext headings into a tree (root level 0 holds text before the first heading). */

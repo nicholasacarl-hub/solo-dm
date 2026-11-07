@@ -540,7 +540,7 @@ function validateSpells(draft: BuilderDraft, ctx: BuilderContext): string[] {
     const cantripIds = new Set(spellsForClass(ctx.spells, list, 0).map((s) => s.id));
     const levelOneIds = new Set(spellsForClass(ctx.spells, list, 1).map((s) => s.id));
     const label = `Magic Initiate (${list})`;
-    if (!choice || !MENTAL_ABILITIES.includes(choice.ability)) {
+    if (!choice?.ability || !MENTAL_ABILITIES.includes(choice.ability)) {
       errors.push(`${label}: choose Intelligence, Wisdom or Charisma as its spellcasting ability.`);
     }
     const cantrips = (choice?.cantrips ?? []).filter((id) => cantripIds.has(id));

@@ -202,7 +202,7 @@ class IdRegistry {
 
 export function normalizeMarkdown(src) {
   const lines = src
-    .replace(/^﻿/, '')
+    .replace(/^\uFEFF/, '')
     .replace(/\r\n?/g, '\n')
     .split('\n')
     .map((l) => l.replace(/[ \t]+$/, ''));
@@ -355,13 +355,6 @@ const crToNumber = (cr) => (cr.includes('/') ? Number(cr.split('/')[0]) / Number
 
 export function proficiencyBonusForCr(cr) {
   return cr < 5 ? 2 : Math.min(9, 2 + Math.ceil((cr - 4) / 4));
-}
-
-function firstSentence(text, max = 160) {
-  const plain = text.replace(/\s+/g, ' ').trim();
-  const m = /^(.+?[.!?])(\s|$)/.exec(plain);
-  const s = m ? m[1] : plain;
-  return s.length <= max ? s : `${s.slice(0, max - 1).replace(/\s+\S*$/, '')}…`;
 }
 
 // ---------------------------------------------------------------------------
@@ -1156,7 +1149,18 @@ function buildEquipment(ctx) {
       name: w.name,
       summary: `${label} · ${w.damageText}${w.properties.length ? ` · ${w.properties.join(', ')}` : ''}`,
       text,
-      data: { category: 'weapon', weaponCategory: w.weaponCategory, weaponType: w.weaponType, damage: w.damage, damageType: w.damageType, properties: w.properties, mastery: w.mastery, range, costGp, weight },
+      data: {
+        category: 'weapon',
+        weaponCategory: w.weaponCategory,
+        weaponType: w.weaponType,
+        damage: w.damage,
+        damageType: w.damageType,
+        properties: w.properties,
+        mastery: w.mastery,
+        range,
+        costGp,
+        weight,
+      },
     });
   }
   crossCheckWeapons(report, options.map((o) => o.option), o5);
@@ -1181,7 +1185,16 @@ function buildEquipment(ctx) {
       name: a.name,
       summary: a.armorType ? `${label} · AC ${a.acText}` : 'Shield · +2 AC',
       text,
-      data: { category: a.armorType ? 'armor' : 'shield', armorType: a.armorType, armorClass: a.armorClass, dexCap: a.dexCap, strengthRequirement: a.strengthRequirement, stealthDisadvantage: a.stealthDisadvantage, costGp, weight },
+      data: {
+        category: a.armorType ? 'armor' : 'shield',
+        armorType: a.armorType,
+        armorClass: a.armorClass,
+        dexCap: a.dexCap,
+        strengthRequirement: a.strengthRequirement,
+        stealthDisadvantage: a.stealthDisadvantage,
+        costGp,
+        weight,
+      },
     });
   }
   crossCheckArmor(report, options.map((o) => o.option), o5);
@@ -1208,7 +1221,14 @@ function buildEquipment(ctx) {
       option(title, { name: title, category: 'gear', description });
       for (const r of variantTable.rows) {
         const variant = titleCase(r[0].replace(/\s*\([^)]*\)$/, ''));
-        option(title, { name: `${title} (${variant})`, category: 'gear', costGp: parseCostGp(r[2]), weight: parseWeightLb(r[1]), description: `${title}: ${r[0]}. ${description ?? ''}`.trim() }, variant);
+        const variantOption = {
+          name: `${title} (${variant})`,
+          category: 'gear',
+          costGp: parseCostGp(r[2]),
+          weight: parseWeightLb(r[1]),
+          description: `${title}: ${r[0]}. ${description ?? ''}`.trim(),
+        };
+        option(title, variantOption, variant);
       }
     } else if (title === 'Ammunition') {
       for (const r of tables[0]?.rows ?? []) {
@@ -1239,7 +1259,14 @@ function buildEquipment(ctx) {
   for (const r of gearTable.rows) {
     const scroll = /^Spell Scroll \((.+)\)$/.exec(r[0]);
     if (scroll) {
-      option('Spell Scroll', { name: r[0], category: 'gear', costGp: parseCostGp(r[2]), weight: parseWeightLb(r[1]), description: 'A magic item bearing one spell. See "Spell Scroll" in "Magic Items".' }, scroll[1]);
+      const scrollOption = {
+        name: r[0],
+        category: 'gear',
+        costGp: parseCostGp(r[2]),
+        weight: parseWeightLb(r[1]),
+        description: 'A magic item bearing one spell. See "Spell Scroll" in "Magic Items".',
+      };
+      option('Spell Scroll', scrollOption, scroll[1]);
       described.add(compactKey(r[0]));
     }
   }
@@ -1445,7 +1472,12 @@ const normalizeCell = (v) => {
   return s === '' || s === '—' || s === '-' ? '—' : s.replace(/^\+/, '').replace(/^(\d+)(?:st|nd|rd|th)$/, '$1').toLowerCase();
 };
 
-/** Level table: Open5e ClassFeatureItem cells, with gaps filled from (and checked against) the Markdown table. */
+/**
+ * Level table from Open5e's ClassFeatureItem cells and the class's Markdown table. Every cell is
+ * cross-checked; the Markdown (the faithful SRD text) fills Open5e's gaps (Druid Wild Shape, Monk
+ * Unarmored Movement) and wins on conflicts. Keys: level, proficiencyBonus, features, then the
+ * class columns in table order (rages, cantrips, preparedSpells, slot1..slot9, pactSlots...).
+ */
 function buildLevelTable(className, classPk, featuresNode, ctx) {
   const { o5, report } = ctx;
   const table = parseTables(bodyOf(featuresNode))[0];
@@ -1462,27 +1494,20 @@ function buildLevelTable(className, classPk, featuresNode, ctx) {
     open5e.set(open5eColumnKey(f), byLevel);
   }
   const keys = [...mdKeys.filter((k) => k !== 'level'), ...[...open5e.keys()].filter((k) => !mdKeys.includes(k))];
-  const filled = [];
   const raw = [];
   for (let level = 1; level <= 20; level++) {
     const md = mdRows.get(level);
     if (!md) throw new Error(`${className}: level ${level} missing from the class table`);
     const row = { level };
     for (const key of keys) {
-      const theirs = open5e.get(key)?.get(level);
+      const cell = open5e.get(key)?.get(level);
+      const theirs = cell === undefined || cell === null ? undefined : String(cell);
       const mine = md[key];
-      if (mine !== undefined && theirs !== undefined && theirs !== null && normalizeCell(mine) !== normalizeCell(theirs)) {
+      if (mine !== undefined && theirs !== undefined && normalizeCell(mine) !== normalizeCell(theirs)) {
         report.warn('classes', `${className} level ${level} ${key}: "${mine}" vs Open5e "${theirs}" (kept the Markdown value)`);
       }
-      if (mine === undefined && key !== 'features') {
-        if (theirs === undefined || theirs === null) continue;
-        row[key] = String(theirs);
-      } else {
-        if ((theirs === undefined || theirs === null) && open5e.has(key) && normalizeCell(mine) !== '—') {
-          filled.push(key);
-        }
-        row[key] = mine;
-      }
+      const value = mine ?? theirs;
+      if (value !== undefined) row[key] = value;
     }
     raw.push(row);
   }
@@ -1515,6 +1540,15 @@ function featureSections(node) {
     .map((x) => ({ level: Number(x.m[1]), name: x.m[2], node: x.node }));
 }
 
+/**
+ * A feature definition. `description` is the full feature text (the builder reads choice options
+ * and counts from it); `summary` is its first paragraph(s), at most ~300 characters, for sheets
+ * and prompts.
+ */
+function featureDef(level, name, description) {
+  return compactObject({ level, name, description, summary: firstParagraphs(description, 300) });
+}
+
 /** Features by level, in the class table's order; descriptions are the full feature text. */
 function classFeatures(className, levelTable, sections, report) {
   const byLevelName = new Map(sections.map((s) => [`${s.level}|${compactKey(s.name)}`, s]));
@@ -1529,12 +1563,12 @@ function classFeatures(className, levelTable, sections, report) {
       const section = byLevelName.get(`${row.level}|${base}`) ?? byNameOnly.get(base);
       if (!section) report.warn('classes', `${className}: no description for "${name}" (level ${row.level})`);
       else used.add(section);
-      features.push({ level: row.level, name, description: section ? renderSubtree(section.node) : '' });
+      features.push(featureDef(row.level, name, section ? renderSubtree(section.node) : ''));
     }
   }
   for (const s of sections.filter((x) => !used.has(x))) {
     report.warn('classes', `${className}: "${s.name}" (level ${s.level}) is not in the class table; added`);
-    features.push({ level: s.level, name: s.name, description: renderSubtree(s.node) });
+    features.push(featureDef(s.level, s.name, renderSubtree(s.node)));
   }
   return features.sort((a, b) => a.level - b.level);
 }
@@ -1635,7 +1669,7 @@ function buildClasses(ctx, known) {
         id,
         name,
         summary: tagline,
-        features: sections.map((s) => ({ level: s.level, name: s.name, description: renderSubtree(s.node) })),
+        features: sections.map((s) => featureDef(s.level, s.name, renderSubtree(s.node))),
       };
     });
     for (const s of featureSections(featuresNode)) {
@@ -1651,7 +1685,8 @@ function buildClasses(ctx, known) {
     if (md.files.has(spellList)) {
       rules.push(...docRuleSections(md, spellList, 'Classes', { ancestors: ['Classes', className], maxChars: Infinity }).map((s) => ruleEntry(s, ids)));
     }
-    const summary = `${primaryAbilities.map((a) => ABILITY_FULL[a]).join(primaryAbilities.length > 1 && /\bor\b/.test(traits.get('Primary Ability')) ? ' or ' : ' and ')} · d${hitDie} Hit Die · ${CASTER_LABELS[casterType]}`;
+    const joiner = /\bor\b/.test(traits.get('Primary Ability') ?? '') ? ' or ' : ' and ';
+    const summary = `${primaryAbilities.map((a) => ABILITY_FULL[a]).join(joiner)} · d${hitDie} Hit Die · ${CASTER_LABELS[casterType]}`;
     const option = {
       id: classId,
       name: className,
@@ -2099,7 +2134,8 @@ async function main() {
   console.log(`  compendium entries: ${compendium.length}`);
   for (const [kind, n] of Object.entries(counts)) console.log(`    ${kind.padEnd(11)} ${String(n).padStart(5)}`);
   console.log(
-    `  builder: ${builder.classes.length} classes, ${builder.species.length} species, ${builder.backgrounds.length} backgrounds, ${builder.feats.length} feats, ${builder.equipment.length} equipment options`,
+    `  builder: ${builder.classes.length} classes, ${builder.species.length} species, ${builder.backgrounds.length} backgrounds, ` +
+      `${builder.feats.length} feats, ${builder.equipment.length} equipment options`,
   );
   for (const [file, bytes] of Object.entries(sizes)) console.log(`  ${file.padEnd(16)} ${(bytes / 1024).toFixed(0).padStart(6)} KiB`);
   for (const note of notes) console.log(`  note: ${note}`);

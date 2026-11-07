@@ -16,7 +16,7 @@ import {
 } from '@/engine';
 import { cn } from '@/lib/cn';
 import type { Character } from '@/types';
-import { Badge, Button, Input } from '@/ui/components/ui';
+import { Badge, Button } from '@/ui/components/ui';
 import {
   concentrationChange,
   damageChange,
@@ -75,32 +75,36 @@ function HpBlock({ character: c, editable, onEdit }: Omit<VitalsProps, 'onRoll'>
         {c.hp.temp > 0 && <div className="h-full bg-info" style={{ width: `${(c.hp.temp / total) * 100}%` }} />}
       </div>
       {editable && (
-        <form onSubmit={onSubmit} className="flex items-center gap-1.5">
+        <form onSubmit={onSubmit} className="flex flex-wrap items-center gap-1.5">
           <label htmlFor={inputId} className="sr-only">
             Amount of damage or healing
           </label>
-          <Input
+          <input
             id={inputId}
             type="number"
             inputMode="numeric"
             min={0}
-            placeholder="Amount"
+            placeholder="HP"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="h-8 w-20 shrink-0 px-2 tabular-nums"
+            className={cn(
+              'h-8 w-16 shrink-0 rounded-lg border border-border bg-surface px-2 text-center text-sm tabular-nums',
+              'placeholder:text-faint focus:border-accent focus:outline-none',
+              '[-moz-appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none',
+            )}
           />
-          <Button size="sm" variant="danger" disabled={!valid} onClick={() => apply(damageChange)} icon={<Swords className="size-3.5" aria-hidden />}>
+          <Button size="sm" variant="danger" disabled={!valid} onClick={() => apply(damageChange)} icon={<Swords className="size-3.5 @max-sm:hidden" aria-hidden />}>
             Damage
           </Button>
-          <Button
-            size="sm"
+          <button
+            type="button"
             disabled={!valid}
             onClick={() => apply(healChange)}
-            className="bg-success text-white hover:opacity-90"
-            icon={<HeartPulse className="size-3.5" aria-hidden />}
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-success px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
+            <HeartPulse className="size-3.5 @max-sm:hidden" aria-hidden />
             Heal
-          </Button>
+          </button>
           <Button size="sm" variant="ghost" disabled={!valid} onClick={() => apply(tempHpChange)} title="Set temporary hit points">
             Temp
           </Button>

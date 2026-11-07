@@ -31,7 +31,8 @@ function entriesOf(json: unknown): unknown[] {
 }
 
 function describeIssue(index: number, raw: unknown, error: z.ZodError): string {
-  const name = raw && typeof raw === 'object' && typeof (raw as { name?: unknown }).name === 'string' ? ` ("${(raw as { name: string }).name}")` : '';
+  const rawName = raw && typeof raw === 'object' ? (raw as { name?: unknown }).name : undefined;
+  const name = typeof rawName === 'string' && rawName.trim() ? ` ("${rawName.trim()}")` : '';
   const issue = error.issues[0];
   const field = issue?.path.length ? `${issue.path.join('.')}: ` : '';
   return `Entry ${index + 1}${name}: ${field}${issue?.message ?? 'invalid'}`;
@@ -48,7 +49,7 @@ export function parseJsonImport(input: string | unknown, opts: { sourceId: strin
     try {
       json = JSON.parse(input);
     } catch (err) {
-      throw new Error(`That isn't valid JSON (${err instanceof Error ? err.message : 'parse error'}).`);
+      throw new Error(`That isn't valid JSON (${err instanceof Error ? err.message : 'parse error'}).`, { cause: err });
     }
   }
   const raw = entriesOf(json);

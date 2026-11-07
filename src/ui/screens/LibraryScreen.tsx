@@ -14,8 +14,8 @@ import { Page, PageHeader, useDocumentTitle } from '@/ui/shell/Page';
 
 export type LibraryTab = 'browse' | 'mine' | 'homebrew' | 'about';
 
-const TABS: { value: LibraryTab; label: string; icon: typeof BookOpen }[] = [
-  { value: 'browse', label: 'Browse rules', icon: BookOpen },
+const TABS: { value: LibraryTab; label: string; short?: string; icon: typeof BookOpen }[] = [
+  { value: 'browse', label: 'Browse rules', short: 'Browse', icon: BookOpen },
   { value: 'mine', label: 'My library', icon: Library },
   { value: 'homebrew', label: 'Homebrew', icon: FlaskConical },
   { value: 'about', label: 'About', icon: Info },
@@ -52,7 +52,18 @@ export function LibraryScreen() {
         value={tab}
         onChange={selectTab}
         className="mb-6"
-        tabs={TABS.map((t) => ({ value: t.value, label: t.label, icon: <t.icon className="hidden size-4 sm:block" aria-hidden /> }))}
+        tabs={TABS.map((t) => ({
+          value: t.value,
+          label: t.short ? (
+            <>
+              <span className="sm:hidden">{t.short}</span>
+              <span className="hidden sm:inline">{t.label}</span>
+            </>
+          ) : (
+            t.label
+          ),
+          icon: <t.icon className="hidden size-4 sm:block" aria-hidden />,
+        }))}
       />
       <div role="tabpanel" aria-label={current.label}>
         <ErrorBoundary label={current.label} resetKeys={[tab]}>
