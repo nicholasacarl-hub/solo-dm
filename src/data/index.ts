@@ -47,6 +47,7 @@ export interface SearchHit {
 
 export interface RulesIndex {
   search(query: string, opts?: SearchOptions): SearchHit[];
+  /** Variant ids of the form "srd:item:<base>:<variant>" resolve to the base entry. */
   get(id: string): CompendiumEntry | undefined;
   /** Exact-ish name lookup (case/punctuation-insensitive), preferring homebrew > imports > SRD. */
   findByName(name: string, opts?: { kind?: ContentKind; campaignId?: string | null }): CompendiumEntry | undefined;

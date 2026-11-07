@@ -154,10 +154,11 @@ describe('LevelUpDialog', () => {
   it('shows multiclass prerequisites', async () => {
     const user = userEvent.setup();
     render(<LevelUpDialog open onClose={() => undefined} />);
-    await user.click(screen.getByRole('radio', { name: /Fighter 1/ }));
+    const multiclass = screen.getByLabelText('Or multiclass into');
+    await user.selectOptions(multiclass, 'Fighter (d10)');
     expect(screen.getByText(/Fighter needs Strength or Dexterity 13\+/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Level up' })).toBeEnabled();
-    await user.click(screen.getByRole('radio', { name: /Cleric 1/ }));
+    await user.selectOptions(multiclass, 'Cleric (d8)');
     expect(screen.getByRole('button', { name: 'Level up' })).toBeDisabled();
     await user.click(screen.getByLabelText('My DM allows it anyway'));
     expect(screen.getByRole('button', { name: 'Level up' })).toBeEnabled();

@@ -101,14 +101,23 @@ interface Failure {
   logIds: string[];
 }
 
+/** Don't hold up a new session for long if the rules index is slow to build. */
+const SOURCE_NAMES_TIMEOUT_MS = 5000;
+
 /** Library source display names, for the prompt (only fetched when imports are enabled). */
 async function sourceNames(d: DmDeps, enabled: readonly string[]): Promise<Record<string, string>> {
   if (!enabled.some((id) => id !== SRD_SOURCE_ID)) return {};
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), SOURCE_NAMES_TIMEOUT_MS);
+  });
   try {
-    const index = await Promise.race([d.rulesIndex(), new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000))]);
+    const index = await Promise.race([d.rulesIndex(), timeout]);
     return index ? Object.fromEntries(index.sources().map((s) => [s.id, s.name])) : {};
   } catch {
     return {};
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -320,24 +329,33 @@ export class DmSessionController {
     await this.run(op, op);
   }
 
-  async regenerate(): Promise<void> {
-    if (this.busy) throw new Error(BUSY);
+  /** Why the last DM response can't be regenerated right now, or null when it can. */
+  regenerateProblem(): string | null {
+    if (this.busy) return BUSY;
     const store = this.d.store();
-    const session = store.activeSession;
-    if (!session) throw new Error('There is no session in progress to regenerate.');
+    if (!store.activeSession) return 'There is no session in progress to regenerate.';
     const transcript = store.transcript;
     const start = lastTurnStartIndex(transcript);
     if (start < 0 || !transcript.slice(start + 1).some((m) => m.param.role === 'assistant')) {
-      throw new Error("There's no DM response to regenerate yet.");
+      return "There's no DM response to regenerate yet.";
     }
-    const kind = appRequestKind(transcript[start].param);
-    if (kind === 'session_end') throw new Error("The session recap can't be regenerated.");
+    if (appRequestKind(transcript[start].param) === 'session_end') return "The session recap can't be regenerated.";
     const changing = [...new Set(toolsInLastResponse(transcript).filter((name) => !READ_ONLY_TOOLS.has(name)))];
     if (changing.length > 0) {
-      throw new Error(
-        `Can't regenerate this response: the DM already changed the game in it (${changing.join(', ')}), and those results stand. Continue the story instead.`,
-      );
+      return `Can't regenerate this response: the DM already changed the game in it (${changing.join(', ')}), and those results stand. Continue the story instead.`;
     }
+    return null;
+  }
+
+  async regenerate(): Promise<void> {
+    const problem = this.regenerateProblem();
+    if (problem) throw new Error(problem);
+    const store = this.d.store();
+    const session = store.activeSession;
+    if (!session) return;
+    const transcript = store.transcript;
+    const start = lastTurnStartIndex(transcript);
+    const kind = appRequestKind(transcript[start].param);
     let keep = start;
     while (transcript[keep + 1]?.param.role === 'system') keep++;
     const keepSeq = transcript[keep].seq;

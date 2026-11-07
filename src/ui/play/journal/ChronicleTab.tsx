@@ -17,7 +17,7 @@ export function ChronicleTab() {
 
   if (ended.length === 0) {
     return (
-      <EmptyState icon={<History className="size-7" aria-hidden />} title="No chronicle yet" className="py-8">
+      <EmptyState icon={<History className="size-7" aria-hidden />} title="No chronicle yet" className="py-8!">
         When a session ends, the DM&apos;s recap is kept here.
       </EmptyState>
     );

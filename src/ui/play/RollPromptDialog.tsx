@@ -369,7 +369,7 @@ function RollResultSummary({
       {badges.length > 0 && (
         <div className="flex flex-wrap justify-center gap-1.5">
           {badges.map((b) => (
-            <Badge key={b.label} tone={b.tone === 'neutral' ? 'neutral' : b.tone} className="px-2.5 py-1 text-sm">
+            <Badge key={b.label} tone={b.tone === 'neutral' ? 'neutral' : b.tone} className="px-2.5! py-1! text-sm!">
               {b.label}
             </Badge>
           ))}
@@ -446,7 +446,7 @@ function PhysicalEntry({
               onEdit();
             }}
             aria-describedby={hintId}
-            className="h-12 text-center text-xl font-semibold tabular-nums"
+            className="h-12! text-center text-xl! font-semibold tabular-nums"
           />
         </div>
         <Button type="submit" variant="primary" size="lg">

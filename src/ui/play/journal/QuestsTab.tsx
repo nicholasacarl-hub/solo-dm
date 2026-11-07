@@ -38,7 +38,7 @@ export function QuestsTab() {
   const quests = useGame((s) => s.quests);
   if (quests.length === 0) {
     return (
-      <EmptyState icon={<ScrollText className="size-7" aria-hidden />} title="No quests yet" className="py-8">
+      <EmptyState icon={<ScrollText className="size-7" aria-hidden />} title="No quests yet" className="py-8!">
         Leads and goals appear here as the DM records them.
       </EmptyState>
     );

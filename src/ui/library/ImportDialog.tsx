@@ -254,7 +254,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
           {method === 'file' && (
             <FilePicker
               label="File"
-              hint="PDF with selectable text, Markdown (.md), plain text (.txt) or JSON."
+              hint="One file per import. Scanned PDFs without selectable text work better as photos."
               accept=".pdf,.md,.markdown,.txt,.json,application/pdf,text/markdown,text/plain,application/json"
               onPick={(files) => chooseFile(files[0] ?? null)}
             >

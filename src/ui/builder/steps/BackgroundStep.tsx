@@ -18,6 +18,7 @@ export function BackgroundStep({ draft, setDraft, ctx, onDmDecide }: StepProps) 
       />
       <RadioCards
         label="Background"
+        collapsible
         value={draft.backgroundId}
         onChange={(id) => setDraft((d) => selectBackground(d, id))}
         options={data.backgrounds.map((b) => ({

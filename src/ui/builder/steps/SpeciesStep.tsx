@@ -36,6 +36,7 @@ export function SpeciesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
       />
       <RadioCards
         label="Species"
+        collapsible
         value={draft.speciesId}
         onChange={(id) => setDraft((d) => selectSpecies(d, id))}
         columns="sm:grid-cols-2 xl:grid-cols-3"

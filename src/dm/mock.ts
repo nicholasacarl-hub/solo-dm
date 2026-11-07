@@ -231,7 +231,11 @@ function combatStart(ctx: MockContext): Reply {
   switch (prev.name) {
     case 'start_combat':
       if (!ctx.store.combat?.active) return say('The figure thinks better of it and vanishes into the rain.', ['Follow them', 'Stay inside']);
-      return call(ctx, null, { name: 'roll_dice', input: { expression: '1d20+3', purpose: `${ENEMY} attacks ${ctx.heroName}`, dc: heroAc, is_attack: true } });
+      // Striking from hiding: the ambusher has Advantage.
+      return call(ctx, null, {
+        name: 'roll_dice',
+        input: { expression: '1d20+3', purpose: `${ENEMY} attacks ${ctx.heroName}`, dc: heroAc, is_attack: true, advantage: 'advantage' },
+      });
     case 'roll_dice': {
       if (String(inputField(prev, 'purpose') ?? '').includes('attacks')) {
         const hit = lastRoll(ctx, 'dm', 'attacks')?.roll.success ?? false;

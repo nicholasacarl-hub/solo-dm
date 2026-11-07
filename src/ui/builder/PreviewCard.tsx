@@ -87,8 +87,8 @@ export function PreviewCard({ built, stats, className }: { built: Character | nu
               <Swords className="size-3.5 shrink-0 text-faint" aria-hidden />
               <span className="min-w-0 flex-1 truncate">{a.name}</span>
               <span className="font-semibold tabular-nums">{formatModifier(a.bonus)}</span>
-              <span className="w-24 truncate text-right text-muted tabular-nums">
-                {a.damage} {a.damageType}
+              <span className="text-right text-muted tabular-nums" title={`${a.damage} ${a.damageType}`}>
+                {a.damage}
               </span>
             </li>
           ))}

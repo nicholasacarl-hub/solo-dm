@@ -12,7 +12,8 @@ import { cn } from '@/lib/cn';
 import { useGame } from '@/state/gameStore';
 import { ABILITY_NAMES, type Ability, type Character, type ClassFeatureDef, type ClassLevel, type ClassOption, type Feature } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
-import { Badge, Button, Dialog, EmptyState, Input, Segmented, Spinner } from '@/ui/components/ui';
+import { Badge, Button, Dialog, EmptyState, Input, Segmented, Select, Spinner } from '@/ui/components/ui';
+import { RadioCards } from '@/ui/builder/BuilderParts';
 import { featuresAtLevel, subclassFeaturesAtLevel } from '@/ui/builder/classFeatures';
 import { inferFeatureUses } from '@/ui/builder/featureUses';
 import { useSheetEdit } from './useSheetActions';
@@ -170,6 +171,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<LevelUpResult | null>(null);
   const faceId = useId();
+  const multiId = useId();
 
   if (result) return <Summary result={result} onClose={onClose} />;
   if (!character) return <EmptyState title="No character loaded" />;
@@ -239,46 +241,48 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
     if (saved && outcome.result) setResult({ ...outcome.result, character: saved });
   };
 
-  const options: { choice: Choice; label: string; sub: string; disabledReason?: string }[] = [
-    ...character.classes.map((cl, index) => ({
-      choice: { kind: 'existing', index } as Choice,
-      label: `${cl.name} ${cl.level} → ${cl.level + 1}`,
-      sub: cl.subclass ?? `d${cl.hitDie} hit die`,
-    })),
-    ...classes
-      .filter((o) => !character.classes.some((cl) => classOptionFor(cl, classes)?.id === o.id))
-      .map((o) => ({ choice: { kind: 'new', classId: o.id } as Choice, label: `${o.name} 1`, sub: 'Multiclass' })),
-  ];
+  const existingOptions = character.classes.map((cl, index) => ({
+    value: choiceKey({ kind: 'existing', index }),
+    title: `${cl.name} ${cl.level} → ${cl.level + 1}`,
+    meta: <span>{cl.subclass ?? `d${cl.hitDie} hit die`}</span>,
+  }));
+  const multiclassOptions = classes.filter((o) => !character.classes.some((cl) => classOptionFor(cl, classes)?.id === o.id));
+  const selectChoice = (next: Choice) => {
+    setChoice(next);
+    setSubclass('');
+    setAllowAnyway(false);
+  };
 
   return (
     <div className="flex flex-col gap-5">
       {builder.error && <p className="text-sm text-danger">Class data couldn't load ({builder.error}); you can still level your current class.</p>}
       <Section title="Class">
-        <div role="radiogroup" aria-label="Class to gain a level in" className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-          {options.map((o) => {
-            const selected = choiceKey(o.choice) === choiceKey(choice);
-            return (
-              <button
-                key={choiceKey(o.choice)}
-                type="button"
-                role="radio"
-                aria-checked={selected}
-                onClick={() => {
-                  setChoice(o.choice);
-                  setSubclass('');
-                  setAllowAnyway(false);
-                }}
-                className={cn(
-                  'flex flex-col items-start rounded-xl border px-3 py-2 text-left transition-colors',
-                  selected ? 'border-accent bg-accent-soft' : 'border-border hover:bg-surface-2',
-                )}
-              >
-                <span className="font-medium">{o.label}</span>
-                <span className="text-xs text-muted">{o.sub}</span>
-              </button>
-            );
-          })}
-        </div>
+        <RadioCards
+          label="Class to gain a level in"
+          value={choice.kind === 'existing' ? choiceKey(choice) : null}
+          onChange={(key) => selectChoice({ kind: 'existing', index: Number(key.split(':')[1]) })}
+          options={existingOptions}
+        />
+        {multiclassOptions.length > 0 && (
+          <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+            <label htmlFor={multiId} className="text-sm text-muted">
+              Or multiclass into
+            </label>
+            <Select
+              id={multiId}
+              value={choice.kind === 'new' ? choice.classId : ''}
+              onChange={(e) => (e.target.value ? selectChoice({ kind: 'new', classId: e.target.value }) : selectChoice({ kind: 'existing', index: 0 }))}
+              className="h-9 sm:w-64"
+            >
+              <option value="">Choose a new class…</option>
+              {multiclassOptions.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name} (d{o.hitDie})
+                </option>
+              ))}
+            </Select>
+          </div>
+        )}
         {multiclassing && option && (
           <div className="flex flex-col gap-2 rounded-xl border border-border p-3">
             <p className="text-sm font-medium">Multiclassing prerequisites (13+ in each primary ability)</p>
@@ -304,6 +308,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
 
       <Section title="Hit points">
         <Segmented
+          className="self-start"
           value={hpMethod}
           onChange={setHpMethod}
           options={[

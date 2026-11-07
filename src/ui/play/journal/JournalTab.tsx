@@ -38,7 +38,7 @@ export function JournalTab() {
 
   if (journal.length === 0) {
     return (
-      <EmptyState icon={<NotebookPen className="size-7" aria-hidden />} title="The journal is empty" className="py-8">
+      <EmptyState icon={<NotebookPen className="size-7" aria-hidden />} title="The journal is empty" className="py-8!">
         People, places and house rules are recorded here as you meet them.
       </EmptyState>
     );
@@ -60,7 +60,7 @@ export function JournalTab() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Filter the journal"
-          className="h-9 pl-9"
+          className="pl-9"
         />
       </div>
       {KIND_GROUPS.map(({ kind, label }) => {

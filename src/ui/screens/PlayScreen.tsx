@@ -103,7 +103,7 @@ export function PlayScreen() {
 function Opening() {
   return (
     <div className="flex h-dvh flex-col items-center justify-center gap-3 bg-bg text-muted">
-      <Spinner label="Opening the campaign" className="size-6" />
+      <Spinner label="Opening the campaign" className="size-6!" />
       <p className="text-sm">Opening the campaign…</p>
     </div>
   );

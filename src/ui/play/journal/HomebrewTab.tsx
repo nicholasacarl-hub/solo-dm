@@ -17,7 +17,7 @@ export function HomebrewTab() {
 
   if (homebrew.length === 0) {
     return (
-      <EmptyState icon={<FlaskConical className="size-7" aria-hidden />} title="No homebrew yet" className="py-8">
+      <EmptyState icon={<FlaskConical className="size-7" aria-hidden />} title="No homebrew yet" className="py-8!">
         Spells, boons and monsters the DM invents for this campaign are collected here.
       </EmptyState>
     );

@@ -92,6 +92,8 @@ export function ShortRestDialog({ request, onDone, onCancel }: ShortRestDialogPr
   const healedTotal = spent.reduce((n, s) => n + s.healed, 0);
   const projected = hp ? Math.min(hp.max, hp.current + healedTotal) : null;
   const atFull = hp !== null && projected !== null && projected >= hp.max;
+  // What the rest will actually restore (healing can't exceed the HP maximum).
+  const effective = hp && projected !== null ? projected - hp.current : healedTotal;
   const dice = [...new Set(request.hitDice.map((h) => h.die))].sort((a, b) => b - a) as HitDie[];
 
   const record = (die: number, roll: RollResult) => {
@@ -126,7 +128,7 @@ export function ShortRestDialog({ request, onDone, onCancel }: ShortRestDialogPr
             Cancel rest
           </Button>
           <Button variant="primary" icon={<Coffee className="size-4" aria-hidden />} onClick={() => onDone({ spent })}>
-            {spent.length ? `Done — heal ${healedTotal}` : 'Done'}
+            {spent.length ? `Done — +${effective} HP` : 'Done'}
           </Button>
         </>
       }
@@ -196,7 +198,7 @@ export function ShortRestDialog({ request, onDone, onCancel }: ShortRestDialogPr
               ))}
             </ol>
             <p className="text-right text-sm tabular-nums" aria-live="polite">
-              Healed so far: <span className="font-semibold text-success">{healedTotal}</span>
+              Rolled healing: <span className="font-semibold text-success">{healedTotal}</span>
             </p>
           </div>
         )}

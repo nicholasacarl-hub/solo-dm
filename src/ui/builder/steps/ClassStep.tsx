@@ -64,6 +64,7 @@ export function ClassStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
       />
       <RadioCards
         label="Class"
+        collapsible
         value={draft.classId}
         onChange={(id) => setDraft((d) => selectClass(d, id))}
         columns="sm:grid-cols-2 xl:grid-cols-3"

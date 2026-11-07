@@ -56,7 +56,7 @@ export function XCardButton() {
       anchor="parent"
       open={open}
       onOpenChange={setOpen}
-      className="w-80 max-w-full"
+      className="w-80! max-w-full"
       trigger={({ ref, ...props }) => (
         <button
           ref={ref}

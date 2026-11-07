@@ -178,7 +178,7 @@ function MobileMenu({
       placement="bottom-end"
       open={open}
       onOpenChange={setOpen}
-      className="w-[min(20rem,calc(100vw-1.5rem))]"
+      className="w-[min(20rem,calc(100vw-1.5rem))]!"
       trigger={({ ref, ...props }) => (
         <button ref={ref} type="button" {...props} aria-label="Table menu" title="Table menu" className={iconButton}>
           <Ellipsis className="size-5" aria-hidden />
@@ -202,7 +202,7 @@ function MobileMenu({
         <div className="flex flex-col gap-1">
           <Button
             variant="ghost"
-            className="justify-start"
+            className="justify-start!"
             onClick={() => choose('table')}
             icon={<SlidersHorizontal className="size-4" aria-hidden />}
           >
@@ -210,7 +210,7 @@ function MobileMenu({
           </Button>
           <Button
             variant="ghost"
-            className="justify-start"
+            className="justify-start!"
             onClick={() => choose('end')}
             disabled={endDisabled}
             icon={<Flag className="size-4" aria-hidden />}

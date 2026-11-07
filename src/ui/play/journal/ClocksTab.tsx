@@ -24,7 +24,7 @@ export function ClocksTab() {
   if (visible.length === 0) {
     return (
       <div className="flex flex-col gap-3">
-        <EmptyState icon={<Hourglass className="size-7" aria-hidden />} title="No clocks running" className="py-8">
+        <EmptyState icon={<Hourglass className="size-7" aria-hidden />} title="No clocks running" className="py-8!">
           Looming threats and long projects tick here.
         </EmptyState>
         <HiddenNote count={hidden} singular="clock" plural="clocks" />

@@ -72,7 +72,7 @@ function StepNav({
   onSelect: (step: BuilderStep) => void;
 }) {
   return (
-    <nav aria-label="Character creation steps" className="-mx-4 overflow-x-auto px-4 scroll-thin lg:mx-0 lg:px-0">
+    <nav aria-label="Character creation steps" className="-mx-4 min-w-0 overflow-x-auto px-4 scroll-thin lg:mx-0 lg:px-0">
       <ol className="flex gap-1.5 lg:flex-col">
         {steps.map((step, i) => {
           const isCurrent = step === current;
@@ -215,7 +215,7 @@ export function CharacterBuilder({ campaign, data, spells, characterId, onSave }
           </div>
         </aside>
       </div>
-      <div className="sticky bottom-0 z-20 -mx-4 mt-2 border-t border-border bg-bg/95 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:-mx-6 sm:px-6">
+      <div className="sticky bottom-0 z-20 -mx-4 mt-2 border-t border-border bg-bg px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:-mx-6 sm:px-6">
         <div className="flex items-center gap-2">
           <Button variant="ghost" onClick={() => prev && goTo(prev)} disabled={!prev} icon={<ArrowLeft className="size-4" aria-hidden />}>
             Back

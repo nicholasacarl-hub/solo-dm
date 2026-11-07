@@ -43,6 +43,12 @@ export const dm: DmController = {
   isBusy: () => controller.isBusy(),
 };
 
+/** True when dm.regenerate() would be allowed now (the last response changed no game state). */
+export const canRegenerate = (): boolean => controller.regenerateProblem() === null;
+
+/** What the X-card button sends: the DM steers away from the current content without discussion. */
+export const X_CARD_MESSAGE = '[X-card]';
+
 /** Verify an API key with a tiny request. */
 export const testApiKey = async (apiKey: string): Promise<{ ok: true } | { ok: false; error: string }> => {
   const key = apiKey.trim();

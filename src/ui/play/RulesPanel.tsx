@@ -66,24 +66,22 @@ export function RulesPanel({ autoFocus, onAskDm }: { autoFocus?: boolean; onAskD
         <label htmlFor={kindId} className="sr-only">
           Kind
         </label>
-        <Select
-          id={kindId}
-          value={kind}
-          onChange={(e) => setKind(e.target.value as ContentKind | 'all')}
-          className="w-32 shrink-0"
-        >
-          <option value="all">All kinds</option>
-          {CONTENT_KINDS.map((k) => (
-            <option key={k} value={k}>
-              {capitalize(k)}
-            </option>
-          ))}
-        </Select>
+        {/* Width lives on a wrapper: the Select primitive is w-full and cn() doesn't merge conflicts. */}
+        <div className="w-32 shrink-0">
+          <Select id={kindId} value={kind} onChange={(e) => setKind(e.target.value as ContentKind | 'all')}>
+            <option value="all">All kinds</option>
+            {CONTENT_KINDS.map((k) => (
+              <option key={k} value={k}>
+                {capitalize(k)}
+              </option>
+            ))}
+          </Select>
+        </div>
       </form>
 
       {!index ? (
         <div className="flex items-center gap-2 py-6 text-sm text-muted" role="status">
-          <Spinner label="Loading the rules" className="size-4" />
+          <Spinner label="Loading the rules" className="size-4!" />
           Loading the rules…
         </div>
       ) : deferredQuery.length < MIN_QUERY ? (
@@ -103,7 +101,7 @@ export function RulesPanel({ autoFocus, onAskDm }: { autoFocus?: boolean; onAskD
           </div>
         </div>
       ) : hits.length === 0 ? (
-        <EmptyState icon={<BookOpen className="size-7" aria-hidden />} title="No matches" className="py-6">
+        <EmptyState icon={<BookOpen className="size-7" aria-hidden />} title="No matches" className="py-6!">
           Nothing in your rules library matches “{deferredQuery}”.
         </EmptyState>
       ) : (

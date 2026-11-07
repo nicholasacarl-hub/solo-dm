@@ -2,8 +2,8 @@
  * Shared pieces of the character builder: radio cards (WAI-ARIA radio group with arrow keys),
  * toggle chips, the step header with "Let the DM decide", and issue lists.
  */
-import { useRef, type KeyboardEvent, type ReactNode } from 'react';
-import { Check, TriangleAlert, Wand2 } from 'lucide-react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { Check, ChevronsUpDown, TriangleAlert, Wand2 } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { Button } from '@/ui/components/ui';
 
@@ -23,6 +23,7 @@ export function RadioCards<T extends string>({
   onChange,
   columns = 'sm:grid-cols-2',
   variant = 'cards',
+  collapsible = false,
   className,
 }: {
   label: string;
@@ -33,9 +34,13 @@ export function RadioCards<T extends string>({
   columns?: string;
   /** 'pills' = compact inline choices (size, ability, spell list). */
   variant?: 'cards' | 'pills';
+  /** On small screens, show only the chosen card (with a "Change" button) once something is chosen. */
+  collapsible?: boolean;
   className?: string;
 }) {
   const refs = useRef<(HTMLButtonElement | null)[]>([]);
+  const small = useSmallScreen();
+  const [expanded, setExpanded] = useState(false);
   const enabled = options.map((o, i) => (o.disabled ? -1 : i)).filter((i) => i >= 0);
   const selectedIndex = options.findIndex((o) => o.value === value);
   const focusable = selectedIndex >= 0 ? selectedIndex : (enabled[0] ?? -1);
@@ -84,6 +89,41 @@ export function RadioCards<T extends string>({
     );
   }
 
+  const collapsed = collapsible && small && !expanded && selectedIndex >= 0;
+  const choose = (next: T) => {
+    onChange(next);
+    setExpanded(false);
+  };
+
+  if (collapsed) {
+    const o = options[selectedIndex];
+    return (
+      <div className={cn('flex flex-col gap-2', className)}>
+        <div role="radiogroup" aria-label={label}>
+          <button
+            type="button"
+            role="radio"
+            aria-checked
+            onClick={() => setExpanded(true)}
+            className="flex w-full flex-col items-start gap-1 rounded-xl border border-accent bg-accent-soft/60 px-3.5 py-3 text-left shadow-sm"
+          >
+            <span className="flex w-full items-start justify-between gap-2">
+              <span className="font-semibold">{o.title}</span>
+              <span aria-hidden className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-full border border-accent bg-accent text-accent-ink">
+                <Check className="size-3.5" />
+              </span>
+            </span>
+            {o.meta && <span className="flex flex-wrap gap-1 text-xs text-muted">{o.meta}</span>}
+            {o.description && <span className="line-clamp-3 text-sm text-muted">{o.description}</span>}
+          </button>
+        </div>
+        <Button size="sm" variant="ghost" onClick={() => setExpanded(true)} icon={<ChevronsUpDown className="size-4" aria-hidden />} className="self-start">
+          Show all {options.length} options
+        </Button>
+      </div>
+    );
+  }
+
   return (
     <div role="radiogroup" aria-label={label} className={cn('grid grid-cols-1 gap-2', columns, className)}>
       {options.map((o, i) => {
@@ -99,7 +139,7 @@ export function RadioCards<T extends string>({
             aria-checked={selected}
             disabled={o.disabled}
             tabIndex={i === focusable ? 0 : -1}
-            onClick={() => onChange(o.value)}
+            onClick={() => choose(o.value)}
             onKeyDown={(e) => onKeyDown(e, i)}
             className={cn(
               'relative flex flex-col items-start gap-1 rounded-xl border px-3.5 py-3 text-left transition-colors',
@@ -126,6 +166,20 @@ export function RadioCards<T extends string>({
       })}
     </div>
   );
+}
+
+/** True below the `sm` breakpoint (640px). */
+function useSmallScreen(): boolean {
+  const query = '(max-width: 639px)';
+  const [small, setSmall] = useState(() => typeof window !== 'undefined' && Boolean(window.matchMedia?.(query).matches));
+  useEffect(() => {
+    const mql = window.matchMedia?.(query);
+    if (!mql) return;
+    const update = () => setSmall(mql.matches);
+    mql.addEventListener('change', update);
+    return () => mql.removeEventListener('change', update);
+  }, []);
+  return small;
 }
 
 /** A toggle chip (aria-pressed). Disabled chips explain why in `reason`. */

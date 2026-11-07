@@ -44,9 +44,10 @@ describe('ShortRestDialog', () => {
     await user.click(screen.getByRole('button', { name: 'Spend a d6' }));
     await user.click(screen.getByRole('button', { name: 'Spend a d6' }));
     expect(screen.getByText('None left')).toBeInTheDocument();
-    expect(screen.getByText('Healed so far:').textContent).toContain('8');
+    expect(screen.getByText('Rolled healing:').textContent).toContain('8');
 
-    await user.click(screen.getByRole('button', { name: 'Done — heal 8' }));
+    // Mira has 12/17 HP: only 5 of the 8 rolled can be regained.
+    await user.click(screen.getByRole('button', { name: 'Done — +5 HP' }));
     expect(onDone).toHaveBeenCalledTimes(1);
     const { spent } = onDone.mock.calls[0][0];
     expect(spent.map((s: { die: number; healed: number; roll: { expression: string; total: number } }) => [s.die, s.roll.expression, s.roll.total, s.healed])).toEqual([
@@ -61,7 +62,7 @@ describe('ShortRestDialog', () => {
     queueRolls(1);
     render(<ShortRestDialog request={request({ conMod: -2 })} onDone={onDone} onCancel={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'Spend a d6' }));
-    await user.click(screen.getByRole('button', { name: 'Done — heal 1' }));
+    await user.click(screen.getByRole('button', { name: 'Done — +1 HP' }));
     expect(onDone.mock.calls[0][0].spent[0]).toMatchObject({ healed: 1, roll: { total: -1 } });
   });
 
@@ -77,7 +78,7 @@ describe('ShortRestDialog', () => {
     await user.clear(input);
     await user.type(input, '3');
     await user.click(screen.getByRole('button', { name: 'Spend' }));
-    await user.click(screen.getByRole('button', { name: 'Done — heal 4' }));
+    await user.click(screen.getByRole('button', { name: 'Done — +4 HP' }));
     expect(onDone.mock.calls[0][0].spent).toEqual([{ die: 6, healed: 4, roll: expect.objectContaining({ expression: '1d6+1', total: 4 }) }]);
   });
 

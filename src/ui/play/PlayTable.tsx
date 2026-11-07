@@ -42,7 +42,7 @@ function DesktopTable() {
     <div className="grid min-h-0 flex-1 grid-cols-[16rem_minmax(0,1fr)_20rem] xl:grid-cols-[18rem_minmax(0,1fr)_24rem] 2xl:grid-cols-[20rem_minmax(0,1fr)_28rem]">
       <aside
         aria-label="Scene and journal"
-        className="flex min-h-0 flex-col gap-3 overflow-y-auto border-r border-border p-3 scroll-thin xl:gap-4 xl:p-4"
+        className="min-h-0 space-y-3 overflow-y-auto border-r border-border p-3 scroll-thin xl:space-y-4 xl:p-4"
       >
         <PanelBoundary name="scene card">
           <SceneCard />
@@ -56,7 +56,7 @@ function DesktopTable() {
       </main>
       <aside
         aria-label="Character"
-        className="flex min-h-0 flex-col gap-3 overflow-y-auto border-l border-border p-3 scroll-thin xl:gap-4 xl:p-4"
+        className="min-h-0 space-y-3 overflow-y-auto border-l border-border p-3 scroll-thin xl:space-y-4 xl:p-4"
       >
         {combatActive && (
           <PanelBoundary name="combat tracker">

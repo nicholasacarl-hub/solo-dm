@@ -105,7 +105,10 @@ export interface EquipmentPackage {
 export interface ClassFeatureDef {
   level: number;
   name: string;
+  /** Full rules text (the builder reads choice options and counts from it). */
   description: string;
+  /** Short version (≈300 chars) for sheets and the DM prompt. */
+  summary?: string;
 }
 
 export interface SubclassOption {
@@ -196,6 +199,12 @@ export interface EquipmentOption {
   category: 'weapon' | 'armor' | 'shield' | 'gear' | 'tool' | 'pack';
   costGp?: number;
   weight?: number;
+  /** Weapons: 'simple' or 'martial'. */
+  weaponCategory?: 'simple' | 'martial';
+  /** Weapons: 'melee' or 'ranged'. */
+  weaponType?: 'melee' | 'ranged';
+  /** Weapons with range, e.g. "80/320". */
+  range?: string;
   /** Weapons: damage dice and type, e.g. "1d8" / "slashing". */
   damage?: string;
   damageType?: string;
