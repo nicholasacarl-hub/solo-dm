@@ -1,30 +1,18 @@
-import { RotateCcw, TriangleAlert } from 'lucide-react';
-import { dm } from '@/dm';
 import { useGame } from '@/state/gameStore';
-import { Button } from '@/ui/components/ui';
-import { phaseLabel, runDm } from '../dmStatus';
+import { phaseLabel } from '../dmStatus';
 
-/** The slim "The DM is thinking…" bar above the composer; shows failures with Retry. */
+/** The slim "The DM is thinking…" bar above the composer. Failures show as an error card in the log. */
 export function DmActivityBar() {
   const status = useGame((s) => s.dm);
 
   if (status.phase === 'idle') return null;
 
   if (status.phase === 'error') {
+    // The error card in the log already shows the message with Retry; announce it for screen
+    // readers without repeating it on screen.
     return (
-      <div role="alert" className="flex items-center gap-2 rounded-xl bg-danger-soft px-3 py-2 text-sm text-text">
-        <TriangleAlert className="size-4 shrink-0 text-danger" aria-hidden />
-        <span className="min-w-0 flex-1">{status.error || phaseLabel('error', null)}</span>
-        {status.retryable && (
-          <Button
-            size="sm"
-            variant="secondary"
-            icon={<RotateCcw className="size-3.5" aria-hidden />}
-            onClick={() => void runDm(() => dm.retry())}
-          >
-            Retry
-          </Button>
-        )}
+      <div role="alert" className="sr-only">
+        {status.error || phaseLabel('error', null)}
       </div>
     );
   }

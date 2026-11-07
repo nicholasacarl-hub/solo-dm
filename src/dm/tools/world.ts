@@ -76,6 +76,7 @@ export async function updateJournalTool(input: ToolInput<'update_journal'>, ctx:
     await logTool(ctx, 'update_journal', 'journal', `Journal: ${label} ${verb}`, {
       detail: entry.summary,
       secret: entry.secret,
+      refId: entry.id,
     });
     lines.push(`${label} ${verb}${entry.secret ? ' [secret]' : ''}.`);
   }
@@ -133,7 +134,7 @@ export async function updateQuestTool(input: ToolInput<'update_quest'>, ctx: Too
   };
   const saved = await store.upsertQuest(upsert);
   const summary = questSummary(prev, saved, merged.added, merged.completed);
-  await logTool(ctx, 'update_quest', 'quest', summary, { detail: saved.summary || undefined });
+  await logTool(ctx, 'update_quest', 'quest', summary, { detail: saved.summary || undefined, refId: saved.id });
 
   const open = saved.objectives.filter((o) => !o.done).map((o) => o.text);
   return ok(`${summary}. Status: ${saved.status}. Open objectives: ${open.length ? open.join('; ') : 'none'}.`);
@@ -170,6 +171,7 @@ export async function updateClocksTool(input: ToolInput<'update_clocks'>, ctx: T
     const state = saved.resolved ? 'resolved' : justFilled ? 'FILLED' : `${saved.filled}/${saved.segments}`;
     await logTool(ctx, 'update_clocks', 'quest', `Clock: ${saved.name} ${saved.filled}/${saved.segments}${saved.resolved ? ' (resolved)' : justFilled ? ' — filled!' : ''}`, {
       secret: saved.secret,
+      refId: saved.id,
       ...(saved.consequence && !saved.secret ? { detail: `When it fills: ${saved.consequence}` } : {}),
     });
     let line = `${saved.name}: ${state}${prev ? '' : ` (new ${saved.kind} clock, ${plural(saved.segments, 'segment')})`}`;

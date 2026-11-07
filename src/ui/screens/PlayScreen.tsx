@@ -55,7 +55,13 @@ function useBeginOrResume(campaignId: string | null): void {
       if (!(await whenDmIdle(30_000, () => cancelled)) || begunFor.current === campaignId) return;
       // Marked only when the call is made, so a cancelled wait (unmount, reload) can try again.
       begunFor.current = campaignId;
-      await runDm(() => dm.beginOrResume());
+      try {
+        await dm.beginOrResume();
+      } catch (err) {
+        // Let a later render try again (e.g. the campaign was mid-reload), unless we've left.
+        if (begunFor.current === campaignId) begunFor.current = null;
+        if (!cancelled) await runDm(() => Promise.reject(err));
+      }
     })();
     return () => {
       cancelled = true;
@@ -75,20 +81,30 @@ export function PlayScreen() {
     })),
   );
   const [failure, setFailure] = useState<{ id: string; message: string } | null>(null);
+  // The id whose load THIS screen started has finished. The store may already hold the campaign
+  // (the builder leaves it loaded), but the DM must not start until our own reload settles —
+  // otherwise the reload replaces the store's state in the middle of the session's opening.
+  const [readyId, setReadyId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
+    let active = true;
     useGame
       .getState()
       .loadCampaign(id)
+      .then(() => {
+        if (active) setReadyId(id);
+      })
       .catch((err: unknown) => setFailure({ id, message: errorMessage(err) }));
     return () => {
+      active = false;
+      setReadyId(null);
       stopDm();
       useGame.getState().unloadCampaign();
     };
   }, [id]);
 
-  const loaded = Boolean(id) && loadedId === id && !loading;
+  const loaded = Boolean(id) && readyId === id && loadedId === id && !loading;
   useBeginOrResume(loaded && hasCharacter ? (id ?? null) : null);
 
   if (!id) return <Navigate to="/" replace />;

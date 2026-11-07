@@ -28,7 +28,7 @@ export function PlayTable() {
   const isDesktop = useIsDesktop();
   useEffect(() => () => usePlayView.getState().reset(), []);
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-bg text-text">
+    <div className="relative flex h-dvh flex-col overflow-hidden bg-bg text-text">
       <PlayHeader isDesktop={isDesktop} />
       {isDesktop ? <DesktopTable /> : <MobileTable />}
       <InteractionHost />

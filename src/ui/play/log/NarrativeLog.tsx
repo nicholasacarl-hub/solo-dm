@@ -87,7 +87,7 @@ export function NarrativeLog() {
         aria-live="off"
         aria-label="Story so far"
         tabIndex={0}
-        className="min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-thin focus-visible:outline-offset-[-2px]"
+        className="relative min-h-0 flex-1 overflow-y-auto overscroll-contain scroll-thin focus-visible:outline-offset-[-2px]"
       >
         <div ref={contentRef} className="mx-auto w-full max-w-[42rem] px-4 pt-6 pb-8 sm:px-6">
           {hiddenCount > 0 && (

@@ -15,7 +15,8 @@ export interface DmController {
   /**
    * Make sure the loaded campaign has an active session. If none exists, create one (freezing the
    * system prompt) and let the DM open it: session 1 starts the adventure from the premise; later
-   * sessions open with a short "previously…" recap. No-op if a session is active.
+   * sessions open with a short "previously…" recap. If a session is active this does nothing,
+   * unless its opening never got a reply (a reload or navigation interrupted it); then it resumes it.
    */
   beginOrResume(): Promise<void>;
   /** Send the player's words and run the DM until it hands the turn back. */

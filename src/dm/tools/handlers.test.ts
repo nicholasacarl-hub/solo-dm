@@ -47,6 +47,14 @@ describe('roll_dice', () => {
     expect(out.isError).toBeUndefined();
     expect(out.content).toMatch(/Guard Perception: 20 .*DC 15 → success/);
     expect(h.s().log.at(-1)).toMatchObject({ kind: 'roll', actor: 'dm', secret: true, roll: { total: 20, success: true, natural: 17 } });
+    expect(h.s().log.at(-1)).not.toHaveProperty('rollType');
+  });
+
+  it('tags attack rolls so the log can say "vs AC" and Hit/Miss', async () => {
+    fakeDice.queue(12);
+    const h = setup();
+    await h.run('roll_dice', { expression: '1d20+4', purpose: 'Stranger stabs at you', dc: 17, is_attack: true });
+    expect(h.s().log.at(-1)).toMatchObject({ kind: 'roll', rollType: 'attack' });
   });
 
   it('applies the natural-20 rule to attack rolls', async () => {

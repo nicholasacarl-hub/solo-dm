@@ -269,7 +269,10 @@ export class DmSessionController {
   async beginOrResume(): Promise<void> {
     const store = this.d.store();
     if (!store.campaign) throw new Error('No campaign is loaded.');
-    if (store.activeSession || this.busy) return;
+    if (this.busy) return;
+    // An active session needs nothing — unless its opening never got a reply (the page reloaded or
+    // the table closed mid-opening). Other unanswered turns wait for Retry or the player's next words.
+    if (store.activeSession && !this.openingUnanswered()) return;
     const op: Operation = async (signal) => {
       if (this.d.store().activeSession) await this.respondToTranscript(signal);
       else await this.startSession(signal);
@@ -294,6 +297,14 @@ export class DmSessionController {
       },
       (signal) => this.respondToTranscript(signal),
     );
+  }
+
+  /** True when the active session's opening request is still waiting for the DM's first reply. */
+  private openingUnanswered(): boolean {
+    const transcript = this.d.store().transcript;
+    if (!isTurnUnanswered(transcript) || !owesReply(transcript)) return false;
+    const start = lastTurnStartIndex(transcript);
+    return start >= 0 && appRequestKind(transcript[start].param) === 'session_start';
   }
 
   /** Run the DM against the transcript as it stands (retry after a failure or a reload). */

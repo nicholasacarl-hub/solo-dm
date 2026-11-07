@@ -9,6 +9,7 @@ import type {
   D20TestResult,
   GameEvent,
   NewLogEntry,
+  PlayerRollType,
   ToolActivityIcon,
 } from '@/types';
 import type { DmDeps } from '../deps';
@@ -88,17 +89,25 @@ export async function logTool(
   tool: string,
   icon: ToolActivityIcon,
   summary: string,
-  extra: { detail?: string; secret?: boolean } = {},
+  extra: { detail?: string; secret?: boolean; refId?: string } = {},
 ): Promise<void> {
   const entry: NewLogEntry = { kind: 'tool', tool, icon, summary };
   if (extra.detail) entry.detail = extra.detail;
   if (extra.secret) entry.secret = true;
+  if (extra.refId) entry.refId = extra.refId;
   await logEntry(ctx, entry);
 }
 
 export async function logRoll(
   ctx: ToolContext,
-  roll: { actor: 'player' | 'dm'; purpose: string; result: D20TestResult; secret?: boolean; manual?: boolean },
+  roll: {
+    actor: 'player' | 'dm';
+    purpose: string;
+    result: D20TestResult;
+    secret?: boolean;
+    manual?: boolean;
+    rollType?: PlayerRollType;
+  },
 ): Promise<void> {
   const entry: NewLogEntry = {
     kind: 'roll',
@@ -108,6 +117,7 @@ export async function logRoll(
     secret: roll.secret ?? false,
   };
   if (roll.manual) entry.manual = true;
+  if (roll.rollType) entry.rollType = roll.rollType;
   await logEntry(ctx, entry);
 }
 

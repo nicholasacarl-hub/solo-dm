@@ -503,6 +503,9 @@ function validateSpecies(draft: BuilderDraft, data: BuilderData): string[] {
 function validateEquipment(draft: BuilderDraft, data: BuilderData): string[] {
   const { cls, background } = picks(draft, data);
   const errors: string[] = [];
+  // Starting gear comes from the class and background, so the step isn't done before both exist.
+  if (!cls) errors.push('Choose a class first: your starting equipment depends on it.');
+  if (!background) errors.push('Choose a background first: it adds its own equipment.');
   if (cls?.startingEquipment.length && (draft.classEquipment === null || !cls.startingEquipment[draft.classEquipment])) {
     errors.push('Choose your class starting equipment (or the gold).');
   }

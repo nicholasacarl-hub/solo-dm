@@ -41,7 +41,7 @@ export function RollCard({ entry }: { entry: RollLogEntry }) {
 
 function VisibleRoll({ entry }: { entry: RollLogEntry }) {
   const { roll } = entry;
-  const attack = isAttackPurpose(entry.purpose);
+  const attack = entry.rollType ? entry.rollType === 'attack' : isAttackPurpose(entry.purpose);
   const natural = naturalOf(roll);
   const badges = outcomeBadges(roll, attack);
   const tone = primaryTone(badges);

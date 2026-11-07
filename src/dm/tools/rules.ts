@@ -181,6 +181,7 @@ export async function createHomebrewTool(input: ToolInput<'create_homebrew'>, ct
   ctx.deps.invalidateRulesIndex();
   await logTool(ctx, 'create_homebrew', 'homebrew', `Homebrew: ${entry.name} (${entry.kind})`, {
     detail: [entry.summary, entry.text, `**Balance:** ${entry.balanceNotes}`].join('\n\n'),
+    refId: entry.id,
   });
   return ok(
     `Saved homebrew "${entry.name}" to the campaign compendium. The player can read it and may veto it — announce it before it affects a roll.`,
@@ -214,6 +215,7 @@ export async function updateHomebrewTool(input: ToolInput<'update_homebrew'>, ct
   const verb = updated.status === 'retired' && entry.status !== 'retired' ? 'retired' : 'updated';
   await logTool(ctx, 'update_homebrew', 'homebrew', `Homebrew ${verb}: ${updated.name} — ${truncate(input.reason, 80)}`, {
     detail: [updated.summary, updated.text].join('\n\n'),
+    refId: updated.id,
   });
   return ok(`Homebrew "${updated.name}" ${verb}.`);
 }

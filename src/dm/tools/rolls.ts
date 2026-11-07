@@ -175,7 +175,7 @@ export async function performPlayerRoll(ctx: ToolContext, input: PlayerRollReque
 
   const result = withVerdict(request.rollType, rolled.result, request.dc);
   const purpose = request.reason ? `${label} — ${truncate(request.reason, 60)}` : label;
-  await logRoll(ctx, { actor: 'player', purpose, result, manual: rolled.manual });
+  await logRoll(ctx, { actor: 'player', purpose, result, manual: rolled.manual, rollType: request.rollType });
   return { request, label, modifier, result, manual: rolled.manual };
 }
 
@@ -253,7 +253,7 @@ export async function rollDiceTool(input: ToolInput<'roll_dice'>, ctx: ToolConte
   }
   const rollType = input.is_attack ? 'attack' : 'check';
   result = withVerdict(rollType, result, input.dc);
-  await logRoll(ctx, { actor: 'dm', purpose: input.purpose, result, secret: input.secret ?? false });
+  await logRoll(ctx, { actor: 'dm', purpose: input.purpose, result, secret: input.secret ?? false, rollType: input.is_attack ? 'attack' : undefined });
 
   const line = describeRoll(input.purpose, rollType, result);
   const secretNote = input.secret ? ' (secret: hidden from the player)' : '';

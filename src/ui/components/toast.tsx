@@ -26,7 +26,7 @@ const useToasts = create<ToastStore>()((set, get) => ({
   items: [],
   push(tone, message, ms = 4000) {
     const id = ++counter;
-    set({ items: [...get().items, { id, tone, message }].slice(-4) });
+    set({ items: [...get().items, { id, tone, message }].slice(-3) });
     window.setTimeout(() => get().dismiss(id), ms);
   },
   dismiss(id) {
@@ -52,7 +52,7 @@ export function Toaster() {
   return (
     <div
       aria-live="polite"
-      className="pointer-events-none fixed inset-x-0 bottom-4 z-50 flex flex-col items-center gap-2 px-4 sm:bottom-6"
+      className="pointer-events-none fixed inset-x-0 top-16 z-50 flex flex-col items-center gap-2 px-4"
     >
       {items.map((t) => (
         <div

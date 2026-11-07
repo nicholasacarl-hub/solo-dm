@@ -108,7 +108,7 @@ function HomebrewActions({ entry }: { entry: ToolLogEntry }) {
   const homebrew = useGame((s) => s.homebrew);
   const [viewing, setViewing] = useState(false);
   const [vetoed, setVetoed] = useState(false);
-  const match = findHomebrewInText(entry.summary, homebrew);
+  const match = (entry.refId ? homebrew.find((h) => h.id === entry.refId) : undefined) ?? findHomebrewInText(entry.summary, homebrew);
   const name = match?.name ?? homebrewNameFromSummary(entry.summary);
 
   const veto = () => {
