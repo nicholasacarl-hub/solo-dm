@@ -6,8 +6,8 @@ import { fileURLToPath, URL } from 'node:url';
 
 /**
  * Content Security Policy for production builds (the dev server needs inline scripts for HMR).
- * The app only talks to its own origin, Anthropic's API (the player's key) and GitHub's API
- * (optional cloud saves). Untrusted markdown can't load remote images or scripts.
+ * The app only talks to its own origin, Anthropic's API (the player's key), OpenAI's API (optional
+ * illustrations, the player's own key) and GitHub's API (optional cloud saves). Untrusted markdown can't load remote images or scripts.
  */
 const CSP = [
   "default-src 'self'",
@@ -15,7 +15,7 @@ const CSP = [
   "style-src 'self' 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
-  "connect-src 'self' https://api.anthropic.com https://api.github.com",
+  "connect-src 'self' https://api.anthropic.com https://api.github.com https://api.openai.com",
   "worker-src 'self' blob:",
   "manifest-src 'self'",
   "object-src 'none'",

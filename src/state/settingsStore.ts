@@ -43,6 +43,7 @@ function fromStored(stored: Partial<PersistedSettings>, ownKey: string): AppSett
     ...DEFAULT_SETTINGS,
     ...stored,
     githubSync: { ...DEFAULT_SETTINGS.githubSync, ...(stored.githubSync ?? {}) },
+    images: { ...DEFAULT_SETTINGS.images, ...(stored.images ?? {}) },
     apiKey: '',
   };
   merged.apiKey = merged.rememberApiKey ? (stored.apiKey ?? '') : ownKey;

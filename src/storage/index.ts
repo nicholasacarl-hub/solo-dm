@@ -195,3 +195,32 @@ export const acquireCampaignLock: (campaignId: string, opts?: { steal?: boolean 
 export const isCampaignOpenElsewhere: (campaignId: string) => Promise<boolean> = lock.isCampaignOpenElsewhere;
 /** The error for changes refused because the campaign is open at the table in another tab. */
 export const OPEN_ELSEWHERE_ERROR: string = lock.OPEN_ELSEWHERE_ERROR;
+
+// ---------------------------------------------------------------------------
+// Illustrations (CONTRACT — implemented by the images engineer). Stored in their own IndexedDB table;
+// never in exports or GitHub saves. Deleting a campaign deletes its images.
+// ---------------------------------------------------------------------------
+
+export type StoredImageMeta = Omit<import('@/types').StoredImage, 'blob'>;
+
+export const saveImage: (image: import('@/types').StoredImage) => Promise<void> = async () => {
+  throw new Error('storage: saveImage not implemented');
+};
+export const getImage: (id: string) => Promise<import('@/types').StoredImage | undefined> = async () => {
+  throw new Error('storage: getImage not implemented');
+};
+/** Newest first. */
+export const listImages: (campaignId: string) => Promise<StoredImageMeta[]> = async () => {
+  throw new Error('storage: listImages not implemented');
+};
+export const deleteImage: (id: string) => Promise<void> = async () => {
+  throw new Error('storage: deleteImage not implemented');
+};
+/** React hook: live list of a campaign's images (metadata only), newest first. */
+export const useImageList: (campaignId: string | null) => StoredImageMeta[] | undefined = () => {
+  throw new Error('storage: useImageList not implemented');
+};
+/** React hook: an object URL for a stored image (revoked on unmount), or null while loading/missing. */
+export const useImageUrl: (imageId: string | null) => string | null = () => {
+  throw new Error('storage: useImageUrl not implemented');
+};

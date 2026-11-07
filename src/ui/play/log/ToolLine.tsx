@@ -47,6 +47,8 @@ const ICONS: Record<ToolActivityIcon, { Icon: LucideIcon; tone: string }> = {
   homebrew: { Icon: FlaskConical, tone: 'text-arcane' },
   oracle: { Icon: Orbit, tone: 'text-arcane' },
   info: { Icon: Info, tone: 'text-muted' },
+  transform: { Icon: Sparkles, tone: 'text-arcane' },
+  image: { Icon: Info, tone: 'text-muted' },
 };
 
 /** A compact "something changed" line: icon, one-line summary, optional expandable detail. */

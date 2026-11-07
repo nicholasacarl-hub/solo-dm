@@ -97,6 +97,11 @@ export type Difficulty = 'story' | 'standard' | 'hard' | 'brutal';
 export type NarrationLength = 'brief' | 'standard' | 'rich';
 /** auto = the app rolls instantly; prompt = player taps to roll; physical = player types the result of real dice. */
 export type PlayerRollMode = 'auto' | 'prompt' | 'physical';
+/**
+ * off = the hero stays as built; offered = the DM may offer transformations, the player always chooses;
+ * consequences = the player's knowing choices can transform the hero (always with a story path back).
+ */
+export type TransformationsMode = 'off' | 'offered' | 'consequences';
 
 export interface CampaignSettings {
   /** e.g. "Heroic high fantasy", "Grim and gritty", "Lighthearted". */
@@ -123,6 +128,10 @@ export interface CampaignSettings {
   veils: string[];
   /** Anything else the player wants the DM to know. */
   playerNotes?: string;
+  /** Lasting changes to the hero (vampirism, blessings, curses...). Missing = 'offered'. */
+  transformations?: TransformationsMode;
+  /** Visual style for illustrations, e.g. "painterly fantasy, muted palette, dramatic light". */
+  artStyle?: string;
 }
 
 export interface Scene {
@@ -256,6 +265,11 @@ export interface Quest {
   giver?: string;
   reward?: string;
   objectives: QuestObjective[];
+  /**
+   * A goal the player set for themselves (found a guild, take the throne). Not a checklist: progress is
+   * tracked on a progress clock and only advances for what the hero actually earns.
+   */
+  ambition?: boolean;
   /** DM-only notes. */
   secretNotes?: string;
   createdAt: number;
@@ -328,6 +342,8 @@ export interface RollLogEntry extends LogEntryBase {
 }
 
 export type ToolActivityIcon =
+  | 'transform'
+  | 'image'
   | 'hp'
   | 'heal'
   | 'condition'
@@ -384,6 +400,19 @@ export interface ErrorLogEntry extends LogEntryBase {
   retryable: boolean;
 }
 
+export type ImageSubject = 'scene' | 'character' | 'npc' | 'creature' | 'item' | 'battle';
+
+/** An illustration in the story log. The image itself is stored separately (StoredImage). */
+export interface ImageLogEntry extends LogEntryBase {
+  kind: 'image';
+  imageId: string;
+  title: string;
+  subject: ImageSubject;
+  status: 'pending' | 'ready' | 'failed';
+  /** Friendly reason when status is 'failed'. */
+  error?: string;
+}
+
 export type LogEntry =
   | PlayerLogEntry
   | DmLogEntry
@@ -392,7 +421,8 @@ export type LogEntry =
   | SystemLogEntry
   | SessionLogEntry
   | RecapLogEntry
-  | ErrorLogEntry;
+  | ErrorLogEntry
+  | ImageLogEntry;
 
 export type LogEntryKind = LogEntry['kind'];
 
@@ -490,6 +520,7 @@ export type GameEventType =
   | 'level-up'
   | 'rest'
   | 'combat'
+  | 'transformation'
   | 'warning';
 
 export interface GameEvent {

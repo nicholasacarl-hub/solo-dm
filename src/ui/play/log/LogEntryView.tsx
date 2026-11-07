@@ -17,6 +17,7 @@ const SPACING: Record<LogEntryKind, string> = {
   session: 'mt-10 first:mt-0',
   recap: 'mt-6',
   error: 'mt-5',
+  image: 'mt-6',
 };
 
 export interface LogEntryViewProps {

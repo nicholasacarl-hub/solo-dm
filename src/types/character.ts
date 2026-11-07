@@ -220,6 +220,7 @@ export type FeatureSource =
   | 'background'
   | 'feat'
   | 'boon'
+  | 'transformation'
   | 'item'
   | 'homebrew'
   | 'other';
@@ -409,6 +410,8 @@ export interface Character {
   conditionImmunities?: string[];
   /** Extra bonuses to particular skill checks (Thaumaturge, Magician...). */
   skillBonuses?: SkillBonus[];
+  /** Lasting changes the story made to the hero (vampirism, ceremorphosis, a celestial blessing...). */
+  transformations?: Transformation[];
   hp: HitPoints;
   hitDice: HitDiceEntry[];
   deathSaves: DeathSaves;
@@ -427,6 +430,32 @@ export interface Character {
   notes: string;
   /** Emoji or data URL. */
   portrait?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * A lasting, story-driven change to the hero (Baldur's Gate 3 style): accepted as a bargain or
+ * temptation, or imposed as the consequence of choices the player made knowingly (only when the
+ * campaign allows it). Its mechanics live in features (source 'transformation'), defenses, senses and
+ * ability scores on the character; this record tracks the story side and what to undo when it ends.
+ */
+export interface Transformation {
+  id: string;
+  name: string;
+  /** One or two sentences: what the hero is becoming, and what it costs. */
+  summary: string;
+  /** Free-text stage, e.g. "Partial ceremorphosis" or "Stage 2 of 3". */
+  stage?: string;
+  /** 'accepted' = the player chose it; 'imposed' = a consequence of their choices. */
+  origin: 'accepted' | 'imposed';
+  status: 'active' | 'ended';
+  /** How it could end: a cure, a ritual, a price to pay. */
+  howItEnds?: string;
+  /** Ids of the features this transformation added (removed when it ends). */
+  featureIds: string[];
+  startedSession: number;
+  endedSession?: number;
   createdAt: number;
   updatedAt: number;
 }

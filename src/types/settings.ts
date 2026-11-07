@@ -58,6 +58,39 @@ export interface GithubSyncSettings {
   lastSyncedAt: number | null;
 }
 
+export interface ImageModelInfo {
+  id: string;
+  label: string;
+  blurb: string;
+}
+
+/** OpenAI image models offered in Settings (GPT image models always return base64 images). */
+export const IMAGE_MODELS: readonly ImageModelInfo[] = [
+  { id: 'gpt-image-2.5-flare', label: 'GPT Image 2.5 Flare', blurb: 'Fast everyday illustrations. Recommended.' },
+  { id: 'gpt-image-2.6-flare', label: 'GPT Image 2.6 Flare', blurb: 'Newest fast model.' },
+  { id: 'gpt-image-2.5-sunburst', label: 'GPT Image 2.5 Sunburst', blurb: 'Slower, more precise detail.' },
+  { id: 'gpt-image-2.6-sunburst', label: 'GPT Image 2.6 Sunburst', blurb: 'Newest precise model.' },
+  { id: 'gpt-image-1-mini', label: 'GPT Image 1 Mini', blurb: 'Cheapest, simpler images.' },
+];
+
+export type ImageFrequency = 'off' | 'request' | 'moments';
+
+export interface ImageSettings {
+  /** OpenAI API key (platform.openai.com). Stored only in this browser, like the Anthropic key. */
+  openaiApiKey: string;
+  model: string;
+  quality: 'low' | 'medium' | 'high';
+  /** off = never; request = only when the player asks; moments = the DM may illustrate key moments. */
+  frequency: ImageFrequency;
+}
+
+export const DEFAULT_IMAGE_SETTINGS: ImageSettings = {
+  openaiApiKey: '',
+  model: 'gpt-image-2.5-flare',
+  quality: 'medium',
+  frequency: 'request',
+};
+
 export interface AppSettings {
   /** Anthropic API key. Stored only in this browser. */
   apiKey: string;
@@ -79,6 +112,7 @@ export interface AppSettings {
   /** Offline demo DM that makes no API calls (for trying the app without a key). */
   mockMode: boolean;
   githubSync: GithubSyncSettings;
+  images: ImageSettings;
 }
 
 export const DEFAULT_SETTINGS: AppSettings = {
@@ -105,7 +139,23 @@ export const DEFAULT_SETTINGS: AppSettings = {
     path: 'saves',
     lastSyncedAt: null,
   },
+  images: DEFAULT_IMAGE_SETTINGS,
 };
+
+/** An illustration stored in IndexedDB (never in exports or GitHub saves: too large). */
+export interface StoredImage {
+  id: string;
+  campaignId: string;
+  sessionId: string | null;
+  title: string;
+  subject: import('./game').ImageSubject;
+  /** The full prompt sent to the image model. */
+  prompt: string;
+  model: string;
+  mime: string;
+  blob: Blob;
+  createdAt: number;
+}
 
 /** One message of a session's Anthropic API transcript, stored verbatim (append-only). */
 export interface TranscriptMessage {
