@@ -72,7 +72,8 @@ function StepNav({
   onSelect: (step: BuilderStep) => void;
 }) {
   return (
-    <nav aria-label="Character creation steps" className="-mx-4 min-w-0 overflow-x-auto px-4 scroll-thin lg:mx-0 lg:px-0">
+    // `relative` makes the nav the containing block of the sr-only labels, so they scroll with it.
+    <nav aria-label="Character creation steps" className="relative -mx-4 min-w-0 overflow-x-auto px-4 scroll-thin lg:mx-0 lg:px-0">
       <ol className="flex gap-1.5 lg:flex-col">
         {steps.map((step, i) => {
           const isCurrent = step === current;

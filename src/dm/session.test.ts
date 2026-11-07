@@ -16,6 +16,7 @@ import { NOTES } from './agent';
 import { resetDmDeps } from './deps';
 import { DM_INSTRUCTIONS } from './prompts';
 import { makeMessage, textBlock, thinkingBlock, toolUseBlock } from './scripted';
+import { canRegenerate } from './index';
 import { WRAP_UP_REQUEST } from './session';
 import { fakeDice } from './testing/fakeEngine';
 import { answerRolls, setupHarness } from './testing/harness';
@@ -173,6 +174,8 @@ describe('regenerate', () => {
     });
     h.s().queueDmNotice('Settings changed.');
     await h.controller.sendPlayerMessage('Describe my gear.');
+    expect(h.controller.regenerateProblem()).toBeNull();
+    expect(canRegenerate()).toBe(true);
     await h.controller.regenerate();
 
     const s = h.s();
@@ -190,6 +193,7 @@ describe('regenerate', () => {
       steps: [makeMessage([toolUseBlock('toolu_r', 'roll_dice', { expression: '1d20', purpose: 'Luck' })], 'tool_use'), end('Fate decides.')],
     });
     await h.controller.sendPlayerMessage('I trust to luck.');
+    expect(canRegenerate()).toBe(false);
     await expect(h.controller.regenerate()).rejects.toThrow(/already changed the game.*roll_dice/);
     expect(h.client.requests).toHaveLength(2);
   });

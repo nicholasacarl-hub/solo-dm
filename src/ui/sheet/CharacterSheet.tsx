@@ -172,7 +172,7 @@ export function CharacterSheet({ character, variant = 'full', editable = false }
           value={tab}
           onChange={setTab}
           tabs={tabs.map((t) => ({ ...t, label: <span className={cn(t.value !== tab && '@max-sm:sr-only')}>{t.label}</span> }))}
-          className="-mx-1 px-1"
+          className="relative -mx-1 px-1"
         />
         <div role="tabpanel" aria-label={tabs.find((t) => t.value === tab)?.label}>
           {tab === 'overview' && <OverviewPanel character={character} onRoll={onRoll} />}

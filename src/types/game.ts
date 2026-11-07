@@ -296,6 +296,8 @@ export interface DmLogEntry extends LogEntryBase {
 export interface RollLogEntry extends LogEntryBase {
   kind: 'roll';
   actor: 'player' | 'dm';
+  /** What kind of roll this was (attack rolls are compared to AC, checks and saves to a DC). */
+  rollType?: PlayerRollType;
   /** What the roll was for: "Stealth check", "Goblin 2 attack". */
   purpose: string;
   roll: D20TestResult;
@@ -327,6 +329,8 @@ export type ToolActivityIcon =
 export interface ToolLogEntry extends LogEntryBase {
   kind: 'tool';
   tool: string;
+  /** Id of the record this line is about (homebrew, quest, journal entry, clock), when there is one. */
+  refId?: string;
   icon: ToolActivityIcon;
   /** One-line summary such as "HP 23 → 15 (8 piercing)". */
   summary: string;
