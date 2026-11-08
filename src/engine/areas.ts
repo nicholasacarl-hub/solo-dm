@@ -32,6 +32,7 @@ import type {
   MapRef,
 } from '@/types';
 import {
+  clipRect,
   cornerLabel,
   dirVector,
   footprint,
@@ -77,6 +78,9 @@ type Perspective = 'dm' | 'player';
 
 const DEFAULT_LINE_WIDTH_FT = 5;
 const DEFAULT_CYLINDER_HEIGHT_FT = 40;
+/** The tool schemas' limits (size_ft ≤ 500, width_ft ≤ 60), enforced again so stored data can't blow up a loop. */
+const MAX_AREA_FT = 500;
+const MAX_LINE_WIDTH_FT = 60;
 
 // ---------------------------------------------------------------------------
 // Resolving references
@@ -285,7 +289,11 @@ function emanationSquares(space: GridRect, n: number, includeOrigin: boolean): G
 // One area, resolved
 // ---------------------------------------------------------------------------
 
-/** 'levels': a creature's 5-ft levels must meet [lo, hi]; '3d': within sizeFt by the 3D grid count; 'flag': ignore height, flag fliers. */
+/**
+ * The vertical test (D14). 'levels': a creature's 5-ft levels must meet [lo, hi] (spheres, cylinders, cubes);
+ * 'emanation': within sizeFt of its creature by the 3D grid count; 'flag': height is ignored and fliers are flagged
+ * (cones, lines and squares; the DM decides).
+ */
 type Vertical = { kind: 'levels'; lo: number; hi: number } | { kind: 'emanation'; body: Body; sizeFt: number } | { kind: 'flag' };
 
 interface Shape {
@@ -299,6 +307,8 @@ interface Shape {
   target: RefPoint | null;
   /** The area comes out of this creature (cones, lines, cubes from a creature, emanations). */
   source?: Body;
+  /** Squares already known to be off the map and left out of `raw` ('squares' only). */
+  offMap?: number;
 }
 
 const SHAPE_NAMES: Readonly<Record<AreaShape, string>> = {
@@ -316,7 +326,7 @@ function sizeSquaresOf(spec: AreaSpec): number | Problem {
   if (typeof size !== 'number' || !Number.isFinite(size) || size < SQUARE_FT) {
     return { problem: `${SHAPE_NAMES[spec.shape]} needs a size of at least 5 ft.` };
   }
-  return Math.floor(size / SQUARE_FT);
+  return Math.floor(Math.min(size, MAX_AREA_FT) / SQUARE_FT);
 }
 
 function levelOf(elevationFt: number): number {
@@ -362,12 +372,12 @@ function buildShape(state: CombatState, hero: Character | null, spec: AreaSpec, 
       if (!spec.at) return { problem: `${SHAPE_NAMES[spec.shape]} needs "at": its centre (a square, a corner or a creature).` };
       const at = refPoint(state, hero, spec.at, perspective);
       if (isProblem(at)) return at;
-      const radiusFt = spec.sizeFt as number; // checked by sizeSquaresOf
+      const radiusFt = Math.min(spec.sizeFt as number, MAX_AREA_FT); // checked by sizeSquaresOf
       const level = levelOf(baseElevation(spec, from, at));
       let vertical: Vertical;
       if (spec.shape === 'sphere') vertical = { kind: 'levels', lo: level - n, hi: level + n };
       else {
-        const heightFt = spec.heightFt && spec.heightFt > 0 ? spec.heightFt : DEFAULT_CYLINDER_HEIGHT_FT;
+        const heightFt = spec.heightFt && spec.heightFt > 0 ? Math.min(spec.heightFt, MAX_AREA_FT) : DEFAULT_CYLINDER_HEIGHT_FT;
         vertical = { kind: 'levels', lo: level, hi: level + Math.max(1, Math.ceil(heightFt / SQUARE_FT)) - 1 };
       }
       return { raw: roundSquares(at.point, radiusFt), origins: [at.point], coverOrigin: at.point, vertical, target: at };
@@ -383,7 +393,8 @@ function buildShape(state: CombatState, hero: Character | null, spec: AreaSpec, 
       let raw: GridPoint[];
       if (spec.shape === 'cone') raw = coneSquares(a.apex, u, a.space, n, a.skip);
       else {
-        const w = Math.max(1, Math.floor((spec.widthFt ?? DEFAULT_LINE_WIDTH_FT) / SQUARE_FT));
+        const widthFt = typeof spec.widthFt === 'number' && Number.isFinite(spec.widthFt) ? spec.widthFt : DEFAULT_LINE_WIDTH_FT;
+        const w = Math.max(1, Math.floor(Math.min(widthFt, MAX_LINE_WIDTH_FT) / SQUARE_FT));
         raw = lineSquares(a.apex, u, n, w, a.skip);
       }
       if (spec.includeOrigin && a.skip) raw = [...rectPoints(a.skip), ...raw];
@@ -441,10 +452,19 @@ function buildShape(state: CombatState, hero: Character | null, spec: AreaSpec, 
       };
     }
     case 'squares': {
-      const rects = spec.rects ?? [];
+      const rects = (spec.rects ?? []).filter((r) => [r.x0, r.y0, r.x1, r.y1].every((v) => Number.isFinite(v)));
       if (rects.length === 0) return { problem: 'A squares area needs its squares.' };
-      const raw = rects.flatMap((r) => rectPoints({ x0: Math.min(r.x0, r.x1), y0: Math.min(r.y0, r.y1), x1: Math.max(r.x0, r.x1), y1: Math.max(r.y0, r.y1) }));
-      return { raw, origins: [], coverOrigin: null, vertical: { kind: 'flag' }, target: null };
+      const map = state.map as BattleMap;
+      const raw: GridPoint[] = [];
+      let offMap = 0;
+      for (const r of rects) {
+        const whole = { x0: Math.min(r.x0, r.x1), y0: Math.min(r.y0, r.y1), x1: Math.max(r.x0, r.x1), y1: Math.max(r.y0, r.y1) };
+        const on = clipRect(whole, map);
+        const area = (whole.x1 - whole.x0 + 1) * (whole.y1 - whole.y0 + 1);
+        offMap += area - (on ? (on.x1 - on.x0 + 1) * (on.y1 - on.y0 + 1) : 0);
+        if (on) raw.push(...rectPoints(on));
+      }
+      return { raw, origins: [], coverOrigin: null, vertical: { kind: 'flag' }, target: null, offMap };
     }
   }
 }
@@ -487,7 +507,7 @@ function classify(map: BattleMap, cells: MapCells, shape: Shape): SquareSets {
     if (shape.origins.length > 0 && allLinesBlocked(shape.origins, p, total)) shielded.push(p);
     else kept.push(p);
   }
-  return { kept, shielded, offMap };
+  return { kept, shielded, offMap: offMap + (shape.offMap ?? 0) };
 }
 
 /** The square's centre and 4 corners, in doubled coordinates. */

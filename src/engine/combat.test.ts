@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Combatant, CombatState } from '@/types';
-import { sampleCombat } from '@/test/fixtures';
+import { sampleCombat, sampleMappedCombat } from '@/test/fixtures';
 import {
   addCombatant,
   createCombat,
@@ -185,5 +185,76 @@ describe('summarizeCombat', () => {
     expect(player).toContain('Hooded Stranger (enemy) · Init 14 · unhurt');
     expect(player).toContain('Captain Rhea (ally) · Init 9 · AC 16 · HP 10/10');
     expect(player).not.toMatch(/Vampire Spawn|\[Guard\]|AC 15|Thirsty/);
+  });
+});
+
+describe('Reactions come back when a turn starts (SRD 5.2.1 srd:rule:reaction: "until the start of your next turn")', () => {
+  const spent = (state: CombatState, ids: string[]): CombatState => ({
+    ...state,
+    combatants: state.combatants.map((c) => (ids.includes(c.id) ? { ...c, reactionUsed: true } : c)),
+  });
+  const used = (state: CombatState) => state.combatants.filter((c) => c.reactionUsed).map((c) => c.id);
+
+  it('B7: Bandit 1’s turn begins — its Reaction is back, Mira’s stays spent', () => {
+    const before = spent(sampleMappedCombat({ heroTurn: true }), ['c-1', 'c-2']);
+    const after = nextTurn(before);
+    expect(currentCombatant(after)?.id).toBe('c-2');
+    expect(used(after)).toEqual(['c-1']);
+    expect('reactionUsed' in (findCombatant(after, 'c-2') as Combatant)).toBe(false);
+    // Nothing else is copied or changed.
+    expect(after.combatants[0]).toBe(before.combatants[0]);
+    expect(after.map).toBe(before.map);
+  });
+
+  it('a wrap into the next round resets the first creature; skipped defeated creatures keep theirs', () => {
+    const base = spent(sampleCombat(), ['c-1', 'c-2', 'c-4']);
+    const last = { ...base, turnIndex: 3, combatants: base.combatants.map((c) => (c.id === 'c-1' ? { ...c, defeated: true } : c)) };
+    const wrapped = nextTurn(last);
+    expect(wrapped).toMatchObject({ round: 3, turnIndex: 1 });
+    expect(used(wrapped)).toEqual(['c-1', 'c-4']);
+  });
+
+  it('removing the current creature passes the turn — and the reset — to the next one', () => {
+    const state = removeCombatant(spent(sampleCombat(), ['c-2', 'c-3']), 'c-2');
+    expect(currentCombatant(state)?.id).toBe('c-3');
+    expect(used(state)).toEqual([]);
+  });
+
+  it('a creature whose Reaction is unused is left as it is', () => {
+    const before = sampleCombat();
+    expect(nextTurn(before).combatants).toBe(before.combatants);
+  });
+
+  it('createCombat starts everyone with their Reaction', () => {
+    const state = createCombat([npc('a', 'Goblin', 12, { reactionUsed: true }), npc('b', 'Wolf', 9)]);
+    expect(used(state)).toEqual([]);
+  });
+});
+
+describe('summarizeCombat and hidden combatants (D41, D42)', () => {
+  it('B13: the player’s view leaves the Cutthroat out; the DM’s tags it [hidden]', () => {
+    const state = sampleMappedCombat();
+    const player = summarizeCombat(state, { forPlayer: true });
+    expect(player).not.toMatch(/Cutthroat/);
+    expect(player.split('\n')).toEqual([
+      "Combat: Ambush in the warehouse — round 2, Bandit 1's turn",
+      '  1. Mira Voss (you) · Init 17 · AC 12',
+      '→ 2. Bandit 1 (enemy) · Init 14 · bloodied',
+      '  3. Bandit 2 (enemy) · Init 9 · unhurt · Prone',
+      '  4. Old Tam (ally) · Init 5 · AC 11 · HP 9/9',
+      '  5. Dock Ogre (enemy) · Init 3 · unhurt',
+    ]);
+    const dm = summarizeCombat(state);
+    expect(dm).toContain('  3. Cutthroat (enemy) [hidden] · Init 12 · AC 14 · HP 16/16');
+    expect(dm).toContain('  6. Dock Ogre (enemy) [Ogre] · Init 3 · AC 11 · HP 59/59');
+  });
+
+  it('during a hidden creature’s turn the player’s header shows the last visible creature before it', () => {
+    const state = { ...sampleMappedCombat(), turnIndex: 2 }; // the Cutthroat's turn
+    expect(summarizeCombat(state).split('\n')[0]).toBe("Combat: Ambush in the warehouse — round 2, Cutthroat's turn");
+    const player = summarizeCombat(state, { forPlayer: true }).split('\n');
+    expect(player[0]).toBe("Combat: Ambush in the warehouse — round 2, Bandit 1's turn");
+    expect(player[2]).toBe('→ 2. Bandit 1 (enemy) · Init 14 · bloodied');
+    expect(player.join('\n')).not.toMatch(/Cutthroat/);
   });
 });

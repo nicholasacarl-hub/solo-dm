@@ -119,7 +119,7 @@ function coverCore(input: CoverInput): CoverResult {
   const { map, cells, origins, target, own, creatureAt } = input;
   const isOwn = (x: number, y: number) => own.some((r) => inRect(r, x, y));
   const level = (x: number, y: number) => {
-    if (isOwn(x, y)) return 0;
+    if (isOwn(x, y) || x < 0 || y < 0 || x >= cells.width || y >= cells.height) return 0;
     const terrain = coverAt(cells, x, y);
     return Math.max(terrain, creatureAt.has(y * cells.width + x) ? 1 : 0);
   };
@@ -156,14 +156,17 @@ function coverCore(input: CoverInput): CoverResult {
   }
   if (!best || best.degree === 'none') return { ...NO_COVER, byTerrain: [], byCreatureIds: [] };
   const chosen = best;
-  // Name the blockers of the chosen pair.
-  const byTerrain: string[] = [];
+  // Name the blockers of the chosen pair: terrain strongest first (a pillar before crates), then creatures.
+  const terrainNames: { name: string; level: number }[] = [];
   const byCreatureIds: string[] = [];
   const corners = squareCorners(chosen.square.x, chosen.square.y);
   const addSquare = (x: number, y: number, minLevel: number) => {
-    if (coverAt(cells, x, y) >= minLevel) {
+    const level = coverAt(cells, x, y);
+    if (level >= minLevel) {
       const name = coverFeatureName(map, { x, y }, minLevel);
-      if (name && !byTerrain.includes(name)) byTerrain.push(name);
+      const known = terrainNames.find((t) => t.name === name);
+      if (name && !known) terrainNames.push({ name, level });
+      else if (known && level > known.level) known.level = level;
     }
     const id = minLevel <= 1 ? creatureAt.get(y * cells.width + x) : undefined;
     if (id && !byCreatureIds.includes(id)) byCreatureIds.push(id);
@@ -184,6 +187,10 @@ function coverCore(input: CoverInput): CoverResult {
     }
     for (const p of segmentBlockers(chosen.origin, q, blocksAt[l])) addSquare(p.x, p.y, l);
   });
+  const byTerrain = terrainNames
+    .map((t, i) => ({ ...t, i }))
+    .sort((a, b) => b.level - a.level || a.i - b.i)
+    .map((t) => t.name);
   return { degree: chosen.degree, byTerrain, byCreatureIds };
 }
 

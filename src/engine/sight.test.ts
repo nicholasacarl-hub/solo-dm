@@ -147,6 +147,18 @@ describe('cover (SRD 5.2.1 Cover: srd:rule:combat-cover; app convention C21)', (
     expect(coverAgainst(state, hero, 'c-1', 'c-6').degree).toBe('none');
   });
 
+  it('§4.10: the cover Bandit 1 could reach against Mira: Three-Quarters at I3, J3 and K3 by the pillar, Half at H3', () => {
+    const state = sampleMappedCombat();
+    const hero = sampleCharacter();
+    const at = (label: string) => coverAgainst(state, hero, 'c-1', 'c-2', { targetAt: sq(label) });
+    for (const l of ['I3', 'J3', 'K3']) {
+      expect(at(l).degree).toBe('three-quarters');
+      // The pillar (Total Cover terrain) is named before lesser blockers on the same lines.
+      expect(at(l).byTerrain[0]).toBe('pillar');
+    }
+    expect(at('H3').degree).toBe('half');
+  });
+
   it('creatures give at most Half Cover, Tiny and defeated ones none (C7, C21)', () => {
     const wall = scene([], [
       { id: 'a', at: 'A3' },

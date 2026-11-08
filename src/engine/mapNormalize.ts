@@ -328,6 +328,7 @@ function turnMove(value: unknown, dims: Dims, known: ReadonlySet<string>): TurnM
     const set = value[flag];
     if (typeof set === 'boolean') move[flag] = set;
   }
+  if (typeof value.blockedById === 'string' && known.has(value.blockedById)) move.blockedById = value.blockedById;
   const toldSeq = seq(value.toldSeq);
   if (toldSeq !== undefined) move.toldSeq = toldSeq;
   return move;

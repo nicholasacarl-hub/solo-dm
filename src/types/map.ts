@@ -194,6 +194,8 @@ export interface TurnMove {
   entered: string[];
   /** It stopped early on something the hero couldn't see. Never undoable. */
   revealedHidden?: boolean;
+  /** DM-only: the hidden creature whose space stopped it. playerView removes it. */
+  blockedById?: string;
   /** by 'player': transcript seq of the user message that first carried it in <game_state> (D48). */
   toldSeq?: number;
 }

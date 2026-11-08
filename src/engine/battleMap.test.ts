@@ -322,7 +322,10 @@ describe('editMap', () => {
       const r = editMap(state, hero, edit);
       return r.ok ? null : r.problem;
     };
-    expect(problem({ terrainAdd: [{ kind: 'wall', rects: rects('F3:F4') }] })).toBe('Bandit 2 stands at F3: move it before putting a wall there');
+    // Creatures are checked in initiative order: Bandit 1 (F4) before Bandit 2 (F3).
+    expect(problem({ terrainAdd: [{ kind: 'wall', rects: rects('F3:F4') }] })).toBe('Bandit 1 stands at F4: clear that square before putting a wall there');
+    expect(problem({ terrainAdd: [{ kind: 'three-quarters-cover', rects: rects('F3') }] })).toBe('Bandit 2 stands at F3: clear that square before putting three-quarters cover there');
+    expect(problem({ terrainAdd: [{ kind: 'pit', rects: rects('F3') }] })).toBeNull();
     expect(problem({ terrainClear: [{ label: 'barrels' }] })).toMatch(/No terrain is labelled "barrels"\. Labels on this map: office wall, office door, pillar, crates/);
     expect(problem({ placesRemove: ['balcony'] })).toBe('There is no place called "balcony". Places on this map: the loading door, the office.');
     expect(problem({ placesAdd: [{ name: 'The Office', rects: rects('A1') }] })).toBe('There is already a place called "The Office".');
@@ -511,6 +514,11 @@ describe('the player view (D42, D63)', () => {
     });
     expect(playerView(hiddenTurn).map?.turn).toBeUndefined();
     expect(JSON.stringify(playerView(hiddenTurn))).not.toContain('c-5');
+    // A hero move stopped by the hidden Cutthroat keeps its blocker for the DM only.
+    const blocked = withMap(stop, { turn: { ...turn, moves: [{ ...turn.moves[0], revealedHidden: true, blockedById: 'c-5' }] } });
+    expect(blocked.map?.turn?.moves[0].blockedById).toBe('c-5');
+    expect(playerView(blocked).map?.turn?.moves[0]).not.toHaveProperty('blockedById');
+    expect(playerView(blocked).map?.turn?.moves[0].revealedHidden).toBe(true);
   });
 
   it('is the state itself when nothing is hidden; wraps back to the end when the first creature is hidden', () => {
@@ -585,6 +593,31 @@ describe('mapSnapshot (D7, D47)', () => {
     expect(snap?.current).toMatchObject({ id: 'c-1', moves: [{ by: 'player', costFt: 0 }] });
   });
 
+  it('§5.4 facts by C21: who has cover against the hero, and what gives it (checked with spec-proto/engine.py)', () => {
+    const cover = (state: CombatState) =>
+      Object.fromEntries(
+        (mapSnapshot(state, hero, { perspective: 'dm' })?.tokens ?? [])
+          .filter((t) => !t.isHero)
+          .map((t) => [t.name, t.coverFromHero && [t.coverFromHero.degree, ...t.coverFromHero.byTerrain, ...t.coverFromHero.byCreatureIds]]),
+      );
+    // Example 1. Bandit 2 (F3) is Half behind Bandit 1 (F4): from Mira's best corner only Bandit 1's square cuts a line.
+    expect(cover(sampleMappedCombat({ heroTurn: true }))).toEqual({
+      'Bandit 1': ['half', 'crates'],
+      Cutthroat: ['none'],
+      'Bandit 2': ['half', 'c-2'],
+      'Old Tam': ['none'],
+      'Dock Ogre': ['none'],
+    });
+    // Example 2. With the Ogre at C7:D8 and Bandit 1 at C5, the Cutthroat (M8) has Half Cover too (the Ogre and the crates).
+    expect(cover(sampleStopCombat())).toEqual({
+      'Bandit 1': ['none'],
+      Cutthroat: ['half', 'crates'],
+      'Bandit 2': ['half', 'crates', 'c-2'],
+      'Old Tam': ['none'],
+      'Dock Ogre': ['none'],
+    });
+  });
+
   it('the player perspective has no hidden token, and during a hidden turn shows the last visible creature', () => {
     const snap = mapSnapshot({ ...sampleMappedCombat(), turnIndex: 2 }, hero, { perspective: 'player' });
     expect(snap?.tokens.map((t) => t.id)).toEqual(['c-1', 'c-2', 'c-3', 'c-4', 'c-6']);
@@ -625,11 +658,16 @@ describe('mapSnapshot (D7, D47)', () => {
     expect(mapSnapshot(noMap, hero, { perspective: 'dm' })).toBeNull();
   });
 
-  it('is deterministic for a shuffled combatant list with the same initiative order', () => {
+  it('is deterministic: a reshuffled combatant list gives the same facts per creature and the same reach pairs', () => {
     const state = move(sampleMappedCombat(), 'c-2', 'C5');
     const a = mapSnapshot(state, hero, { perspective: 'dm' });
-    const b = mapSnapshot({ ...state, combatants: [...state.combatants] }, hero, { perspective: 'dm' });
-    expect(b).toEqual(a);
+    const shuffled = { ...state, combatants: [state.combatants[3], state.combatants[0], state.combatants[5], state.combatants[1], state.combatants[4], state.combatants[2]] };
+    const b = mapSnapshot({ ...shuffled, turnIndex: shuffled.combatants.findIndex((c) => c.id === 'c-2') }, hero, { perspective: 'dm' });
+    const byId = (s: typeof a) => Object.fromEntries((s?.tokens ?? []).map((t) => [t.id, t]));
+    expect(byId(b)).toEqual(byId(a));
+    const pairs = (s: typeof a) => (s?.reach ?? []).map((p) => `${p.aId}>${p.bId}:${p.aReachesB}${p.bReachesA}${p.distanceFt}`).sort();
+    expect(pairs(b)).toEqual(pairs(a));
+    expect(mapSnapshot(state, hero, { perspective: 'dm' })).toEqual(a);
   });
 });
 
@@ -674,9 +712,10 @@ describe('mapWarnings', () => {
   it('a falling distance under 10 ft has no dice; a footprint in a wall does not fit', () => {
     let state = patch(sampleMappedCombat(), 'c-3', { speeds: { walk: 30, fly: 40 }, elevationFt: 5 });
     state = move(state, 'c-2', 'I4');
+    // Per-creature warnings come in initiative order.
     expect(mapWarnings(state, hero)).toEqual([
-      { kind: 'must-fall', id: 'c-3', elevationFt: 5, dice: null },
       { kind: 'does-not-fit', id: 'c-2' },
+      { kind: 'must-fall', id: 'c-3', elevationFt: 5, dice: null },
     ]);
   });
 });
@@ -729,6 +768,25 @@ describe('mapGlyphGrid', () => {
 });
 
 describe('performance (battle-map spec §7.12, generous margins)', () => {
+  it('rasterises a full 40×40 map (60 features × 40 rects) in under 50 ms, then serves it from the memo', () => {
+    const terrain: BattleMapInput['terrain'] = Array.from({ length: 60 }, (_, f) => ({
+      kind: (['wall', 'difficult', 'half-cover', 'obscured', 'deep-water', 'hazard'] as const)[f % 6],
+      rects: Array.from({ length: 40 }, (_, r) => ({ x0: (f + r) % 30, y0: (f * 3 + r) % 30, x1: ((f + r) % 30) + 9, y1: ((f * 3 + r) % 30) + 9 })),
+      label: `feature ${f}`,
+    }));
+    const map = createBattleMap({ width: 40, height: 40, terrain });
+    expect(map.terrain).toHaveLength(60);
+    const state: CombatState = { ...sampleMappedCombat(), map };
+    const t0 = performance.now();
+    const first = mapGlyphGrid(state, hero);
+    const ms = performance.now() - t0;
+    expect(first.rows).toHaveLength(40);
+    expect(ms).toBeLessThan(50);
+    const t1 = performance.now();
+    mapGlyphGrid(state, hero);
+    expect(performance.now() - t1).toBeLessThan(ms + 5);
+  });
+
   it('builds the player snapshot of a 40×40 map with 30 creatures and walls in under 50 ms', () => {
     const terrain: BattleMapInput['terrain'] = [
       { kind: 'wall', rects: [{ x0: 0, y0: 20, x1: 30, y1: 20 }] },

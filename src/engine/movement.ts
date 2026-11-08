@@ -495,6 +495,16 @@ type Refused = Extract<MoveOutcome, { status: 'refused' }>;
 // Small geometry helpers (hot paths keep to plain integers)
 // ---------------------------------------------------------------------------
 
+/** Integer coordinates (a square, not a stray number). */
+function isSquare(p: GridPoint | undefined): p is GridPoint {
+  return !!p && Number.isInteger(p.x) && Number.isInteger(p.y);
+}
+
+/** The n-square footprint anchored at p lies on a W × H map. */
+function fits(p: GridPoint, n: number, W: number, H: number): boolean {
+  return isSquare(p) && p.x >= 0 && p.y >= 0 && p.x + n <= W && p.y + n <= H;
+}
+
 function samePoint(a: GridPoint | undefined, b: GridPoint | undefined): boolean {
   return !!a && !!b && a.x === b.x && a.y === b.y;
 }
@@ -798,6 +808,8 @@ function buildCtx(state: CombatState, hero: Character | null, mover: Combatant, 
   const W = cells.width;
   const H = cells.height;
   const n = sizeSquares(stats.size);
+  // A footprint that no longer fits (a stale save, a size change not yet re-fitted) counts as not on the map.
+  if (!fits(mover.position, n, W, H)) return null;
   const N = W * H;
   const ctx: Ctx = {
     state,
@@ -922,15 +934,13 @@ function ensureMask(ctx: Ctx, m: ReachMasks, a: number): void {
   }
 }
 
-/** Opportunity Attacks the search counts for step a → b (reactors may repeat; the walk counts each once). */
-function provocations(ctx: Ctx, a: number, b: number, startIdx: number): number {
+/** Masks for the reactors' reach around the anchors of step a → b (the start has its own height). */
+function stepMasks(ctx: Ctx, a: number, b: number, startIdx: number): [ReachMasks, ReachMasks] {
   const ma = (a === startIdx ? ctx.startMasks : ctx.masks) as ReachMasks;
   const mb = ctx.masks as ReachMasks;
   ensureMask(ctx, ma, a);
   ensureMask(ctx, mb, b);
-  let count = 0;
-  for (let k = 0; k < ma.chunks; k++) count += popcount(ma.seen[a * ma.chunks + k] & ~mb.reach[b * mb.chunks + k]);
-  return count;
+  return [ma, mb];
 }
 
 // ---------------------------------------------------------------------------
@@ -1125,16 +1135,27 @@ interface Search {
   diag: Int32Array;
   prev: Int32Array;
   startLabel: number;
+  /** With `trackFired`: per label × mask chunk, the reactors its route has provoked (each counted once). */
+  fired: Int32Array | null;
+  chunks: number;
 }
 
-function runSearch(ctx: Ctx, from: GridPoint, g0: number, caps: Caps, safest: boolean): Search {
+/**
+ * Dijkstra from `from` with total `g0`. Safest: labels (anchor, provocations capped at 4); shortest: one per anchor.
+ * A label is settled the first time it is popped (its best (feet, diagonals)); later pops of it are skipped.
+ */
+function runSearch(ctx: Ctx, from: GridPoint, g0: number, caps: Caps, safest: boolean, trackFired = false): Search {
   const W = ctx.W;
   const N = W * ctx.H;
   const counting = safest && ctx.reactors.length > 0;
+  const tracking = trackFired && ctx.reactors.length > 0;
   const L = counting ? SAFEST_CAP + 1 : 1;
+  const chunks = ctx.masks?.chunks ?? 0;
   const g = new Int32Array(N * L).fill(INF);
   const diag = new Int32Array(N * L);
   const prev = new Int32Array(N * L).fill(-1);
+  const done = new Uint8Array(N * L);
+  const fired = tracking ? new Int32Array(N * L * chunks) : null;
   const startIdx = from.y * W + from.x;
   const fromStart = ctx.start.y * W + ctx.start.x;
   const startLabel = startIdx * L;
@@ -1144,6 +1165,8 @@ function runSearch(ctx: Ctx, from: GridPoint, g0: number, caps: Caps, safest: bo
   heap.push(heapKey(g0, 0, seq++), startLabel);
   while (heap.size > 0) {
     const label = heap.pop();
+    if (done[label]) continue;
+    done[label] = 1;
     const gl = g[label];
     const dl = diag[label];
     const a = (label / L) | 0;
@@ -1157,18 +1180,40 @@ function runSearch(ctx: Ctx, from: GridPoint, g0: number, caps: Caps, safest: bo
       if (cost < 0) continue;
       const ng = gl + cost;
       const b = a + DY[d] * W + DX[d];
-      const np = counting ? Math.min(SAFEST_CAP, p + provocations(ctx, a, b, fromStart)) : 0;
+      let np = 0;
+      let ma: ReachMasks | null = null;
+      let mb: ReachMasks | null = null;
+      if (counting || tracking) [ma, mb] = stepMasks(ctx, a, b, fromStart);
+      if (counting && ma && mb) {
+        // Reactors that see the mover at a and don't reach it at b: the step out of their reach (D30).
+        let count = 0;
+        for (let k = 0; k < chunks; k++) count += popcount(ma.seen[a * chunks + k] & ~mb.reach[b * chunks + k]);
+        np = Math.min(SAFEST_CAP, p + count);
+      }
       const nl = b * L + np;
       const nd = dl + (d >= 4 ? 1 : 0);
       if (ng < g[nl] || (ng === g[nl] && nd < diag[nl])) {
         g[nl] = ng;
         diag[nl] = nd;
         prev[nl] = label;
+        if (fired && ma && mb) {
+          for (let k = 0; k < chunks; k++) {
+            fired[nl * chunks + k] = fired[label * chunks + k] | (ma.seen[a * chunks + k] & ~mb.reach[b * chunks + k]);
+          }
+        }
         heap.push(heapKey(ng, nd, seq++), nl);
       }
     }
   }
-  return { L, g, diag, prev, startLabel };
+  return { L, g, diag, prev, startLabel, fired, chunks };
+}
+
+/** The number of reactors the route to `label` provokes (a search with trackFired). */
+function firedCount(s: Search, label: number): number {
+  if (!s.fired) return 0;
+  let n = 0;
+  for (let k = 0; k < s.chunks; k++) n += popcount(s.fired[label * s.chunks + k]);
+  return n;
 }
 
 function labelPath(ctx: Ctx, s: Search, label: number): GridPoint[] {
@@ -1277,11 +1322,15 @@ function reachedAnchors(ctx: Ctx, s: Search, g0: number, caps: Caps): { at: Grid
   return out;
 }
 
-/** The endable anchor within the allowance minimising (grid distance to the goal, feet, y, x). */
-function closestTo(ctx: Ctx, s: Search, goal: Goal, g0: number, caps: Caps): { at: GridPoint; costFt: number } | undefined {
+/**
+ * The endable anchor within the allowance minimising (grid distance to the goal, feet, y, x). `elsewhere` leaves
+ * out the start (an alternative destination must be somewhere else).
+ */
+function closestTo(ctx: Ctx, s: Search, goal: Goal, g0: number, caps: Caps, elsewhere = false): { at: GridPoint; costFt: number } | undefined {
   let best: { at: GridPoint; costFt: number } | undefined;
   let bestKey: number[] | null = null;
   for (const r of reachedAnchors(ctx, s, g0, caps)) {
+    if (elsewhere && samePoint(r.at, ctx.start)) continue;
     const key = [goalDistance(ctx, goal, r.at.x, r.at.y), r.costFt, r.at.y, r.at.x];
     if (!bestKey || compareKeys(key, bestKey) < 0) {
       bestKey = key;
@@ -1653,7 +1702,8 @@ function resolveGoal(ctx: Ctx, req: MoveRequest, stats: MoverStats): Goal | Move
 }
 
 function squareGoal(ctx: Ctx, at: GridPoint, transit: boolean): Goal | MoveRefusal {
-  if (at.x < 0 || at.y < 0 || at.x + ctx.n > ctx.W || at.y + ctx.n > ctx.H) return { code: 'off-map', to: point(at) };
+  if (!isSquare(at)) return { code: 'bad-request', problem: 'A square needs whole-number coordinates.' };
+  if (!fits(at, ctx.n, ctx.W, ctx.H)) return { code: 'off-map', to: point(at) };
   for (let y = at.y; y < at.y + ctx.n; y++) {
     for (let x = at.x; x < at.x + ctx.n; x++) {
       const f = ctx.cells.flags[y * ctx.W + x];
@@ -1739,7 +1789,7 @@ function planWilling(state: CombatState, hero: Character | null, req: MoveReques
     reactorsOn: !disengaged,
   };
   const ctx = buildCtx(state, hero, mover, stats, ctxOpts);
-  if (!ctx) return fail({ code: 'bad-request', problem: 'This fight has no battle map.' });
+  if (!ctx) return fail({ code: 'unplaced' });
   const g0 = moved + (standing ? standCost : 0);
   const goal = resolveGoal(ctx, req, stats);
   if (isRefusal(goal)) return fail(goal);
@@ -1785,9 +1835,9 @@ function planWilling(state: CombatState, hero: Character | null, req: MoveReques
     );
     if (src) {
       const near = chainSearch(ctx, legs, g0, caps, safest);
-      const alt = near.search ? closestTo(ctx, near.search, legs[near.failedLeg], g0, caps) : undefined;
-      const alternative = alt && !samePoint(alt.at, ctx.start) ? alt.at : undefined;
-      return toward(Math.max(0, near.failedLeg), alternative, { code: 'frightened', sourceId: src.id, alternative });
+      const alternative = near.search ? closestTo(ctx, near.search, legs[near.failedLeg], g0, caps, true)?.at : undefined;
+      const refusal: MoveRefusal = { code: 'frightened', sourceId: src.id, ...(alternative ? { alternative } : {}) };
+      return toward(Math.max(0, near.failedLeg), alternative, refusal);
     }
   }
   const chain = chainSearch(ctx, legs, g0, caps, safest);
@@ -1806,8 +1856,9 @@ function planWilling(state: CombatState, hero: Character | null, req: MoveReques
     const brave = buildCtx(state, hero, mover, stats, { ...ctxOpts, fearIds: [] }) as Ctx;
     const daring = chainSearch(brave, legs, g0, caps, safest);
     if (daring.ok) {
-      const alternative = closest && !samePoint(closest.at, ctx.start) ? closest.at : undefined;
-      return toward(failedLeg, alternative, { code: 'frightened', sourceId: fearSource(ctx, daring.path) ?? '', alternative });
+      const alternative = closestTo(ctx, failed, legs[failedLeg], g0, caps, true)?.at;
+      const refusal: MoveRefusal = { code: 'frightened', sourceId: fearSource(ctx, daring.path) ?? '', ...(alternative ? { alternative } : {}) };
+      return toward(failedLeg, alternative, refusal);
     }
   }
   const unlimited = chainSearch(ctx, legs, g0, { main: INF, swim: INF }, safest);
@@ -1880,6 +1931,7 @@ function finishWilling(state: CombatState, wp: WillingPlan, ctx: Ctx): { planned
         provoked: walk.provoked.map((p) => ({ reactorId: p.reactorId, at: point(p.at), hidden: p.hidden })),
         entered: facts.entered.map((e) => e.label),
         ...(walk.stop && walk.stop.kind !== 'oa' ? { revealedHidden: true } : {}),
+        ...(walk.stop?.kind === 'unseen' ? { blockedById: walk.stop.byId } : {}),
       }
     : null;
   let turn: MapTurn | null = null;
@@ -1999,11 +2051,24 @@ function lineAnchors(a: GridPoint, b: GridPoint): GridPoint[] {
 }
 
 /** The current creature's record after a move of `kind` that spent `spendFt` (forced/teleport/place). */
-function recordOther(state: CombatState, stats: MoverStats, kind: MoveKind, by: 'player' | 'dm', from: GridPoint, to: GridPoint, path: GridPoint[], spendFt: number, entered: string[]): MapTurn | null {
+function recordOther(
+  state: CombatState,
+  stats: MoverStats,
+  move: { kind: MoveKind; by: 'player' | 'dm'; from: GridPoint; to: GridPoint; path: GridPoint[]; spendFt: number; entered: string[] },
+): MapTurn | null {
   if (currentCombatant(state)?.id !== stats.id) return null;
   const turn = currentTurn(state) as MapTurn;
-  const move: TurnMove = { by, kind, from: point(from), to: point(to), path: path.slice(0, MAP_LIMITS.maxPathSquares), costFt: spendFt, provoked: [], entered };
-  return { ...turn, movedFt: turn.movedFt + spendFt, moves: appendMove(turn, move) };
+  const record: TurnMove = {
+    by: move.by,
+    kind: move.kind,
+    from: point(move.from),
+    to: point(move.to),
+    path: move.path.slice(0, MAP_LIMITS.maxPathSquares),
+    costFt: move.spendFt,
+    provoked: [],
+    entered: move.entered,
+  };
+  return { ...turn, movedFt: turn.movedFt + move.spendFt, moves: appendMove(turn, record) };
 }
 
 /** The current creature's budget after a forced move, teleport or placement; null for anyone else. */
@@ -2039,7 +2104,7 @@ function planForced(state: CombatState, hero: Character | null, req: MoveRequest
     }
     const v = dirVector(dir);
     steps = Array.from({ length: wanted }, (_, i) => ({ x: start.x + v.dx * (i + 1), y: start.y + v.dy * (i + 1) }));
-  } else if (req.to?.kind === 'square') {
+  } else if (req.to?.kind === 'square' && isSquare(req.to.at)) {
     steps = lineAnchors(start, req.to.at);
     wanted = steps.length;
   } else {
@@ -2100,7 +2165,7 @@ function planForced(state: CombatState, hero: Character | null, req: MoveRequest
     const reach = moverStats(state, hero, grappler.id)?.reachFt ?? 5;
     if (gapFt(cur.x, cur.y, n, elevationFt, bandOf(grappler, hero)) > reach) notes.push({ kind: 'grapple-ended', grapplerId: grappler.id });
   }
-  const turn = recordOther(state, stats, 'forced', req.by, start, cur, path, 0, entered);
+  const turn = recordOther(state, stats, { kind: 'forced', by: req.by, from: start, to: cur, path, spendFt: 0, entered });
   const plan: MovePlan = {
     status: 'moved',
     moverId: id,
@@ -2122,7 +2187,9 @@ function planForced(state: CombatState, hero: Character | null, req: MoveRequest
 /** C18: a footprint a creature can appear in: on the map, no blocking terrain, nobody else there (Tiny sharing aside). */
 function legalSpot(ctx: Ctx, ax: number, ay: number): 'ok' | 'blocked' | 'occupied' {
   if (ax < 0 || ay < 0 || ax + ctx.n > ctx.W || ay + ctx.n > ctx.H) return 'blocked';
-  for (let y = ay; y < ay + ctx.n; y++) for (let x = ax; x < ax + ctx.n; x++) if (ctx.cells.flags[y * ctx.W + x] & CELL.BLOCKS_MOVE) return 'blocked';
+  for (let y = ay; y < ay + ctx.n; y++) {
+    for (let x = ax; x < ax + ctx.n; x++) if (ctx.cells.flags[y * ctx.W + x] & CELL.BLOCKS_MOVE) return 'blocked';
+  }
   return endable(ctx, ax, ay) ? 'ok' : 'occupied';
 }
 
@@ -2151,7 +2218,8 @@ function requestedSpot(ctx: Ctx, req: MoveRequest, start: GridPoint | null): Gri
   const to = req.to;
   if (!to) return { code: 'bad-request', problem: `kind "${req.kind}" needs "to": a square, a creature or a place.` };
   if (to.kind === 'square') {
-    if (to.at.x < 0 || to.at.y < 0 || to.at.x + ctx.n > ctx.W || to.at.y + ctx.n > ctx.H) return { code: 'off-map', to: point(to.at) };
+    if (!isSquare(to.at)) return { code: 'bad-request', problem: 'A square needs whole-number coordinates.' };
+    if (!fits(to.at, ctx.n, ctx.W, ctx.H)) return { code: 'off-map', to: point(to.at) };
     return point(to.at);
   }
   const from = start ? anchorRect(start.x, start.y, ctx.n) : null;
@@ -2161,7 +2229,9 @@ function requestedSpot(ctx: Ctx, req: MoveRequest, start: GridPoint | null): Gri
   if (to.kind === 'creature' && !target?.position) return { code: 'bad-request', problem: `No creature "${to.id}" on the map.` };
   const place = to.kind === 'place' ? ctx.map.places.find((p) => p.id === to.placeId) : undefined;
   if (to.kind === 'place' && !place) return { code: 'bad-request', problem: `No place "${to.placeId}" on the map.` };
-  const goal: Goal = target ? { kind: 'creature', band: bandOf(target, ctx.hero), withinFt: to.kind === 'creature' ? (to.withinFt ?? 5) : 5 } : { kind: 'place', place: place as MapPlace };
+  const goal: Goal = target
+    ? { kind: 'creature', band: bandOf(target, ctx.hero), withinFt: to.kind === 'creature' ? (to.withinFt ?? 5) : 5 }
+    : { kind: 'place', place: place as MapPlace };
   for (let y = 0; y + ctx.n <= ctx.H; y++) {
     for (let x = 0; x + ctx.n <= ctx.W; x++) {
       if (legalSpot(ctx, x, y) !== 'ok') continue;
@@ -2178,7 +2248,14 @@ function requestedSpot(ctx: Ctx, req: MoveRequest, start: GridPoint | null): Gri
   return best ?? { code: 'no-route' };
 }
 
-function planTeleportOrPlace(state: CombatState, hero: Character | null, req: MoveRequest, ctx: Ctx | null, mover: Combatant, stats: MoverStats): Planned {
+function planTeleportOrPlace(
+  state: CombatState,
+  hero: Character | null,
+  req: MoveRequest,
+  ctx: Ctx | null,
+  mover: Combatant,
+  stats: MoverStats,
+): Planned {
   const id = stats.id;
   const teleport = req.kind === 'teleport';
   const start = mover.position ? point(mover.position) : null;
@@ -2201,8 +2278,18 @@ function planTeleportOrPlace(state: CombatState, hero: Character | null, req: Mo
   const startElev = clampElevation(mover.elevationFt ?? 0);
   const elevationFt = req.elevationFt !== undefined ? clampElevation(req.elevationFt) : startElev;
   const notes: MoveNote[] = [];
+  /** The grid distance from the start to a destination anchor at the end height. */
+  const distanceTo = (p: GridPoint) =>
+    start
+      ? gapFt(start.x, start.y, anchorCtx.n, startElev, {
+          id,
+          rect: anchorRect(p.x, p.y, anchorCtx.n),
+          lo: levelOf(elevationFt),
+          hi: levelOf(elevationFt) + anchorCtx.n - 1,
+        })
+      : 0;
   if (teleport && start && req.maxFt !== undefined) {
-    const dist = gapFt(start.x, start.y, anchorCtx.n, startElev, { id, rect: anchorRect(want.x, want.y, anchorCtx.n), lo: levelOf(elevationFt), hi: levelOf(elevationFt) + anchorCtx.n - 1 });
+    const dist = distanceTo(want);
     const maxFt = Math.max(0, toInt(req.maxFt));
     if (dist > maxFt) return { plan: refused(id, { code: 'out-of-range', distanceFt: dist, maxFt }), write: null };
   }
@@ -2215,14 +2302,16 @@ function planTeleportOrPlace(state: CombatState, hero: Character | null, req: Mo
     notes.push({ kind: 'shifted', requested: point(want), reason: legal });
   }
   if (teleport && start) {
-    const distanceFt = gapFt(start.x, start.y, anchorCtx.n, startElev, { id, rect: anchorRect(to.x, to.y, anchorCtx.n), lo: levelOf(elevationFt), hi: levelOf(elevationFt) + anchorCtx.n - 1 });
-    notes.push({ kind: 'teleported', distanceFt, lineOfSight: seeing(anchorCtx.cells, anchorRect(start.x, start.y, anchorCtx.n), anchorRect(to.x, to.y, anchorCtx.n)) });
+    // srd:rule:teleportation: the effect says whether the destination must be seen (a Blinded creature sees nothing).
+    const n = anchorCtx.n;
+    const sees = !stats.blinded && seeing(anchorCtx.cells, anchorRect(start.x, start.y, n), anchorRect(to.x, to.y, n));
+    notes.push({ kind: 'teleported', distanceFt: distanceTo(to), lineOfSight: sees });
     if (anchorCtx.cells.flags[to.y * anchorCtx.W + to.x] & CELL.PIT && canFall(stats, elevationFt)) {
       notes.push(fellNote(pitAt(anchorCtx.map, to.x, to.y), PIT_DEPTH_FT));
     }
   }
   const spendFt = teleport ? 0 : Math.max(0, toInt(req.spendFt));
-  const turn = recordOther(state, stats, req.kind, req.by, start ?? to, to, [], spendFt, []);
+  const turn = recordOther(state, stats, { kind: req.kind, by: req.by, from: start ?? to, to, path: [], spendFt, entered: [] });
   const plan: MovePlan = {
     status: 'moved',
     moverId: id,
@@ -2328,6 +2417,9 @@ export function applyHeroMove(state: CombatState, hero: Character, req: HeroMove
   const heroC = state.combatants.find((c) => c.isPlayer);
   if (!heroC) return refuse({ code: 'bad-request', problem: 'The hero is not in this fight.' });
   if (!heroC.position) return refuse({ code: 'unplaced' });
+  if (req.to !== undefined && !isSquare(req.to)) {
+    return refuse({ code: 'bad-request', problem: 'A square needs whole-number coordinates.' });
+  }
   const view = playerView(state);
   if (currentCombatant(state)?.id !== heroC.id) {
     const shown = currentCombatant(view);
@@ -2352,31 +2444,29 @@ export function applyHeroMove(state: CombatState, hero: Character, req: HeroMove
   const planned = planWilling(view, hero, moveReq);
   if (!planned.ok) return refuse(planned.refused.refusal);
   const wp = planned.plan;
-  // 3. Replay on the true map: the same speeds, standing and fear; every creature (hidden ones included).
+  // 3. Replay on the true map: the same speeds, standing and fear; every creature (hidden ones included). A stop
+  // being continued is read from the true map too (one whose reactors are all hidden isn't in the player view).
+  const continuing = stop && stop.moverId === heroC.id && stop.round === state.round && samePoint(stop.at, heroC.position) ? stop : null;
   const trueCtx = buildCtx(state, hero, heroC, moverStats(state, hero, heroC.id) as MoverStats, {
     fly: wp.ctx.fly,
     startElev: wp.ctx.startElev,
     endElev: wp.ctx.endElev,
     crawl: wp.ctx.crawl,
     fearIds: wp.ctx.fear.map((f) => f.id),
-    ignore: new Set(wp.continuing?.reactorIds ?? []),
+    ignore: new Set(continuing?.reactorIds ?? []),
     declined: new Set(),
     reactorsOn: !wp.disengaged,
-  }) as Ctx;
+  });
+  if (!trueCtx) return refuse({ code: 'unplaced' });
   // The view's turn record drops DM-only detail (hidden reactors): write the true one.
-  const trueWp: WillingPlan = {
-    ...wp,
-    ctx: trueCtx,
-    turn: currentTurn(state),
-    continuing: wp.continuing ? (map.stop ?? null) : null,
-  };
+  const trueWp: WillingPlan = { ...wp, ctx: trueCtx, turn: currentTurn(state), continuing };
   const { planned: result, walk } = finishWilling(state, trueWp, trueCtx);
   const plan = result.plan;
   if (plan.status === 'refused') return refuse(plan.refusal);
   // 4. The write: position, the turn record (by 'player'), the stop; continuing marks the stop's reactors used.
   const next = result.write ? commit(state, result.write) : state;
   const turnMoves = next.map?.turn?.moves ?? [];
-  const recorded = result.write?.turn && turnMoves.length > (wp.turn?.moves.length ?? 0) ? turnMoves[turnMoves.length - 1] : null;
+  const recorded = result.write?.turn && turnMoves.length > (trueWp.turn?.moves.length ?? 0) ? turnMoves[turnMoves.length - 1] : null;
   const move: TurnMove = recorded ?? {
     by: 'player',
     kind: 'move',
@@ -2389,13 +2479,17 @@ export function applyHeroMove(state: CombatState, hero: Character, req: HeroMove
   };
   const revealedHidden = walk.stop !== null && walk.stop.kind !== 'oa';
   let stoppedFor: Extract<HeroMoveOutcome, { status: 'moved' | 'stopped' }>['stoppedFor'];
-  if (walk.stop?.kind === 'oa') stoppedFor = { kind: 'opportunity-attack', reactorIds: walk.stop.reactors.filter((r) => !r.hidden).map((r) => r.reactorId) };
+  if (walk.stop?.kind === 'oa') {
+    stoppedFor = { kind: 'opportunity-attack', reactorIds: walk.stop.reactors.filter((r) => !r.hidden).map((r) => r.reactorId) };
+  }
   else if (walk.stop?.kind === 'unseen') stoppedFor = { kind: 'unseen' };
   else if (walk.stop?.kind === 'out-of-movement') stoppedFor = { kind: 'out-of-movement' };
+  // The outcome goes to the player's side: the hidden blocker stays in the DM's turn record only.
+  const { blockedById: _dmOnly, ...shownMove } = move;
   return {
     status: stoppedFor ? 'stopped' : 'moved',
     state: next,
-    move,
+    move: shownMove,
     heroStoodUp: plan.heroStoodUp,
     ...(stoppedFor ? { stoppedFor } : {}),
     revealedHidden,
@@ -2417,7 +2511,8 @@ export interface ReachableSquare {
 /**
  * Every anchor reachable this turn (band 'dash' needs one more Dash). For the UI's bands and check_map.
  * The current creature uses its turn record, anyone else a fresh turn. A Prone mover stands first unless
- * `standUp: false` (then it crawls). `provokes` counts the Opportunity Attacks on its route (at most 4).
+ * `standUp: false` (then it crawls). `provokes` counts the reactors whose Opportunity Attacks its route provokes
+ * (the route planMove takes; nothing stops it here).
  */
 export function reachableSquares(
   state: CombatState,
@@ -2454,17 +2549,17 @@ export function reachableSquares(
   const g0 = budget.movedFt + standCost;
   const capMove: Caps = { main: budget.speedFt + budget.dashFt, swim: stats.swim + budget.dashFt };
   const dashAvailable = budget.dashes === 0 && budget.dashAddsFt > 0;
-  const near = runSearch(ctx, ctx.start, g0, capMove, safest);
+  const near = runSearch(ctx, ctx.start, g0, capMove, safest, true);
   const far = dashAvailable
-    ? runSearch(ctx, ctx.start, g0, { main: capMove.main + budget.dashAddsFt, swim: capMove.swim + budget.dashAddsFt }, safest)
+    ? runSearch(ctx, ctx.start, g0, { main: capMove.main + budget.dashAddsFt, swim: capMove.swim + budget.dashAddsFt }, safest, true)
     : null;
   const out: ReachableSquare[] = [];
   const startIdx = ctx.start.y * ctx.W + ctx.start.x;
   /** The route planMove would take there: fewest provocations first (one label per anchor when shortest). */
-  const best = (s: Search, a: number): { g: number; p: number } | null => {
+  const best = (s: Search, a: number): { g: number; provokes: number } | null => {
     for (let p = 0; p < s.L; p++) {
-      const g = s.g[a * s.L + p];
-      if (g < INF) return { g, p };
+      const label = a * s.L + p;
+      if (s.g[label] < INF) return { g: s.g[label], provokes: firedCount(s, label) };
     }
     return null;
   };
@@ -2479,31 +2574,11 @@ export function reachableSquares(
       at: { x: ax, y: ay },
       costFt: hit.g - g0,
       band: inMove ? 'move' : 'dash',
-      provokes: hit.p,
+      provokes: hit.provokes,
       canEnd: endable(ctx, ax, ay),
     });
   }
-  if (!safest) {
-    // The shortest search doesn't count provocations: walk each route once to count them.
-    for (const sq of out) {
-      const s = sq.band === 'move' ? near : (far as Search);
-      const path = labelPath(ctx, s, (sq.at.y * ctx.W + sq.at.x) * s.L);
-      sq.provokes = countProvocations(ctx, path);
-    }
-  }
   return out;
-}
-
-/** Opportunity Attacks along a path, each reactor once (no stop). */
-function countProvocations(ctx: Ctx, path: readonly GridPoint[]): number {
-  if (ctx.reactors.length === 0) return 0;
-  const fired = new Set<string>();
-  for (let i = 0; i + 1 < path.length; i++) {
-    for (const r of ctx.reactors) {
-      if (!fired.has(r.id) && leaves(ctx, r, path[i], ctx.pathElev, path[i + 1], ctx.pathElev)) fired.add(r.id);
-    }
-  }
-  return fired.size;
 }
 
 /** Each step of `path` (anchors, start first) that leaves an eligible reactor's reach (D30). */

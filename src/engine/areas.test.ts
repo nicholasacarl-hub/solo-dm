@@ -321,6 +321,17 @@ describe('the warehouse fixture (spells as named)', () => {
     expect(r.inside.find((h) => h.id === 'c-2')?.cover.degree).toBe('none');
   });
 
+  it('reports a corner centre, and whether the caster can see the centre (the "near side" rule is the DM\'s call)', () => {
+    const corner = resolved(resolveArea(sampleMappedCombat(), hero, { shape: 'sphere', sizeFt: 10, at: { kind: 'corner', x: 8, y: 7 }, fromId: 'c-1' }));
+    expect(corner.origin).toMatchObject({ fromId: 'c-1', corner: { x: 8, y: 7 }, lineOfSight: true });
+    const onOgre = resolved(resolveArea(sampleMappedCombat(), hero, { shape: 'sphere', sizeFt: 10, at: { kind: 'creature', id: 'c-6' } }));
+    expect(onOgre.origin).toEqual({ corner: { x: 8, y: 10 } });
+    expect(ids(onOgre)).toEqual(['c-6']);
+    // Inside the office, behind its wall: Mira can't see the centre.
+    const office = resolved(resolveArea(sampleMappedCombat(), hero, { shape: 'sphere', sizeFt: 5, at: at('N2'), fromId: 'c-1' }));
+    expect(office.origin.lineOfSight).toBe(false);
+  });
+
   it('A12: a range of 20 ft with the centre 25 ft away is out of range (srd:rule:casting-spells-range)', () => {
     const r = resolved(resolveArea(sampleMappedCombat(), hero, { shape: 'sphere', sizeFt: 20, at: at('G4'), fromId: 'c-1' }, { rangeFt: 20 }));
     expect(r.origin.distanceFt).toBe(25);
@@ -389,6 +400,16 @@ describe('creatures inside (app convention C19, D14)', () => {
     expect(ids(r)).toEqual(['a', 'b']);
     expect(r.inside[1].airborneFt).toBe(10);
     expect(r.outside).toEqual(['c']);
+  });
+
+  it('absurd sizes from stored data are capped instead of hanging; squares off the map are counted, not enumerated', () => {
+    const state = board(16, 12, [], [{ id: 'a', at: 'A1' }]);
+    const huge = resolved(resolveArea(state, null, { shape: 'sphere', sizeFt: 1e9, at: square('A1', { width: 16, height: 12 }) }));
+    expect(ids(huge)).toEqual(['a']);
+    const far = resolved(resolveArea(state, null, { shape: 'squares', rects: [{ x0: 14, y0: 10, x1: 1e6, y1: 11 }] }));
+    expect(rectsLabel(far.squares)).toBe('O11:P12');
+    expect(far.offMap).toBe((1e6 - 14 + 1) * 2 - 4);
+    expect(areaSquares(state, null, { shape: 'line', sizeFt: 30, widthFt: 1e9, fromId: 'a', toward: dir('east') }).length).toBeGreaterThan(0);
   });
 
   it('results do not depend on the order of the combatant list (determinism)', () => {

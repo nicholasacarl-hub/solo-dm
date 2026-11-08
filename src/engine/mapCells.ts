@@ -258,7 +258,9 @@ interface EffectsMemo {
   key: string;
   cells: MapCells;
 }
-const effectsMemo = new WeakMap<readonly MapEffect[], EffectsMemo>();
+/** A few entries per effects array: the DM's and the player's views of one state differ in their emanation anchors. */
+const effectsMemo = new WeakMap<readonly MapEffect[], EffectsMemo[]>();
+const EFFECTS_MEMO_SIZE = 4;
 
 function withEffects(base: MapCells, state: CombatState, hero: Character | null, lasting: readonly MapEffect[]): MapCells {
   const flags = new Uint16Array(base.flags);
@@ -285,10 +287,11 @@ export function mapCells(state: CombatState, hero: Character | null): MapCells |
   const lasting = map.effects.filter(isLasting);
   if (lasting.length === 0) return base;
   const key = emanationKey(state, hero, lasting);
-  const memo = effectsMemo.get(map.effects);
-  if (memo && memo.base === base && memo.key === key) return memo.cells;
+  const memo = effectsMemo.get(map.effects) ?? [];
+  const hit = memo.find((m) => m.base === base && m.key === key);
+  if (hit) return hit.cells;
   const cells = withEffects(base, state, hero, lasting);
-  effectsMemo.set(map.effects, { base, key, cells });
+  effectsMemo.set(map.effects, [{ base, key, cells }, ...memo].slice(0, EFFECTS_MEMO_SIZE));
   return cells;
 }
 

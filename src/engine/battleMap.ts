@@ -31,7 +31,7 @@ import { AREA_TERRAIN, CREATURE_SIZES, MAP_LIMITS, TERRAIN_KINDS } from '@/types
 import { effectSquares, resolveArea, type AreaResult } from './areas';
 import { currentCombatant, findCombatant } from './combat';
 import { clipRect, cornerLabel, footprint, rectInBounds, rectsOverlap, sizeSquares, spaceDistanceFt, squareLabel, subtractRect, type MapDims, type Space } from './grid';
-import { CELL, combatantSize, mapCells, occupants, type MapCells } from './mapCells';
+import { CELL, combatantSize, mapCells, occupants, type MapCells, type Occupant } from './mapCells';
 import { areHostile, currentTurn, inReach, moverStats, teamOf, turnBudget, type MoverStats, type TurnBudget } from './movement';
 import { coverAgainst, lineOfSight, type CoverResult } from './sight';
 import { toInt } from './util';
@@ -505,7 +505,7 @@ function addTerrain(state: CombatState, hero: Character | null, map: BattleMap, 
     const stander = solid ? standerOn(state, hero, feature.rects) : null;
     if (stander) {
       const what = feature.kind === 'door' ? 'a closed door' : feature.kind === 'wall' ? 'a wall' : 'three-quarters cover';
-      return { ok: false, problem: `${stander.c.name} stands at ${squareLabel(stander.at)}: move it before putting ${what} there` };
+      return { ok: false, problem: `${stander.c.name} stands at ${squareLabel(stander.at)}: clear that square before putting ${what} there` };
     }
     out = { ...out, terrain: [...out.terrain, feature], nextId: out.nextId + 1 };
     changes.push({ kind: 'terrain-added', feature });
@@ -623,10 +623,14 @@ function editCreatures(state: CombatState, hero: Character | null, creatures: No
     });
     const change: Extract<MapChange, { kind: 'creature' }> = { kind: 'creature', id: c.id, patch };
     if (patch.size !== undefined && before) {
-      const refit = refitFootprints(out, hero);
+      // Re-fit only the creature that changed size; anything else is the DM's to see in mapWarnings.
+      const refit = refitSome(out, hero, new Set([c.id]));
       out = refit.state;
       const moved = refit.moved.find((m) => m.id === c.id);
       if (moved) change.moved = { from: moved.from, to: moved.to };
+      if (refit.unplaced.includes(c.id)) {
+        return { ok: false, problem: `${c.name} doesn't fit anywhere on the map as a ${patch.size} creature.` };
+      }
     }
     changes.push(change);
   }
@@ -824,12 +828,22 @@ export function refitFootprints(
   state: CombatState,
   hero: Character | null,
 ): { state: CombatState; moved: { id: string; from: GridPoint; to: GridPoint }[]; unplaced: string[] } {
+  return refitSome(state, hero, null);
+}
+
+/** refitFootprints for `only` these creatures (null: everyone), in initiative order. */
+function refitSome(
+  state: CombatState,
+  hero: Character | null,
+  only: ReadonlySet<string> | null,
+): { state: CombatState; moved: { id: string; from: GridPoint; to: GridPoint }[]; unplaced: string[] } {
   const cells = mapCells(state, hero);
   if (!cells) return { state, moved: [], unplaced: [] };
   let working = state;
   const moved: { id: string; from: GridPoint; to: GridPoint }[] = [];
   const unplaced: string[] = [];
   for (const original of state.combatants) {
+    if (only && !only.has(original.id)) continue;
     const c = working.combatants.find((x) => x.id === original.id) as Combatant;
     if (c.defeated || !c.position || !misfit(working, hero, cells, c, c.position)) continue;
     const from = c.position;
@@ -899,9 +913,10 @@ function viewTurn(turn: MapTurn, hiddenIds: ReadonlySet<string>): MapTurn | unde
   let changed = false;
   const moves = turn.moves.map((m): TurnMove => {
     const provoked = m.provoked.filter((p) => !p.hidden && !hiddenIds.has(p.reactorId));
-    if (provoked.length === m.provoked.length) return m;
+    if (provoked.length === m.provoked.length && m.blockedById === undefined) return m;
     changed = true;
-    return { ...m, provoked };
+    const { blockedById: _dmOnly, ...shown } = m;
+    return { ...shown, provoked };
   });
   return changed ? { ...turn, moves } : turn;
 }
@@ -1152,6 +1167,13 @@ export function mapSnapshot(state: CombatState, hero: Character | null, opts: { 
   };
 }
 
+/** Do two creatures' 5-ft levels meet (C3)? A flier above another creature doesn't share its space. */
+function levelsOverlap(a: Occupant, b: Occupant): boolean {
+  const lo = (o: Occupant) => Math.floor(o.elevationFt / 5);
+  const hi = (o: Occupant) => lo(o) + sizeSquares(o.size) - 1;
+  return lo(a) <= hi(b) && lo(b) <= hi(a);
+}
+
 /** A Fly Speed the creature has before conditions (the sheet's, granted ones, or its stat block's). */
 function naturalFly(c: Combatant, hero: Character | null): number {
   const own = c.isPlayer && hero ? toInt(hero.otherSpeeds?.fly) : 0;
@@ -1176,7 +1198,7 @@ export function mapWarnings(state: CombatState, hero: Character | null): MapWarn
       const a = placed[i];
       const b = placed[j];
       if (a.size === 'Tiny' && b.size === 'Tiny') continue;
-      if (rectsOverlap(a.rect, b.rect)) out.push({ kind: 'shared-space', ids: [a.id, b.id] });
+      if (rectsOverlap(a.rect, b.rect) && levelsOverlap(a, b)) out.push({ kind: 'shared-space', ids: [a.id, b.id] });
     }
   }
   for (const o of placed) {
