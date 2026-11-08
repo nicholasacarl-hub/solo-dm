@@ -315,17 +315,24 @@ function defaultMode(stats: MoverStats, elevationFt: number): MoveMode {
   return 'walk';
 }
 
-function budgetOf(stats: MoverStats, mode: MoveMode, turn: MapTurn | null, prone = stats.prone): TurnBudget {
-  const speedFt = mode === 'fly' ? stats.fly : stats.walk;
+/**
+ * The budget for `mode`. A creature in deep water whose Swim Speed beats its moving speed reports the swimming
+ * allowance: its Swim Speed, and each Dash taken with it (srd:rule:dash; R10), as turnCaps gives.
+ */
+function budgetOf(stats: MoverStats, mode: MoveMode, turn: MapTurn | null, prone = stats.prone, inDeepWater = false): TurnBudget {
+  const moving = mode === 'fly' ? stats.fly : stats.walk;
+  const swimming = inDeepWater && mode === 'walk' && stats.swim > moving;
+  const speedFt = swimming ? stats.swim : moving;
   const movedFt = turn?.movedFt ?? 0;
-  const dashFt = turn?.dashFt ?? 0;
+  const dashes = turn?.dashes ?? 0;
+  const dashFt = swimming ? turnCaps(stats, moving, turn?.dashFt ?? 0, dashes).swim - stats.swim : (turn?.dashFt ?? 0);
   return {
     combatantId: stats.id,
     mode,
     speedFt,
     movedFt,
     dashFt,
-    dashes: turn?.dashes ?? 0,
+    dashes,
     leftFt: Math.max(0, speedFt + dashFt - movedFt),
     dashAddsFt: speedFt,
     disengaged: turn?.disengaged ?? false,
@@ -342,7 +349,15 @@ export function turnBudget(state: CombatState, hero: Character | null, id: strin
   if (!stats) return null;
   const c = state.combatants.find((x) => x.id === id) as Combatant;
   const turn = currentCombatant(state)?.id === id ? currentTurn(state) : null;
-  return budgetOf(stats, mode ?? defaultMode(stats, c.elevationFt ?? 0), turn);
+  const deep = inDeepWater(mapCells(state, hero), c.position, sizeSquares(stats.size));
+  return budgetOf(stats, mode ?? defaultMode(stats, c.elevationFt ?? 0), turn, stats.prone, deep);
+}
+
+/** Does any square of the footprint anchored at `at` hold deep water? */
+function inDeepWater(cells: MapCells | null, at: GridPoint | undefined, n: number): boolean {
+  if (!cells || !at || !fits(at, n, cells.width, cells.height)) return false;
+  for (let y = at.y; y < at.y + n; y++) for (let x = at.x; x < at.x + n; x++) if (cells.flags[y * cells.width + x] & CELL.DEEP) return true;
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -733,13 +748,14 @@ interface Reactor extends Band {
   reachFt: number;
   hidden: boolean;
   isHero: boolean;
-  rank: number;
   declined: boolean;
 }
 
 interface ReachMasks {
   elevFt: number;
   chunks: number;
+  /** Per anchor × chunk: the reactors close enough to reach the mover there, by distance alone (null: test them all). */
+  near: Int32Array | null;
   done: Uint8Array;
   reach: Int32Array;
   seen: Int32Array;
@@ -749,7 +765,17 @@ interface Ctx {
   state: CombatState;
   hero: Character | null;
   map: BattleMap;
+  /** The map with every effect where it is now: sight and cover. */
   cells: MapCells;
+  /**
+   * What the mover's own steps cross (terrain costs, labels entered): its own lasting emanations left out, since they
+   * move with it (srd:rule:emanation; R4). The same object as `cells` when it has none.
+   */
+  moveCells: MapCells;
+  /** Its own lasting emanation includes it and is Difficult Terrain: every step is in it (its creator's choice). */
+  selfDifficult: boolean;
+  /** Its own lasting emanation is obscuring: it moves inside it, so no reactor sees it (C14, C20). */
+  selfObscured: boolean;
   W: number;
   H: number;
   mover: Combatant;
@@ -765,7 +791,8 @@ interface Ctx {
   fly: boolean;
   swims: boolean;
   crawl: boolean;
-  ranks: Map<string, number>;
+  /** Initiative ranks, made on first use: only what a move reports needs an order (rankOf). */
+  ranks: Map<string, number> | null;
   others: Occupant[];
   /** Per square, on the path band: an occupant it can't pass / a passable one whose space is Difficult Terrain. */
   sqBlock: Uint8Array;
@@ -805,14 +832,28 @@ interface CtxOpts {
   reactorsOn: boolean;
 }
 
+const ownEffectsMemo = new WeakMap<readonly MapEffect[], Map<string, { own: MapEffect[]; rest: MapEffect[] }>>();
+
+/** A creature's own lasting emanations and the map's other effects (memoized per effects array), or null without any. */
+function splitOwnEmanations(effects: readonly MapEffect[], moverId: string): { own: MapEffect[]; rest: MapEffect[] } | null {
+  const isOwn = (e: MapEffect) => e.duration === 'lasting' && e.spec.shape === 'emanation' && e.spec.fromId === moverId;
+  if (!effects.some(isOwn)) return null;
+  let byMover = ownEffectsMemo.get(effects);
+  if (!byMover) ownEffectsMemo.set(effects, (byMover = new Map()));
+  let split = byMover.get(moverId);
+  if (!split) byMover.set(moverId, (split = { own: effects.filter(isOwn), rest: effects.filter((e) => !isOwn(e)) }));
+  return split;
+}
+
 /** D30 / C14: who may make an Opportunity Attack against this mover (line of sight is checked per step). */
 function eligibleReactors(ctx: Ctx, o: CtxOpts): void {
   const { state, hero, stats } = ctx;
   if (!o.reactorsOn || stats.invisible) return;
   for (const c of state.combatants) {
     if (c.id === stats.id || !c.position || c.defeated || c.reactionUsed || o.ignore.has(c.id)) continue;
+    if (!areHostile(teamOf(c.side), stats.team)) continue;
     const r = moverStats(state, hero, c.id) as MoverStats;
-    if (!areHostile(r.team, stats.team) || r.incapacitated || r.blinded) continue;
+    if (r.incapacitated || r.blinded) continue;
     if (stats.hidden && r.team === 'party') continue;
     const reactor: Reactor = {
       ...bandOf(c, hero),
@@ -820,13 +861,11 @@ function eligibleReactors(ctx: Ctx, o: CtxOpts): void {
       reachFt: r.reachFt,
       hidden: r.hidden,
       isHero: r.isHero,
-      rank: ctx.ranks.get(c.id) ?? 0,
       declined: o.declined.has(c.id),
     };
     (reactor.declined ? ctx.declinedReactors : ctx.reactors).push(reactor);
   }
-  ctx.reactors.sort((a, b) => a.rank - b.rank);
-  ctx.declinedReactors.sort((a, b) => a.rank - b.rank);
+  // In list order: a search only counts reactors; what a walk reports is put in initiative order (byRank).
   ctx.allReactors = [...ctx.reactors, ...ctx.declinedReactors];
   ctx.allReactors.forEach((r, i) => (r.index = i));
 }
@@ -835,6 +874,8 @@ function buildCtx(state: CombatState, hero: Character | null, mover: Combatant, 
   const map = state.map;
   const cells = mapCells(state, hero);
   if (!map || !cells || !mover.position) return null;
+  const split = splitOwnEmanations(map.effects, mover.id);
+  const moveCells = split ? (mapCells({ ...state, map: { ...map, effects: split.rest } }, hero) as MapCells) : cells;
   const W = cells.width;
   const H = cells.height;
   const n = sizeSquares(stats.size);
@@ -846,6 +887,9 @@ function buildCtx(state: CombatState, hero: Character | null, mover: Combatant, 
     hero,
     map,
     cells,
+    moveCells,
+    selfDifficult: !!split && split.own.some((e) => e.spec.includeOrigin === true && e.terrain.includes('difficult')),
+    selfObscured: !!split && split.own.some((e) => e.terrain.includes('obscured')),
     W,
     H,
     mover,
@@ -859,7 +903,7 @@ function buildCtx(state: CombatState, hero: Character | null, mover: Combatant, 
     fly: o.fly,
     swims: !o.fly && stats.swim > 0,
     crawl: o.crawl,
-    ranks: initiativeRanks(state),
+    ranks: null,
     others: occupants(state, hero).filter((x) => x.id !== mover.id),
     sqBlock: new Uint8Array(N),
     sqDT: new Uint8Array(N),
@@ -886,8 +930,9 @@ function buildCtx(state: CombatState, hero: Character | null, mover: Combatant, 
     const ohi = olo + sizeSquares(occ.size) - 1;
     if (olo > phi || plo > ohi) continue;
     const ally = areAllies(occ.team, stats.team);
-    const passable =
-      ally || occ.incapacitated || occ.size === 'Tiny' || stats.size === 'Tiny' || Math.abs(sizeIndex(occ.size) - moverSize) >= 2;
+    // An ally, an Incapacitated creature, a Tiny creature (the occupant: a Tiny mover still can't pass a Small foe)
+    // or one two sizes apart (R13).
+    const passable = ally || occ.incapacitated || occ.size === 'Tiny' || Math.abs(sizeIndex(occ.size) - moverSize) >= 2;
     const difficult = passable && !(ally || occ.size === 'Tiny');
     for (let y = Math.max(0, occ.rect.y0); y <= Math.min(H - 1, occ.rect.y1); y++) {
       for (let x = Math.max(0, occ.rect.x0); x <= Math.min(W - 1, occ.rect.x1); x++) {
@@ -902,7 +947,7 @@ function buildCtx(state: CombatState, hero: Character | null, mover: Combatant, 
   }
   eligibleReactors(ctx, o);
   if (ctx.reactors.length > 0) {
-    ctx.masks = newMasks(ctx, ctx.pathElev);
+    ctx.masks = withNear(ctx, newMasks(ctx, ctx.pathElev));
     ctx.startMasks = ctx.startElev === ctx.pathElev ? ctx.masks : newMasks(ctx, ctx.startElev);
   }
   return ctx;
@@ -930,6 +975,7 @@ function reaches(ctx: Ctx, r: Reactor, ax: number, ay: number, elevFt: number): 
 
 /** C14: r has line of sight to the mover at (ax, ay). */
 function seesAt(ctx: Ctx, r: Reactor, ax: number, ay: number): boolean {
+  if (ctx.selfObscured) return false;
   const key = r.index * ctx.W * ctx.H + ay * ctx.W + ax;
   let v = ctx.sightMemo.get(key);
   if (v === undefined) {
@@ -947,24 +993,64 @@ function leaves(ctx: Ctx, r: Reactor, a: GridPoint, ea: number, b: GridPoint, eb
 function newMasks(ctx: Ctx, elevFt: number): ReachMasks {
   const chunks = Math.ceil(ctx.reactors.length / 30);
   const N = ctx.W * ctx.H;
-  return { elevFt, chunks, done: new Uint8Array(N), reach: new Int32Array(N * chunks), seen: new Int32Array(N * chunks) };
+  return { elevFt, chunks, near: null, done: new Uint8Array(N), reach: new Int32Array(N * chunks), seen: new Int32Array(N * chunks) };
 }
 
+/** Reactor i's bits at anchor a, once its distance is known to be within reach: no Total Cover (D7), then sight (C14). */
+function markAnchor(ctx: Ctx, m: ReachMasks, i: number, a: number, ax: number, ay: number): void {
+  const r = ctx.reactors[i];
+  if (walledFrom(ctx, r, ax, ay)) return;
+  const slot = a * m.chunks + ((i / 30) | 0);
+  const bit = 1 << i % 30;
+  m.reach[slot] |= bit;
+  if (seesAt(ctx, r, ax, ay)) m.seen[slot] |= bit;
+}
+
+/** The reactors' reach and sight at anchor a, on first use: the same bits as reaches / seesAt per reactor. */
 function ensureMask(ctx: Ctx, m: ReachMasks, a: number): void {
   if (m.done[a]) return;
   m.done[a] = 1;
   const ax = a % ctx.W;
   const ay = (a - ax) / ctx.W;
-  for (let i = 0; i < ctx.reactors.length; i++) {
-    const r = ctx.reactors[i];
-    if (!reaches(ctx, r, ax, ay, m.elevFt)) continue;
-    const slot = a * m.chunks + ((i / 30) | 0);
-    const bit = 1 << i % 30;
-    m.reach[slot] |= bit;
-    if (seesAt(ctx, r, ax, ay)) m.seen[slot] |= bit;
+  if (!m.near) {
+    for (let i = 0; i < ctx.reactors.length; i++) {
+      if (gapFt(ax, ay, ctx.n, m.elevFt, ctx.reactors[i]) <= ctx.reactors[i].reachFt) markAnchor(ctx, m, i, a, ax, ay);
+    }
+    return;
+  }
+  for (let k = 0; k < m.chunks; k++) {
+    for (let bits = m.near[a * m.chunks + k]; bits !== 0; ) {
+      const low = bits & -bits;
+      bits ^= low;
+      markAnchor(ctx, m, k * 30 + 31 - Math.clz32(low), a, ax, ay);
+    }
   }
 }
 
+/**
+ * Which reactors are close enough to reach the mover at each anchor, by distance alone, filled at once reactor by
+ * reactor: 5 × max(gapX, gapY) ≤ reach puts the footprint within reach / 5 squares of the reactor's space. A visited
+ * anchor then tests walls and sight only for those (spec §7.12), not for every reactor.
+ */
+function withNear(ctx: Ctx, m: ReachMasks): ReachMasks {
+  const { W, H, n } = ctx;
+  const near = new Int32Array(W * H * m.chunks);
+  for (let i = 0; i < ctx.reactors.length; i++) {
+    const r = ctx.reactors[i];
+    const squares = Math.floor(r.reachFt / 5);
+    const slot = (i / 30) | 0;
+    const bit = 1 << i % 30;
+    const x1 = Math.min(W - n, r.rect.x1 + squares);
+    const y1 = Math.min(H - n, r.rect.y1 + squares);
+    for (let ay = Math.max(0, r.rect.y0 - (n - 1) - squares); ay <= y1; ay++) {
+      for (let ax = Math.max(0, r.rect.x0 - (n - 1) - squares); ax <= x1; ax++) {
+        if (gapFt(ax, ay, n, m.elevFt, r) <= r.reachFt) near[(ay * W + ax) * m.chunks + slot] |= bit;
+      }
+    }
+  }
+  m.near = near;
+  return m;
+}
 
 // ---------------------------------------------------------------------------
 // Step rules (spec §3.4.2)
@@ -1046,8 +1132,8 @@ function computeStep(ctx: Ctx, ax: number, ay: number, d: number): number {
   const by = ay + dy;
   // 1. Bounds.
   if (bx < 0 || by < 0 || bx + n > W || by + n > H) return ILLEGAL;
-  const flags = ctx.cells.flags;
-  let dt = 0;
+  const flags = ctx.moveCells.flags;
+  let dt = ctx.selfDifficult && !ctx.fly ? 1 : 0;
   let deep = 0;
   // 2. Terrain of the newly entered squares; 6. their cost.
   for (let y = by; y < by + n; y++) {
@@ -1095,6 +1181,15 @@ interface Caps {
   main: number;
   /** Highest total for a deep-water step paid with the Swim Speed (§3.4.4). */
   swim: number;
+}
+
+/**
+ * A turn's allowances (spec §3.4.3–3.4.4): the moving speed plus the Dashes (dashFt: that speed at each Dash). A
+ * Dash may be taken with the Swim Speed instead (srd:rule:dash: "you can use that speed instead of your Speed";
+ * R10), so for steps paid with the Swim Speed each Dash adds the larger of the two.
+ */
+function turnCaps(stats: MoverStats, speedFt: number, dashFt: number, dashes: number): Caps {
+  return { main: speedFt + dashFt, swim: stats.swim + Math.max(dashFt, dashes * stats.swim) };
 }
 
 /**
@@ -1231,10 +1326,13 @@ function runSearch(ctx: Ctx, from: GridPoint, g0: number, caps: Caps, safest: bo
         steps[key] = code;
       }
       if (code < 0) continue;
+      const b = a + DY[d] * W + DX[d];
+      // A settled label of b with no more provocations costs no more than this one (labels settle in order and a step
+      // costs at least 5 ft): every label this step could make is equal to it or dominated by it.
+      if (settledUpTo(done, b * L, p)) continue;
       const cost = stepCost(ctx, code, gl, caps);
       if (cost < 0) continue;
       const ng = gl + cost;
-      const b = a + DY[d] * W + DX[d];
       let np = 0;
       if (ma && mb) {
         if (!mb.done[b]) ensureMask(ctx, mb, b);
@@ -1273,6 +1371,12 @@ function runSearch(ctx: Ctx, from: GridPoint, g0: number, caps: Caps, safest: bo
  */
 function dominated(g: Int32Array, done: Uint8Array, base: number, p: number, gl: number): boolean {
   for (let q = 0; q < p; q++) if (done[base + q] && g[base + q] < gl) return true;
+  return false;
+}
+
+/** Is a label of this anchor with at most p provocations settled? */
+function settledUpTo(done: Uint8Array, base: number, p: number): boolean {
+  for (let q = 0; q <= p; q++) if (done[base + q]) return true;
   return false;
 }
 
@@ -1333,9 +1437,12 @@ function goalDistance(ctx: Ctx, goal: Goal, ax: number, ay: number): number {
   return Math.min(...goal.place.rects.map((r) => rectGapFt(rect, r)));
 }
 
-/** The feet a move costs: its path, or for a flight the larger of the path and the climb or descent (C12). */
-function moveCostFt(ctx: Ctx, pathFt: number, complete: boolean): number {
-  return ctx.fly && complete ? Math.max(pathFt, Math.abs(ctx.endElev - ctx.startElev)) : pathFt;
+/**
+ * The feet a move costs: its path, or for a flight the larger of the path and the climb or descent to the height it
+ * ends at (C12). A flight stopped part-way has already climbed to its path height and pays for it (R11).
+ */
+function moveCostFt(ctx: Ctx, pathFt: number, endsAtFt: number = ctx.endElev): number {
+  return ctx.fly ? Math.max(pathFt, Math.abs(endsAtFt - ctx.startElev)) : pathFt;
 }
 
 /** The goal label minimising (provocations [safest], place penalty, feet, diagonals, y, x), or -1. */
@@ -1356,7 +1463,7 @@ function chooseEnd(ctx: Ctx, s: Search, goal: Goal, g0: number, caps: Caps, safe
         if (penalty === null) return;
         if (!(goal.kind === 'square' && goal.transit) && !endable(ctx, ax, ay)) return;
       }
-      const cost = moveCostFt(ctx, s.g[label] - g0, true);
+      const cost = moveCostFt(ctx, s.g[label] - g0);
       if (ctx.fly && g0 + cost > caps.main) continue;
       const key = [safest ? p : 0, penalty as number, cost, s.diag[label], ay, ax];
       if (!bestKey || compareKeys(key, bestKey) < 0) {
@@ -1383,7 +1490,7 @@ function reachedAnchors(ctx: Ctx, s: Search, g0: number, caps: Caps): { at: Grid
     const ax = a % ctx.W;
     const ay = (a - ax) / ctx.W;
     if (!endable(ctx, ax, ay)) continue;
-    const cost = moveCostFt(ctx, g - g0, true);
+    const cost = moveCostFt(ctx, g - g0);
     if (ctx.fly && g0 + cost > caps.main) continue;
     out.push({ at: { x: ax, y: ay }, costFt: cost });
   }
@@ -1493,22 +1600,17 @@ function lastEndable(ctx: Ctx, path: readonly GridPoint[], i: number): number {
 
 /** The first creature (initiative order) holding the footprint at p that the mover can't pass or end on. */
 function blockerAt(ctx: Ctx, p: GridPoint, lo: number): string {
-  const here = occupantsAt(ctx, p.x, p.y, lo).sort((a, b) => (ctx.ranks.get(a.id) ?? 0) - (ctx.ranks.get(b.id) ?? 0));
+  const here = occupantsAt(ctx, p.x, p.y, lo).sort((a, b) => rankOf(ctx, a.id) - rankOf(ctx, b.id));
   return here[0]?.id ?? '';
 }
 
 /**
- * Walk `path` step by step on ctx's state. `replay` (the player's move on the true map) also checks each step's
- * legality and cost, because the plan was made on the player view: a step something unseen blocks, or one the
- * true cost can't pay for, ends the move at the last square the mover can end on.
+ * Walk `path` step by step on ctx's state (the stop rule, D31). `planned` (the player's move replayed on the true
+ * map, C24) holds the totals the player view priced the path at: a step something unseen blocks, or makes dearer
+ * than the preview (R9), ends the move at the last square before it the mover can end on. Without `planned` the
+ * path always fits (it comes from a search on the same state).
  */
-/**
- * Walk `path` step by step on ctx's state (the stop rule, D31). `replay` is the player's move on the true map
- * (C24): the plan was made on the player view, so a step something unseen blocks, or one the true cost can't pay
- * for, ends the move at the last square the mover can end on. Without `replay` the path always fits (it comes
- * from a search on the same state).
- */
-function walkPath(ctx: Ctx, path: readonly GridPoint[], g0: number, caps: Caps, by: 'player' | 'dm'): Walk {
+function walkPath(ctx: Ctx, path: readonly GridPoint[], g0: number, caps: Caps, by: 'player' | 'dm', planned?: readonly number[]): Walk {
   const k = path.length - 1;
   const fired = new Set<string>();
   const provoked: ProvokedAttack[] = [];
@@ -1519,20 +1621,21 @@ function walkPath(ctx: Ctx, path: readonly GridPoint[], g0: number, caps: Caps, 
   const trigger = (i: number, a: GridPoint, ea: number, b: GridPoint, eb: number): WalkStop | null => {
     const stopping: ProvokedAttack[] = [];
     const declinedHere: ProvokedAttack[] = [];
+    const unseenHere: ProvokedAttack[] = [];
     for (const r of ctx.allReactors) {
       if (fired.has(r.id) || !leaves(ctx, r, a, ea, b, eb)) continue;
       fired.add(r.id);
       const pa = provokedBy(r, a, i);
-      if (r.declined) {
-        declinedHere.push(pa);
-        provoked.push(pa);
-      } else if (r.hidden && by === 'player') {
-        // D35: a hidden reactor never stops (or warns) the player's own move.
-        unseen.push(pa);
-        provoked.push(pa);
-      } else stopping.push(pa);
+      if (r.declined) declinedHere.push(pa);
+      // D35: a hidden reactor never stops (or warns) the player's own move.
+      else if (r.hidden && by === 'player') unseenHere.push(pa);
+      else stopping.push(pa);
     }
+    unseen.push(...byRank(ctx, unseenHere));
+    provoked.push(...declinedHere, ...unseenHere);
     if (stopping.length === 0) return null;
+    byRank(ctx, stopping);
+    byRank(ctx, declinedHere);
     provoked.push(...stopping);
     return { kind: 'oa', triggerIdx: i, reactors: [...stopping, ...declinedHere], declinedIds: declinedHere.map((x) => x.reactorId) };
   };
@@ -1547,6 +1650,9 @@ function walkPath(ctx: Ctx, path: readonly GridPoint[], g0: number, caps: Caps, 
     const code = d < 0 ? ILLEGAL : stepCode(ctx, a.x, a.y, d);
     if (code < 0) return finish(lastEndable(ctx, path, i), { kind: 'unseen', byId: blockerAt(ctx, b, levelOf(ctx.pathElev)), at: point(b) });
     const cost = stepCost(ctx, code, g, caps);
+    if (planned && (cost < 0 || cost > planned[i + 1] - planned[i])) {
+      return finish(lastEndable(ctx, path, i), { kind: 'unseen', byId: dearerBy(ctx, a, b), at: point(b) });
+    }
     if (cost < 0) return finish(lastEndable(ctx, path, i), { kind: 'out-of-movement' });
     const stop = trigger(i, a, elevationAt(ctx, i, k), b, elevationAt(ctx, i + 1, k));
     if (stop) return finish(lastEndable(ctx, path, i), stop);
@@ -1565,8 +1671,37 @@ function walkPath(ctx: Ctx, path: readonly GridPoint[], g0: number, caps: Caps, 
   return finish(k, null);
 }
 
+/**
+ * R9: the hidden creature that makes the step a → b dearer than the player's preview — a hostile one whose space is
+ * Difficult Terrain, or one whose lasting Difficult Terrain aura covers a square entered (neither is in the player
+ * view).
+ */
+function dearerBy(ctx: Ctx, a: GridPoint, b: GridPoint): string {
+  const lo = levelOf(ctx.pathElev);
+  const spaces = occupantsAt(ctx, b.x, b.y, lo).filter((o) => o.hidden && !areAllies(o.team, ctx.stats.team) && o.size !== 'Tiny');
+  if (spaces.length > 0) return spaces.sort((x, y) => rankOf(ctx, x.id) - rankOf(ctx, y.id))[0].id;
+  const entered: GridPoint[] = [];
+  for (let y = b.y; y < b.y + ctx.n; y++) {
+    for (let x = b.x; x < b.x + ctx.n; x++) if (!(x >= a.x && x < a.x + ctx.n && y >= a.y && y < a.y + ctx.n)) entered.push({ x, y });
+  }
+  for (const e of ctx.map.effects) {
+    if (e.duration !== 'lasting' || e.spec.shape !== 'emanation' || !e.terrain.includes('difficult')) continue;
+    const src = ctx.state.combatants.find((c) => c.id === e.spec.fromId);
+    if (!src?.hidden || src.id === ctx.stats.id) continue;
+    const rects = effectSquares(ctx.state, ctx.hero, e);
+    if (entered.some((q) => rects.some((r) => q.x >= r.x0 && q.x <= r.x1 && q.y >= r.y0 && q.y <= r.y1))) return src.id;
+  }
+  return blockerAt(ctx, b, lo);
+}
+
 function rankOf(ctx: Ctx, id: string): number {
+  ctx.ranks ??= initiativeRanks(ctx.state);
   return ctx.ranks.get(id) ?? 0;
+}
+
+/** Opportunity Attacks in initiative order (a no-op for fewer than two). */
+function byRank(ctx: Ctx, list: ProvokedAttack[]): ProvokedAttack[] {
+  return list.length < 2 ? list : list.sort((x, y) => rankOf(ctx, x.reactorId) - rankOf(ctx, y.reactorId));
 }
 
 /** Cumulative totals along a path that fits (the planned route). */
@@ -1593,7 +1728,7 @@ interface StepFacts {
 function labelsUnder(ctx: Ctx, ax: number, ay: number): Set<string> {
   const out = new Set<string>();
   for (let y = ay; y < ay + ctx.n; y++) {
-    for (let x = ax; x < ax + ctx.n; x++) for (const l of ctx.cells.hazardsAt.get(y * ctx.W + x) ?? []) out.add(l);
+    for (let x = ax; x < ax + ctx.n; x++) for (const l of ctx.moveCells.hazardsAt.get(y * ctx.W + x) ?? []) out.add(l);
   }
   return out;
 }
@@ -1667,6 +1802,31 @@ function stopIsValid(state: CombatState, stop: MapStop): boolean {
   return stop.round === state.round && currentCombatant(state)?.id === stop.moverId;
 }
 
+/**
+ * R12: the mover's own valid stop that a forced move, a teleport or a placement ends. Its reactors made their
+ * Opportunity Attacks (that is often why it was pushed), so those that didn't let it go spend their Reactions, as
+ * when the move goes on (D33); the note says so.
+ */
+function endedStop(state: CombatState, moverId: string): { reactionsUsed: string[]; note: MoveNote } | null {
+  const stop = state.map?.stop;
+  if (!stop || stop.moverId !== moverId || !stopIsValid(state, stop)) return null;
+  return {
+    reactionsUsed: stop.reactorIds.filter((id) => !stop.declinedIds.includes(id)),
+    note: { kind: 'stop-continued', reactorIds: [...stop.reactorIds], declinedIds: [...stop.declinedIds] },
+  };
+}
+
+/**
+ * D42: during a hidden creature's turn, the turn the player view shows in its place (the last visible creature's),
+ * else null. Its turn record and stop stay until a visible creature's turn begins (battleMap's pruneMap rule).
+ */
+function shownTurnWhileHidden(state: CombatState): { id: string; round: number } | null {
+  if (!currentCombatant(state)?.hidden) return null;
+  const view = playerView(state);
+  const shown = currentCombatant(view);
+  return shown ? { id: shown.id, round: view.round } : null;
+}
+
 function commit(state: CombatState, w: Write): CombatState {
   const map = state.map as BattleMap;
   const combatants = state.combatants.map((c) => {
@@ -1681,10 +1841,18 @@ function commit(state: CombatState, w: Write): CombatState {
     return next;
   });
   const nextMap: BattleMap = { ...map };
-  if (w.turn) nextMap.turn = w.turn;
+  // While a hidden creature has the turn, the player still sees the shown turn's record and stop: neither may change
+  // (amendment 8). The hidden creature's own record and stop then aren't kept (the map holds one of each).
+  const shown = shownTurnWhileHidden(state);
+  const isShown = (round: number, id: string) => shown !== null && round === shown.round && id === shown.id;
+  if (w.turn && !(map.turn && isShown(map.turn.round, map.turn.combatantId))) nextMap.turn = w.turn;
   // The mover's own stop ends when it moves again; anyone else's is kept while it still counts (pruned otherwise).
   const old = map.stop;
-  const stop = w.stop ?? (old && old.moverId !== w.moverId && stopIsValid(state, old) ? old : undefined);
+  const othersStop = old && old.moverId !== w.moverId ? old : undefined;
+  const stop =
+    othersStop && isShown(othersStop.round, othersStop.moverId)
+      ? othersStop
+      : (w.stop ?? (othersStop && stopIsValid(state, othersStop) ? othersStop : undefined));
   if (stop) nextMap.stop = stop;
   else delete nextMap.stop;
   return { ...state, combatants, map: nextMap };
@@ -1772,8 +1940,11 @@ function resolveGoal(ctx: Ctx, req: MoveRequest, stats: MoverStats): Goal | Move
 function squareGoal(ctx: Ctx, at: GridPoint, transit: boolean): Goal | MoveRefusal {
   if (!isSquare(at)) return { code: 'bad-request', problem: 'A square needs whole-number coordinates.' };
   if (!fits(at, ctx.n, ctx.W, ctx.H)) return { code: 'off-map', to: point(at) };
+  const own = anchorRect(ctx.start.x, ctx.start.y, ctx.n);
   for (let y = at.y; y < at.y + ctx.n; y++) {
     for (let x = at.x; x < at.x + ctx.n; x++) {
+      // The squares it already stands on never block it (R8: a creature in a pit can stand up where it fell).
+      if (ctx.placed && x >= own.x0 && x <= own.x1 && y >= own.y0 && y <= own.y1) continue;
       const f = ctx.cells.flags[y * ctx.W + x];
       if (f & CELL.BLOCKS_MOVE || (!ctx.fly && f & CELL.PIT)) {
         return { code: 'blocked', at: { x, y }, what: blockedWhat(blockingFeature(ctx.map, x, y, ctx.fly)) };
@@ -1799,6 +1970,18 @@ function fearSource(ctx: Ctx, path: readonly GridPoint[]): string | null {
     }
   }
   return ctx.fear[0]?.id ?? null;
+}
+
+/**
+ * R5: the waypoints a repeated stopped move still has ahead (D33: "repeat the same call"). One it already passed is
+ * off the stop's remaining route and was walked this turn (with no turn record, an off-turn move: just off the
+ * route); any other, a new one included, still counts.
+ */
+function waypointsAhead(state: CombatState, stop: MapStop, via: readonly GridPoint[]): GridPoint[] {
+  const turn = state.map?.turn;
+  const walked = turn && turn.combatantId === stop.moverId && turn.round === stop.round ? turn.moves.flatMap((m) => [m.from, ...m.path]) : null;
+  const on = (list: readonly GridPoint[], p: GridPoint) => list.some((q) => samePoint(p, q));
+  return via.filter((p) => on(stop.route, p) || (walked !== null && !on(walked, p)));
 }
 
 function planWilling(state: CombatState, hero: Character | null, req: MoveRequest): WillingResult {
@@ -1835,7 +2018,7 @@ function planWilling(state: CombatState, hero: Character | null, req: MoveReques
   const moved = turn?.movedFt ?? 0;
   const offTurnAllowance = kindMove ? 0 : req.budgetFt !== undefined ? Math.max(0, toInt(req.budgetFt)) : speedFt;
   const caps: Caps = kindMove
-    ? { main: speedFt + dashFt, swim: stats.swim + dashFt }
+    ? turnCaps(stats, speedFt, dashFt, dashes)
     : { main: offTurnAllowance, swim: req.budgetFt !== undefined ? offTurnAllowance : stats.swim };
   // Standing up (srd:condition:prone): half the walking Speed, before moving; DM-made moves stand by default.
   const standing = stats.prone && req.stayProne !== true;
@@ -1862,7 +2045,7 @@ function planWilling(state: CombatState, hero: Character | null, req: MoveReques
   const goal = resolveGoal(ctx, req, stats);
   if (isRefusal(goal)) return fail(goal);
   const legs: Goal[] = [];
-  for (const wp of req.via ?? []) {
+  for (const wp of continuing && req.via?.length ? waypointsAhead(state, continuing, req.via) : (req.via ?? [])) {
     const leg = squareGoal(ctx, wp, true);
     if (isRefusal(leg)) return fail(leg);
     legs.push(leg);
@@ -1931,12 +2114,15 @@ function planWilling(state: CombatState, hero: Character | null, req: MoveReques
   }
   const unlimited = chainSearch(ctx, legs, g0, { main: INF, swim: INF }, safest);
   if (!unlimited.ok) return toward(failedLeg, closest?.at, { code: 'no-route', ...(closest ? { closest } : {}) });
-  const dashAvailable = kindMove && !tookDash && (turn?.dashes ?? 0) === 0 && speedFt > 0;
-  const dashWouldReach = dashAvailable && chainSearch(ctx, legs, g0, { main: caps.main + speedFt, swim: caps.swim + speedFt }, safest).ok;
+  // A Dash adds the moving speed, or the Swim Speed for a swimmer (R10).
+  const dashAvailable = kindMove && !tookDash && (turn?.dashes ?? 0) === 0 && (speedFt > 0 || ctx.swims);
+  const dashWouldReach = dashAvailable && chainSearch(ctx, legs, g0, turnCaps(stats, speedFt, dashFt + speedFt, dashes + 1), safest).ok;
+  // In deep water a swimmer has what its Swim Speed allows, if that is more.
+  const allowance = ctx.swims && inDeepWater(ctx.cells, ctx.start, ctx.n) ? Math.max(caps.main, caps.swim) : caps.main;
   return toward(failedLeg, closest?.at, {
     code: 'too-far',
-    needFt: moveCostFt(ctx, unlimited.g - g0, true),
-    leftFt: Math.max(0, caps.main - g0),
+    needFt: moveCostFt(ctx, unlimited.g - g0),
+    leftFt: Math.max(0, allowance - g0),
     route: unlimited.path.slice(1),
     ...(closest ? { closest } : {}),
     dashWouldReach,
@@ -1952,18 +2138,21 @@ function stopOpts(req: MoveRequest, mode: MoveMode): MapStop['opts'] {
   return opts;
 }
 
-/** The walk, the notes, the turn record and the stop of a willing move (DM-made, or the player's replay). */
-function finishWilling(state: CombatState, wp: WillingPlan, ctx: Ctx): { planned: Planned; walk: Walk } {
+/**
+ * The walk, the notes, the turn record and the stop of a willing move (DM-made, or the player's replay: `preview`
+ * holds the totals the player view priced its path at).
+ */
+function finishWilling(state: CombatState, wp: WillingPlan, ctx: Ctx, preview?: readonly number[]): { planned: Planned; walk: Walk } {
   const { req, stats, path, g0, caps } = wp;
   const by = req.by;
-  const walk = walkPath(ctx, path, g0, caps, by);
+  const walk = walkPath(ctx, path, g0, caps, by, preview);
   const k = path.length - 1;
   const endIdx = walk.endIdx;
   const end = path[endIdx];
   const taken = path.slice(1, endIdx + 1).map(point);
   const completed = walk.stop === null;
-  const costFt = moveCostFt(ctx, walk.gAt[endIdx] - g0, completed);
   const elevationFt = finalElevation(ctx, endIdx, completed);
+  const costFt = moveCostFt(ctx, walk.gAt[endIdx] - g0, elevationFt);
   const facts = stepFacts(ctx, path, endIdx);
   const oaStop = walk.stop?.kind === 'oa' ? walk.stop : null;
 
@@ -2015,7 +2204,7 @@ function finishWilling(state: CombatState, wp: WillingPlan, ctx: Ctx): { planned
     };
   }
   const budget: TurnBudget = turn
-    ? budgetOf(stats, wp.mode, turn, stats.prone && !wp.standing)
+    ? budgetOf(stats, wp.mode, turn, stats.prone && !wp.standing, inDeepWater(ctx.cells, end, ctx.n))
     : {
         ...budgetOf(stats, wp.mode, null, stats.prone && !wp.standing),
         speedFt: wp.offTurnAllowance,
@@ -2042,7 +2231,9 @@ function finishWilling(state: CombatState, wp: WillingPlan, ctx: Ctx): { planned
       }
     : null;
   const reactionsUsed = wp.continuing ? wp.continuing.reactorIds.filter((id) => !declinedAll.has(id)) : [];
+  // A stop for something unseen is news for the DM even on the first step (P3): its 0-ft record is written.
   const nothingChanged =
+    walk.stop === null &&
     taken.length === 0 &&
     !wp.standing &&
     !wp.tookDash &&
@@ -2084,7 +2275,10 @@ function finishWilling(state: CombatState, wp: WillingPlan, ctx: Ctx): { planned
         destination: point(path[k]),
         reactors: oaStop.reactors,
         remainingPath: path.slice(endIdx + 1).map(point),
-        remainingCostFt: Math.max(0, moveCostFt(ctx, totals[k] - g0, true) - costFt),
+        // What the repeat costs from here: the rest of the path (a flight: or the height still to change).
+        remainingCostFt: ctx.fly
+          ? Math.max(totals[k] - walk.gAt[endIdx], Math.abs(ctx.endElev - elevationFt))
+          : Math.max(0, totals[k] - walk.gAt[endIdx]),
       }
     : { ...base, status: 'moved', to: point(end) };
   return { planned: { plan, write }, walk };
@@ -2140,8 +2334,8 @@ function recordOther(
 }
 
 /** The current creature's budget after a forced move, teleport or placement; null for anyone else. */
-function otherBudget(stats: MoverStats, turn: MapTurn | null, elevationFt: number): TurnBudget | null {
-  return turn ? budgetOf(stats, defaultMode(stats, elevationFt), turn) : null;
+function otherBudget(stats: MoverStats, turn: MapTurn | null, elevationFt: number, inDeep: boolean): TurnBudget | null {
+  return turn ? budgetOf(stats, defaultMode(stats, elevationFt), turn, stats.prone, inDeep) : null;
 }
 
 function planForced(state: CombatState, hero: Character | null, req: MoveRequest, ctx: Ctx): Planned {
@@ -2234,6 +2428,8 @@ function planForced(state: CombatState, hero: Character | null, req: MoveRequest
     if (gapFt(cur.x, cur.y, n, elevationFt, bandOf(grappler, hero)) > reach) notes.push({ kind: 'grapple-ended', grapplerId: grappler.id });
   }
   const turn = recordOther(state, stats, { kind: 'forced', by: req.by, from: start, to: cur, path, spendFt: 0, entered });
+  const ended = path.length > 0 ? endedStop(state, id) : null;
+  if (ended) notes.push(ended.note);
   const plan: MovePlan = {
     status: 'moved',
     moverId: id,
@@ -2242,13 +2438,15 @@ function planForced(state: CombatState, hero: Character | null, req: MoveRequest
     path,
     to: point(cur),
     costFt: 0,
-    budget: otherBudget(stats, turn, elevationFt),
+    budget: otherBudget(stats, turn, elevationFt, inDeepWater(ctx.cells, cur, n)),
     provoked: [],
     notes,
     heroStoodUp: false,
   };
   const write: Write | null =
-    path.length === 0 ? null : { moverId: id, to: cur, elevationFt, removeProne: false, turn, stop: null, reactionsUsed: [] };
+    path.length === 0
+      ? null
+      : { moverId: id, to: cur, elevationFt, removeProne: false, turn, stop: null, reactionsUsed: ended?.reactionsUsed ?? [] };
   return { plan, write };
 }
 
@@ -2380,6 +2578,9 @@ function planTeleportOrPlace(
   }
   const spendFt = teleport ? 0 : Math.max(0, toInt(req.spendFt));
   const turn = recordOther(state, stats, { kind: req.kind, by: req.by, from: start ?? to, to, path: [], spendFt, entered: [] });
+  const unchanged = start !== null && samePoint(start, to) && elevationFt === startElev && spendFt === 0;
+  const ended = unchanged ? null : endedStop(state, id);
+  if (ended) notes.push(ended.note);
   const plan: MovePlan = {
     status: 'moved',
     moverId: id,
@@ -2388,13 +2589,14 @@ function planTeleportOrPlace(
     path: [],
     to: point(to),
     costFt: spendFt,
-    budget: otherBudget(stats, turn, elevationFt),
+    budget: otherBudget(stats, turn, elevationFt, inDeepWater(anchorCtx.cells, to, anchorCtx.n)),
     provoked: [],
     notes,
     heroStoodUp: false,
   };
-  const unchanged = start !== null && samePoint(start, to) && elevationFt === startElev && spendFt === 0;
-  const write: Write | null = unchanged ? null : { moverId: id, to, elevationFt, removeProne: false, turn, stop: null, reactionsUsed: [] };
+  const write: Write | null = unchanged
+    ? null
+    : { moverId: id, to, elevationFt, removeProne: false, turn, stop: null, reactionsUsed: ended?.reactionsUsed ?? [] };
   return { plan, write };
 }
 
@@ -2528,7 +2730,7 @@ export function applyHeroMove(state: CombatState, hero: Character, req: HeroMove
   if (!trueCtx) return refuse({ code: 'unplaced' });
   // The view's turn record drops DM-only detail (hidden reactors): write the true one.
   const trueWp: WillingPlan = { ...wp, ctx: trueCtx, turn: currentTurn(state), continuing };
-  const { planned: result, walk } = finishWilling(state, trueWp, trueCtx);
+  const { planned: result, walk } = finishWilling(state, trueWp, trueCtx, pathTotals(wp.ctx, wp.path, wp.g0, wp.caps));
   const plan = result.plan;
   if (plan.status === 'refused') return refuse(plan.refusal);
   // 4. The write: position, the turn record (by 'player'), the stop; continuing marks the stop's reactors used.
@@ -2600,8 +2802,11 @@ export function reachableSquares(
   if (fly && (stats.fly <= 0 || noFly(stats, startElev, !standing))) return [];
   const turn = currentCombatant(view)?.id === id ? currentTurn(view) : null;
   const budget = budgetOf(stats, mode, turn);
+  const speedFt = budget.speedFt;
   const standCost = standing ? budget.standCostFt : 0;
-  if (standing && (stats.walk <= 0 || budget.leftFt < standCost)) return [];
+  // Standing may be paid out of a Dash it hasn't taken yet (as planMove allows): then there is only the Dash band (R14).
+  const standsNow = budget.leftFt >= standCost;
+  if (standing && (stats.walk <= 0 || (!standsNow && !(budget.dashes === 0 && budget.leftFt + speedFt >= standCost)))) return [];
   const ctx = buildCtx(view, hero, mover, stats, {
     fly,
     startElev,
@@ -2615,41 +2820,46 @@ export function reachableSquares(
   if (!ctx) return [];
   const safest = (opts.prefer ?? 'safest') === 'safest';
   const g0 = budget.movedFt + standCost;
-  const capMove: Caps = { main: budget.speedFt + budget.dashFt, swim: stats.swim + budget.dashFt };
-  const dashAvailable = budget.dashes === 0 && budget.dashAddsFt > 0;
-  const far = dashAvailable
-    ? runSearch(ctx, ctx.start, g0, { main: capMove.main + budget.dashAddsFt, swim: capMove.swim + budget.dashAddsFt }, safest, true)
-    : null;
+  const capMove = turnCaps(stats, speedFt, budget.dashFt, budget.dashes);
+  // One more Dash: the moving speed, or the Swim Speed for a swimmer (R10).
+  const dashAvailable = budget.dashes === 0 && (speedFt > 0 || ctx.swims);
+  const capDash = dashAvailable ? turnCaps(stats, speedFt, budget.dashFt + speedFt, budget.dashes + 1) : null;
+  const far = capDash ? runSearch(ctx, ctx.start, g0, capDash, safest, true) : null;
   // One search serves both bands unless a step's price depends on the allowance (a swimmer in deep water pays a
   // step with its Swim Speed only while that allowance lasts): every label the Dash search settles within the move
   // allowance has the same route, cost and provocations as in a search capped there (spec §7.12).
   const shared = far !== null && !(ctx.swims && hasDeepWater(ctx.cells));
-  const near = shared ? (far as Search) : runSearch(ctx, ctx.start, g0, capMove, safest, true);
+  const near = !standsNow ? null : shared ? (far as Search) : runSearch(ctx, ctx.start, g0, capMove, safest, true);
   const nearMaxG = shared ? capMove.main : INF - 1;
   const out: ReachableSquare[] = [];
-  const startIdx = ctx.start.y * ctx.W + ctx.start.x;
   /** The route planMove would take there: fewest provocations first (one label per anchor when shortest). */
-  const best = (s: Search, a: number, maxG: number): { g: number; provokes: number } | null => {
+  const best = (s: Search | null, a: number, maxG: number): { g: number; provokes: number } | null => {
+    if (!s) return null;
     for (let p = 0; p < s.L; p++) {
       const label = a * s.L + p;
       if (s.g[label] <= maxG) return { g: s.g[label], provokes: firedCount(s, label) };
     }
     return null;
   };
-  for (let a = 0; a < ctx.W * ctx.H; a++) {
-    if (a === startIdx) continue;
-    const inMove = best(near, a, nearMaxG);
-    const hit = inMove ?? (far ? best(far, a, INF - 1) : null);
-    if (!hit) continue;
-    const ax = a % ctx.W;
-    const ay = (a - ax) / ctx.W;
-    out.push({
-      at: { x: ax, y: ay },
-      costFt: hit.g - g0,
-      band: inMove ? 'move' : 'dash',
-      provokes: hit.provokes,
-      canEnd: endable(ctx, ax, ay),
-    });
+  // Every step costs at least 5 ft and moves one square, so nothing lies further than the allowance / 5 squares away.
+  const widest = capDash ?? capMove;
+  const range = Math.floor((Math.max(widest.main, widest.swim) - g0) / 5);
+  const { x: sx, y: sy } = ctx.start;
+  for (let ay = Math.max(0, sy - range); ay <= Math.min(ctx.H - 1, sy + range); ay++) {
+    for (let ax = Math.max(0, sx - range); ax <= Math.min(ctx.W - 1, sx + range); ax++) {
+      if (ax === sx && ay === sy) continue;
+      const a = ay * ctx.W + ax;
+      const inMove = best(near, a, nearMaxG);
+      const hit = inMove ?? best(far, a, INF - 1);
+      if (!hit) continue;
+      out.push({
+        at: { x: ax, y: ay },
+        costFt: hit.g - g0,
+        band: inMove ? 'move' : 'dash',
+        provokes: hit.provokes,
+        canEnd: endable(ctx, ax, ay),
+      });
+    }
   }
   return out;
 }

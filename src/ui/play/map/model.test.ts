@@ -98,18 +98,41 @@ describe('the map model: one player view (D63)', () => {
     resetShownBudgetForTests();
     expect(turnRecordHidden(hiddenTurn)).toBe(false);
     expect(modelFor(hiddenTurn, { rawBlock: 'not-your-turn' }).budget?.leftFt).toBe(20);
-    // …and is kept when the Cutthroat's move replaces that record on the same page.
+    // …and is kept on the same page after the Cutthroat moves.
     const cutMoved = applyMove(hiddenTurn, hero, { moverId: 'c-5', kind: 'move', by: 'dm', to: { kind: 'square', at: { x: 11, y: 7 } } });
     if (cutMoved.status === 'refused') throw new Error('refused');
-    expect(turnRecordHidden(cutMoved.state)).toBe(true);
     expect(modelFor(cutMoved.state, { rawBlock: 'not-your-turn' }).budget?.leftFt).toBe(20);
-    // Reloaded after the Cutthroat moved: the hero's movement can't be known here; no fresh "30 ft" (the turn would
-    // look restarted), just "Your turn".
+    // Reloaded after the Cutthroat moved: the true map still has the hero's record (the truth, 20 ft), or the hidden
+    // creature's record replaced it (unknown here: no feet, next test) — never a fresh 30 ft, as if the turn restarted.
     resetShownBudgetForTests();
     const reloaded = modelFor(cutMoved.state, { rawBlock: 'not-your-turn' });
     expect(reloaded.yourTurn).toBe(true);
+    expect(reloaded.budget?.leftFt ?? null).toBe(turnRecordHidden(cutMoved.state) ? null : 20);
+  });
+
+  it('U8: when the hidden creature’s record has replaced the hero’s on the true map, a reloaded page shows "Your turn" with no feet', () => {
+    const base = sampleMappedCombat({ heroTurn: true });
+    const [mira, bandit1, cutthroat, ...rest] = base.combatants;
+    const ordered: CombatState = { ...base, combatants: [mira, { ...cutthroat, initiative: 16 }, bandit1, ...rest], turnIndex: 0 };
+    const moved = applyHeroMove(ordered, hero, { to: { x: 1, y: 7 }, prefer: 'safest', dash: false, disengage: false, standUp: false }, { stopResolved: true });
+    if (moved.status === 'refused') throw new Error('refused');
+    const hiddenTurn = nextTurn(moved.state);
+    const map = hiddenTurn.map as NonNullable<CombatState['map']>;
+    // The Cutthroat's own turn record (5 ft moved) in place of the hero's.
+    const replaced: CombatState = {
+      ...hiddenTurn,
+      map: { ...map, turn: { combatantId: 'c-5', round: hiddenTurn.round, movedFt: 5, dashFt: 0, dashes: 0, disengaged: false, stoodUp: false, moves: [] } },
+    };
+    expect(turnRecordHidden(replaced)).toBe(true);
+    resetShownBudgetForTests();
+    const reloaded = modelFor(replaced, { rawBlock: 'not-your-turn' });
+    expect(reloaded.yourTurn).toBe(true);
     expect(reloaded.budget).toBeNull();
     expect(turnPillText({ yourTurn: reloaded.yourTurn, currentName: null, budget: reloaded.budget })).toBe('Your turn');
+    // The same page keeps the budget it last showed (20 ft) rather than dropping it.
+    resetShownBudgetForTests();
+    expect(modelFor(hiddenTurn, { rawBlock: 'not-your-turn' }).budget?.leftFt).toBe(20);
+    expect(modelFor(replaced, { rawBlock: 'not-your-turn' }).budget?.leftFt).toBe(20);
   });
 
   it('lists the hero’s moves the DM hasn’t answered yet (D48)', () => {

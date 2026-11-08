@@ -85,9 +85,11 @@ export function TokenCard({
     <CardFrame
       onClose={onClose}
       title={
-        <span className="flex min-w-0 items-center gap-2">
+        // Wraps instead of squeezing the name (as the tracker's rows do, E1): in phone landscape's side column the
+        // side and the square go to the next line.
+        <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
           <span className={`size-2.5 shrink-0 ${SHAPE_DOT[token.side]}`} aria-hidden />
-          <span className="truncate">{name}</span>
+          <span className="min-w-0 truncate">{name}</span>
           {!isHero && <span className="shrink-0 text-xs font-normal text-faint">({SIDE_WORD[token.side]})</span>}
           <span className="ml-auto shrink-0 text-xs font-normal text-muted tabular-nums">
             {where}

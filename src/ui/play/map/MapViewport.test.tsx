@@ -1,5 +1,5 @@
 import '../testing/setup';
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { GameStoreState } from '@/state/gameStore';
 import { sampleMappedCombat } from '@/test/fixtures';
@@ -59,11 +59,53 @@ beforeEach(() => {
 });
 
 describe('MapViewport pointer input (D60)', () => {
-  it('stores the opening camera for this fight and map: the whole 16×12 map at ≈ 37px squares', () => {
+  it('stores the opening camera for this fight and map: the whole 16×12 map at ≈ 34px squares, clear of the zoom buttons (E3)', () => {
     renderMap();
     const cam = usePlayView.getState().cameras[CAMERA_KEY];
-    expect(cam.cellPx).toBeGreaterThan(36);
-    expect(cam.cellPx).toBeLessThan(38);
+    // (640 − 22 rulers − 56 zoom lane − 16 padding) / 16 columns.
+    expect(cam.cellPx).toBeCloseTo(34.125);
+    const live = liveCamera(cam, VIEW);
+    expect(worldToScreen(live, 16 * CELL, 0).x).toBeLessThanOrEqual(VIEW.width - 56);
+    expect(worldToScreen(live, 0, 12 * CELL).y).toBeLessThanOrEqual(VIEW.height);
+  });
+
+  it('E2: an opening camera the player hasn’t moved is chosen again when the view changes size, so a fit stays a fit', () => {
+    renderMap();
+    expect(usePlayView.getState().cameras[CAMERA_KEY].cellPx).toBeCloseTo(34.125);
+    // The view gets shorter (the dock's head wraps, the window is resized…): the whole map again, at (400 − 32) / 12.
+    stubBoundingRect(640, 400);
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    const cam = usePlayView.getState().cameras[CAMERA_KEY];
+    expect(cam.cellPx).toBeCloseTo(368 / 12);
+    const live = liveCamera(cam, { width: 640, height: 400 });
+    expect(worldToScreen(live, 0, 0).y).toBeGreaterThanOrEqual(16);
+    expect(worldToScreen(live, 0, 12 * CELL).y).toBeLessThanOrEqual(400);
+  });
+
+  it('E2: …also when the map comes back at another size (the dock collapsed and expanded, the Combat tab reopened)', () => {
+    renderMap();
+    expect(usePlayView.getState().cameras[CAMERA_KEY].cellPx).toBeCloseTo(34.125);
+    // The map unmounts (the camera stays in the view state) and comes back in a shorter view.
+    cleanup();
+    stubBoundingRect(640, 400);
+    render(<BattleMapPanel variant="dock" />);
+    expect(usePlayView.getState().cameras[CAMERA_KEY].cellPx).toBeCloseTo(368 / 12);
+  });
+
+  it('E2: once the player zooms, a resize leaves the camera alone', async () => {
+    renderMap();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Zoom in' }));
+    });
+    const zoomed = usePlayView.getState().cameras[CAMERA_KEY];
+    expect(zoomed.cellPx).toBeCloseTo(34.125 * 1.25);
+    stubBoundingRect(640, 400);
+    act(() => {
+      window.dispatchEvent(new Event('resize'));
+    });
+    expect(usePlayView.getState().cameras[CAMERA_KEY]).toBe(zoomed);
   });
 
   it('touch: the first tap plans, a second tap on the same square moves', async () => {

@@ -84,7 +84,8 @@ describe('PositionsList (spec §7.9)', () => {
 
   it('can’t move off your turn, and never lists a hidden creature', async () => {
     await renderList({ combat: { ...sampleMappedCombat(), turnIndex: 2 } });
-    expect(screen.getByText('You can move on your turn.')).toBeInTheDocument();
+    // The bar's reason, in the list too (U2).
+    expect(screen.getByText("It isn't your turn.")).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Move next to/ })).not.toBeInTheDocument();
     expect(screen.getByRole('table').textContent).not.toMatch(/Cutthroat/);
   });

@@ -514,6 +514,25 @@ describe('the list view (spec §7.9: the complete path without a pointer or sigh
   const field = () => screen.getByRole('textbox', { name: 'Move to square' }) as HTMLInputElement;
   const listMove = () => within(field().closest('form') as HTMLElement).getByRole('button', { name: /Move/ });
 
+  it('U2: the list’s readout region stays mounted (empty while you can’t move), so its first readout is announced', async () => {
+    const { user } = renderPanel({ combat: sampleMappedCombat() });
+    act(() => usePlayView.getState().setMapList(true));
+    const region = screen.getByTestId('list-readout');
+    expect(region).toHaveAttribute('aria-live', 'polite');
+    await user.type(field(), 'D8');
+    // Off your turn there is no plan to read out: the region is there, and empty.
+    expect(screen.getByTestId('list-readout')).toBe(region);
+    expect(region).toBeEmptyDOMElement();
+    // Your turn: the same region gets the readout.
+    const c = useGame.getState().combat as CombatState;
+    act(() => useGame.setState({ combat: { ...c, turnIndex: 0, round: c.round + 1 } }));
+    await user.clear(field());
+    await user.type(field(), 'D8');
+    expect(screen.getByTestId('list-readout')).toBe(region);
+    expect(region).toHaveTextContent('To D8 · 10 ft · 20 ft left');
+    expect(field()).toHaveAttribute('aria-describedby', region.id);
+  });
+
   it('U3: Move to square commits what its own readout previewed, not an earlier map plan’s Disengage', async () => {
     const { spies, user } = renderPanel({ combat: heroTurnWithBanditAdjacent() });
     await enterOn(3, 7); // D8 on the map…
@@ -689,5 +708,64 @@ describe('U10: the next fight on the same table', () => {
     const c = useGame.getState().combat as CombatState;
     act(() => useGame.setState({ combat: { ...c, map: { ...(c.map as NonNullable<CombatState['map']>), id: 'map-2' } } }));
     expect(usePlayView.getState().cursor).toBeNull();
+  });
+});
+
+describe('E2 and E3: the dock’s action bar and the zoom buttons', () => {
+  const zoomGroup = () => screen.queryByRole('group', { name: 'Zoom' });
+  const viewportArea = () => document.querySelector('[data-map-part="viewport"]') as HTMLElement;
+  const strip = () => document.querySelector('[data-map-part="strip"]') as HTMLElement | null;
+
+  it('E2: the bar sits in a strip of fixed height under the map, so the map keeps its size whatever the bar holds', async () => {
+    renderPanel();
+    expect(strip()).toHaveClass('h-14', 'shrink-0');
+    expect(strip()?.contains(bar())).toBe(true);
+    expect(viewportArea().contains(bar())).toBe(false);
+    // A taller bar (a creature's card) grows up over the map from the strip; the strip itself stays put.
+    act(() => usePlayView.getState().setCursor({ x: 1, y: 4 }));
+    await key('Enter');
+    expect(within(bar()).getByText('Old Tam')).toBeInTheDocument();
+    expect(strip()).toHaveClass('h-14');
+    expect(bar().parentElement).toHaveClass('absolute', 'bottom-0', 'z-10');
+  });
+
+  it('E3: the zoom buttons float in a lane the bar keeps clear (40px buttons with a mouse, 48px on touch)', () => {
+    const { unmount } = renderPanel();
+    const group = zoomGroup() as HTMLElement;
+    // Above the bar's strip and anything it grows over (z-20 over its z-10), not inside the map's own box.
+    expect(viewportArea().contains(group)).toBe(false);
+    expect(group.parentElement).toHaveClass('absolute', 'right-2', 'bottom-2', 'z-20');
+    expect((bar().parentElement as HTMLElement).style.paddingRight).toBe('56px');
+    unmount();
+    setMatchMedia((q) => DESKTOP(q) || TOUCH(q));
+    renderPanel();
+    expect((bar().parentElement as HTMLElement).style.paddingRight).toBe('64px');
+  });
+
+  it('E3: the list view has no zoom buttons and no lane; on phones the buttons stay inside the map and the bar is below it', async () => {
+    const { unmount } = renderPanel();
+    await key('l');
+    expect(zoomGroup()).toBeNull();
+    expect((bar().parentElement as HTMLElement).style.paddingRight).toBe('');
+    unmount();
+    act(() => usePlayView.getState().setMapList(false));
+    renderPanel({}, 'tab');
+    expect(strip()).toBeNull();
+    expect(viewportArea().contains(zoomGroup())).toBe(true);
+    expect(viewportArea().contains(bar())).toBe(false);
+  });
+});
+
+describe('E1 in a creature’s card', () => {
+  it('the name stays whole in a narrow bar: the side and the square wrap to the next line instead of squeezing it', async () => {
+    renderPanel();
+    act(() => usePlayView.getState().setCursor({ x: 1, y: 4 })); // Old Tam
+    await key('Enter');
+    const name = within(bar()).getByText('Old Tam');
+    const title = name.parentElement as HTMLElement;
+    expect(title).toHaveClass('flex-wrap');
+    expect(name).toHaveClass('min-w-0', 'truncate');
+    expect(within(title).getByText('(ally)')).toHaveClass('shrink-0');
+    expect(title).toHaveTextContent('B5 (the loading door)');
   });
 });

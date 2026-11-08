@@ -1,7 +1,8 @@
 /**
  * The battle map's container: store → model (the player view) → controller → viewport and chrome. `dock` is the
- * desktop panel above the story (the action bar floats over the map); `tab` is the phone Combat tab's section (pill,
- * map, action bar stacked; side by side in phone landscape, by CSS only).
+ * desktop panel above the story (the action bar in a fixed strip under the map, growing up over it when taller, the
+ * zoom buttons in a lane at the right that the bar keeps clear); `tab` is the phone Combat tab's section (pill, map,
+ * action bar stacked; side by side in phone landscape, by CSS only).
  */
 import { useCallback, useId, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
@@ -93,6 +94,16 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
     dispatch({ type: 'template', template: templateFromPreset(preset, { heroId: model.heroId, centre, aim }) });
   };
 
+  /** The zoom buttons' lane down the map's right edge, which the cameras the app chooses keep clear (E3). */
+  const lane = zoomControlsInset(touch);
+  // Bottom-right. In the dock they sit above the action bar's strip and its overflow (z-20 over its z-10), in a lane
+  // the bar's content keeps clear, so a tall bar (a card, a plan with chips) never hides them or goes under them.
+  const zoomControls = mapList ? null : (
+    <div className={cn('pointer-events-none absolute right-2 bottom-2 flex flex-col', variant === 'dock' && 'z-20')}>
+      <ZoomControls onZoom={onZoom} onFit={onFit} onCenter={onCenter} />
+    </div>
+  );
+
   const viewportArea = mapList ? (
     <PositionsList model={model} onShow={showOnMap} onMoveTo={moveTo} onMoveNextTo={moveNextTo} />
   ) : (
@@ -106,18 +117,16 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
         helpId={helpId}
         onHelp={openHelp}
         onList={toggleList}
-        controlsInset={zoomControlsInset(touch)}
+        controlsInset={lane}
       />
-      <div className="pointer-events-none absolute right-2 bottom-2 flex flex-col">
-        <ZoomControls onZoom={onZoom} onFit={onFit} onCenter={onCenter} />
-      </div>
+      {variant === 'tab' && zoomControls}
     </>
   );
 
   const bar = <MapActionBar model={model} controller={controller} variant={variant} />;
 
   return (
-    <div data-map-part="panel" className={cn('flex min-h-0 flex-col', variant === 'dock' && 'h-full')}>
+    <div data-map-part="panel" className={cn('flex min-h-0 flex-col', variant === 'dock' && 'relative h-full')}>
       <div data-map-part="head" className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 border-b border-border bg-surface px-3 py-1.5">
         <TurnPill model={model} onStandUp={controller.standUp} />
         <MapToolbar
@@ -144,7 +153,10 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
         // map that shrank and grew with the bar would shift under the pointer, and an opening fit would stop fitting
         // (E2). A bar taller than the strip (a card, a plan with chips) grows up over the map's bottom edge instead.
         <div data-map-part="strip" className="relative h-14 shrink-0">
-          <div className="absolute inset-x-0 bottom-0 z-10 flex max-h-44 min-h-full flex-col overflow-y-auto border-t border-border bg-surface px-3 py-2 scroll-thin">
+          <div
+            className="absolute inset-x-0 bottom-0 z-10 flex max-h-44 min-h-full flex-col overflow-y-auto border-t border-border bg-surface px-3 py-2 scroll-thin"
+            style={zoomControls ? { paddingRight: lane } : undefined}
+          >
             <div ref={barRef} data-map-part="bar" className="@container my-auto">
               {bar}
             </div>
@@ -156,6 +168,7 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
           {bar}
         </div>
       )}
+      {variant === 'dock' && zoomControls}
       <p id={helpId} className="sr-only">
         {HELP_TEXT}
       </p>

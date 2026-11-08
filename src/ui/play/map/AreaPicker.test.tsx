@@ -171,6 +171,31 @@ describe('area templates (D50, D64)', () => {
     expect(readout()).toHaveTextContent(/^Gust · 30-ft line, 10 ft wide toward /);
   });
 
+  it('U12: on a narrow bar Add to message comes right after what the area catches, before the placement controls', async () => {
+    // jsdom lays nothing out: this pins the grid areas the bar uses (the browser check at 844×390 measures them).
+    /** The rows of the base (narrow) and the @md (wide) grid-template-areas of a templateBarGrid class list. */
+    const rows = (classes: string) => {
+      const areas = [...classes.matchAll(/(^|\s)(@md:)?\[grid-template-areas:([^\]]+)\]/g)];
+      const parse = (m: RegExpMatchArray | undefined) => (m ? [...m[3].matchAll(/'([^']+)'/g)].map((r) => r[1].replace(/_/g, ' ')) : []);
+      return { narrow: parse(areas.find((m) => !m[2])), wide: parse(areas.find((m) => m[2])) };
+    };
+    const user = renderArea();
+    await pick(user, /Shatter/);
+    await enterOn(1, 4); // B5: with warnings
+    const bar = screen.getByTestId('template-bar');
+    const withWarnings = rows(bar.className);
+    expect(withWarnings.narrow).toEqual(['readout readout clear', 'warn warn warn', 'change add add', 'place place place']);
+    // Wide (the desktop dock beside the zoom buttons): two rows of controls, Change beside Clear.
+    expect(withWarnings.wide).toEqual(['readout change clear', 'warn warn warn', 'place add add']);
+    await enterOn(6, 3); // G4: nobody friendly inside, no warnings
+    expect(rows(screen.getByTestId('template-bar').className).narrow).toEqual(['readout readout clear', 'change add add', 'place place place']);
+    // Every area the bar names has its element.
+    const named = (area: string) => bar.querySelector(`[class*="[grid-area:${area}]"]`);
+    for (const area of ['readout', 'clear', 'change', 'add', 'place']) expect(named(area)).not.toBeNull();
+    expect(named('add')).toHaveTextContent('Add to message');
+    expect(within(named('place') as HTMLElement).getByRole('group', { name: 'Nudge the centre' })).toBeInTheDocument();
+  });
+
   it('shows only Custom while the rules index loads', async () => {
     mocks.index = null;
     const user = renderArea();

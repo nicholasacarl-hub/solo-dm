@@ -158,7 +158,8 @@ export const MapToolbar = memo(function MapToolbar({
 
 /**
  * Px down the map's right edge that the zoom buttons cover — the buttons (IconButton lg, 48px, on touch screens; md,
- * 40px, with a mouse), their 8px margin and a gap — which the cameras the app chooses keep clear (E3).
+ * 40px, with a mouse), their 8px margin and a gap — which the cameras the app chooses keep clear (E3), and which the
+ * desktop dock's action bar leaves free beside it.
  */
 export function zoomControlsInset(touch: boolean): number {
   return (touch ? 48 : 40) + 16;

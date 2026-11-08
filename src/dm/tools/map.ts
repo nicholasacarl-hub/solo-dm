@@ -31,6 +31,7 @@ import {
   parseSquareList,
   placeCombatants,
   planMove,
+  playerEffectLabel,
   reachableSquares,
   rectSquares,
   rectsLabel,
@@ -723,7 +724,8 @@ function editLogPhrases(after: CombatState, changes: readonly MapChange[]): stri
         break;
       }
       case 'effect-ended':
-        out.push(`${ch.label} ends`);
+        // The DM's free text: one that names a hidden creature reads "Area", as on the player's map (K5).
+        out.push(`${playerEffectLabel(after, ch.label)} ends`);
         break;
     }
   }
@@ -822,12 +824,16 @@ export function parseAreaSpec(state: CombatState, input: AreaInput, tool: string
   return spec;
 }
 
-/** "Fireball: Bandit 1 and you are caught" · "Burning Hands: nobody you can see is caught". */
+/**
+ * "Fireball: Bandit 1 and you are caught" · "Burning Hands: nobody you can see is caught". A label that names a hidden
+ * creature reads "Area", as on the player's map (K5).
+ */
 function areaLogLine(state: CombatState, label: string, insideIds: readonly string[]): string {
+  const shown = playerEffectLabel(state, label);
   const names = youLast(insideIds.map((id) => playerName(state, id)).filter((n): n is string => n !== null));
-  if (!names.length) return `${label}: nobody you can see is caught`;
+  if (!names.length) return `${shown}: nobody you can see is caught`;
   const verb = names.length === 1 && names[0] !== 'you' ? 'is' : 'are';
-  return `${label}: ${listAnd(names)} ${verb} caught`;
+  return `${shown}: ${listAnd(names)} ${verb} caught`;
 }
 
 export async function resolveAreaTool(input: ToolInput<'resolve_area'>, ctx: ToolContext): Promise<ToolOutcome> {

@@ -160,29 +160,38 @@ export function TemplateBar({ model, controller }: { model: BattleMapModel; cont
   const readout = area?.problem ?? areaReadout(templateLine(t, heroName, area?.catches ?? [], model.nameOf));
   const nudge = (dx: number, dy: number) => dispatch({ type: 'template', template: nudgeTemplate(t, dx, dy, extent) });
   const hint = isCentred(t) ? (touch ? 'Tap a square to move it.' : 'Click a square to move it.') : isAimed(t) ? (touch ? 'Tap a square to aim.' : 'Click a square to aim.') : 'It surrounds you.';
-  // What it catches (with Clear), then how to place it with Change and Add to message — one row when the bar is wide.
-  // When it is narrow (a phone; phone landscape's side column scrolls), Change and Add to message take a row of their
-  // own above the placement controls, so the primary action never starts out of view (U12). The hint goes first.
+  const warnings = area?.warnings ?? [];
   return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex items-start gap-2">
-        <p className="min-w-0 flex-1 text-sm font-medium" data-testid="area-readout">
-          {readout}
-        </p>
-        <IconButton label="Clear the area" size={touch ? 'lg' : 'sm'} className="-my-1 -mr-1" onClick={() => dispatch({ type: 'template', template: null })}>
-          <X className="size-4" aria-hidden />
-        </IconButton>
-      </div>
-      {area && area.warnings.length > 0 && (
-        <ul className="flex flex-wrap gap-1.5">
-          {area.warnings.map((w) => (
+    <div className={cn('grid items-center gap-x-2 gap-y-1.5', templateBarGrid(warnings.length > 0))} data-testid="template-bar">
+      <p className="min-w-0 self-start text-sm font-medium [grid-area:readout]" data-testid="area-readout">
+        {readout}
+      </p>
+      {warnings.length > 0 && (
+        <ul className="flex flex-wrap gap-1.5 [grid-area:warn]">
+          {warnings.map((w) => (
             <li key={w} className="rounded-full bg-danger-soft px-2 py-0.5 text-xs font-medium text-danger">
               {w}
             </li>
           ))}
         </ul>
       )}
-      <div className="flex flex-wrap items-center gap-1.5">
+      <IconButton label="Clear the area" size={touch ? 'lg' : 'sm'} className="-my-1 -mr-1 self-start justify-self-end [grid-area:clear]" onClick={() => dispatch({ type: 'template', template: null })}>
+        <X className="size-4" aria-hidden />
+      </IconButton>
+      <Button size={btn} variant="ghost" className={cn(pad, 'justify-self-end [grid-area:change] @md:-my-1 @md:self-start')} onClick={() => dispatch({ type: 'picker', open: true })}>
+        Change
+      </Button>
+      <Button
+        size={btn}
+        variant="arcane"
+        className={cn(pad, 'justify-self-end [grid-area:add]')}
+        disabled={!area || area.problem !== null}
+        icon={<MessageSquareText className="size-4" aria-hidden />}
+        onClick={controller.addAreaToMessage}
+      >
+        Add to message
+      </Button>
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5 [grid-area:place]" data-testid="template-placement">
         {isCentred(t) && (
           <>
             <Segmented<'square' | 'corner'>
@@ -221,23 +230,20 @@ export function TemplateBar({ model, controller }: { model: BattleMapModel; cont
             </IconButton>
           </div>
         )}
-        <span className="hidden min-w-0 flex-1 truncate text-xs text-faint @lg:inline">{hint}</span>
-        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5 @max-md:order-first @max-md:basis-full" data-template-actions>
-          <Button size={btn} variant="ghost" className={pad} onClick={() => dispatch({ type: 'picker', open: true })}>
-            Change
-          </Button>
-          <Button
-            size={btn}
-            variant="arcane"
-            className={pad}
-            disabled={!area || area.problem !== null}
-            icon={<MessageSquareText className="size-4" aria-hidden />}
-            onClick={controller.addAreaToMessage}
-          >
-            Add to message
-          </Button>
-        </div>
+        <span className="hidden min-w-0 flex-1 truncate text-xs text-faint @2xl:inline">{hint}</span>
       </div>
     </div>
   );
+}
+
+/**
+ * Where the placed area's bar puts things (a grid, by the bar's own width). Narrow (a phone; phone landscape's side
+ * column, which scrolls): what it catches with Clear, then Change and Add to message, then how to place it — so the
+ * primary action never starts out of view (U12). Wide (the desktop dock, beside the zoom buttons): Change beside
+ * Clear, and Add to message at the end of the placement row, so the bar keeps to two rows over the map.
+ */
+export function templateBarGrid(warnings: boolean): string {
+  return warnings
+    ? "grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'readout_readout_clear'_'warn_warn_warn'_'change_add_add'_'place_place_place'] @md:[grid-template-areas:'readout_change_clear'_'warn_warn_warn'_'place_add_add']"
+    : "grid-cols-[minmax(0,1fr)_auto_auto] [grid-template-areas:'readout_readout_clear'_'change_add_add'_'place_place_place'] @md:[grid-template-areas:'readout_change_clear'_'place_add_add']";
 }

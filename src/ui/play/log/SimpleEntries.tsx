@@ -38,7 +38,8 @@ export function PlayerEntry({ entry, pending = false }: { entry: PlayerLogEntry;
         <span className="sr-only">You: </span>
         {text}
       </div>
-      {entry.mapNote && <MapNoteChip note={entry.mapNote} />}
+      {/* Rows loaded from IndexedDB aren't validated: only a string note is shown (an object would crash the log). */}
+      {typeof entry.mapNote === 'string' && entry.mapNote.length > 0 && <MapNoteChip note={entry.mapNote} />}
       {pending && (
         <p className="mt-1.5 flex items-center gap-1.5 text-right text-xs text-muted">
           <Clock className="size-3.5 shrink-0" aria-hidden />

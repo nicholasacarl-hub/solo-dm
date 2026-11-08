@@ -7,14 +7,19 @@ import {
   committedCamera,
   defaultCamera,
   fillCamera,
+  fitCamera,
   fitCellPx,
   liveCamera,
   MAX_CELL_PX,
   MIN_CELL_PX,
   pinchCamera,
   rectOnScreen,
+  refitOpening,
   revealRect,
+  RULER_LEFT,
+  RULER_TOP,
   rulerStep,
+  sameCamera,
   screenToCorner,
   screenToSquare,
   wheelCamera,
@@ -23,7 +28,10 @@ import {
   zoomCentre,
   zoomTo,
   type Camera,
+  type MapExtent,
+  type ViewSize,
 } from './camera';
+import type { MapCamera } from '../playView';
 
 const warehouse = { cols: 16, rows: 12 };
 const B6 = { x0: 1, y0: 5, x1: 1, y1: 5 };
@@ -157,5 +165,91 @@ describe('camera (spec §7.5)', () => {
     expect(rulerStep(40)).toBe(1);
     expect(rulerStep(12)).toBe(2);
     expect(rulerStep(8)).toBe(5);
+  });
+});
+
+/** Where a committed camera draws the map, in view px. */
+function mapBox(cam: MapCamera, view: ViewSize, map: MapExtent) {
+  const live = liveCamera(cam, view);
+  const a = worldToScreen(live, 0, 0);
+  const b = worldToScreen(live, map.cols * CELL, map.rows * CELL);
+  return { left: a.x, top: a.y, right: b.x, bottom: b.y };
+}
+
+describe('E3: the cameras the app chooses keep the map clear of the zoom buttons', () => {
+  // The demo DM's 10×8 map, as in the end-to-end flow.
+  const lantern = { cols: 10, rows: 8 };
+  const D3 = { x0: 3, y0: 2, x1: 3, y1: 2 };
+
+  it('fits the whole map between the rulers and the zoom buttons’ lane (desktop dock and phone)', () => {
+    // Desktop dock at 1280×800: a 608 × 232 view, 40px buttons in a 56px lane down the right edge.
+    const dock = { width: 608, height: 232, right: 56 };
+    const cam = defaultCamera(lantern, dock, D3, false);
+    expect(cam.cellPx).toBe(25); // height-bound: (232 − 16 − 16) / 8
+    const box = mapBox(cam, dock, lantern);
+    expect(box.left).toBeGreaterThanOrEqual(RULER_LEFT);
+    expect(box.top).toBeGreaterThanOrEqual(RULER_TOP);
+    expect(box.right).toBeLessThanOrEqual(dock.width - dock.right);
+    expect(box.bottom).toBeLessThanOrEqual(dock.height);
+    // Phone at 390×844: a 390 × 366 view, 48px buttons in a 64px lane. Without the lane the squares would be 35px and
+    // columns I and J would sit under the buttons.
+    const phone = { width: 390, height: 366, right: 64 };
+    expect(fitCellPx(lantern, { width: 390, height: 366 })).toBeCloseTo(35.2);
+    const pc = defaultCamera(lantern, phone, D3, true);
+    expect(pc.cellPx).toBeCloseTo(28.8); // (390 − 22 − 64 − 16) / 10, still ≥ 24: the whole map
+    expect(mapBox(pc, phone, lantern).right).toBeLessThanOrEqual(phone.width - phone.right);
+    expect(fitCamera(lantern, phone)).toEqual(pc);
+  });
+
+  it('a map wider than the view stops at the lane when the app scrolls it to its east edge', () => {
+    const view = { width: 400, height: 300, right: 56 };
+    const east = fillCamera({ cellPx: 40, cx: 99, cy: 6 }, warehouse, view);
+    close(mapBox(east, view, warehouse).right, view.width - view.right);
+    // The west edge is unchanged: beside the row numbers.
+    close(mapBox(fillCamera({ cellPx: 40, cx: 0, cy: 6 }, warehouse, view), view, warehouse).left, RULER_LEFT);
+  });
+
+  it('a square under the zoom buttons is not on screen: revealing it brings it out from under them', () => {
+    const view = { width: 400, height: 300, right: 56 };
+    const cam = { cellPx: 40, cx: 5, cy: 3.75 };
+    // I4 is drawn at x 320–360: inside the view, but under the lane (344–400).
+    const i4 = { x0: 8, y0: 3, x1: 8, y1: 3 };
+    expect(rectOnScreen(liveCamera(cam, { width: 400, height: 300 }), { width: 400, height: 300 }, i4)).toBe(true);
+    expect(rectOnScreen(liveCamera(cam, view), view, i4)).toBe(false);
+    const moved = revealRect(cam, view, warehouse, i4);
+    expect(moved.cellPx).toBe(40);
+    expect(rectOnScreen(liveCamera(moved, view), view, i4)).toBe(true);
+  });
+});
+
+describe('E2: the opening camera follows the view’s size until the player moves it', () => {
+  const lantern = { cols: 10, rows: 8 };
+  const D3 = { x0: 3, y0: 2, x1: 3, y1: 2 };
+
+  it('a fit stays a fit: chosen before the action bar took its height, chosen again for the smaller view', () => {
+    const tall = { width: 608, height: 288, right: 56 };
+    const short = { width: 608, height: 232, right: 56 };
+    const opening = defaultCamera(lantern, tall, D3, false);
+    expect(opening.cellPx).toBe(32);
+    // Kept as it was, the map would overflow the smaller view (row 8 cut off)…
+    expect(mapBox(opening, short, lantern).bottom).toBeGreaterThan(short.height);
+    // …chosen again, the whole map is in it.
+    const again = refitOpening(opening, lantern, short, false);
+    expect(again).toEqual(defaultCamera(lantern, short, D3, false));
+    const box = mapBox(again, short, lantern);
+    expect(box.top).toBeGreaterThanOrEqual(RULER_TOP);
+    expect(box.bottom).toBeLessThanOrEqual(short.height);
+  });
+
+  it('a camera on the hero keeps its centre at the opening square size when the map still doesn’t fit', () => {
+    const view = { width: 608, height: 232, right: 56 };
+    const opening = defaultCamera(warehouse, view, B6, false);
+    expect(opening.cellPx).toBe(36);
+    const wider = { width: 700, height: 260, right: 56 };
+    const again = refitOpening(opening, warehouse, wider, false);
+    expect(again.cellPx).toBe(36);
+    expect(again).toEqual(fillCamera({ cellPx: 36, cx: opening.cx, cy: opening.cy }, warehouse, wider));
+    expect(sameCamera(again, { ...again, cx: again.cx + 0.0001 })).toBe(true);
+    expect(sameCamera(again, { ...again, cx: again.cx + 0.01 })).toBe(false);
   });
 });

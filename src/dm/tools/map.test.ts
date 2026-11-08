@@ -648,6 +648,21 @@ describe('hidden creatures write no player log line, whatever they do (D41, amen
     expect(lastLine(h)?.summary).toBe('Cutthroat appears (G6)');
   });
 
+  it('K5: an area or lasting effect whose label names a hidden creature reads "Area" in the log; the DM still gets the label', async () => {
+    const h = setup(fixture({ heroTurn: true }));
+    const out = await h.run('resolve_area', { label: "Cutthroat's Darkness", shape: 'sphere', size_ft: 20, at: 'G4', lasting: true });
+    expect(out.content).toMatch(/^Cutthroat's Darkness: 20-ft-radius Sphere centred on G4\b/);
+    expect(lastLine(h)).toMatchObject({ icon: 'area', summary: 'Area: Bandit 1 and Bandit 2 are caught' });
+    const ended = await h.run('update_map', { effects_end: ["Cutthroat's Darkness"] });
+    expect(ended.content).toContain("Cutthroat's Darkness has ended.");
+    expect(lastLine(h)).toMatchObject({ icon: 'map', summary: 'Area ends' });
+    expect(JSON.stringify(h.s().log)).not.toMatch(/cutthroat/i);
+    // Once the creature is revealed, its name is no secret.
+    await h.run('update_combat', { action: 'reveal', target: 'Cutthroat' });
+    await h.run('resolve_area', { label: "Cutthroat's Smoke Bomb", shape: 'sphere', size_ft: 5, at: 'M8' });
+    expect(lastLine(h)?.summary).toBe("Cutthroat's Smoke Bomb: Cutthroat is caught");
+  });
+
   it('keeps a roll public when the purpose only shares a word with a hidden name a visible creature also has', async () => {
     const combat = fixture();
     const h = setup({ ...combat, combatants: combat.combatants.map((c) => (c.name === 'Cutthroat' ? { ...c, name: 'Bandit' } : c)) });

@@ -208,11 +208,10 @@ export function PositionsList({
             {preview?.dash ? 'Dash and move' : 'Move'}
           </Button>
         </div>
-        {readout && (
-          <p id={readoutId} className="text-xs text-muted" aria-live="polite">
-            {readout}
-          </p>
-        )}
+        {/* Always mounted (U2): a live region inserted together with its text is often not announced. */}
+        <p id={readoutId} className="text-xs text-muted" aria-live="polite" data-testid="list-readout">
+          {readout}
+        </p>
         {/* Why you can't move right now, in the bar's words (U2): the DM working, a stop to tell the DM about… */}
         {model.block && (
           <p className="text-xs text-faint">{capitalize(blockText(model.block, { stopReactors: (model.pendingStop?.reactorIds ?? []).map(model.nameOf) }))}</p>

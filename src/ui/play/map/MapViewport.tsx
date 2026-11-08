@@ -164,6 +164,19 @@ const Rulers = memo(forwardRef<RulersHandle, { camera: Camera; extent: MapExtent
 /** How long the app's own recentring takes (ms). */
 const FLY_MS = 260;
 
+/**
+ * The opening cameras the app chose, each with the view it was chosen for (viewKey). A stored camera found here is
+ * still the app's choice — the player hasn't panned or zoomed since — so a view of another size (the dock's head
+ * wrapping, the dock resized or collapsed and expanded, a phone turned) gets it chosen again (E2). Keyed by the
+ * camera object, so it survives the Combat tab unmounting and the 1024px remount; any camera the player or the app
+ * sets afterwards is a new object and isn't here.
+ */
+const OPENING_CAMERAS = new WeakMap<MapCamera, string>();
+
+function viewKey(size: ViewSize, compact: boolean): string {
+  return `${size.width}×${size.height}·${size.right ?? 0}·${compact ? 'phone' : 'desktop'}`;
+}
+
 const ARROWS: Record<string, [number, number]> = {
   ArrowLeft: [-1, 0],
   ArrowRight: [1, 0],
@@ -219,23 +232,22 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
   // Keep the opening camera once the viewport has a size, so it doesn't follow the hero around afterwards. Until the
   // player (or the app, revealing a square) moves it, it is still the app's own choice and follows the view's size:
   // a view that settles or is resized after it was chosen gets it chosen again, so a fit stays a fit (E2).
-  const opening = useRef<{ cam: MapCamera; width: number; height: number } | null>(null);
   useEffect(() => {
     if (!hasSize) return;
-    const { width, height } = size;
+    const chosenFor = viewKey(size, compact);
     if (!stored) {
-      opening.current = { cam: committed, width, height };
+      OPENING_CAMERAS.set(committed, chosenFor);
       usePlayView.getState().setCamera(cameraKey, committed);
       return;
     }
-    const o = opening.current;
-    if (!o || o.cam !== stored || (o.width === width && o.height === height)) return;
+    const was = OPENING_CAMERAS.get(stored);
+    if (was === undefined || was === chosenFor) return;
     const next = refitOpening(stored, extent, size, compact);
     if (sameCamera(next, stored)) {
-      opening.current = { cam: stored, width, height };
+      OPENING_CAMERAS.set(stored, chosenFor);
       return;
     }
-    opening.current = { cam: next, width, height };
+    OPENING_CAMERAS.set(next, chosenFor);
     usePlayView.getState().setCamera(cameraKey, next);
   }, [stored, hasSize, cameraKey, committed, size, extent, compact]);
 

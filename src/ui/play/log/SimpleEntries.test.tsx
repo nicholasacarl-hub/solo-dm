@@ -33,4 +33,17 @@ describe('PlayerEntry', () => {
     render(<PlayerEntry entry={entry()} />);
     expect(screen.queryByText(/On the battle map/)).not.toBeInTheDocument();
   });
+
+  it('P4: a damaged row from IndexedDB (a mapNote that is not a string) shows its words without a chip, and does not crash', () => {
+    for (const mapNote of [{ text: 'Moved B6 → C7' }, ['Moved B6 → C7'], 0, 42, true, '']) {
+      // Rows loaded from IndexedDB aren't validated, so the type can't be trusted.
+      const damaged = entry({ mapNote: mapNote as unknown as string });
+      const { container, unmount } = render(<PlayerEntry entry={damaged} />);
+      // Nothing but the player's words: no chip, and no stray "0" or "42" either.
+      expect(container.textContent).toBe('You: I duck behind the crates.');
+      expect(screen.queryByText(/On the battle map/)).not.toBeInTheDocument();
+      expect(container.querySelector('svg.lucide-footprints')).toBeNull();
+      unmount();
+    }
+  });
 });

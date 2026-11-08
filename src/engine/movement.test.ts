@@ -12,6 +12,7 @@ import type {
   TerrainFeature,
 } from '@/types';
 import { sampleCharacter, sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
+import { playerView } from './battleMap';
 import { nextTurn, removeCombatant } from './combat';
 import { parseSquare, spaceDistanceFt, squareLabel } from './grid';
 import {
@@ -978,6 +979,62 @@ describe('edge cases (spec §3.10)', () => {
 // Reachable squares and the performance budget (spec §7.12)
 // ---------------------------------------------------------------------------
 
+/** §7.12's case: 40×40 with walls, Difficult Terrain, deep water, half cover and 30 creatures; the hero walks 60. */
+function budgetFight(): CombatState {
+  const features: Feature[] = [];
+  for (let i = 0; i < 12; i++) features.push(wall(squareLabel({ x: 3 + 3 * i, y: 5 }), squareLabel({ x: 3 + 3 * i, y: 12 + (i % 5) })));
+  features.push(terrain('difficult', 'E20', 'P28'), terrain('deep-water', 'Z3', 'AH9'), terrain('half-cover', 'B30', 'L31'));
+  const others: Combatant[] = [];
+  for (let i = 0; i < 29; i++) {
+    others.push(creature(`n${i}`, i % 3 === 0 ? 'ally' : 'enemy', squareLabel({ x: (i * 7) % 38, y: 14 + ((i * 5) % 24) })));
+  }
+  return fight(battleMap(40, 40, features), [creature('h', 'player', 'T20', { speeds: { walk: 60 } }), ...others]);
+}
+
+/** The map preview's big fight (the UI case): the warehouse fixture on a 40×40 keep with 30 creatures, Large and Prone ones among them. */
+function keepFight(): CombatState {
+  const base = sampleMappedCombat({ heroTurn: true });
+  const others: Combatant[] = Array.from({ length: 29 }, (_, i) => {
+    const enemy = i % 5 !== 0;
+    return creature(`big-${i + 1}`, enemy ? 'enemy' : 'ally', squareLabel({ x: 3 + ((i * 7) % 34), y: 2 + Math.floor(i / 6) * 4 + (i % 2) }), {
+      name: enemy ? `Bandit ${i + 1}` : `Guard ${i + 1}`,
+      conditions: i % 4 === 0 ? [{ id: 'prone' }] : [],
+      defeated: i === 13,
+      ...(i % 9 === 4 ? { size: 'Large' as const } : {}),
+    });
+  });
+  const keep: Feature[] = [
+    wall('A1', 'AN1', 'keep walls'), wall('A40', 'AN40'), wall('A1', 'A40'), wall('AN1', 'AN40'), wall('M11', 'M27'), wall('AA15', 'AI15'),
+    { kind: 'door', rects: [R('M19')], label: 'gate', door: 'closed' },
+    terrain('difficult', 'P21', 'W25', 'rubble'), terrain('difficult', 'AE31', 'AK34'), terrain('deep-water', 'C31', 'J38', 'moat'),
+    terrain('shallow-water', 'K34', 'N38', 'ford'), terrain('half-cover', 'S28', 'V28', 'barricade'), terrain('half-cover', 'F6', 'H7'),
+    terrain('three-quarters-cover', 'AA21', 'AA23', 'arrow slits'), terrain('pit', 'AE6', 'AG8', 'well'), terrain('hazard', 'Y29', 'Y29', 'braziers'), terrain('hazard', 'I16', 'I16', 'braziers'),
+    terrain('obscured', 'AH23', 'AL27', 'smoke'),
+  ];
+  return { ...base, combatants: [{ ...base.combatants[0], position: P('T31') }, ...others], map: battleMap(40, 40, keep) };
+}
+
+/** A whole band list in five numbers (equal lists, equal digests). */
+const bandsDigest = (squares: ReturnType<typeof reachableSquares>) => ({
+  move: squares.filter((s) => s.band === 'move').length,
+  dash: squares.filter((s) => s.band === 'dash').length,
+  feet: squares.reduce((n, s) => n + s.costFt, 0),
+  provokes: squares.reduce((n, s) => n + s.provokes, 0),
+  cantEnd: squares.filter((s) => !s.canEnd).length,
+});
+
+/** The fastest of nine warm runs, in ms (the minimum shrugs off a busy machine). */
+function fastestMs(f: () => unknown): number {
+  f();
+  let best = Infinity;
+  for (let i = 0; i < 9; i++) {
+    const t0 = performance.now();
+    f();
+    best = Math.min(best, performance.now() - t0);
+  }
+  return best;
+}
+
 describe('reachableSquares', () => {
   it('lists the walk band and the Dash band with costs and provocations', () => {
     const squares = reachableSquares(fixture({ heroTurn: true, at: { 'c-2': 'C5' } }), mira, 'c-1');
@@ -1007,14 +1064,7 @@ describe('reachableSquares', () => {
   });
 
   it('meets the 40×40 budget (§7.12: < 6 ms; asserted with a generous margin)', () => {
-    const features: Feature[] = [];
-    for (let i = 0; i < 12; i++) features.push(wall(squareLabel({ x: 3 + 3 * i, y: 5 }), squareLabel({ x: 3 + 3 * i, y: 12 + (i % 5) })));
-    features.push(terrain('difficult', 'E20', 'P28'), terrain('deep-water', 'Z3', 'AH9'), terrain('half-cover', 'B30', 'L31'));
-    const others: Combatant[] = [];
-    for (let i = 0; i < 29; i++) {
-      others.push(creature(`n${i}`, i % 3 === 0 ? 'ally' : 'enemy', squareLabel({ x: (i * 7) % 38, y: 14 + ((i * 5) % 24) })));
-    }
-    const state = fight(battleMap(40, 40, features), [creature('h', 'player', 'T20', { speeds: { walk: 60 } }), ...others]);
+    const state = budgetFight();
     const sheet = sampleCharacter({ speed: 60 });
     reachableSquares(state, sheet, 'h'); // warm up (JIT, memoized terrain)
     const times: number[] = [];
@@ -1026,6 +1076,31 @@ describe('reachableSquares', () => {
     }
     times.sort((a, b) => a - b);
     expect(times[3]).toBeLessThan(40);
+  });
+
+  it('K2: 40×40 with 30 creatures stays inside the 6 ms budget, with the same bands as before the speed-up (§7.12)', () => {
+    const state = budgetFight();
+    const sheet = sampleCharacter({ speed: 60 });
+    // Digests of the full lists, recorded with the earlier search: the speed-up changed no square, cost or count.
+    expect(bandsDigest(reachableSquares(state, sheet, 'h'))).toEqual({ move: 440, dash: 934, feet: 101920, provokes: 55, cantEnd: 10 });
+    expect(bandsDigest(reachableSquares(state, sheet, 'h', { prefer: 'shortest' }))).toEqual({
+      move: 440,
+      dash: 934,
+      feet: 101160,
+      provokes: 1000,
+      cantEnd: 10,
+    });
+    const keep = keepFight();
+    expect(bandsDigest(reachableSquares(keep, mira, 'c-1', { perspective: 'player' }))).toEqual({
+      move: 156,
+      dash: 284,
+      feet: 16885,
+      provokes: 0,
+      cantEnd: 0,
+    });
+    expect(fastestMs(() => reachableSquares(state, sheet, 'h'))).toBeLessThan(6);
+    expect(fastestMs(() => reachableSquares(state, sheet, 'h', { prefer: 'shortest' }))).toBeLessThan(6);
+    expect(fastestMs(() => reachableSquares(keep, mira, 'c-1', { perspective: 'player' }))).toBeLessThan(6);
   });
 });
 
@@ -1166,10 +1241,14 @@ describe('notes and records', () => {
   });
   it('another creature’s stop that no longer counts is pruned on the next write; a valid one is kept', () => {
     const stoppedState = stateOf(move(fixture({ at: { 'c-2': 'C5' } }), 'c-2', 'F4'));
-    const pushed = stateOf(applyMove(stoppedState, mira, { moverId: 'c-3', kind: 'forced', by: 'dm', push: { distanceFt: 5, direction: 'north' } }));
-    expect(pushed.map?.stop?.moverId).toBe('c-2');
-    const later = stateOf(applyMove(nextTurn(stoppedState), mira, { moverId: 'c-3', kind: 'forced', by: 'dm', push: { distanceFt: 5, direction: 'north' } }));
-    expect(later.map?.stop).toBeUndefined();
+    const shove = (state: CombatState) =>
+      stateOf(applyMove(state, mira, { moverId: 'c-3', kind: 'forced', by: 'dm', push: { distanceFt: 5, direction: 'north' } }));
+    expect(shove(stoppedState).map?.stop?.moverId).toBe('c-2');
+    // The hidden Cutthroat is next: the player still sees Bandit 1's turn, so its stop stays (D42; pruneMap's rule)…
+    const hiddenTurn = nextTurn(stoppedState);
+    expect(shove(hiddenTurn).map?.stop?.moverId).toBe('c-2');
+    // …until a visible creature's turn begins.
+    expect(shove(nextTurn(hiddenTurn)).map?.stop).toBeUndefined();
   });
   it('itemises at most 40 moves a turn; later ones still count', () => {
     const base = fixture();
@@ -1182,13 +1261,14 @@ describe('notes and records', () => {
 });
 
 describe('the true-map replay of the player’s move (app convention C24)', () => {
-  it('an unseen creature’s space costs more than the preview: stops on the last affordable open square', () => {
+  it('an unseen creature’s space costs more than the preview: stops on the last open square before it (R9)', () => {
     const state = fight(battleMap(16, 12), [creature('h', 'player', 'A1'), creature('g', 'enemy', 'C1', { size: 'Huge', hidden: true })]);
     expect(moved(planMove(state, mira, { moverId: 'h', kind: 'move', by: 'player', to: { kind: 'square', at: P('G1') } }, { perspective: 'player' })).costFt).toBe(30);
     const out = applyHeroMove(state, mira, heroMove('G1'), { stopResolved: true });
     if (out.status === 'refused') throw new Error(JSON.stringify(out.refusal));
-    expect(out).toMatchObject({ status: 'stopped', stoppedFor: { kind: 'out-of-movement' }, revealedHidden: true });
+    expect(out).toMatchObject({ status: 'stopped', stoppedFor: { kind: 'unseen' }, revealedHidden: true });
     expect(out.move).toMatchObject({ to: P('B1'), path: [P('B1')], costFt: 5, revealedHidden: true });
+    expect(out.state.map?.turn?.moves.at(-1)?.blockedById).toBe('g');
   });
   it('the player view plans as if hidden creatures weren’t there', () => {
     const state = fixture({ heroTurn: true, at: { 'c-5': 'B9' } });
@@ -1230,5 +1310,234 @@ describe('determinism: the same plans on a shuffled combatant list (spec §9.1)'
   it('reachableSquares', () => {
     const s = fixture({ heroTurn: true, at: { 'c-2': 'C5' } });
     expect(reachableSquares(shuffled(s), mira, 'c-1')).toEqual(reachableSquares(s, mira, 'c-1'));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Battle-map review fixes (R4–R14, P3) and the hidden turn (D42, amendment 8)
+// ---------------------------------------------------------------------------
+
+/** A lasting 15-ft Spirit Guardians (Difficult Terrain) around `fromId`. */
+function guardians(fromId: string, extra: Partial<MapEffect> = {}, spec: Partial<Extract<MapEffect['spec'], { shape: 'emanation' }>> = {}): MapEffect {
+  return {
+    id: 'e20',
+    label: 'Spirit Guardians',
+    spec: { shape: 'emanation', sizeFt: 15, fromId, ...spec },
+    rects: [],
+    terrain: ['difficult'],
+    duration: 'lasting',
+    round: 1,
+    turnOfId: fromId,
+    ...extra,
+  };
+}
+
+describe('R4: a creature’s own lasting emanation moves with it (SRD 5.2.1 srd:rule:emanation, srd:spell:spirit-guardians)', () => {
+  it('R4: the hero walks inside its own Spirit Guardians at the normal cost and enters nothing; its bands reach as usual', () => {
+    const state = fight(battleMap(16, 16, [], [guardians('h')]), [creature('h', 'player', 'F6'), creature('b', 'enemy', 'P16')]);
+    const out = applyHeroMove(state, mira, heroMove('H6'), { stopResolved: true });
+    if (out.status === 'refused') throw new Error(JSON.stringify(out.refusal));
+    expect(out).toMatchObject({ status: 'moved', revealedHidden: false, move: { costFt: 10, entered: [] } });
+    const bands = reachableSquares(state, mira, 'h', { perspective: 'player' });
+    expect(bands.find((s) => squareLabel(s.at) === 'L6')).toMatchObject({ band: 'move', costFt: 30 });
+  });
+
+  it('R4: an NPC pays no Difficult Terrain for its own aura and isn’t told it entered it; anyone else still is', () => {
+    const map = battleMap(16, 16, [], [guardians('p')]);
+    const own = moved(move(fight(map, [creature('p', 'enemy', 'F6'), creature('h', 'player', 'P16')]), 'p', 'I6'));
+    expect(own.costFt).toBe(15);
+    expect(own.notes.filter((n) => n.kind === 'difficult' || n.kind === 'entered')).toEqual([]);
+    // The aura around F6 covers C3:I9: the Goblin entering it at C6 pays double there and is told.
+    const other = moved(move(fight(map, [creature('g', 'enemy', 'A6'), creature('p', 'enemy', 'F6'), creature('h', 'player', 'P16')]), 'g', 'C6'));
+    expect(other.costFt).toBe(15);
+    expect(other.notes).toContainEqual({ kind: 'entered', label: 'Spirit Guardians', at: P('C6') });
+  });
+
+  it('R4: an aura its creator included itself in slows it on every step; an obscuring one hides it from reactors (C14)', () => {
+    const priest = creature('p', 'enemy', 'F6', { speeds: { walk: 60 } });
+    const slow = fight(battleMap(16, 16, [], [guardians('p', {}, { includeOrigin: true })]), [priest, creature('h', 'player', 'P16')]);
+    // Past where the aura was when it set out (C3:I9) too: it goes along.
+    const p = moved(move(slow, 'p', 'K6'));
+    expect(p.costFt).toBe(50);
+    expect(p.notes).toContainEqual({ kind: 'difficult', squares: 5 });
+    expect(p.notes.some((n) => n.kind === 'entered')).toBe(false);
+    // The Bandit passes the hero inside its own Darkness: no Opportunity Attack when it leaves the hero's reach at F6.
+    const darkness = guardians('b', { label: 'Darkness', terrain: ['obscured'] }, { sizeFt: 5 });
+    const pass = (effects: MapEffect[]) =>
+      move(fight(battleMap(16, 16, [], effects), [creature('b', 'enemy', 'C5'), creature('h', 'player', 'G5')]), 'b', 'F7', { via: [P('F5')] });
+    expect(moved(pass([darkness])).provoked).toEqual([]);
+    expect(stopped(pass([])).reactors.map((r) => r.reactorId)).toEqual(['h']);
+  });
+});
+
+describe('R5: repeating a stopped move that used via (D33)', () => {
+  it('R5: the identical repeat goes on from the stop, not back to the waypoint it passed; a new waypoint still counts', () => {
+    const state = fight(battleMap(16, 16), [creature('b', 'enemy', 'A3'), creature('t', 'ally', 'D4'), creature('h', 'player', 'P16')]);
+    const first = move(state, 'b', 'F3', { via: [P('C3')] });
+    expect(stopped(first)).toMatchObject({ at: P('E3'), costFt: 20, remainingPath: [P('F3')] });
+    expect(route(stopped(first))).toBe('A3 B3 C3 D3 E3');
+    const again = move(stateOf(first), 'b', 'F3', { via: [P('C3')] });
+    expect(route(moved(again))).toBe('E3 F3');
+    expect(moved(again).costFt).toBe(5);
+    expect(find(stateOf(again), 't').reactionUsed).toBe(true);
+    expect(stateOf(again).map?.turn?.movedFt).toBe(25);
+    expect(route(moved(move(stateOf(first), 'b', 'F3', { via: [P('C3'), P('F4')] })))).toBe('E3 F4 F3');
+  });
+});
+
+describe('R8: standing up in a pit (SRD 5.2.1 srd:condition:prone; spec §3.4.2 step 7)', () => {
+  const map = battleMap(12, 12, [terrain('pit', 'F6', 'F6', 'pit')]);
+  it('R8: the hero who fell in stands up where it is', () => {
+    const prone = sampleCharacter({ conditions: [{ id: 'prone' }] });
+    const out = applyHeroMove(fight(map, [creature('h', 'player', 'F6'), creature('b', 'enemy', 'A1')]), prone, { prefer: 'safest', dash: false, disengage: false, standUp: true }, { stopResolved: true });
+    if (out.status === 'refused') throw new Error(JSON.stringify(out.refusal));
+    expect(out).toMatchObject({ status: 'moved', heroStoodUp: true, move: { kind: 'stand', costFt: 15, path: [] } });
+  });
+  it('R8: an NPC in a pit stands with a move to its own square; walking into the pit is still refused', () => {
+    const o = move(fight(map, [creature('b', 'enemy', 'F6', { conditions: [{ id: 'prone' }] }), creature('h', 'player', 'A1')]), 'b', 'F6');
+    expect(moved(o).notes).toContainEqual({ kind: 'stood-up', costFt: 15 });
+    expect(find(stateOf(o), 'b').conditions).toEqual([]);
+    expect(refusal(move(fight(map, [creature('b', 'enemy', 'E6'), creature('h', 'player', 'A1')]), 'b', 'F6'))).toMatchObject({ code: 'blocked', at: P('F6') });
+  });
+});
+
+describe('R9: something unseen that only makes the route dearer (app convention C24)', () => {
+  it('R9: a hidden creature’s Difficult Terrain aura stops the player’s move before it; the DM learns who', () => {
+    const state = fight(battleMap(16, 16, [], [guardians('p')]), [creature('h', 'player', 'B6'), creature('p', 'enemy', 'G9', { hidden: true })]);
+    expect(moved(planMove(state, mira, { moverId: 'h', kind: 'move', by: 'player', to: { kind: 'square', at: P('F6') } }, { perspective: 'player' })).costFt).toBe(20);
+    const out = applyHeroMove(state, mira, heroMove('F6'), { stopResolved: true });
+    if (out.status === 'refused') throw new Error(JSON.stringify(out.refusal));
+    expect(out).toMatchObject({ status: 'stopped', stoppedFor: { kind: 'unseen' }, revealedHidden: true });
+    expect(out.move).toMatchObject({ to: P('C6'), path: [P('C6')], costFt: 5, revealedHidden: true, entered: [] });
+    expect(out.move).not.toHaveProperty('blockedById');
+    expect(out.state.map?.turn).toMatchObject({ movedFt: 5 });
+    expect(out.state.map?.turn?.moves.at(-1)?.blockedById).toBe('p');
+  });
+  it('R9: a hidden creature’s space it could afford to cross stops the move too, instead of costing more unseen', () => {
+    const state = fight(battleMap(16, 12), [creature('h', 'player', 'A1'), creature('g', 'enemy', 'C1', { size: 'Huge', hidden: true })]);
+    const out = applyHeroMove(state, sampleCharacter({ speed: 60 }), heroMove('G1'), { stopResolved: true });
+    if (out.status === 'refused') throw new Error(JSON.stringify(out.refusal));
+    expect(out).toMatchObject({ status: 'stopped', stoppedFor: { kind: 'unseen' }, revealedHidden: true, move: { to: P('B1'), costFt: 5 } });
+    expect(out.state.map?.turn?.moves.at(-1)?.blockedById).toBe('g');
+  });
+});
+
+describe('R10: Dash with a Swim Speed (SRD 5.2.1 srd:rule:dash, srd:rule:swimming, srd:rule:speed)', () => {
+  const shark = () => creature('s', 'enemy', 'A1', { speeds: { walk: 5, swim: 40 } });
+  const sea = (from = 'A1') => battleMap(20, 6, [terrain('deep-water', from, 'T4', 'sea')]);
+  it('R10: a Hunter Shark Dashes with its Swim Speed; refusals and budgets give its swimming allowance', () => {
+    const state = fight(sea(), [shark(), creature('h', 'player', 'T6')]);
+    expect(moved(plan(state, 's', 'P1', { dash: true })).costFt).toBe(75);
+    expect(refusal(plan(state, 's', 'R1', { dash: true }))).toMatchObject({ code: 'too-far', needFt: 85, leftFt: 80, dashWouldReach: false });
+    expect(refusal(plan(state, 's', 'K1'))).toMatchObject({ code: 'too-far', needFt: 50, leftFt: 40, dashWouldReach: true });
+    expect(turnBudget(state, mira, 's')).toMatchObject({ speedFt: 40, leftFt: 40, dashAddsFt: 40 });
+    const dashed = stateOf(move(state, 's', 'F1', { dash: true }));
+    expect(turnBudget(dashed, mira, 's')).toMatchObject({ speedFt: 40, dashFt: 40, movedFt: 25, leftFt: 55 });
+    const bands = reachableSquares(state, mira, 's');
+    expect(bands.find((b) => squareLabel(b.at) === 'I1')).toMatchObject({ band: 'move', costFt: 40 });
+    expect(bands.find((b) => squareLabel(b.at) === 'P1')).toMatchObject({ band: 'dash', costFt: 75 });
+  });
+  it('R10: on land the shark has its walking Speed; a walker with a small Swim Speed keeps its walking Dash in water', () => {
+    expect(turnBudget(fight(sea('C1'), [shark(), creature('h', 'player', 'T6')]), mira, 's')).toMatchObject({ speedFt: 5, leftFt: 5 });
+    const swimmer = fight(sea(), [creature('m', 'enemy', 'A1', { speeds: { walk: 30, swim: 20 } }), creature('h', 'player', 'T6')]);
+    expect(moved(plan(swimmer, 'm', 'K1', { dash: true })).costFt).toBe(50);
+    expect(turnBudget(swimmer, mira, 'm')).toMatchObject({ speedFt: 30, leftFt: 30 });
+  });
+});
+
+describe('R11: a flight stopped part-way (app convention C12; SRD 5.2.1 srd:rule:flying)', () => {
+  it('R11: pays for the height it already climbed, and the repeat for the rest of the path', () => {
+    const at = (dragon: string) =>
+      fight(battleMap(16, 16), [creature('h', 'player', 'E1', { speeds: { fly: 60 } }), creature('d', 'enemy', dragon, { size: 'Gargantuan', reachFt: 15 })]);
+    const req = { mode: 'fly' as const, elevationFt: 30 };
+    const first = move(at('A1'), 'h', 'H1', req);
+    expect(stopped(first)).toMatchObject({ at: P('G1'), costFt: 30, remainingCostFt: 5 });
+    expect(find(stateOf(first), 'h').elevationFt).toBe(30);
+    const again = move(stateOf(first), 'h', 'H1', req);
+    expect(moved(again).costFt).toBe(5);
+    expect(stateOf(again).map?.turn?.movedFt).toBe(35);
+    expect(moved(move(at('L12'), 'h', 'H1', req)).costFt).toBe(30);
+  });
+});
+
+describe('R12: a stopped mover pushed, teleported or placed (D33; SRD 5.2.1 srd:rule:opportunity-attacks)', () => {
+  it('R12: ends the stop and spends the Reactions of the reactors that didn’t let it go', () => {
+    const halted = stateOf(move(fixture({ at: { 'c-2': 'C5' } }), 'c-2', 'F4', { declinedIds: ['c-1'] }));
+    expect(halted.map?.stop).toMatchObject({ moverId: 'c-2', reactorIds: ['c-4', 'c-1'], declinedIds: ['c-1'] });
+    const pushed = applyMove(halted, mira, { moverId: 'c-2', kind: 'forced', by: 'dm', push: { distanceFt: 5, direction: 'east' } });
+    expect(moved(pushed).notes).toContainEqual({ kind: 'stop-continued', reactorIds: ['c-4', 'c-1'], declinedIds: ['c-1'] });
+    expect(stateOf(pushed).map?.stop).toBeUndefined();
+    expect(find(stateOf(pushed), 'c-4').reactionUsed).toBe(true);
+    expect(find(stateOf(pushed), 'c-1').reactionUsed).toBeUndefined();
+    for (const kind of ['teleport', 'place'] as const) {
+      const after = stateOf(applyMove(halted, mira, { moverId: 'c-2', kind, by: 'dm', to: { kind: 'square', at: P('H2') } }));
+      expect(after.map?.stop).toBeUndefined();
+      expect(find(after, 'c-4').reactionUsed).toBe(true);
+    }
+  });
+});
+
+describe('R13: Tiny movers (SRD 5.2.1 srd:rule:combat-movement-and-position-moving-around-other-creatures; app convention C5)', () => {
+  const corridor = battleMap(4, 3, [wall('A1', 'D1'), wall('A3', 'D3')]);
+  it('R13: a Tiny Rat can’t pass a hostile Small creature, only one two sizes larger', () => {
+    const through = (size: Combatant['size']) =>
+      plan(fight(corridor, [creature('r', 'enemy', 'A2', { size: 'Tiny' }), creature('k', 'ally', 'B2', { size }), creature('h', 'player', 'D2')]), 'r', 'C2');
+    expect(refusal(through('Small'))).toMatchObject({ code: 'no-route' });
+    expect(moved(through('Medium')).costFt).toBe(15);
+  });
+});
+
+describe('R14: a Prone creature that needs the Dash to stand up (SRD 5.2.1 srd:condition:prone, srd:rule:dash)', () => {
+  it('R14: gets the Dash band from after standing, matching what the move does', () => {
+    const prone = sampleCharacter({ conditions: [{ id: 'prone' }] });
+    const base = fight(battleMap(16, 16), [creature('h', 'player', 'F6'), creature('b', 'enemy', 'P16')]);
+    const turn = { combatantId: 'h', round: 1, movedFt: 20, dashFt: 0, dashes: 0, disengaged: false, stoodUp: false, moves: [] };
+    const state: CombatState = { ...base, map: { ...(base.map as BattleMap), turn } };
+    const bands = reachableSquares(state, prone, 'h', { standUp: true, perspective: 'player' });
+    expect(bands.length).toBeGreaterThan(0);
+    expect(bands.every((s) => s.band === 'dash')).toBe(true);
+    expect(Math.max(...bands.map((s) => s.costFt))).toBe(25);
+    expect(bands.find((s) => squareLabel(s.at) === 'I6')).toMatchObject({ band: 'dash', costFt: 15 });
+    expect(applyHeroMove(state, prone, heroMove('I6', { standUp: true }), { stopResolved: true })).toMatchObject({
+      status: 'refused',
+      refusal: { code: 'cant-stand', costFt: 15, leftFt: 10 },
+    });
+    const out = applyHeroMove(state, prone, heroMove('I6', { standUp: true, dash: true }), { stopResolved: true });
+    if (out.status === 'refused') throw new Error(JSON.stringify(out.refusal));
+    expect(out).toMatchObject({ status: 'moved', heroStoodUp: true, move: { costFt: 15, stoodUp: true, dashed: true } });
+  });
+});
+
+describe('P3: a hidden creature that blocks the hero’s first step (app convention C24; spec §3.4.8 step 4)', () => {
+  it('P3: the 0-ft stop is recorded for the DM, the hidden blocker in the turn record only', () => {
+    const state = fixture({ heroTurn: true, at: { 'c-5': 'C6' } });
+    const out = applyHeroMove(state, mira, heroMove('D6'), { stopResolved: true });
+    if (out.status === 'refused') throw new Error(JSON.stringify(out.refusal));
+    expect(out).toMatchObject({ status: 'stopped', stoppedFor: { kind: 'unseen' }, revealedHidden: true });
+    expect(out.move).toMatchObject({ from: P('B6'), to: P('B6'), path: [], costFt: 0, revealedHidden: true });
+    expect(out.move).not.toHaveProperty('blockedById');
+    expect(out.state).not.toBe(state);
+    expect(out.state.map?.turn).toMatchObject({ combatantId: 'c-1', movedFt: 0 });
+    expect(out.state.map?.turn?.moves).toEqual([expect.objectContaining({ by: 'player', to: P('B6'), costFt: 0, revealedHidden: true, blockedById: 'c-5' })]);
+    expect(find(out.state, 'c-1').position).toEqual(P('B6'));
+  });
+});
+
+describe('the hidden creature’s turn (D42; amendment 8: nothing about it reaches the player)', () => {
+  it('its moves keep the shown turn’s record and stop, so the player’s view doesn’t change', () => {
+    // Bandit 1's move stops for Old Tam and the hero; then the hidden Cutthroat has the turn, and the player still sees Bandit 1's.
+    const during = nextTurn(stateOf(move(fixture({ at: { 'c-2': 'C5' } }), 'c-2', 'F4')));
+    expect(during.combatants[during.turnIndex].id).toBe('c-5');
+    expect(during.map?.stop?.moverId).toBe('c-2');
+    expect(during.map?.turn?.combatantId).toBe('c-2');
+    const sneak = applyMove(during, mira, { moverId: 'c-5', kind: 'move', by: 'dm', to: { kind: 'square', at: P('M10') } });
+    expect(moved(sneak).costFt).toBe(10);
+    const shove = applyMove(stateOf(sneak), mira, { moverId: 'c-4', kind: 'forced', by: 'dm', push: { distanceFt: 5, direction: 'north' } });
+    for (const after of [stateOf(sneak), stateOf(shove)]) {
+      expect(after.map?.turn).toEqual(during.map?.turn);
+      expect(after.map?.stop).toEqual(during.map?.stop);
+      expect(playerView(after).map?.turn).toEqual(playerView(during).map?.turn);
+      expect(playerView(after).map?.stop).toEqual(playerView(during).map?.stop);
+    }
   });
 });
