@@ -25,6 +25,7 @@ import { DmError, isAbortError, isUnparseableStreamError } from './errors';
 import { buildMessageRequest } from './request';
 import { flushLeftoverReasoning, StreamConsumer, TurnLog } from './stream';
 import type { ToolContext, ToolOutcome } from './tools/context';
+import { namesHiddenCreature } from './mapText';
 import { toolActivity } from './tools/definitions';
 import { runTool } from './tools/handlers';
 import {
@@ -302,6 +303,12 @@ async function keepStoppedNarration(d: DmDeps, opts: LoopOptions, consumer: Stre
 // Tool calls
 // ---------------------------------------------------------------------------
 
+/** Does status text name a creature the hero hasn't noticed (amendment 8: nothing hidden in the status bar)? */
+function namesHidden(d: DmDeps, text: string): boolean {
+  const combat = d.store().combat;
+  return combat?.active ? namesHiddenCreature(combat, text) : false;
+}
+
 async function runToolCalls(
   d: DmDeps,
   opts: LoopOptions,
@@ -320,7 +327,7 @@ async function runToolCalls(
       results.push(errorResult(block.id, NOTES.cancelled));
       continue;
     }
-    ctx.status(toolActivity(block.name, block.input));
+    ctx.status(toolActivity(block.name, block.input, { isSecret: (text) => namesHidden(d, text) }));
     try {
       results.push(toolResult(block.id, await runTool(block.name, block.input, ctx)));
       // Its effects are already saved: keep its result too, in case the app closes mid-batch.

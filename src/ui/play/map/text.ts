@@ -75,7 +75,6 @@ export function conditionLabel(id: string, level?: number): string {
 export interface BlockContext {
   /** The visible creatures that get an Opportunity Attack at the player's pending stop. */
   stopReactors: readonly string[];
-  dmBusy: boolean;
 }
 
 /** Why the hero can't move right now (spec §7.8). */
@@ -86,7 +85,7 @@ export function blockText(block: MapBlock, ctx: BlockContext): string {
     case 'not-your-turn':
       return "It isn't your turn.";
     case 'waiting':
-      return ctx.dmBusy ? 'The DM is still working.' : 'Waiting for the DM.';
+      return 'Waiting for the DM.';
     case 'dm-busy':
       return 'The DM is still working.';
     case 'interaction':
@@ -159,7 +158,7 @@ export function refusalText(refusal: MoveRefusal, ctx: RefusalContext): string {
       return "It isn't your turn.";
     case 'stop-pending': {
       const names = refusal.reactorIds.map(ctx.name);
-      return blockText('stop-pending', { stopReactors: names, dmBusy: false });
+      return blockText('stop-pending', { stopReactors: names });
     }
     case 'out-of-range':
       return `Too far: ${refusal.distanceFt} ft (the most is ${refusal.maxFt}).`;
@@ -246,9 +245,11 @@ export const UNDO_FAILED_TOAST = "Couldn't undo that move. Try again.";
 // Turn pill, waiting banner, battle chip, tip
 // ---------------------------------------------------------------------------
 
-/** "Your turn · 30 ft", "Your turn · Grappled: Speed 0", "Bandit 2's turn". */
-export function turnPillText(opts: { yourTurn: boolean; waiting: boolean; currentName: string | null; budget: TurnBudget | null }): string {
-  if (opts.waiting) return 'Waiting for the DM…';
+/**
+ * "Your turn · 30 ft", "Your turn · Grappled: Speed 0", "Bandit 2's turn" — whose turn the player's view shows
+ * (D42: during a hidden creature's turn, the last visible creature before it).
+ */
+export function turnPillText(opts: { yourTurn: boolean; currentName: string | null; budget: TurnBudget | null }): string {
   if (!opts.yourTurn) return opts.currentName ? `${capitalize(possessive(opts.currentName))} turn` : 'Battle map';
   const b = opts.budget;
   if (!b) return 'Your turn';
@@ -267,8 +268,7 @@ export function remindWords(name: string): string {
 }
 
 /** The phone Story tab's chip: "Battle map · your turn · 25 ft". */
-export function battleChipText(opts: { yourTurn: boolean; waiting: boolean; currentName: string | null; leftFt: number | null }): string {
-  if (opts.waiting) return 'Battle map · waiting for the DM';
+export function battleChipText(opts: { yourTurn: boolean; currentName: string | null; leftFt: number | null }): string {
   if (opts.yourTurn) return opts.leftFt === null ? 'Battle map · your turn' : `Battle map · your turn · ${feet(opts.leftFt)}`;
   return opts.currentName ? `Battle map · ${possessive(opts.currentName)} turn` : 'Battle map';
 }

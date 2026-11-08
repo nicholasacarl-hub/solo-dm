@@ -13,7 +13,7 @@ import { PlayHeader } from './header/PlayHeader';
 import { InteractionHost } from './InteractionHost';
 import { JournalPanel } from './JournalPanel';
 import { NarrativeLog } from './log/NarrativeLog';
-import { BattleChip, CombatTabPanel, MapDock, useMappedFight } from './map';
+import { BattleChip, CombatTabPanel, MapDock, useMappedFight, useMapPlanExpiry } from './map';
 import { MobileTabBar } from './MobileTabBar';
 import { PanelBoundary } from './PanelBoundary';
 import { usePlayView } from './playView';
@@ -28,6 +28,7 @@ import { useIsDesktop } from './useMediaQuery';
 export function PlayTable() {
   const isDesktop = useIsDesktop();
   useEffect(() => () => usePlayView.getState().reset(), []);
+  useMapPlanExpiry();
   return (
     <div className="relative flex h-dvh flex-col overflow-hidden bg-bg text-text">
       <PlayHeader isDesktop={isDesktop} />

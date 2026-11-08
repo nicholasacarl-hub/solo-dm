@@ -162,6 +162,12 @@ describe('the battle map in <game_state> (spec §5.4)', () => {
     expect(blocked).toContain("Mira Voss's move stopped at C7: the [hidden] Cutthroat (M8) blocks the way — the player saw the hero stop and nothing more.");
   });
 
+  it("notes the hero's spent Reaction, as for anyone else", () => {
+    const base = sampleMappedCombat({ heroTurn: true });
+    const spent: CombatState = { ...base, combatants: base.combatants.map((c) => (c.isPlayer ? { ...c, reactionUsed: true } : c)) };
+    expect(block(spent)).toContain('- Mira Voss (hero) B6 (the loading door) · reach 5 ft · Reaction used\n');
+  });
+
   it('lists lasting effects and map warnings', () => {
     const base = sampleMappedCombat({ heroTurn: true });
     const map = base.map as BattleMap;

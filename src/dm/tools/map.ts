@@ -12,6 +12,8 @@
 import {
   addAreaEffect,
   applyMove,
+  areAllies,
+  areHostile,
   combatantSize,
   coverAgainst,
   createBattleMap,
@@ -40,6 +42,7 @@ import {
   snapDirection,
   spaceDistanceFt,
   squareLabel,
+  teamOf,
   turnBudget,
   type BattleMapInput,
   type MapChange,
@@ -64,6 +67,7 @@ import type {
   MapRef,
   TerrainFeature,
 } from '@/types';
+import { nameKey } from '@/lib/id';
 import { DmCancelledError } from '../errors';
 import {
   coverBy,
@@ -200,9 +204,22 @@ export function resolveWho(state: CombatState, who: string, where: string): Comb
   return c;
 }
 
-/** A move's `to`: a square, a place or a creature. */
+/**
+ * A creature called exactly this (its id or name, in any case), or the hero for "hero" / "the hero" / "you". It is
+ * tried before square-like text, because start_combat numbers groups: "Bat 2", "Rat 1" and "Imp 3" look like squares.
+ */
+function exactCreature(state: CombatState, text: string): Combatant | undefined {
+  const key = nameKey(text);
+  if (!key) return undefined;
+  if (/^\s*(?:(?:the\s+)?hero|you)\s*$/i.test(text)) return state.combatants.find((c) => c.isPlayer);
+  return state.combatants.find((c) => c.id === text.trim() || nameKey(c.name) === key);
+}
+
+/** A move's `to`: a creature named exactly, a square, a place, or a creature by a unique partial name. */
 function resolveMoveTarget(state: CombatState, text: string, where: string): MoveTarget {
   const map = state.map as BattleMap;
+  const named = exactCreature(state, text);
+  if (named) return { kind: 'creature', id: named.id };
   if (looksLikeSquare(text)) return { kind: 'square', at: parseOneSquare(text, dimsOf(map), where) };
   const place = findPlace(map, text);
   if (place) return { kind: 'place', placeId: place.id };
@@ -221,6 +238,8 @@ function resolveRef(state: CombatState, text: string, where: string, opts: { dir
     if (!corner.ok) throw new ToolInputError(`${where}: ${corner.problem}`);
     return { kind: 'corner', x: corner.value.x, y: corner.value.y };
   }
+  const named = exactCreature(state, text);
+  if (named) return { kind: 'creature', id: named.id };
   if (looksLikeSquare(text)) return { kind: 'square', at: parseOneSquare(text, dimsOf(map), where) };
   if (opts.direction) {
     const dir = parseDirection(text);
@@ -442,9 +461,14 @@ interface MoveRun {
   stoppedBy: string | null;
 }
 
+/** What a refusal line needs to know about the request: the square it named and whether it meant to crawl. */
+function refusalOpts(req: MoveRequest): { toAt?: GridPoint; stayProne?: boolean } {
+  return { ...(req.to?.kind === 'square' ? { toAt: req.to.at } : {}), ...(req.stayProne ? { stayProne: true } : {}) };
+}
+
 function describeOutcome(n: number, before: CombatState, after: CombatState, hero: Character | null, prepared: PreparedMove, outcome: MoveOutcome, heroTakes: boolean): string {
-  if (outcome.status === 'refused') return describeRefusal(n, before, hero, outcome.moverId, outcome.refusal, prepared.target);
-  if (outcome.status === 'stopped') return describeStop(n, after, hero, outcome as StoppedOutcome, { heroTakes });
+  if (outcome.status === 'refused') return describeRefusal(n, before, hero, outcome.moverId, outcome.refusal, prepared.target, refusalOpts(prepared.req));
+  if (outcome.status === 'stopped') return describeStop(n, after, hero, outcome as StoppedOutcome, { heroTakes, declined: prepared.req.declinedIds ?? [] });
   const moved = outcome as MovedOutcome;
   switch (moved.kind) {
     case 'forced':
@@ -465,7 +489,7 @@ async function runMove(ctx: ToolContext, n: number, prepared: PreparedMove): Pro
   const hero = store.character;
   const plan = planMove(latest, hero, prepared.req);
   if (plan.status === 'refused') {
-    return { line: describeRefusal(n, latest, hero, plan.moverId, plan.refusal, prepared.target), log: null, stoppedBy: null };
+    return { line: describeRefusal(n, latest, hero, plan.moverId, plan.refusal, prepared.target, refusalOpts(prepared.req)), log: null, stoppedBy: null };
   }
   let req = prepared.req;
   let heroTakes = false;
@@ -477,7 +501,8 @@ async function runMove(ctx: ToolContext, n: number, prepared: PreparedMove): Pro
   }
   // The hero stands up: the sheet loses Prone first (D49 ordering); the move is still charged as a stand (old sheet).
   if (plan.heroStoodUp && hero) await mutateCharacter(ctx, (c) => removeCondition(c, 'prone'));
-  const before = store.combat as CombatState;
+  // deps.store() is a snapshot: read the combat again after the awaits.
+  const before = ctx.deps.store().combat as CombatState;
   const { outcome, state: after } = await mutateCombat(ctx, (c) => {
     const out = applyMove(c, hero, req);
     if (out.status === 'refused') return { outcome: out, state: c };
@@ -628,8 +653,10 @@ function parseEdit(input: UpdateMapInput, state: CombatState): MapEdit {
     });
   }
   if (input.doors) {
+    // A door's own label wins over square-like text ("Hut 2").
+    const isDoorLabel = (text: string) => map.terrain.some((f) => f.kind === 'door' && f.label && nameKey(f.label) === nameKey(text));
     edit.doors = input.doors.map((d, i) => ({
-      at: looksLikeSquare(d.at) ? parseOneSquare(d.at, dims, `update_map: doors[${i}]`) : { label: d.at },
+      at: !isDoorLabel(d.at) && looksLikeSquare(d.at) ? parseOneSquare(d.at, dims, `update_map: doors[${i}]`) : { label: d.at },
       state: d.state,
     }));
   }
@@ -830,6 +857,8 @@ type Point = { kind: 'creature'; c: Combatant } | { kind: 'square'; at: GridPoin
 
 function resolvePoint(state: CombatState, text: string, where: string): Point {
   const map = state.map as BattleMap;
+  const named = exactCreature(state, text);
+  if (named) return { kind: 'creature', c: named };
   if (looksLikeSquare(text)) return { kind: 'square', at: parseOneSquare(text, dimsOf(map), where) };
   return { kind: 'creature', c: resolveWho(state, text, where) };
 }
@@ -867,8 +896,9 @@ function measureSection(state: CombatState, hero: Character | null, from: Point,
   return lines.join('\n');
 }
 
-function teamOfSide(c: Combatant): string {
-  return c.side === 'player' || c.side === 'ally' ? 'party' : c.side === 'enemy' ? 'foes' : 'neutral';
+/** "it" for a creature, the hero's name for the hero (DM text never uses a pronoun for the hero, amendment 1). */
+function itOrName(c: Combatant): string {
+  return c.isPlayer ? c.name : 'it';
 }
 
 /** "Around Bandit 1 (F4): Bandit 2 5 ft (ally) · Mira Voss 20 ft · …" plus the best cover it can reach this turn. */
@@ -883,8 +913,9 @@ function aroundSection(state: CombatState, hero: Character | null, from: Point):
     .sort((a, b) => a.d - b.d);
   const tag = (c: Combatant) => {
     if (!self) return '';
-    if (teamOfSide(c) === 'neutral' || teamOfSide(self) === 'neutral') return ' (neutral)';
-    return teamOfSide(c) === teamOfSide(self) ? ' (ally)' : '';
+    const [mine, theirs] = [teamOf(self.side), teamOf(c.side)];
+    if (mine === 'neutral' || theirs === 'neutral') return ' (neutral)';
+    return areAllies(mine, theirs) ? ' (ally)' : '';
   };
   const lines = [`Around ${pointName(state, from, hero)}: ${near.map(({ c, d }) => `${dmName(state, c.id)} ${d} ft${tag(c)}`).join(' · ') || 'nobody else on the map'}.`];
   if (self) {
@@ -894,11 +925,13 @@ function aroundSection(state: CombatState, hero: Character | null, from: Point):
   return lines.join(' ');
 }
 
-/** The three best squares of cover a creature can reach this turn against its main threat (the hero for foes). */
+/**
+ * The three best squares of cover a creature can reach this turn against its main threat (the hero for foes, else
+ * the nearest hostile creature), with the Opportunity Attacks getting there would provoke.
+ */
 function reachableCover(state: CombatState, hero: Character | null, self: Combatant, byDistance: readonly Combatant[]): string | null {
   const heroC = state.combatants.find((c) => c.isPlayer);
-  const hostile = (c: Combatant) =>
-    (teamOfSide(c) === 'party' && teamOfSide(self) === 'foes') || (teamOfSide(c) === 'foes' && teamOfSide(self) === 'party');
+  const hostile = (c: Combatant) => areHostile(teamOf(c.side), teamOf(self.side));
   const threat = heroC && heroC.position && hostile(heroC) ? heroC : byDistance.find(hostile);
   if (!threat) return null;
   const rank: Record<string, number> = { none: 0, half: 1, 'three-quarters': 2, total: 3 };
@@ -906,15 +939,16 @@ function reachableCover(state: CombatState, hero: Character | null, self: Combat
     .filter((sq) => sq.band === 'move' && sq.canEnd)
     .map((sq) => ({ sq, cover: coverAgainst(state, hero, threat.id, self.id, { targetAt: sq.at }) }))
     .filter((o) => o.cover.degree !== 'none' && o.cover.degree !== 'total')
-    .sort((a, b) => rank[b.cover.degree] - rank[a.cover.degree] || a.sq.costFt - b.sq.costFt || a.sq.at.y - b.sq.at.y || a.sq.at.x - b.sq.at.x)
+    .sort((a, b) => rank[b.cover.degree] - rank[a.cover.degree] || a.sq.provokes - b.sq.provokes || a.sq.costFt - b.sq.costFt || a.sq.at.y - b.sq.at.y || a.sq.at.x - b.sq.at.x)
     .slice(0, 3);
   if (!options.length) return null;
   const short: Record<string, string> = { half: 'Half', 'three-quarters': 'Three-Quarters' };
   const parts = options.map((o) => {
     const by = coverBy(state, o.cover);
-    return `${squareLabel(o.sq.at)} ${short[o.cover.degree]}${by ? ` (${by})` : ''}, ${o.sq.costFt} ft`;
+    const provokes = o.sq.provokes ? `, provokes ${o.sq.provokes === 1 ? 'an Opportunity Attack' : `${o.sq.provokes} Opportunity Attacks`}` : '';
+    return `${squareLabel(o.sq.at)} ${short[o.cover.degree]}${by ? ` (${by})` : ''}, ${o.sq.costFt} ft${provokes}`;
   });
-  return `Cover it can reach this turn against ${dmName(state, threat.id)}: ${parts.join(' · ')}.`;
+  return `Cover ${itOrName(self)} can reach this turn against ${dmName(state, threat.id)}: ${parts.join(' · ')}.`;
 }
 
 /** "Bandit 2 (F3) → A7: 30 ft after standing up (15 ft) by F3 E4 …; it has 15 ft left, so the closest it gets is C6." */
@@ -927,13 +961,15 @@ function pathSection(state: CombatState, hero: Character | null, mover: Combatan
   const plan = planMove(state, hero, base);
   const name = `${dmName(state, mover.id)} (${spaceText(mover, hero) ?? 'not on the map'})`;
   const target = to.kind === 'square' ? squareLabel(to.at) : to.kind === 'creature' ? dmName(state, to.id) : ((state.map as BattleMap).places.find((p) => p.id === to.placeId)?.name ?? toText);
-  const when = current ? 'this turn' : 'on its next turn';
+  const it = itOrName(mover);
+  const when = current ? 'this turn' : `on ${mover.isPlayer ? `${mover.name}'s` : 'its'} next turn`;
   const from = mover.position as GridPoint;
   if (plan.status === 'refused' && plan.refusal.code !== 'too-far') {
-    return describeRefusal(0, state, hero, mover.id, plan.refusal, target).replace(/^0\. /, '');
+    return describeRefusal(0, state, hero, mover.id, plan.refusal, target, refusalOpts(base)).replace(/^0\. /, '');
   }
-  const left = current ? (turnBudget(state, hero, mover.id)?.leftFt ?? 0) : allowance;
-  const stand = stats?.prone ? ` after standing up (${Math.floor((stats?.walk ?? 0) / 2)} ft)` : '';
+  const budget = turnBudget(state, hero, mover.id);
+  const left = current ? (budget?.leftFt ?? 0) : allowance;
+  const stand = stats?.prone ? ` after standing up (${budget?.standCostFt ?? Math.floor(allowance / 2)} ft)` : '';
   let cost: number;
   let route: GridPoint[];
   const tail: string[] = [];
@@ -941,18 +977,18 @@ function pathSection(state: CombatState, hero: Character | null, mover: Combatan
     const r = plan.refusal;
     cost = r.needFt;
     route = r.route;
-    const closest = r.closest ? `, so the closest it gets is ${squareLabel(r.closest.at)}` : '';
-    tail.push(`it has ${r.leftFt} ft left${closest}`);
+    const closest = r.closest ? `, so the closest ${it} gets is ${squareLabel(r.closest.at)}` : '';
+    tail.push(`${it} has ${r.leftFt} ft left${closest}`);
     const dash = current ? r.dashWouldReach : planMove(state, hero, { ...base, budgetFt: 2 * allowance }).status !== 'refused';
-    if (dash) tail.push(`With Dash it reaches ${target}`);
+    if (dash) tail.push(`With Dash ${it} reaches ${target}`);
   } else if (plan.status === 'stopped') {
     cost = plan.costFt + plan.remainingCostFt;
     route = [...plan.path, ...plan.remainingPath];
-    tail.push(`it has ${left} ft ${when}`);
+    tail.push(`${it} has ${left} ft ${when}`);
   } else if (plan.status === 'moved') {
     cost = plan.costFt;
     route = plan.path;
-    tail.push(`it has ${left} ft ${when}`);
+    tail.push(`${it} has ${left} ft ${when}`);
   } else {
     return '';
   }

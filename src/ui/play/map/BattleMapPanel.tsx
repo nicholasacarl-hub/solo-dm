@@ -3,13 +3,12 @@
  * desktop panel above the story (the action bar floats over the map); `tab` is the phone Combat tab's section (pill,
  * map, action bar stacked; side by side in phone landscape, by CSS only).
  */
-import { useId, useRef, useState } from 'react';
-import { useRulesIndex } from '@/data';
+import { useCallback, useId, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
 import type { GridPoint, MapRef } from '@/types';
-import { usePlayView } from '../playView';
-import { spellPresets, type AreaPreset } from './areaPresets';
-import { AreaPicker } from './AreaPicker';
+import { usePlayView, type MapMode } from '../playView';
+import type { AreaPreset } from './areaPresets';
+import { SpellAreaPicker } from './AreaPicker';
 import { MapActionBar } from './MapActionBar';
 import { MapHelpDialog } from './MapHelp';
 import { MapToolbar, TurnPill, ZoomControls } from './MapToolbar';
@@ -37,10 +36,20 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
   const [helpOpen, setHelpOpen] = useState(false);
   const mapList = usePlayView((s) => s.mapList);
   const dock = usePlayView((s) => s.mapDock);
-  const index = useRulesIndex();
-  const presets: AreaPreset[] = spellPresets(model.hero, index);
 
-  const toggleList = () => usePlayView.getState().setMapList(!usePlayView.getState().mapList);
+  // Stable handlers: the chrome (toolbar, zoom buttons, pill) is memoized and must not re-render on every hovered
+  // square (spec §7.12: hover re-renders only the path, the bands and the bar).
+  const toggleList = useCallback(() => usePlayView.getState().setMapList(!usePlayView.getState().mapList), []);
+  const openHelp = useCallback(() => setHelpOpen(true), []);
+  const onMode = useCallback((mode: MapMode) => dispatch({ type: 'mode', mode }), [dispatch]);
+  const onSize = useCallback(() => {
+    const view = usePlayView.getState();
+    view.setMapDock(view.mapDock === 'large' ? 'normal' : 'large');
+  }, []);
+  const onCollapse = useCallback(() => usePlayView.getState().setMapDock('collapsed'), []);
+  const onZoom = useCallback((factor: number) => viewport.current?.zoom(factor), []);
+  const onFit = useCallback(() => viewport.current?.fit(), []);
+  const onCenter = useCallback(() => viewport.current?.centre(), []);
   const showOnMap = (id: string) => {
     const t = model.tokens.get(id);
     const view = usePlayView.getState();
@@ -57,7 +66,7 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
     if (at) dispatch({ type: 'plan-to', to: at, target: id });
   };
   const pick = (preset: AreaPreset) => {
-    const cam = usePlayView.getState().cameras[model.map.id];
+    const cam = usePlayView.getState().cameras[model.cameraKey];
     const heroAt = model.heroToken?.space ? { x: model.heroToken.space.x0, y: model.heroToken.space.y0 } : { x: 0, y: 0 };
     const centre = cam
       ? { x: Math.min(model.map.width - 1, Math.max(0, Math.floor(cam.cx))), y: Math.min(model.map.height - 1, Math.max(0, Math.floor(cam.cy))) }
@@ -77,19 +86,14 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
         ref={viewport}
         model={model}
         controller={controller}
-        cameraKey={model.map.id}
+        cameraKey={model.cameraKey}
         compact={variant === 'tab'}
         helpId={helpId}
-        onHelp={() => setHelpOpen(true)}
+        onHelp={openHelp}
         onList={toggleList}
       />
       <div className="pointer-events-none absolute right-2 bottom-2 flex flex-col">
-        <ZoomControls
-          layout={variant === 'dock' ? 'row' : 'column'}
-          onZoom={(f) => viewport.current?.zoom(f)}
-          onFit={() => viewport.current?.fit()}
-          onCenter={() => viewport.current?.centre()}
-        />
+        <ZoomControls layout={variant === 'dock' ? 'row' : 'column'} onZoom={onZoom} onFit={onFit} onCenter={onCenter} />
       </div>
     </>
   );
@@ -102,13 +106,13 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
         <TurnPill model={model} onStandUp={controller.standUp} />
         <MapToolbar
           mode={ui.mode}
-          onMode={(mode) => dispatch({ type: 'mode', mode })}
+          onMode={onMode}
           variant={variant}
           size={dock === 'large' ? 'large' : 'normal'}
-          onSize={variant === 'dock' ? () => usePlayView.getState().setMapDock(dock === 'large' ? 'normal' : 'large') : undefined}
-          onCollapse={variant === 'dock' ? () => usePlayView.getState().setMapDock('collapsed') : undefined}
+          onSize={variant === 'dock' ? onSize : undefined}
+          onCollapse={variant === 'dock' ? onCollapse : undefined}
           onList={toggleList}
-          onHelp={() => setHelpOpen(true)}
+          onHelp={openHelp}
           listOn={mapList}
         />
       </div>
@@ -125,8 +129,9 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
       <p id={helpId} className="sr-only">
         {HELP_TEXT}
       </p>
-      <AreaPicker open={ui.picker} presets={presets} onPick={pick} onClose={() => dispatch({ type: 'picker', open: false })} />
-      <MapHelpDialog open={helpOpen} onClose={() => setHelpOpen(false)} />
+      {/* Mounted only while open: "Your spells" needs the rules index, which isn't worth building for every fight. */}
+      {ui.picker && <SpellAreaPicker hero={model.hero} onPick={pick} onClose={() => dispatch({ type: 'picker', open: false })} />}
+      {helpOpen && <MapHelpDialog open onClose={() => setHelpOpen(false)} />}
     </div>
   );
 }

@@ -284,14 +284,17 @@
   flex-shrink: 0;
 }
 
-/* …and two columns in phone landscape (D58): the map on the left; the action bar and the tracker on the right. */
+/* …and two columns in phone landscape (D58): the map takes the whole height on the left; the turn pill and the
+ * toolbar, the DM's activity, the action bar and the tracker stack on the right. */
 @media (orientation: landscape) and (max-height: 500px) {
   .combat-tab {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 18rem;
-    grid-template-rows: auto auto minmax(0, 1fr);
+    /* The action bar gets what it needs while there is room, then scrolls (a placed area template is tall). */
+    grid-template-rows: auto auto minmax(0, max-content) minmax(0, 1fr);
     grid-template-areas:
-      'head activity'
+      'view head'
+      'view activity'
       'view bar'
       'view side';
     overflow: hidden;
@@ -301,6 +304,7 @@
   }
   .combat-tab [data-map-part='head'] {
     grid-area: head;
+    border-left: 1px solid var(--border);
   }
   .combat-tab [data-map-part='activity'] {
     grid-area: activity;
@@ -314,6 +318,8 @@
   }
   .combat-tab [data-map-part='bar'] {
     grid-area: bar;
+    min-height: 0;
+    overflow-y: auto;
     border-left: 1px solid var(--border);
   }
   .combat-tab [data-map-part='side'] {

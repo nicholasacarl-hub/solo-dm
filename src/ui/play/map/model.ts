@@ -3,7 +3,7 @@
  * player view of the fight (playerView), so a hidden creature can't reach the DOM, an accessible name, a path, a
  * band or a readout. "Show DM secrets" only adds `secretTokens`, which are drawn and never used in a computation.
  */
-import { useMemo } from 'react';
+import { useDeferredValue, useMemo } from 'react';
 import { useShallow } from 'zustand/react/shallow';
 import {
   currentTurn,
@@ -31,6 +31,11 @@ export interface BattleMapModel {
   /** playerView(combat): every computation uses it. */
   view: CombatState;
   map: BattleMap;
+  /**
+   * The key of this map's camera in usePlayView.cameras: the fight and the map. Every fight's first map is "map-1",
+   * so the map id alone would hand a new fight the last fight's camera.
+   */
+  cameraKey: string;
   /** mapSnapshot(view, hero, { perspective: 'player' }). */
   snapshot: MapSnapshot;
   cells: MapCells;
@@ -79,11 +84,34 @@ export interface ModelInputs {
 
 /**
  * The block the player is shown. A hidden creature's turn reads 'not-your-turn' in the store while the player's
- * view still shows the hero acting (D42): that becomes the neutral 'waiting', never "It isn't your turn".
+ * view still shows the hero acting (D42). It must look exactly like the hero's own turn: while the DM works that is
+ * 'dm-busy' (what the hero's turn shows then); once the DM is idle it is the neutral 'waiting' — never "It isn't
+ * your turn".
  */
-export function displayBlock(rawBlock: ModelInputs['rawBlock'], yourTurnInView: boolean): MapBlock | null {
-  if (rawBlock === 'not-your-turn' && yourTurnInView) return 'waiting';
+export function displayBlock(rawBlock: ModelInputs['rawBlock'], yourTurnInView: boolean, dmBusy: boolean): MapBlock | null {
+  if (rawBlock === 'not-your-turn' && yourTurnInView) return dmBusy ? 'dm-busy' : 'waiting';
   return rawBlock;
+}
+
+/**
+ * The hero's movement as last shown on the hero's own turn. When a hidden creature acts right after the hero, the
+ * player view keeps showing the hero's turn (D42), but the hidden creature's turn record replaces the hero's, so a
+ * fresh budget ("30 ft" again) would give the hidden turn away: the readouts keep the last budget the hero had.
+ * Shared by every map surface (pill, bar, chip), so a surface that mounts during the hidden turn agrees with them.
+ */
+let lastHeroBudget: { key: string; budget: TurnBudget | null } | null = null;
+
+export function shownHeroBudget(view: CombatState, hero: Character | null, heroId: string, hiddenTurn: boolean): TurnBudget | null {
+  const key = `${view.startedAt}:${view.round}:${heroId}`;
+  if (hiddenTurn && lastHeroBudget?.key === key) return lastHeroBudget.budget;
+  const budget = turnBudget(view, hero, heroId);
+  if (!hiddenTurn) lastHeroBudget = { key, budget };
+  return budget;
+}
+
+/** Tests: forget the cached budget. */
+export function resetShownBudgetForTests(): void {
+  lastHeroBudget = null;
 }
 
 /** The hero's moves this turn (in the player view) that the DM hasn't seen and answered. */
@@ -106,19 +134,22 @@ export function buildModelCore(input: ModelInputs): Omit<BattleMapModel, 'reacha
   if (!snapshot || !cells || !heroC) return null;
   const current = view.combatants[view.turnIndex] ?? null;
   const yourTurn = current?.id === heroC.id;
-  const block = displayBlock(input.rawBlock, yourTurn);
+  const dmBusy = isBusyPhase(input.dmPhase);
+  const block = displayBlock(input.rawBlock, yourTurn, dmBusy);
+  const hiddenTurn = yourTurn && input.rawBlock === 'not-your-turn';
   const tokens = new Map(snapshot.tokens.map((t) => [t.id, t]));
   const combatants = new Map(view.combatants.map((c) => [c.id, c]));
   const stop = pendingPlayerStop(view, input.transcript);
   return {
     view,
     map,
+    cameraKey: `${view.startedAt}:${map.id}`,
     snapshot,
     cells,
     hero,
     heroId: heroC.id,
     heroToken: tokens.get(heroC.id) ?? null,
-    budget: yourTurn && block !== 'waiting' ? turnBudget(view, hero, heroC.id) : null,
+    budget: yourTurn ? shownHeroBudget(view, hero, heroC.id, hiddenTurn) : null,
     canMove: block === null,
     block,
     currentId: current?.id ?? null,
@@ -131,7 +162,7 @@ export function buildModelCore(input: ModelInputs): Omit<BattleMapModel, 'reacha
     unseenMoves: yourTurn ? unseenHeroMoves(view, heroC.id, input.transcript) : [],
     canUndo: input.canUndo,
     dmPhase: input.dmPhase,
-    dmBusy: isBusyPhase(input.dmPhase),
+    dmBusy,
     hasSession: input.hasSession,
   };
 }
@@ -166,9 +197,12 @@ export function useBattleMapModel(): BattleMapModel | null {
   const heroId = core?.heroId ?? null;
   const canMove = core?.canMove ?? false;
   // The bands: the expensive search, only while the hero can move, and only when the fight or the sheet changes.
+  // Deferred, so the map paints first and the bands follow (spec §7.12, first paint).
+  const bandsInput = useMemo(() => (view && hero && heroId && canMove ? { view, hero, heroId, standUp } : null), [view, hero, heroId, canMove, standUp]);
+  const bandsKey = useDeferredValue(bandsInput, null);
   const reachable = useMemo(
-    () => (view && hero && heroId && canMove ? reachableSquares(view, hero, heroId, { perspective: 'player', standUp }) : []),
-    [view, hero, heroId, canMove, standUp],
+    () => (bandsKey ? reachableSquares(bandsKey.view, bandsKey.hero, bandsKey.heroId, { perspective: 'player', standUp: bandsKey.standUp }) : []),
+    [bandsKey],
   );
   const secret = useMemo(() => {
     if (!showSecrets || !combat?.map) return { tokens: [] as SnapshotToken[], labels: new Map<string, string>() };

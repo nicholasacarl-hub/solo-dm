@@ -23,6 +23,7 @@ import { makeMessage, textBlock, thinkingBlock, toolUseBlock } from './scripted'
 import { canRegenerate } from './index';
 import { WRAP_UP_REQUEST } from './session';
 import { fakeDice } from './testing/fakeEngine';
+import { autoRespond } from './testing/fakeStore';
 import { answerRolls, NO_IMAGE_KEY, setupHarness } from './testing/harness';
 
 beforeEach(() => fakeDice.reset());
@@ -681,5 +682,89 @@ describe('the battle-maps table rule mid-session', () => {
     expect(notes).toHaveLength(1);
     expect(notes[0]).toContain('Setting update — Battle maps: Off.');
     expectAppendOnly(h.client.requests);
+  });
+});
+
+describe('a mapped fight: regenerate and the Opportunity Attack dialog', () => {
+  /** Bandit 1's turn with Bandit 1 at C5, next to Mira Voss (B6) and Old Tam (B5), whose Reaction is spent. */
+  function bandit1AtC5(): CombatState {
+    const base = sampleMappedCombat();
+    return {
+      ...base,
+      combatants: base.combatants.map((c) =>
+        c.name === 'Bandit 1' ? { ...c, position: { x: 2, y: 4 } } : c.name === 'Old Tam' ? { ...c, reactionUsed: true } : c,
+      ),
+    };
+  }
+
+  it('can regenerate a response that only asked check_map, not one that moved a token', async () => {
+    const look = setupHarness({
+      withSession: true,
+      state: { combat: sampleMappedCombat() },
+      steps: [makeMessage([toolUseBlock('toolu_look', 'check_map', { show: true })], 'tool_use'), end('First draft.'), end('Second draft.')],
+    });
+    await look.controller.sendPlayerMessage('Where is everyone?');
+    expect(look.controller.regenerateProblem()).toBeNull();
+    await look.controller.regenerate();
+    expect((look.s().log.at(-1) as DmLogEntry).text).toBe('Second draft.');
+
+    const move = setupHarness({
+      withSession: true,
+      state: { combat: sampleMappedCombat() },
+      steps: [makeMessage([toolUseBlock('toolu_move', 'move_tokens', { moves: [{ who: 'Bandit 1', to: 'hero' }] })], 'tool_use'), end('The bandit closes in.')],
+    });
+    await move.controller.sendPlayerMessage('I wait.');
+    await expect(move.controller.regenerate()).rejects.toThrow(/already changed the game.*move_tokens/);
+  });
+
+  it('asks the player in the middle of the turn, sends the answer to the DM, and stays append-only', async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: bandit1AtC5() },
+      steps: [
+        makeMessage([toolUseBlock('toolu_move', 'move_tokens', { moves: [{ who: 'Bandit 1', to: 'F4' }] })], 'tool_use'),
+        makeMessage([toolUseBlock('toolu_area', 'resolve_area', { label: 'Smoke Bomb', shape: 'sphere', size_ft: 10, at: 'F4' })], 'tool_use'),
+        makeMessage([toolUseBlock('toolu_door', 'update_map', { doors: [{ at: 'office door', state: 'open' }] })], 'tool_use'),
+        end('The bandit slips away through the smoke.'),
+        end('The office door creaks.'),
+      ],
+    });
+    const asked: string[] = [];
+    autoRespond(h.store, (req) => {
+      if (req.kind !== 'confirm') return null;
+      asked.push(req.title);
+      return { kind: 'confirm', confirmed: false };
+    });
+    await h.controller.sendPlayerMessage('I hold my ground.');
+    await h.controller.sendPlayerMessage('I listen.');
+
+    expect(asked).toEqual(['Opportunity Attack']);
+    expect(h.client.requests).toHaveLength(5);
+    expectAppendOnly(h.client.requests);
+    const moveResult = toolResults(h.client.requests[1].messages.at(-1) as BetaMessageParam)[0];
+    expect(String(moveResult.content)).toContain("Leaving C5 provoked Mira Voss's Opportunity Attack: the player let it go.");
+    expect(h.s().combat?.combatants.find((c) => c.name === 'Bandit 1')?.position).toEqual({ x: 5, y: 3 });
+    expect(h.s().dm.phase).toBe('idle');
+  });
+});
+
+describe('the status bar never names a hidden creature (amendment 8)', () => {
+  it("shows a hidden creature's roll as behind the screen even when the DM forgot secret: true", async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: sampleMappedCombat() },
+      steps: [
+        makeMessage([toolUseBlock('toolu_sneak', 'roll_dice', { expression: '1d20+7', purpose: 'Cutthroat Stealth' })], 'tool_use'),
+        end('Something shifts in the dark.'),
+      ],
+    });
+    const activities: string[] = [];
+    h.store.subscribe((s) => {
+      if (s.dm.activity) activities.push(s.dm.activity);
+    });
+    await h.controller.sendPlayerMessage('I listen.');
+    expect(activities).toContain('Rolling dice behind the screen…');
+    expect(activities.join('\n')).not.toMatch(/cutthroat/i);
+    expect(h.s().log.find((e) => e.kind === 'roll')).toMatchObject({ secret: true });
   });
 });

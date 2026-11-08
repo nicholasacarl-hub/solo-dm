@@ -99,7 +99,7 @@ export function PositionsList({
         <h3 className="mb-1 font-semibold">You</h3>
         <p className="text-muted">
           {hero?.space ? spaceLabel({ x: hero.space.x0, y: hero.space.y0 }, hero.size) : 'Not on the map'}
-          {hero?.places.length ? ` (${hero.places.join(', ')})` : ''} · {turnPillText({ yourTurn: model.yourTurn, waiting: model.block === 'waiting', currentName: model.currentId ? (model.combatants.get(model.currentId)?.name ?? null) : null, budget: model.budget })}
+          {hero?.places.length ? ` (${hero.places.join(', ')})` : ''} · {turnPillText({ yourTurn: model.yourTurn, currentName: model.currentId ? (model.combatants.get(model.currentId)?.name ?? null) : null, budget: model.budget })}
           {conditions.length ? ` · ${conditions.join(', ')}` : ''}
         </p>
       </div>
@@ -186,15 +186,16 @@ export function PositionsList({
           Move to square
         </label>
         <div className="flex items-center gap-2">
-          <Input
-            id={fieldId}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            placeholder="E6"
-            autoComplete="off"
-            aria-describedby={readout ? readoutId : undefined}
-            className="w-28"
-          />
+          <div className="w-28 shrink-0">
+            <Input
+              id={fieldId}
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="E6"
+              autoComplete="off"
+              aria-describedby={readout ? readoutId : undefined}
+            />
+          </div>
           <Button type="submit" variant="primary" size={btn} disabled={!target || !preview || preview.refusal !== null}>
             {preview?.dash ? 'Dash and move' : 'Move'}
           </Button>

@@ -131,6 +131,48 @@ describe('InteractionHost', () => {
     expect(useGame.getState().interaction).toBeNull();
   });
 
+  // The battle map's hero-as-reactor question (D32): the first tool to use `confirm` (R7).
+  it("asks about an Opportunity Attack the way move_tokens does: title, body, both labels; Let it go answers false and the dialog can't be dismissed by accident", async () => {
+    const { answer, user } = request({
+      kind: 'confirm',
+      id: 'oa1',
+      title: 'Opportunity Attack',
+      body: 'Bandit 1 is leaving your reach (from C5). Use your Reaction to make one melee attack against it?',
+      confirmLabel: 'Attack',
+      cancelLabel: 'Let it go',
+    });
+    const dialog = screen.getByRole('dialog', { name: 'Opportunity Attack' });
+    expect(dialog).toHaveTextContent('Bandit 1 is leaving your reach (from C5). Use your Reaction to make one melee attack against it?');
+    expect(screen.getByRole('button', { name: 'Attack' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Let it go' })).toBeInTheDocument();
+    // The DM is waiting on the answer: no close button, and Escape doesn't close it.
+    expect(screen.queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+    await user.keyboard('{Escape}');
+    // What a browser's Escape does to a modal <dialog> (jsdom doesn't): a cancel event, refused here.
+    act(() => {
+      dialog.dispatchEvent(new Event('cancel', { cancelable: true }));
+    });
+    expect(useGame.getState().interaction).not.toBeNull();
+    expect(screen.getByRole('dialog', { name: 'Opportunity Attack' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Let it go' }));
+    await expect(answer).resolves.toEqual({ kind: 'confirm', confirmed: false });
+    expect(useGame.getState().interaction).toBeNull();
+
+    let second: Promise<InteractionResponse> | undefined;
+    act(() => {
+      second = useGame.getState().requestInteraction({
+        kind: 'confirm',
+        id: 'oa2',
+        title: 'Opportunity Attack',
+        body: 'The Dock Ogre is leaving your reach (from B6).',
+        confirmLabel: 'Attack',
+        cancelLabel: 'Let it go',
+      });
+    });
+    await user.click(screen.getByRole('button', { name: 'Attack' }));
+    await expect(second).resolves.toEqual({ kind: 'confirm', confirmed: true });
+  });
+
   it('hands short rests to the sheet dialog and reports cancellation', async () => {
     const { answer, spies, user } = request({
       kind: 'short-rest',

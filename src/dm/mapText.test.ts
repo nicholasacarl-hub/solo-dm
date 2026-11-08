@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest';
 import mapTextSource from './mapText.ts?raw';
 import mapToolsSource from './tools/map.ts?raw';
 import combatToolsSource from './tools/combat.ts?raw';
+import rollToolsSource from './tools/rolls.ts?raw';
+import definitionsSource from './tools/definitions.ts?raw';
+import stateSource from './state.ts?raw';
+import promptsSource from './prompts.ts?raw';
+import sessionSource from './session.ts?raw';
+import agentSource from './agent.ts?raw';
 import { applyMove, sortCombatants } from '@/engine';
 import { sampleCharacter, sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
 import type { BattleMap, Combatant, CombatState, TurnMove } from '@/types';
@@ -14,10 +20,16 @@ import {
   layoutForPrompt,
   mapNote,
   mapStateLines,
+  namesHiddenCreature,
   playerLayout,
+  relationClause,
+  turnStartLine,
   type MovedOutcome,
   type StoppedOutcome,
 } from './mapText';
+import { BATTLE_MAPS_MODES } from '@/types';
+import { battleMapsNotice, battleMapsSection } from './modes';
+import { DM_TOOLS } from './tools/definitions';
 
 const hero = sampleCharacter();
 const never = () => false;
@@ -134,6 +146,12 @@ describe('no gendered pronouns for anyone (amendment 1)', () => {
       ['mapText.ts', mapTextSource],
       ['tools/map.ts', mapToolsSource],
       ['tools/combat.ts', combatToolsSource],
+      ['tools/rolls.ts', rollToolsSource],
+      ['tools/definitions.ts', definitionsSource],
+      ['state.ts', stateSource],
+      ['prompts.ts', promptsSource],
+      ['session.ts', sessionSource],
+      ['agent.ts', agentSource],
     ] as const) {
       const strings = source.match(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g) ?? [];
       for (const s of strings) expect(s, `${file}: ${s}`).not.toMatch(PRONOUNS);
@@ -156,5 +174,63 @@ describe('no gendered pronouns for anyone (amendment 1)', () => {
       describeStop(1, stopped.status === 'stopped' ? stopped.state : state, hero, stopped as StoppedOutcome, { heroTakes: false }),
     ];
     for (const text of texts) expect(text).not.toMatch(PRONOUNS);
+  });
+});
+
+describe('the battle-map prompt text and tool definitions have no gendered pronouns either (amendment 1)', () => {
+  const PRONOUNS = /\b(he|she|him|her|his|hers|himself|herself)\b/i;
+  const MAP_TOOLS = new Set(['move_tokens', 'update_map', 'resolve_area', 'check_map', 'start_combat', 'update_combat', 'roll_dice']);
+
+  it('in the battle-maps section and its mid-session notes, every mode', () => {
+    for (const mode of BATTLE_MAPS_MODES) {
+      expect(battleMapsSection(mode)).not.toMatch(PRONOUNS);
+      expect(battleMapsNotice(mode, { withPrinciples: true })).not.toMatch(PRONOUNS);
+    }
+  });
+
+  it('in the descriptions and schemas of the map tools and the combat tools they extend', () => {
+    for (const tool of DM_TOOLS.filter((t) => MAP_TOOLS.has(t.name))) expect(JSON.stringify(tool), tool.name).not.toMatch(PRONOUNS);
+  });
+});
+
+describe('the reach clause and the turn-start line', () => {
+  it('lists the hero first among the creatures a mover reaches, whatever the initiative order', () => {
+    const base = sampleMappedCombat();
+    const [mira, bandit1, cutthroat, bandit2, oldTam, ogre] = base.combatants;
+    // Old Tam acts before Mira Voss here; Bandit 1 at C5 is next to both.
+    const state: CombatState = { ...base, turnIndex: 1, combatants: [{ ...oldTam, initiative: 20 }, { ...bandit1, position: { x: 2, y: 4 } }, mira, cutthroat, bandit2, ogre] };
+    expect(relationClause(state, hero, 'c-2')).toBe("5 ft from Mira Voss and 5 ft from Old Tam — each is within the other's reach");
+  });
+
+  it("doesn't remind the DM to move the hero when the hero shares an initiative with the next creature", () => {
+    const before = sampleMappedCombat();
+    const shared: CombatState = {
+      ...before,
+      turnIndex: 0,
+      round: 3,
+      combatants: before.combatants.map((c) => (c.name === 'Bandit 1' ? { ...c, initiative: 17 } : c)),
+    };
+    const line = turnStartLine(before, shared, hero) ?? '';
+    expect(line).toMatch(/^Map: Mira Voss's turn — the player moves Mira Voss on the map/);
+    expect(line).not.toContain('same initiative');
+  });
+
+  it("asks for the hero to be placed when the hero's turn starts off the map", () => {
+    const before = sampleMappedCombat();
+    const unplaced: CombatState = { ...before, turnIndex: 0, round: 3, combatants: before.combatants.map((c) => (c.isPlayer ? { ...c, position: undefined } : c)) };
+    expect(turnStartLine(before, unplaced, hero)).toBe(
+      'Map: Mira Voss\'s turn — Mira Voss isn\'t on the map: place Mira Voss with move_tokens kind "place" so the player can move.',
+    );
+  });
+});
+
+describe('free text that names a hidden creature (amendment 8)', () => {
+  it('matches whole names in any case, and skips a hidden name a visible creature shares', () => {
+    const state = sampleMappedCombat();
+    expect(namesHiddenCreature(state, 'Stealth for the cutthroat')).toBe(true);
+    expect(namesHiddenCreature(state, 'Cutthroats everywhere')).toBe(false);
+    expect(namesHiddenCreature(state, 'Bandit 1 attacks')).toBe(false);
+    const renamed: CombatState = { ...state, combatants: state.combatants.map((c) => (c.name === 'Cutthroat' ? { ...c, name: 'Bandit' } : c)) };
+    expect(namesHiddenCreature(renamed, 'Bandit attacks')).toBe(false);
   });
 });

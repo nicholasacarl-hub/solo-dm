@@ -6,15 +6,16 @@
  * Query options: roll=prompt|physical|damage (open a roll prompt), dm=streaming|thinking|error,
  * tab=story|sheet|combat|journal|rules (mobile), combat=0 (no combat), empty=1 (no log yet),
  * ended=1 (between sessions), mock=1 (Demo badge), transformed=1 (the hero has a transformation),
- * map=1 (the warehouse battle map, the hero's turn) | map=npc (Bandit 1's turn) | map=hidden (the hidden Cutthroat's
- * turn) | map=stop (a pending Opportunity Attack stop), spoilers=1 ("Show DM secrets").
+ * confirm=oa (the hero's Opportunity Attack question), map=1 (the warehouse battle map, the hero's turn) | map=npc (Bandit 1's turn) | map=hidden (the hidden Cutthroat's
+ * turn) | map=stop (a pending Opportunity Attack stop) | map=big (40×40, 30 creatures: the performance case),
+ * spoilers=1 ("Show DM secrets").
  */
 import { useEffect } from 'react';
 import { MemoryRouter, useInRouterContext } from 'react-router';
 import { useGame, type GameStoreState } from '@/state/gameStore';
 import { useSettings } from '@/state/settingsStore';
 import { sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
-import type { Character, Clock, CombatState, InteractionRequest, LogEntry, PlayerRollMode, Quest } from '@/types';
+import type { Character, Clock, Combatant, CombatState, InteractionRequest, LogEntry, PlayerRollMode, Quest } from '@/types';
 import { Toaster } from '@/ui/components/toast';
 import { PlayTable } from '../PlayTable';
 import { usePlayView, type MobileTab } from '../playView';
@@ -204,11 +205,68 @@ function withExtraEntries(log: LogEntry[]): LogEntry[] {
   return [first, recap, narration, ...rest, ...extra].filter((e): e is LogEntry => Boolean(e));
 }
 
-/** The battle-map fixtures (§9.6) for map=1|npc|hidden|stop, with the log line that put the fight on the map. */
+/**
+ * The performance case of spec §7.12: a 40×40 map with every terrain kind and 30 creatures (the hero's turn), so
+ * pan, zoom, plans and the first paint can be timed on the largest map the app allows.
+ */
+function bigMappedCombat(): CombatState {
+  const base = sampleMappedCombat({ heroTurn: true });
+  const hero = { ...base.combatants[0], position: { x: 19, y: 30 } };
+  const others: Combatant[] = Array.from({ length: 29 }, (_, i) => {
+    const enemy = i % 5 !== 0;
+    const at = { x: 3 + ((i * 7) % 34), y: 2 + Math.floor(i / 6) * 4 + (i % 2) };
+    return {
+      id: `big-${i + 1}`,
+      name: enemy ? `Bandit ${i + 1}` : `Guard ${i + 1}`,
+      side: enemy ? 'enemy' : 'ally',
+      isPlayer: false,
+      initiative: 16 - (i % 15),
+      initiativeBonus: 1,
+      ac: 12,
+      hp: { max: 11, current: 11 - (i % 7), temp: 0 },
+      conditions: i % 4 === 0 ? [{ id: 'prone' }] : [],
+      defeated: i === 13,
+      hideHp: enemy,
+      position: at,
+      ...(i % 9 === 4 ? { size: 'Large' as const } : {}),
+    };
+  });
+  const rect = (x0: number, y0: number, x1: number, y1: number) => ({ x0, y0, x1, y1 });
+  return {
+    ...base,
+    encounterName: 'Siege of the old keep',
+    combatants: [hero, ...others],
+    map: {
+      id: 'map-1',
+      name: 'The old keep',
+      width: 40,
+      height: 40,
+      terrain: [
+        { id: 't1', kind: 'wall', rects: [rect(0, 0, 39, 0), rect(0, 39, 39, 39), rect(0, 0, 0, 39), rect(39, 0, 39, 39), rect(12, 10, 12, 26), rect(26, 14, 34, 14)], label: 'keep walls' },
+        { id: 't2', kind: 'door', rects: [rect(12, 18, 12, 18)], label: 'gate', door: 'closed' },
+        { id: 't3', kind: 'difficult', rects: [rect(15, 20, 22, 24), rect(30, 30, 36, 33)], label: 'rubble' },
+        { id: 't4', kind: 'deep-water', rects: [rect(2, 30, 9, 37)], label: 'moat' },
+        { id: 't5', kind: 'shallow-water', rects: [rect(10, 33, 13, 37)], label: 'ford' },
+        { id: 't6', kind: 'half-cover', rects: [rect(18, 27, 21, 27), rect(5, 5, 7, 6)], label: 'barricade' },
+        { id: 't7', kind: 'three-quarters-cover', rects: [rect(26, 20, 26, 22)], label: 'arrow slits' },
+        { id: 't8', kind: 'pit', rects: [rect(30, 5, 32, 7)], label: 'well' },
+        { id: 't9', kind: 'hazard', rects: [rect(24, 28, 24, 28), rect(8, 15, 8, 15)], label: 'braziers' },
+        { id: 't10', kind: 'obscured', rects: [rect(33, 22, 37, 26)], label: 'smoke' },
+      ],
+      places: [{ id: 'p11', name: 'the courtyard', rects: [rect(14, 16, 30, 28)] }],
+      effects: [],
+      nextId: 12,
+      rev: 0,
+    },
+  };
+}
+
+/** The battle-map fixtures (§9.6) for map=1|npc|hidden|stop|big, with the log line that put the fight on the map. */
 function mappedCombat(kind: string): CombatState {
   if (kind === 'stop') return sampleStopCombat();
   if (kind === 'npc') return sampleMappedCombat();
   if (kind === 'hidden') return { ...sampleMappedCombat(), turnIndex: 2 };
+  if (kind === 'big') return bigMappedCombat();
   return sampleMappedCombat({ heroTurn: true });
 }
 
@@ -243,6 +301,18 @@ function seed(params: URLSearchParams): void {
     state.campaign = { ...state.campaign, settings: { ...state.campaign.settings, playerRollMode: mode } };
     state.interaction = interaction;
     state.dm = { phase: 'waiting-player', activity: 'Waiting for your roll…', error: null, retryable: false };
+  }
+  // confirm=oa: the hero's Opportunity Attack question as move_tokens asks it (D32).
+  if (params.get('confirm') === 'oa') {
+    state.interaction = {
+      kind: 'confirm',
+      id: 'preview-oa',
+      title: 'Opportunity Attack',
+      body: 'Bandit 1 is leaving your reach (from C5). Use your Reaction to make one melee attack against it?',
+      confirmLabel: 'Attack',
+      cancelLabel: 'Let it go',
+    };
+    state.dm = { phase: 'waiting-player', activity: 'Waiting for your answer: Opportunity Attack…', error: null, retryable: false };
   }
   const dm = params.get('dm');
   if (dm === 'streaming') {

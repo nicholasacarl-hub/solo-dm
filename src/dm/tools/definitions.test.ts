@@ -89,4 +89,10 @@ describe('toolActivity never names a creature for the map tools (hidden creature
     );
     expect(toolActivity('roll_dice', { expression: '1d20+5', purpose: 'Bandit attacks' })).toBe('Rolling: Bandit attacks…');
   });
+
+  it("keeps a purpose that names a hidden creature behind the screen (amendment 8)", () => {
+    const isSecret = (text: string) => /cutthroat/i.test(text);
+    expect(toolActivity('roll_dice', { expression: '1d20+7', purpose: 'Cutthroat Stealth' }, { isSecret })).toBe('Rolling dice behind the screen…');
+    expect(toolActivity('roll_dice', { expression: '1d20+3', purpose: 'Bandit attacks' }, { isSecret })).toBe('Rolling: Bandit attacks…');
+  });
 });

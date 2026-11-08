@@ -92,7 +92,9 @@ interface TerrainSets {
   labels: { at: Pt; text: string }[];
 }
 
-function terrainSets(map: BattleMap): TerrainSets {
+type TerrainInput = Pick<BattleMap, 'terrain' | 'width' | 'height'>;
+
+function terrainSets(map: TerrainInput): TerrainSets {
   const byKind: Partial<Record<TerrainKind, GridPoint[]>> = {};
   const doorSquares = new Set<string>();
   const solid = new Set<string>();
@@ -163,9 +165,25 @@ function Door({ at, horizontal, state }: { at: GridPoint; horizontal: boolean; s
   );
 }
 
-/** Floor, terrain and doors: one path per kind. Memoized on the terrain (map.rev). */
-export const TerrainLayer = memo(function TerrainLayer({ map, ids, labels }: { map: BattleMap; ids: MapIds; labels: boolean }) {
-  const sets = useMemo(() => terrainSets(map), [map]);
+/**
+ * Floor, terrain and doors: one path per kind. Memoized on the terrain array, which only changes when the map's
+ * layout does (with map.rev) — never on a token move.
+ */
+export const TerrainLayer = memo(function TerrainLayer({
+  terrain,
+  width,
+  height,
+  ids,
+  labels,
+}: {
+  terrain: BattleMap['terrain'];
+  width: number;
+  height: number;
+  ids: MapIds;
+  labels: boolean;
+}) {
+  const sets = useMemo(() => terrainSets({ terrain, width, height }), [terrain, width, height]);
+  const map = { width, height };
   const d = (kind: TerrainKind) => (sets.byKind[kind]?.length ? squaresPath(sets.byKind[kind] ?? []) : '');
   return (
     <g>
@@ -289,7 +307,13 @@ export interface EffectView {
   duration: 'turn' | 'lasting';
 }
 
-export const EffectsLayer = memo(function EffectsLayer({ effects, cols, rows, ids, labels }: { effects: readonly EffectView[]; cols: number; rows: number; ids: MapIds; labels: boolean }) {
+function effectsKey(effects: readonly EffectView[]): string {
+  return effects.map((e) => `${e.id}|${e.label}|${e.duration}|${e.terrain.join(',')}|${e.rects.map((r) => `${r.x0},${r.y0},${r.x1},${r.y1}`).join(';')}`).join('/');
+}
+
+/** Areas on the map. The snapshot rebuilds the list on every change, so it re-renders only when what it draws does. */
+export const EffectsLayer = memo(
+  function EffectsLayer({ effects, cols, rows, ids, labels }: { effects: readonly EffectView[]; cols: number; rows: number; ids: MapIds; labels: boolean }) {
   return (
     <g>
       {effects.map((e) => {
@@ -310,7 +334,9 @@ export const EffectsLayer = memo(function EffectsLayer({ effects, cols, rows, id
       })}
     </g>
   );
-});
+  },
+  (a, b) => a.cols === b.cols && a.rows === b.rows && a.ids === b.ids && a.labels === b.labels && effectsKey(a.effects) === effectsKey(b.effects),
+);
 
 // ---------------------------------------------------------------------------
 // Planning overlays
@@ -647,8 +673,11 @@ export const Token = memo(
         opacity={d.secret ? 0.55 : 1}
         className="pointer-events-none"
       >
-        {(d.current || d.highlighted) && !t.defeated && (
-          <circle cx={c} cy={c} r={r + 13} fill="none" stroke="var(--text)" strokeWidth={d.highlighted ? 9 : 0} opacity="0.22" />
+        {/* Highlighted (the tracker row under the pointer): a thick soft halo. Selected (its card is open, or
+            measuring from it): a dashed ring. Shapes and lines, not colour alone. */}
+        {d.highlighted && <circle cx={c} cy={c} r={r + 13} fill="none" stroke="var(--text)" strokeWidth="10" opacity="0.22" data-token-highlight />}
+        {d.selected && (
+          <circle cx={c} cy={c} r={r + 16} fill="none" stroke="var(--text)" strokeWidth="3.5" strokeDasharray="10 7" data-token-selected data-map-stroke />
         )}
         {d.current && !t.defeated && (
           <g key={`current-${t.id}`} className="map-pulse">

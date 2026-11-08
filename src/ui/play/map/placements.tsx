@@ -3,26 +3,27 @@
  * large; the composer stays visible), the phone Combat tab (activity, the map, the tracker; two columns in phone
  * landscape by CSS), and the phone Story tab's BattleChip that switches to it.
  */
-import { useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { ChevronDown, ChevronRight, Map as MapIcon, Swords } from 'lucide-react';
 import { useShallow } from 'zustand/react/shallow';
-import { playerView, turnBudget } from '@/engine';
+import { playerView } from '@/engine';
 import { cn } from '@/lib/cn';
 import { heroMoveBlock, useGame } from '@/state/gameStore';
 import { Button } from '@/ui/components/ui';
 import { CombatTracker } from '../CombatTracker';
 import { DmActivityBar } from '../composer/DmActivityBar';
+import { isBusyPhase } from '../dmStatus';
 import { PanelBoundary } from '../PanelBoundary';
 import { usePlayView } from '../playView';
 import { BattleMapPanel } from './BattleMapPanel';
+import { shownHeroBudget } from './model';
 import { battleChipText, possessive } from './text';
 
 export interface BattleSummary {
   encounter: string;
   round: number;
+  /** The player's view shows the hero acting (D42: also while a hidden creature acts right after the hero). */
   yourTurn: boolean;
-  /** A hidden creature's turn while the player's view still shows the hero (D42). */
-  waiting: boolean;
   currentName: string | null;
   leftFt: number | null;
 }
@@ -35,13 +36,12 @@ export function useBattleSummary(): BattleSummary | null {
     const view = playerView(combat);
     const current = view.combatants[view.turnIndex];
     const yourTurn = current?.isPlayer === true;
-    const waiting = yourTurn && rawBlock === 'not-your-turn';
-    const budget = yourTurn && !waiting && current ? turnBudget(view, hero, current.id) : null;
+    const budget = yourTurn && current ? shownHeroBudget(view, hero, current.id, rawBlock === 'not-your-turn') : null;
     return {
       encounter: combat.encounterName || 'Combat',
-      round: combat.round,
+      // The player view's round, like every other "whose turn" surface (D42).
+      round: view.round,
       yourTurn,
-      waiting,
       currentName: current && !current.isPlayer ? current.name : null,
       leftFt: budget ? budget.leftFt : null,
     };
@@ -53,24 +53,46 @@ export function useMappedFight(): boolean {
   return useGame((s) => Boolean(s.combat?.active && s.combat.map));
 }
 
+/**
+ * Plans, measurements and area templates belong to the moment they were made (spec §7.3): they go when the DM
+ * starts working or the turn the player sees moves on — also while the map is off screen (the phone Story tab, the
+ * collapsed dock), so a stale plan never comes back with the map. Mounted once by the Play table.
+ */
+export function useMapPlanExpiry(): void {
+  const turnKey = useGame((s) => {
+    const c = s.combat;
+    if (!c?.active || !c.map) return null;
+    const view = playerView(c);
+    return `${view.round}:${view.combatants[view.turnIndex]?.id ?? ''}`;
+  });
+  const busy = useGame((s) => isBusyPhase(s.dm.phase));
+  const seen = useRef({ turnKey, busy });
+  useEffect(() => {
+    const prev = seen.current;
+    seen.current = { turnKey, busy };
+    if ((busy && !prev.busy) || turnKey !== prev.turnKey) {
+      const view = usePlayView.getState();
+      if (view.plan || view.measure || view.template) usePlayView.setState({ plan: null, measure: null, template: null });
+    }
+  }, [turnKey, busy]);
+}
+
 /** The collapsed dock: "⚔ Ambush in the warehouse · Round 2 · Your turn · 30 ft [Show map ▾]". */
 export function BattleBar({ onExpand }: { onExpand(): void }) {
   const summary = useBattleSummary();
   if (!summary) return null;
-  const turn = summary.waiting
-    ? 'Waiting for the DM…'
-    : summary.yourTurn
-      ? `Your turn${summary.leftFt !== null ? ` · ${summary.leftFt} ft` : ''}`
-      : summary.currentName
-        ? `${possessive(summary.currentName)} turn`
-        : '';
+  const turn = summary.yourTurn
+    ? `Your turn${summary.leftFt !== null ? ` · ${summary.leftFt} ft` : ''}`
+    : summary.currentName
+      ? `${possessive(summary.currentName)} turn`
+      : '';
   return (
     <div className="flex h-11 shrink-0 items-center gap-2 border-b border-border bg-surface px-3 text-sm">
       <Swords className="size-4 shrink-0 text-danger" aria-hidden />
       <p className="min-w-0 flex-1 truncate">
         <span className="font-semibold">{summary.encounter}</span>
         <span className="text-muted"> · Round {summary.round}</span>
-        {turn && <span className={summary.yourTurn && !summary.waiting ? 'font-semibold text-accent' : 'text-muted'}> · {turn}</span>}
+        {turn && <span className={summary.yourTurn ? 'font-semibold text-accent' : 'text-muted'}> · {turn}</span>}
       </p>
       <Button size="sm" variant="secondary" onClick={onExpand} icon={<ChevronDown className="size-4" aria-hidden />}>
         Show map
@@ -120,14 +142,14 @@ export function CombatTabPanel() {
 export function BattleChip() {
   const summary = useBattleSummary();
   if (!summary) return null;
-  const text = battleChipText({ yourTurn: summary.yourTurn, waiting: summary.waiting, currentName: summary.currentName, leftFt: summary.leftFt });
+  const text = battleChipText({ yourTurn: summary.yourTurn, currentName: summary.currentName, leftFt: summary.leftFt });
   return (
     <button
       type="button"
       onClick={() => usePlayView.getState().setMobileTab('combat')}
       className={cn(
         'flex h-11 w-full items-center gap-2 rounded-xl border px-3 text-left text-sm font-medium transition-colors',
-        summary.yourTurn && !summary.waiting ? 'border-accent/40 bg-accent-soft text-accent' : 'border-border bg-surface text-text hover:bg-surface-2',
+        summary.yourTurn ? 'border-accent/40 bg-accent-soft text-accent' : 'border-border bg-surface text-text hover:bg-surface-2',
       )}
     >
       <MapIcon className="size-4 shrink-0" aria-hidden />

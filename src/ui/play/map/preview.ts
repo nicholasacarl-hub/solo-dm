@@ -4,7 +4,7 @@
  * destination needs it (D61, never switched on silently), the warning chips and the Safe / Short alternative.
  * Pure; a commit re-plans in the store and replays on the true map (C24).
  */
-import { opportunityTriggers, planMove, type MovePlan, type MoveRefusal, type MoveRequest } from '@/engine';
+import { moverStats, opportunityTriggers, planMove, type MovePlan, type MoveRefusal, type MoveRequest } from '@/engine';
 import type { GridPoint } from '@/types';
 import type { MapPlan } from '../playView';
 import type { BattleMapModel } from './model';
@@ -13,6 +13,7 @@ import {
   NEEDS_DASH_CHIP,
   difficultChip,
   enteredChip,
+  frightenedChip,
   opportunityChip,
   standsUpChip,
 } from './text';
@@ -77,7 +78,11 @@ function fullPath(p: Exclude<MovePlan, { status: 'refused' }>): GridPoint[] {
 
 const samePath = (a: readonly GridPoint[], b: readonly GridPoint[]) => a.length === b.length && a.every((p, i) => p.x === b[i].x && p.y === b[i].y);
 
-export function previewMove(model: BattleMapModel, mapPlan: MapPlan): PlanPreview {
+/**
+ * `alternative: false` skips the Safe / Short comparison (a second path search): a hover preview draws only the
+ * path and needs only `warned`.
+ */
+export function previewMove(model: BattleMapModel, mapPlan: MapPlan, opts: { alternative?: boolean } = {}): PlanPreview {
   const req = request(model, mapPlan, { kind: 'square', at: mapPlan.to });
   let result = plan(model, req);
   let needsDash = false;
@@ -110,6 +115,10 @@ export function previewMove(model: BattleMapModel, mapPlan: MapPlan): PlanPrevie
   const stopReactors = result.status === 'stopped' ? result.reactors.filter((r) => !r.hidden).map((r) => r.reactorId) : [];
   if (stopReactors.length) chips.push({ text: opportunityChip(stopReactors.map(model.nameOf)), warn: true });
   if (needsDash) chips.push({ text: NEEDS_DASH_CHIP, warn: true });
+  // Frightened (C13): the route can't bring the hero closer to its source; worth a look before a click moves.
+  for (const id of moverStats(model.view, model.hero, model.heroId)?.frightenedOfIds ?? []) {
+    if (model.combatants.has(id)) chips.push({ text: frightenedChip(model.nameOf(id)), warn: true });
+  }
   const hazards = hazardLabels(model);
   for (const note of result.notes) {
     if (note.kind === 'difficult') chips.push({ text: difficultChip(note.squares), warn: false });
@@ -131,7 +140,7 @@ export function previewMove(model: BattleMapModel, mapPlan: MapPlan): PlanPrevie
     dash,
     chips,
     refusal: null,
-    alternative: alternativeRoute(model, { ...mapPlan, dash }, path),
+    alternative: opts.alternative === false ? null : alternativeRoute(model, { ...mapPlan, dash }, path),
     warned: chips.some((c) => c.warn),
   };
 }
@@ -176,18 +185,26 @@ export function approachSquare(model: BattleMapModel, enemyId: string, options: 
   return null;
 }
 
-/** A small per-model cache, so hovering back and forth doesn't re-plan. */
+/**
+ * A small per-model cache, so hovering back and forth doesn't re-plan. A full preview (with the Safe / Short
+ * alternative) also answers a light one (hover, the click's warning check).
+ */
 export class PreviewCache {
   private readonly cache = new Map<string, PlanPreview>();
   constructor(private readonly model: BattleMapModel) {}
 
-  get(mapPlan: MapPlan): PlanPreview {
+  get(mapPlan: MapPlan, opts: { light?: boolean } = {}): PlanPreview {
     const key = `${mapPlan.to.x},${mapPlan.to.y}|${mapPlan.prefer}|${mapPlan.dash}|${mapPlan.disengage}|${mapPlan.standUp}`;
-    const hit = this.cache.get(key);
-    if (hit) return hit;
-    const preview = previewMove(this.model, mapPlan);
+    const full = this.cache.get(key);
+    if (full) return full;
+    const lightKey = `${key}|light`;
+    if (opts.light) {
+      const hit = this.cache.get(lightKey);
+      if (hit) return hit;
+    }
+    const preview = previewMove(this.model, mapPlan, { alternative: !opts.light });
     if (this.cache.size > 64) this.cache.clear();
-    this.cache.set(key, preview);
+    this.cache.set(opts.light ? lightKey : key, preview);
     return preview;
   }
 }

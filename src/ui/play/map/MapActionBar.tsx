@@ -83,7 +83,7 @@ function PlanBar({ model, controller, preview, btn, touch }: { model: BattleMapM
   if (!plan) return null;
   const target = ui.planTarget ? model.tokens.get(ui.planTarget) : undefined;
   const cancel = (
-    <Button size={btn} variant="ghost" onClick={() => dispatch({ type: 'cancel' })}>
+    <Button size={btn} variant="ghost" className={compact(btn)} onClick={() => dispatch({ type: 'cancel' })}>
       Cancel
     </Button>
   );
@@ -112,7 +112,14 @@ function PlanBar({ model, controller, preview, btn, touch }: { model: BattleMapM
       </div>
       <div className="flex shrink-0 items-center gap-2">
         {cancel}
-        <Button size={btn} variant="primary" onClick={() => dispatch({ type: 'confirm' })} disabled={ui.committing} icon={<ChevronRight className="size-4" aria-hidden />}>
+        <Button
+          size={btn}
+          variant="primary"
+          className={compact(btn)}
+          onClick={() => dispatch({ type: 'confirm' })}
+          disabled={ui.committing}
+          icon={<ChevronRight className="size-4" aria-hidden />}
+        >
           {preview.dash ? 'Dash and move' : 'Move'}
         </Button>
       </div>
@@ -149,9 +156,16 @@ function PlanBar({ model, controller, preview, btn, touch }: { model: BattleMapM
   );
 }
 
+/**
+ * Big targets on phones (48px tall), but narrow enough that a bar's buttons share one row at 390px. `!` because the
+ * button's own size classes would otherwise win (cn doesn't merge Tailwind classes).
+ */
+function compact(btn: 'sm' | 'lg'): string | undefined {
+  return btn === 'lg' ? 'px-3! text-sm!' : undefined;
+}
+
 function TurnButtons({ controller, btn, undo, end = true }: { controller: MapController; btn: 'sm' | 'lg'; undo: boolean; end?: boolean }) {
-  // Big targets on phones, but narrow enough that the three fit on one row.
-  const pad = btn === 'lg' ? 'px-4' : undefined;
+  const pad = compact(btn);
   return (
     <Row className="ml-auto">
       {undo && (
@@ -262,20 +276,22 @@ export function MapActionBar({ model, controller, variant }: { model: BattleMapM
     );
   }
 
-  if (model.block === 'waiting') return <p className="text-sm text-muted">{blockText('waiting', { stopReactors: [], dmBusy: model.dmBusy })}</p>;
-
-  const blocked = model.block && model.block !== 'dm-busy' ? blockText(model.block, { stopReactors: [], dmBusy: model.dmBusy }) : null;
-  if (!notice && !blocked && !model.canMove) return null;
+  // The hero's turn. A standing reason not to move (the DM's question, no session…) shows as a quiet line; while the
+  // DM works, nothing (the activity bar says so) unless a tap asked to move (the notice).
+  const blocked = model.block && model.block !== 'dm-busy' ? capitalize(blockText(model.block, { stopReactors: [] })) : null;
+  const quiet = blocked && blocked !== controller.noticeText ? blocked : null;
+  if (!notice && !quiet && !model.canMove) return null;
   return (
     <div className="flex flex-col gap-2">
       {notice}
-      {blocked && <p className="text-sm text-muted">{capitalize(blocked)}</p>}
+      {quiet && <p className="text-sm text-muted">{quiet}</p>}
       {model.canMove && (
-        <div className="flex items-center gap-2">
-          <div className="min-w-0 flex-1">
+        // The tip beside End turn, or above it when the bar is narrow (phone landscape's side column).
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <div className="min-w-0 flex-1 basis-56">
             <FirstFightTip fallback={<p className="text-xs text-faint">{touch ? 'Tap a square to plan a move.' : 'Click a square to move there.'}</p>} />
           </div>
-          <Button size={btn} variant="secondary" onClick={controller.endTurn}>
+          <Button size={btn} variant="secondary" className={compact(btn)} onClick={controller.endTurn}>
             End turn
           </Button>
         </div>

@@ -4,7 +4,7 @@ vi.mock('@/engine', () => import('../testing/fakeEngine'));
 vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
-import { sampleCombat, sampleMappedCombat } from '@/test/fixtures';
+import { sampleCombat, sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
 import type { BattleMap, Combatant, CombatState, InteractionRequest, LogEntry, MapEffect, TerrainFeature, ToolLogEntry } from '@/types';
 import { mapCells, planMove } from '@/engine';
 import { DmCancelledError } from '../errors';
@@ -111,7 +111,8 @@ describe('move_tokens: moves and refusals (spec §4.7)', () => {
     expect((await wall.run('move_tokens', { moves: [{ who: 'Bandit 1', to: 'I4' }] })).content).toBe('1. Not moved — Bandit 1 to I4: I4 is a wall (pillar).');
     const afraid = setup(fixture({ patch: { 'Bandit 1': { conditions: [{ id: 'frightened', source: 'Mira Voss' }] } } }));
     const out = await afraid.run('move_tokens', { moves: [{ who: 'Bandit 1', to: 'C5' }] });
-    expect(out.content).toMatch(/^1\. Not moved — Bandit 1 to C5: it is Frightened of Mira Voss and can't willingly move closer\./);
+    // F4 → B6 is 20 ft; C5 → B6 is 5 ft (SRD 5.2.1 Frightened: it can't willingly move closer to the source).
+    expect(out.content).toMatch(/^1\. Not moved — Bandit 1 to C5: it is Frightened of Mira Voss and can't willingly move closer \(C5 is 15 ft closer\)\. It could go to [A-P]\d+ instead\.$/);
   });
 
   it("refuses a Large creature's square whose space leaves the map, and a square off the map before moving anything", async () => {
@@ -555,7 +556,7 @@ describe('roll_dice with attacker and target (spec §4.11)', () => {
     const fog: TerrainFeature = { id: 't20', kind: 'obscured', rects: [{ x0: 2, y0: 2, x1: 2, y1: 9 }], label: 'smoke' }; // C3:C10
     const h = setup(fixture({ at: { 'Bandit 1': 'D6' }, map: { terrain: [...(sampleMappedCombat().map as BattleMap).terrain, fog], nextId: 21 } }));
     const out = await h.run('roll_dice', { expression: '1d20+3', purpose: 'Bandit 1 shoots', dc: 12, is_attack: true, attacker: 'Bandit 1', target: 'hero' });
-    expect(out.content).toContain("Bandit 1 can't see Mira Voss from D6 — Disadvantage, unless something lets it see Mira Voss.");
+    expect(out.content).toContain("Bandit 1 can't see Mira Voss from D6 (the smoke) — Disadvantage, unless something lets it see Mira Voss.");
   });
 
   it('adds nothing without a map, without is_attack or for an unknown name', async () => {
@@ -597,5 +598,141 @@ describe("the hero's footprint after a size change on the sheet (D39)", () => {
     expect(await refitHeroAfterSheetChange(h.ctx, hero, { ...hero, size: 'Large' })).toBeNull();
     const mapped = setup(fixture());
     expect(await refitHeroAfterSheetChange(mapped.ctx, hero, hero)).toBeNull();
+  });
+});
+
+describe('hidden creatures write no player log line, whatever they do (D41, amendment 8)', () => {
+  it("runs the Cutthroat's whole turn behind the screen, then reveals it", async () => {
+    fakeDice.queue(15);
+    const h = setup(fixture());
+    const playerSees = () =>
+      JSON.stringify(h.s().log.filter((e) => !('secret' in e && e.secret)));
+    // Bandit 1's turn ends; the hidden Cutthroat's begins.
+    expect((await h.run('update_combat', { action: 'next_turn' })).content).toContain('Map: [hidden] Cutthroat is at M8');
+    await h.run('move_tokens', { moves: [{ who: 'Cutthroat', to: 'G6' }] });
+    expect(byName(h.s().combat, 'Cutthroat').position).toEqual(sq('G6'));
+    // The DM forgot secret: true — the app keeps the rolls behind the screen anyway.
+    await h.run('roll_dice', { expression: '1d20+5', purpose: 'Cutthroat throws a dagger at Mira', dc: 12, is_attack: true, attacker: 'Cutthroat', target: 'hero' });
+    await h.run('roll_dice', { expression: '1d20+7', purpose: 'Stealth for the cutthroat' });
+    await h.run('roll_dice', { expression: '1d20+3', purpose: 'Old Tam swings blindly', is_attack: true, attacker: 'Old Tam', target: 'Cutthroat' });
+    await h.run('resolve_area', { label: 'Fireball', shape: 'sphere', size_ft: 20, at: 'G6' });
+    await h.run('update_combat', { action: 'damage', target: 'Cutthroat', amount: 6 });
+    await h.run('update_combat', { action: 'conditions', target: 'Cutthroat', conditions_add: [{ condition: 'prone' }] });
+    await h.run('update_map', { creatures: [{ who: 'Cutthroat', speed_change_ft: -10 }] });
+    await h.run('check_map', { from: 'Cutthroat', to: ['hero'] });
+    expect(h.s().log.filter((e) => e.kind === 'roll').every((e) => e.kind === 'roll' && e.secret)).toBe(true);
+    expect(playerSees()).not.toMatch(/cutthroat/i);
+    // Its turn passes to Bandit 2 without a word about it.
+    await h.run('update_combat', { action: 'next_turn' });
+    expect(playerSees()).not.toMatch(/cutthroat/i);
+
+    await h.run('update_combat', { action: 'reveal', target: 'Cutthroat' });
+    expect(lastLine(h)?.summary).toBe('Cutthroat appears (G6)');
+  });
+
+  it('keeps a roll public when the purpose only shares a word with a hidden name a visible creature also has', async () => {
+    const combat = fixture();
+    const h = setup({ ...combat, combatants: combat.combatants.map((c) => (c.name === 'Cutthroat' ? { ...c, name: 'Bandit' } : c)) });
+    await h.run('roll_dice', { expression: '1d20+3', purpose: 'Bandit 1 attacks Mira', is_attack: true, attacker: 'Bandit 1', target: 'hero' });
+    expect(h.s().log.at(-1)).toMatchObject({ kind: 'roll', secret: false });
+  });
+});
+
+describe('the hero is named, never "it", in check_map and move results (amendment 1)', () => {
+  it('measures from the hero and plans the hero\'s route in the hero\'s name', async () => {
+    const h = setup(fixture({ heroTurn: true }));
+    const out = await h.run('check_map', { from: 'hero', to: ['Bandit 1'], path_to: 'C7' });
+    expect(out.content).toContain('· Bandit 1 (F4): 20 ft — line of sight; Bandit 1 has Half Cover from Mira Voss (crates); Mira Voss has');
+    expect(out.content).not.toMatch(/\bit (has|reaches|doesn't)\b/);
+    const path = await h.run('check_map', { from: 'hero', path_to: 'C7' });
+    expect(path.content).toMatch(/^Mira Voss \(B6\) → C7: 5 ft by B6 C7; Mira Voss has 30 ft this turn\./);
+    const around = await h.run('check_map', { from: 'hero' });
+    expect(around.content).not.toMatch(/Cover it can reach/);
+  });
+
+  it("lists the Opportunity Attacks a cover square would cost to reach", async () => {
+    const h = setup(fixture({ at: { 'Bandit 1': 'C5' } }));
+    const out = await h.run('check_map', { from: 'Bandit 1' });
+    expect(out.content).toMatch(/Cover it can reach this turn against Mira Voss: [A-P]\d+ (Half|Three-Quarters)/);
+    // Leaving the hero's and Old Tam's reach from C5 provokes; the cover list says so where it does.
+    expect(out.content).toMatch(/provokes (an Opportunity Attack|\d Opportunity Attacks)/);
+  });
+});
+
+describe('move_tokens: details the review added', () => {
+  it('reports a "Let it go" earlier on the route when the move then stops for an NPC', async () => {
+    const h = setup(fixture({ at: { 'Bandit 1': 'C6', 'Old Tam': 'D8' } }));
+    const asked = answerConfirm(h, false);
+    const out = await h.run('move_tokens', { moves: [{ who: 'Bandit 1', to: 'E10', prefer: 'shortest' }] });
+    expect(asked).toHaveLength(1);
+    expect(out.content).toMatch(
+      /^1\. Bandit 1 stopped at [A-P]\d+ on the way to E10 \(\d+ ft so far\): leaving here takes Bandit 1 out of Old Tam's reach, which provokes its Opportunity Attack \(its Reaction is unused\)\. Leaving [A-P]\d+ provoked Mira Voss's Opportunity Attack: the player let it go\. Roll it now/,
+    );
+    expect(byName(h.s().combat, 'Mira Voss').reactionUsed).toBeUndefined();
+  });
+
+  it('says a Prone creature that stays Prone crawls, rather than standing up', async () => {
+    const h = setup(fixture({ turn: 'Bandit 2' }));
+    const out = await h.run('move_tokens', { moves: [{ who: 'Bandit 2', to: 'A7', stay_prone: true }] });
+    expect(out.content).toMatch(/^1\. Not moved — Bandit 2 to A7: A7 is \d+ ft away by crawling \(F3 /);
+  });
+
+  it("names a Large creature's whole space when it walks into a hazard", async () => {
+    const h = setup(fixture({ turn: 'Dock Ogre' }));
+    const out = await h.run('move_tokens', { moves: [{ who: 'Dock Ogre', to: 'hero' }] });
+    // H10 G10 …: at G10 its space G10:H11 covers the brazier on G11.
+    expect(out.content).toContain('It entered the brazier (hazard) at G10:H11.');
+  });
+});
+
+describe('names that look like squares (start_combat numbers groups: "Rat 1", "Rat 2")', () => {
+  /** The fixture with the bandits renamed Rat 1 and Rat 2, and the office door labelled "Hut 2". */
+  function rats(): CombatState {
+    const base = fixture({ at: { 'Bandit 1': 'D4' } });
+    const map = base.map as BattleMap;
+    return {
+      ...base,
+      combatants: base.combatants.map((c) => (c.name === 'Bandit 1' ? { ...c, name: 'Rat 1' } : c.name === 'Bandit 2' ? { ...c, name: 'Rat 2' } : c)),
+      map: { ...map, terrain: map.terrain.map((f) => (f.kind === 'door' ? { ...f, label: 'Hut 2' } : f)) },
+    };
+  }
+
+  it('moves to, measures to and aims at a creature called exactly that', async () => {
+    const h = setup(rats());
+    const moved = await h.run('move_tokens', { moves: [{ who: 'Rat 1', to: 'Rat 2' }] });
+    expect(moved.isError).toBeUndefined();
+    expect(moved.content).toMatch(/^1\. Rat 1 (moved|is already there)/);
+    const measured = await h.run('check_map', { from: 'rat 1', to: ['Rat 2', 'F3'] });
+    expect(measured.content).toMatch(/^From Rat 1 \([A-P]\d+\):\n· Rat 2 \(F3\): \d+ ft/);
+    const blast = await h.run('resolve_area', { label: 'Blast', shape: 'sphere', size_ft: 5, at: 'Rat 2' });
+    expect(blast.content.split('\n')[0]).toBe('Blast: 5-ft-radius Sphere centred on Rat 2. Shown on the map until this turn ends.');
+  });
+
+  it("opens a door by its label even when the label looks like a square", async () => {
+    const h = setup(rats());
+    const out = await h.run('update_map', { doors: [{ at: 'Hut 2', state: 'open' }] });
+    expect(out.content).toBe('Map updated: the Hut 2 (N5) is now open.');
+  });
+});
+
+describe("the DM resolves the player's stop and finishes the hero's move (spec §5.5)", () => {
+  it('checks the Ogre is in reach, then the hero goes on to A7 and the Ogre\'s Reaction is spent', async () => {
+    const h = setup(sampleStopCombat());
+    const roll = await h.run('roll_dice', {
+      expression: '1d20+6',
+      purpose: "Dock Ogre's Opportunity Attack on Mira",
+      dc: 12,
+      is_attack: true,
+      attacker: 'Dock Ogre',
+      target: 'hero',
+    });
+    expect(roll.content.split('\n').at(-1)).toBe('Map: in reach (5 ft); no cover.');
+    const out = await h.run('move_tokens', { moves: [{ who: 'hero', to: 'A7' }] });
+    expect(out.content).toMatch(/^1\. Mira Voss moved B6 → A7: 5 ft \(B6 A7\); 25 of 30 ft left this turn\. Dock Ogre's Reaction is now used\./);
+    const s = h.s().combat as CombatState;
+    expect(s.map?.stop).toBeUndefined();
+    expect(byName(s, 'Dock Ogre').reactionUsed).toBe(true);
+    expect(byName(s, 'Mira Voss').position).toEqual(sq('A7'));
+    expect(lastLine(h)?.summary).toBe('You move to A7');
   });
 });

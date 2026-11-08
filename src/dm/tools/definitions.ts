@@ -899,8 +899,11 @@ function field(input: unknown, key: string): string | undefined {
   return typeof value === 'string' && value.trim() ? value.trim() : undefined;
 }
 
-/** Status text while a tool streams in or runs (never reveals secrets). */
-export function toolActivity(name: string, input?: unknown): string {
+/**
+ * Status text while a tool streams in or runs (never reveals secrets). `opts.isSecret` marks free text the player
+ * mustn't see — a roll's purpose that names a creature the hero hasn't noticed — so it stays behind the screen.
+ */
+export function toolActivity(name: string, input?: unknown, opts: { isSecret?: (text: string) => boolean } = {}): string {
   switch (name) {
     case 'roll_dice': {
       if (input === undefined) return 'Rolling dice…';
@@ -908,7 +911,7 @@ export function toolActivity(name: string, input?: unknown): string {
       // An attack on a battle map may come from a hidden creature: never name anyone.
       if (field(input, 'attacker')) return secret ? 'Rolling dice behind the screen…' : 'Rolling an attack…';
       const purpose = field(input, 'purpose');
-      return purpose && !secret ? `Rolling: ${purpose}…` : 'Rolling dice behind the screen…';
+      return purpose && !secret && !opts.isSecret?.(purpose) ? `Rolling: ${purpose}…` : 'Rolling dice behind the screen…';
     }
     case 'request_player_roll':
       return 'Calling for a roll…';

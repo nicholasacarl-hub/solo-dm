@@ -3,10 +3,10 @@
  * with a drawn keyboard cursor and one polite live region. Pointer gestures go through useMapGestures (native
  * listeners); the keyboard works only while the map has focus, so the composer's caret is never hijacked.
  */
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type RefObject } from 'react';
+import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type RefObject } from 'react';
 import { dirVector, healthDescriptor, squareLabel } from '@/engine';
 import type { GridPoint, GridRect } from '@/types';
-import { usePlayView } from '../playView';
+import { usePlayView, type MapCamera } from '../playView';
 import { usePrefersReducedMotion } from '../useMediaQuery';
 import { portraitDisplay } from '@/ui/components/portrait';
 import {
@@ -114,7 +114,7 @@ interface RulersHandle {
 }
 
 /** Column letters and row numbers pinned to the top and left edges (outside the camera group). */
-const Rulers = forwardRef<RulersHandle, { camera: Camera; extent: MapExtent; size: ViewSize }>(function Rulers({ camera, extent, size }, ref) {
+const Rulers = memo(forwardRef<RulersHandle, { camera: Camera; extent: MapExtent; size: ViewSize }>(function Rulers({ camera, extent, size }, ref) {
   const cols = useRef<SVGGElement>(null);
   const rows = useRef<SVGGElement>(null);
   const place = useCallback((cam: Camera) => {
@@ -154,7 +154,10 @@ const Rulers = forwardRef<RulersHandle, { camera: Camera; extent: MapExtent; siz
       </g>
     </g>
   );
-});
+}));
+
+/** How long the app's own recentring takes (ms). */
+const FLY_MS = 260;
 
 const ARROWS: Record<string, [number, number]> = {
   ArrowLeft: [-1, 0],
@@ -251,23 +254,60 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     const px = Math.max(MIN_CELL_PX, Math.min(MAX_CELL_PX, fitCellPx(extent, size)));
     usePlayView.getState().setCamera(cameraKey, fillCamera({ cellPx: px, cx: extent.cols / 2, cy: extent.rows / 2 }, extent, size));
   }, [cameraKey, extent, size, hasSize]);
+  // A short camera flight for the app's own recentring (Centre on you, the hero's turn start): painted straight to
+  // the camera group like a gesture and committed once at the end; instant under reduced motion (spec §7.5).
+  const flight = useRef<{ frame: number; target: MapCamera } | null>(null);
+  const land = useCallback(() => {
+    const f = flight.current;
+    if (!f) return;
+    flight.current = null;
+    window.cancelAnimationFrame(f.frame);
+    usePlayView.getState().setCamera(cameraKey, f.target);
+  }, [cameraKey]);
+  useEffect(() => () => {
+    if (flight.current) window.cancelAnimationFrame(flight.current.frame);
+  }, []);
+  const flyTo = useCallback(
+    (target: MapCamera) => {
+      land();
+      const from = usePlayView.getState().cameras[cameraKey] ?? committed;
+      if (reducedMotion || typeof window.requestAnimationFrame !== 'function') {
+        usePlayView.getState().setCamera(cameraKey, target);
+        return;
+      }
+      const started = performance.now();
+      const step = (now: number) => {
+        const t = Math.max(0, Math.min(1, (now - started) / FLY_MS));
+        const e = 1 - (1 - t) ** 3;
+        const cam = liveCamera({ cellPx: from.cellPx + (target.cellPx - from.cellPx) * e, cx: from.cx + (target.cx - from.cx) * e, cy: from.cy + (target.cy - from.cy) * e }, size);
+        groupRef.current?.setAttribute('transform', cameraTransform(cam));
+        rulersRef.current?.update(cam);
+        if (t < 1 && flight.current) flight.current.frame = window.requestAnimationFrame(step);
+        else land();
+      };
+      flight.current = { frame: window.requestAnimationFrame(step), target };
+    },
+    [cameraKey, committed, reducedMotion, size, land],
+  );
+
   const centre = useCallback(() => {
     if (!hasSize || !heroRect) return;
     const c = rectCentre(heroRect);
-    usePlayView.getState().setCamera(cameraKey, fillCamera({ cellPx: committed.cellPx, cx: c.x, cy: c.y }, extent, size));
-  }, [cameraKey, committed.cellPx, heroRect, hasSize, extent, size]);
+    flyTo(fillCamera({ cellPx: committed.cellPx, cx: c.x, cy: c.y }, extent, size));
+  }, [committed.cellPx, heroRect, hasSize, extent, size, flyTo]);
   useImperativeHandle(ref, () => ({ zoom, fit, centre, focus: () => wrapRef.current?.focus() }), [zoom, fit, centre]);
 
-  // The camera follows the keyboard cursor (and "Show on map" from the tracker, which sets it).
+  // The camera follows the keyboard cursor, and "Show on map" (the tracker and the list set the cursor; a new
+  // object each time, so showing the same creature again after panning away brings it back).
   const cursor = ui.cursor;
   useEffect(() => {
     if (!cursor || !hasSize) return;
     const cam = usePlayView.getState().cameras[cameraKey] ?? committed;
     const next = revealRect(cam, size, extent, { x0: cursor.x, y0: cursor.y, x1: cursor.x, y1: cursor.y }, Math.min(40, cam.cellPx));
     if (next !== cam) usePlayView.getState().setCamera(cameraKey, next);
-    // Only when the cursor moves (or the viewport first gets a size).
+    // Only when the cursor is set (or the viewport first gets a size).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cursor?.x, cursor?.y, hasSize]);
+  }, [cursor, hasSize]);
 
   // At the hero's turn start, bring the hero back on screen if it is off it.
   const turnKey = `${model.view.round}:${model.yourTurn}`;
@@ -275,7 +315,7 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     if (!model.yourTurn || !heroRect || !hasSize) return;
     const cam = usePlayView.getState().cameras[cameraKey] ?? committed;
     const next = revealRect(cam, size, extent, heroRect);
-    if (next !== cam) usePlayView.getState().setCamera(cameraKey, next);
+    if (next !== cam) flyTo(next);
     // Only at the turn change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [turnKey, hasSize]);
@@ -283,15 +323,16 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
   const heroAnchor = anchorOf(heroRect);
   // The keyboard cursor shows only while the keyboard is in use (data-keyboard; see index.css): a click focuses the
   // map too, and pointer users shouldn't get a stray outline.
-  const onFocus = () => {
+  const onFocus = (e: FocusEvent<HTMLDivElement>) => {
     const el = wrapRef.current;
-    if (!ui.cursor && heroAnchor && el && focusVisible(el)) {
-      el.dataset.keyboard = 'true';
-      dispatch({ type: 'cursor', at: heroAnchor });
-    }
+    if (!el || e.target !== el || !focusVisible(el)) return;
+    el.dataset.keyboard = 'true';
+    if (!ui.cursor && heroAnchor) dispatch({ type: 'cursor', at: heroAnchor });
   };
   const onPointerDown = () => {
     if (wrapRef.current) delete wrapRef.current.dataset.keyboard;
+    // A gesture starts from where the camera is going.
+    land();
   };
 
   const tokenList = useMemo(() => model.snapshot.tokens.filter((t) => t.space), [model.snapshot.tokens]);
@@ -493,7 +534,7 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
       <svg ref={svgRef} aria-hidden="true" width="100%" height="100%" className="absolute inset-0 block" style={{ fontFamily: 'var(--font-sans)' }}>
         <MapDefs ids={ids} />
         <g ref={groupRef} transform={cameraTransform(camera)}>
-          <TerrainLayer map={map} ids={ids} labels={showTerrainLabels} />
+          <TerrainLayer terrain={map.terrain} width={map.width} height={map.height} ids={ids} labels={showTerrainLabels} />
           <GridLayer cols={map.width} rows={map.height} />
           <PlacesLayer places={map.places} cols={map.width} rows={map.height} labels={showLabels} />
           <EffectsLayer effects={model.snapshot.effects} cols={map.width} rows={map.height} ids={ids} labels={showLabels} />

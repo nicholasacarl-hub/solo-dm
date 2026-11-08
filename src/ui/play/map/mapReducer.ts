@@ -101,6 +101,10 @@ export interface ReducerContext {
   canMove: boolean;
   heroId: string;
   heroAt: GridPoint | null;
+  /** The player's view shows the hero acting. */
+  yourTurn: boolean;
+  /** Why the hero can't move right now (null: nothing in the way). */
+  block: MapBlock | null;
 }
 
 export interface ReducerResult {
@@ -131,7 +135,12 @@ function tapToMove(state: MapUiState, a: Extract<MapAction, { type: 'tap' }>, ct
   if (target.kind === 'token' && (target.role !== 'enemy' || !ctx.canMove)) {
     return keep({ ...state, inspect: { kind: 'token', id: target.id }, notice: null });
   }
-  if (!ctx.canMove) return keep({ ...state, inspect: { kind: 'square', at: a.at }, notice: null });
+  if (!ctx.canMove) {
+    // The hero's turn, but something comes first (the DM is working, a question, a stop to tell the DM about): a
+    // tap that means "move there" says what, instead of opening the square's card.
+    if (ctx.yourTurn && ctx.block && !same(a.at, ctx.heroAt)) return keep({ ...state, inspect: null, notice: { kind: 'block', block: ctx.block } });
+    return keep({ ...state, inspect: { kind: 'square', at: a.at }, notice: null });
+  }
   if (target.kind === 'token') {
     // An enemy: close on it. Already next to it (or no way closer): show its card instead.
     if (!target.approach || same(target.approach, ctx.heroAt)) return keep({ ...state, inspect: { kind: 'token', id: target.id }, notice: null });

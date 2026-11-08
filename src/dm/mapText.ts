@@ -11,11 +11,14 @@
  * Everything is deterministic: identical state gives identical text.
  */
 import {
+  areHostile,
+  CELL,
   combatantSize,
   coverAgainst,
   cornerLabel,
   currentCombatant,
   currentTurn,
+  effectSquares,
   footprint,
   inReach,
   isToldAndAnswered,
@@ -27,10 +30,13 @@ import {
   planMove,
   playerView,
   rectLabel,
+  rectsContain,
   rectsLabel,
+  segmentBlockers,
   spaceDistanceFt,
   spaceLabel,
   squareLabel,
+  teamOf,
   turnBudget,
   turnStartReport,
   type AreaResult,
@@ -221,9 +227,9 @@ export function refText(state: CombatState, ref: MapRef | undefined): string {
 // Relations between creatures: distance and reach (D7)
 // ---------------------------------------------------------------------------
 
+/** Party vs foes only (app convention C6: neutrals are nobody's foes), by the engine's own teams. */
 function isHostile(a: Combatant, b: Combatant): boolean {
-  const team = (c: Combatant) => (c.side === 'player' || c.side === 'ally' ? 'party' : c.side === 'enemy' ? 'foes' : 'neutral');
-  return (team(a) === 'party' && team(b) === 'foes') || (team(a) === 'foes' && team(b) === 'party');
+  return areHostile(teamOf(a.side), teamOf(b.side));
 }
 
 /** "{d} ft from X" plus who reaches whom, for one hostile pair. */
@@ -248,9 +254,10 @@ export function relationClause(state: CombatState, hero: Character | null, mover
   const mover = combatant(state, moverId);
   if (!mover?.position) return null;
   const heroC = heroOf(state);
-  const hostiles = state.combatants.filter(
-    (o) => o.id !== mover.id && !o.defeated && o.position && isHostile(mover, o) && (inReach(state, hero, mover.id, o.id) || inReach(state, hero, o.id, mover.id)),
-  );
+  // The hero first, then initiative order (the sort is stable).
+  const hostiles = state.combatants
+    .filter((o) => o.id !== mover.id && !o.defeated && o.position && isHostile(mover, o) && (inReach(state, hero, mover.id, o.id) || inReach(state, hero, o.id, mover.id)))
+    .sort((a, b) => Number(b.isPlayer) - Number(a.isPlayer));
   const mutualAll = hostiles.every((o) => inReach(state, hero, mover.id, o.id) && inReach(state, hero, o.id, mover.id));
   const fragments = hostiles.map((o) => reachFragment(state, hero, mover, o, mutualAll));
   const reachText = fragments.length ? `${fragments.join(' and ')}${mutualAll ? " — each is within the other's reach" : ''}` : '';
@@ -450,7 +457,9 @@ function heroTokenLine(state: CombatState, t: SnapshotToken): string {
   const near = t.enemiesWithin5?.length
     ? ` · within 5 ft of ${listAnd(t.enemiesWithin5.map((id) => dmName(state, id)))} (${t.name}'s ranged attacks have Disadvantage)`
     : '';
-  return `- ${t.name} (hero) ${rectLabel(t.space)}${placeSuffix(t.places)}${elevation} · reach ${t.reachFt} ft${near}`;
+  // The app records the hero's spent Reaction too (an Opportunity Attack taken through move_tokens).
+  const reaction = t.reactionUsed ? ' · Reaction used' : '';
+  return `- ${t.name} (hero) ${rectLabel(t.space)}${placeSuffix(t.places)}${elevation} · reach ${t.reachFt} ft${near}${reaction}`;
 }
 
 function tokenLine(state: CombatState, hero: Character | null, t: SnapshotToken): string {
@@ -686,7 +695,9 @@ export function turnStartLine(before: CombatState, after: CombatState, hero: Cha
   const parts: string[] = [];
   const budget = report.budget;
   const stats = moverStats(after, hero, c.id);
-  if (c.isPlayer) {
+  if (c.isPlayer && !report.position) {
+    parts.push(`Map: ${c.name}'s turn — ${c.name} isn't on the map: place ${c.name} with move_tokens kind "place" so the player can move.`);
+  } else if (c.isPlayer) {
     parts.push(`Map: ${c.name}'s turn — the player moves ${c.name} on the map (${budget?.leftFt ?? 0} ft). Don't move ${c.name} unless the player asks.`);
   } else if (!report.position) {
     parts.push(`Map: ${dmName(after, c.id)} isn't on the map — place it with move_tokens kind "place".`);
@@ -711,14 +722,16 @@ export function turnStartLine(before: CombatState, after: CombatState, hero: Cha
     }
   }
   if (report.expired.length) parts.push(`${listAnd(report.expired)} ${report.expired.length > 1 ? 'are' : 'is'} no longer shown.`);
-  const next = nextInOrder(after, c.id);
+  // A group sharing one initiative still takes separate turns (B §5.8). Not on the hero's turn: the player moves the
+  // hero, and the turn comes back to the DM when the player is done.
+  const next = c.isPlayer ? null : nextInOrder(after, c.id);
   if (next && next.initiative === c.initiative) {
     parts.push(`${dmName(after, next.id)} acts next on the same initiative: move ${dmName(after, c.id)}, act, then call update_combat next_turn again.`);
   }
   return parts.join(' ');
 }
 
-/** The next non-defeated combatant after `id` in initiative order (wrapping), or null. */
+/** The next non-defeated combatant after `id` in initiative order this round (null at the end of the round). */
 function nextInOrder(state: CombatState, id: string): Combatant | null {
   const i = state.combatants.findIndex((c) => c.id === id);
   if (i < 0) return null;
@@ -754,9 +767,53 @@ export function attackCheck(state: CombatState, hero: Character | null, attacker
     if (cover.degree !== 'none') sentences.push(capitalize(coverSentence(state, tName, cover, false)));
   }
   if (cover.degree !== 'total' && !lineOfSight(state, hero, a.id, t.id)) {
-    sentences.push(`${aName} can't see ${tName} from ${aSq} — Disadvantage, unless something lets it see ${tName}.`);
+    const by = sightBlockers(state, hero, a, t);
+    sentences.push(`${aName} can't see ${tName} from ${aSq}${by.length ? ` (${listAnd(by)})` : ''} — Disadvantage, unless something lets ${itOf(a)} see ${tName}.`);
   }
   return sentences.join(' ');
+}
+
+/** "the office wall", "a wall", "the fog bank": a sight-blocking feature as DM text names it. */
+function blockerName(f: TerrainFeature): string {
+  if (f.label) return /^(the|a|an)\s/i.test(f.label) ? f.label : `the ${f.label}`;
+  if (f.kind === 'door') return 'a closed door';
+  return f.kind === 'obscured' ? 'obscured squares' : `a ${terrainWords(f.kind)}`;
+}
+
+/**
+ * What keeps one creature from seeing another, for DM text: the walls, closed doors and obscured terrain or lasting
+ * effects ("Fog Cloud") on the line between their centres, and whatever obscures either creature's whole space.
+ */
+function sightBlockers(state: CombatState, hero: Character | null, a: Combatant, t: Combatant): string[] {
+  const map = state.map;
+  const cells = mapCells(state, hero);
+  const sa = spaceOf(a, hero);
+  const st = spaceOf(t, hero);
+  if (!map || !cells || !sa || !st) return [];
+  const flagsAt = (x: number, y: number) => (x >= 0 && y >= 0 && x < cells.width && y < cells.height ? cells.flags[y * cells.width + x] : 0);
+  const own = (x: number, y: number) => rectsContain([sa.rect, st.rect], { x, y });
+  const centre = (r: GridRect) => ({ x2: r.x0 + r.x1 + 1, y2: r.y0 + r.y1 + 1 });
+  const squares = segmentBlockers(centre(sa.rect), centre(st.rect), (x, y) => !own(x, y) && (flagsAt(x, y) & CELL.BLOCKS_SIGHT) !== 0);
+  const wholly = (r: GridRect) => {
+    const all: GridPoint[] = [];
+    for (let y = r.y0; y <= r.y1; y++) for (let x = r.x0; x <= r.x1; x++) all.push({ x, y });
+    return all.every((p) => (flagsAt(p.x, p.y) & CELL.OBSCURED) !== 0) ? all : [];
+  };
+  squares.push(...wholly(st.rect), ...wholly(sa.rect));
+  const names: string[] = [];
+  const add = (name: string) => {
+    if (!names.includes(name)) names.push(name);
+  };
+  for (const p of squares) {
+    const here = map.terrain.filter((f) => rectsContain(f.rects, p));
+    const door = here.find((f) => f.kind === 'door');
+    if (door && door.door !== 'open') add(blockerName(door));
+    for (const f of here) if (f.kind === 'obscured' || (f.kind === 'wall' && !door)) add(blockerName(f));
+    for (const e of map.effects) {
+      if (e.duration === 'lasting' && e.terrain.includes('obscured') && rectsContain(effectSquares(state, hero, e), p)) add(e.label);
+    }
+  }
+  return names;
 }
 
 function coverSentence(state: CombatState, targetName: string, cover: CoverResult, inReachNow: boolean): string {
@@ -900,7 +957,7 @@ function routeText(from: GridPoint, path: readonly GridPoint[]): string {
 }
 
 /** " It stood up first (15 ft)." and the other notes of a move (DM-facing). */
-export function moveNotes(state: CombatState, moverId: string, notes: readonly MoveNote[]): string {
+export function moveNotes(state: CombatState, hero: Character | null, moverId: string, notes: readonly MoveNote[]): string {
   const mover = combatant(state, moverId);
   const It = ItOf(mover);
   const it = itOf(mover);
@@ -914,9 +971,12 @@ export function moveNotes(state: CombatState, moverId: string, notes: readonly M
       case 'crawled':
         out.push(`${It} crawled (Prone).`);
         break;
-      case 'entered':
-        out.push(`${It} entered ${map ? insideLabel(map, n.label) : n.label} at ${squareLabel(n.at)}.`);
+      case 'entered': {
+        // `at` is the mover's anchor at that step: name its whole space, which is what overlaps the hazard.
+        const where = mover ? spaceLabel(n.at, combatantSize(mover, hero)) : squareLabel(n.at);
+        out.push(`${It} entered ${map ? insideLabel(map, n.label) : n.label} at ${where}.`);
         break;
+      }
       case 'emanation-reached':
         out.push(`${ItsOf(mover)} ${n.label} now covers ${listAnd(n.ids.map((id) => dmName(state, id)))}.`);
         break;
@@ -991,7 +1051,7 @@ export function describeWillingMove(n: number, state: CombatState, hero: Charact
   let left = '';
   if (b && o.kind === 'move') left = `; ${b.leftFt} of ${b.speedFt + b.dashFt} ft left this turn`;
   else if (b && o.kind === 'off-turn') left = `; ${b.leftFt} of its ${b.speedFt}-ft allowance left`;
-  return `${head}${left}.${letGoText(state, o.provoked, declined)}${moveNotes(state, o.moverId, o.notes)}${afterMoveClauses(state, hero, o.moverId)}`;
+  return `${head}${left}.${letGoText(state, o.provoked, declined)}${moveNotes(state, hero, o.moverId, o.notes)}${afterMoveClauses(state, hero, o.moverId)}`;
 }
 
 /** "here", or "Old Tam's space at B6" when the mover was passing through an ally's space (D31). */
@@ -1009,8 +1069,18 @@ function declinedHint(state: CombatState, moverName: string, ids: readonly strin
   return `, adding "declined" with the names of any of ${JSON.stringify(names)} that let ${moverName} go`;
 }
 
-/** A stop at an Opportunity Attack (D31–D33). `heroTakes`: the player answered Attack in the dialog (D32). */
-export function describeStop(n: number, state: CombatState, hero: Character | null, o: StoppedOutcome, opts: { heroTakes: boolean }): string {
+/**
+ * A stop at an Opportunity Attack (D31–D33). `heroTakes`: the player answered Attack in the dialog (D32).
+ * `declined`: the reactors this call let go (the call's own `declined`, and the hero after "Let it go"), so a let-go
+ * earlier on the route is reported as well as one at the stop.
+ */
+export function describeStop(
+  n: number,
+  state: CombatState,
+  hero: Character | null,
+  o: StoppedOutcome,
+  opts: { heroTakes: boolean; declined?: readonly string[] },
+): string {
   const mover = combatant(state, o.moverId);
   const name = dmName(state, o.moverId);
   const moverName = mover?.name ?? name;
@@ -1019,13 +1089,16 @@ export function describeStop(n: number, state: CombatState, hero: Character | nu
   const heroIds = o.reactors.filter((r) => r.isHero && !declined.has(r.reactorId)).map((r) => r.reactorId);
   const heroLetGo = o.reactors.filter((r) => r.isHero && declined.has(r.reactorId)).map((r) => r.reactorId);
   const npcs = o.reactors.filter((r) => !r.isHero && !declined.has(r.reactorId)).map((r) => r.reactorId);
+  const atStop = new Set(o.reactors.map((r) => r.reactorId));
+  const earlier = letGoText(state, o.provoked.filter((p) => !atStop.has(p.reactorId)), [...(opts.declined ?? []), ...declined]);
   const dest = squareLabel(o.destination);
-  const notes = moveNotes(state, o.moverId, o.notes.filter((x) => x.kind !== 'stop-continued'));
+  const notes = moveNotes(state, hero, o.moverId, o.notes.filter((x) => x.kind !== 'stop-continued'));
   if (opts.heroTakes && heroIds.length) {
     const heroName = combatant(state, heroIds[0])?.name ?? 'the hero';
     const ac = mover?.ac !== undefined ? `, AC ${mover.ac}` : '';
+    const provokes = o.reactors.length > 1 ? 'Opportunity Attacks' : 'an Opportunity Attack';
     const parts = [
-      `${n}. ${name} stopped at ${squareLabel(o.at)} (${o.costFt} ft moved; ${o.budget?.leftFt ?? 0} ft left): leaving ${leavingWhere(state, hero, o)} provokes Opportunity Attacks.`,
+      `${n}. ${name} stopped at ${squareLabel(o.at)} (${o.costFt} ft moved; ${o.budget?.leftFt ?? 0} ft left): leaving ${leavingWhere(state, hero, o)} provokes ${provokes}.${earlier}`,
       `${heroName}: the player takes it — resolve it now with request_player_roll (an attack against ${moverName}${ac}), then damage.`,
       ...npcs.map((id) => `${dmName(state, id)}: yours to decide — if ${dmName(state, id)} takes it, roll the attack with roll_dice.`),
       `Then repeat this move to finish it (${o.remainingCostFt} ft more to ${dest})${declinedHint(state, moverName, npcs)}.`,
@@ -1035,7 +1108,7 @@ export function describeStop(n: number, state: CombatState, hero: Character | nu
   const stoppers = npcs.length ? npcs : heroIds;
   const { reach, attack } = reactorsReach(state, stoppers);
   const parts = [
-    `${n}. ${name} stopped at ${squareLabel(o.at)} on the way to ${dest} (${o.costFt} ft so far): leaving ${leavingWhere(state, hero, o)} takes ${moverName} out of ${reach}, which provokes ${attack}.`,
+    `${n}. ${name} stopped at ${squareLabel(o.at)} on the way to ${dest} (${o.costFt} ft so far): leaving ${leavingWhere(state, hero, o)} takes ${moverName} out of ${reach}, which provokes ${attack}.${earlier}`,
   ];
   if (heroLetGo.length) parts.push(`${listAnd(heroLetGo.map((id) => `${dmName(state, id)}'s`))} Opportunity Attack: the player let it go.`);
   const many = stoppers.length > 1;
@@ -1084,7 +1157,7 @@ export function describeForced(n: number, state: CombatState, hero: Character | 
     const beyond = step && stopped.by !== 'the map edge' ? ` at ${squareLabel({ x: stopped.at.x + step.x, y: stopped.at.y + step.y })}` : '';
     head += `: ${stopped.by}${beyond} stopped it ${stopped.shortFt} ft short`;
   }
-  const notes = moveNotes(state, o.moverId, o.notes.filter((x) => x.kind !== 'push-stopped'));
+  const notes = moveNotes(state, hero, o.moverId, o.notes.filter((x) => x.kind !== 'push-stopped'));
   return `${head}.${notes}${afterMoveClauses(state, hero, o.moverId)}`;
 }
 
@@ -1107,7 +1180,7 @@ export function describeTeleport(n: number, before: CombatState, state: CombatSt
   const parts = [`${n}. ${name} teleported ${squareLabel(o.from)} → ${squareLabel(o.to)}${sight ? ` (${sight})` : ''}.`];
   const shifted = shiftedText(before, hero, o, plain, 'appeared');
   if (shifted) parts.push(shifted);
-  const notes = moveNotes(state, o.moverId, o.notes.filter((x) => x.kind !== 'teleported' && x.kind !== 'shifted'));
+  const notes = moveNotes(state, hero, o.moverId, o.notes.filter((x) => x.kind !== 'teleported' && x.kind !== 'shifted'));
   return `${parts.join(' ')}${notes}${afterMoveClauses(state, hero, o.moverId)}`;
 }
 
@@ -1119,7 +1192,7 @@ export function describePlace(n: number, before: CombatState, state: CombatState
   const up = c?.elevationFt ? `, ${c.elevationFt} ft up` : '';
   const spent = o.costFt > 0 ? `; ${o.costFt} ft of ${itsOf(c)} movement spent` : '';
   const shifted = shiftedText(before, hero, o, c?.name ?? name, 'went');
-  const notes = moveNotes(state, o.moverId, o.notes.filter((x) => x.kind !== 'shifted'));
+  const notes = moveNotes(state, hero, o.moverId, o.notes.filter((x) => x.kind !== 'shifted'));
   return `${n}. Placed ${name} at ${where}${up}${spent}.${shifted ? ` ${shifted}` : ''}${notes}${afterMoveClauses(state, hero, o.moverId)}`;
 }
 
@@ -1127,8 +1200,19 @@ function columnsText(map: BattleMap): string {
   return `columns A–${squareLabel({ x: map.width - 1, y: 0 }).replace(/\d+$/, '')}, rows 1–${map.height}`;
 }
 
-/** The "Not moved" line of a refused move. `target`: what `to` named, as the DM wrote it. */
-export function describeRefusal(n: number, state: CombatState, hero: Character | null, moverId: string, refusal: MoveRefusal, target: string | null): string {
+/**
+ * The "Not moved" line of a refused move. `target`: what `to` named, as the DM wrote it; `opts.toAt`: the square it
+ * named, if it was one; `opts.stayProne`: the move was to crawl rather than stand up first.
+ */
+export function describeRefusal(
+  n: number,
+  state: CombatState,
+  hero: Character | null,
+  moverId: string,
+  refusal: MoveRefusal,
+  target: string | null,
+  opts: { toAt?: GridPoint; stayProne?: boolean } = {},
+): string {
   const mover = combatant(state, moverId);
   const name = dmName(state, moverId);
   const it = itOf(mover);
@@ -1168,7 +1252,8 @@ export function describeRefusal(n: number, state: CombatState, hero: Character |
       return `${head}: no open route — walls or creatures cut ${it} off.${closest}`;
     }
     case 'too-far': {
-      const how = mover && moverStats(state, hero, mover.id)?.prone ? 'after standing up' : 'by the cheapest open route';
+      const prone = mover ? moverStats(state, hero, mover.id)?.prone : false;
+      const how = prone ? (opts.stayProne ? 'by crawling' : 'after standing up') : 'by the cheapest open route';
       const route = refusal.route.length && mover?.position ? ` (${routeText(mover.position, refusal.route)})` : '';
       const lead = target && /^[A-Z]+\d+$/.test(target) ? `${target} is ${refusal.needFt} ft away ${how}` : `getting there takes ${refusal.needFt} ft ${how}`;
       const closest = refusal.closest ? `The closest ${it} can get is ${squareLabel(refusal.closest.at)} (${refusal.closest.costFt} ft)` : '';
@@ -1178,7 +1263,13 @@ export function describeRefusal(n: number, state: CombatState, hero: Character |
     }
     case 'frightened': {
       const alt = refusal.alternative ? ` ${capitalize(it)} could go to ${squareLabel(refusal.alternative)} instead.` : '';
-      return `${head}: ${it} is Frightened of ${dmName(state, refusal.sourceId)} and can't willingly move closer.${alt}`;
+      const source = combatant(state, refusal.sourceId);
+      const now = mover && source ? distanceFt(mover, source, hero) : null;
+      const there = mover && source && opts.toAt ? spaceOf(mover, hero, opts.toAt) : null;
+      const sourceSpace = source ? spaceOf(source, hero) : null;
+      const closer = now !== null && there && sourceSpace ? now - spaceDistanceFt(there, sourceSpace) : 0;
+      const how = closer > 0 && opts.toAt ? ` (${squareLabel(opts.toAt)} is ${closer} ft closer)` : '';
+      return `${head}: ${it} is Frightened of ${dmName(state, refusal.sourceId)} and can't willingly move closer${how}.${alt}`;
     }
     case 'out-of-range':
       return `${head}: that is ${refusal.distanceFt} ft away, beyond ${itsOf(mover)} ${refusal.maxFt}-ft range.`;
@@ -1272,6 +1363,8 @@ function creatureChangeText(state: CombatState, hero: Character | null, ch: Extr
 /** "· Mira Voss (B6): 20 ft — line of sight; Mira Voss has Half Cover from it (crates); it has … ; neither is within the other's reach." */
 export function measureLine(state: CombatState, hero: Character | null, a: Combatant, b: Combatant): string {
   const bName = dmName(state, b.id);
+  // "it" for a creature measured from, the hero's name for the hero (never a pronoun for the hero, amendment 1).
+  const self = itOf(a);
   const d = distanceFt(a, b, hero) ?? 0;
   const sees = lineOfSight(state, hero, a.id, b.id);
   const bCover = coverAgainst(state, hero, a.id, b.id);
@@ -1281,11 +1374,11 @@ export function measureLine(state: CombatState, hero: Character | null, a: Comba
   const reach = ab && ba
     ? "each is within the other's reach"
     : ab
-      ? `it reaches ${bName}; ${bName} doesn't reach it`
+      ? `${self} reaches ${bName}; ${bName} doesn't reach ${self}`
       : ba
-        ? `${bName} reaches it; it doesn't reach ${bName}`
+        ? `${bName} reaches ${self}; ${self} doesn't reach ${bName}`
         : "neither is within the other's reach";
-  return `· ${bName} (${spaceText(b, hero)}): ${d} ft — ${sees ? 'line of sight' : 'no line of sight'}; ${hasCover(state, bName, bCover, 'it')}; ${hasCover(state, 'it', aCover, bName)}; ${reach}.`;
+  return `· ${bName} (${spaceText(b, hero)}): ${d} ft — ${sees ? 'line of sight' : 'no line of sight'}; ${hasCover(state, bName, bCover, self)}; ${hasCover(state, self, aCover, bName)}; ${reach}.`;
 }
 
 /** "Mira Voss has Half Cover from it (crates)" / "it has no cover from Mira Voss". */
@@ -1298,6 +1391,24 @@ function hasCover(state: CombatState, who: string, cover: CoverResult, from: str
 // ---------------------------------------------------------------------------
 // Player-facing text: log lines, the bubble's mapNote, final positions, the layout in a log detail
 // ---------------------------------------------------------------------------
+
+/** `name` appears in `text` as whole words, in any case (whitespace inside the name may vary). */
+function namesWord(text: string, name: string): boolean {
+  const clean = name.trim();
+  if (!clean) return false;
+  const pattern = clean.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(?<![\\p{L}\\p{N}])${pattern}(?![\\p{L}\\p{N}])`, 'iu').test(text);
+}
+
+/**
+ * Does free text the player would see (a roll's purpose) name a creature the hero hasn't noticed? Whole words, any
+ * case. A hidden name that is part of a visible one ("Bandit" while "Bandit 1" is visible) is skipped: the text
+ * may mean the visible creature.
+ */
+export function namesHiddenCreature(state: CombatState, text: string): boolean {
+  const visible = state.combatants.filter((c) => !c.hidden).map((c) => c.name);
+  return state.combatants.some((c) => c.hidden && namesWord(text, c.name) && !visible.some((v) => namesWord(v, c.name)));
+}
 
 /** The player's name for a combatant in a log line: "you" for the hero; null when the player can't see it. */
 export function playerName(state: CombatState, id: string): string | null {
@@ -1346,7 +1457,8 @@ export function mapNote(state: CombatState | null, hero: Character | null, answe
   const turn = currentTurn(view);
   const heroC = heroOf(view);
   if (!turn || !heroC || turn.combatantId !== heroC.id) return undefined;
-  const stop = unseenPlayerStop(state, answered);
+  // Player-facing: the stop as the player view keeps it (hidden reactors dropped; gone if only they remained).
+  const stop = unseenPlayerStop(view, answered);
   const moves = turn.moves.filter((m) => m.by === 'player' && !isToldAndAnswered(m, answered));
   if (!moves.length && !stop) return undefined;
   const standFt = turnBudget(view, hero, heroC.id)?.standCostFt ?? 0;

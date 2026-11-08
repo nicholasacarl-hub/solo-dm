@@ -3,6 +3,7 @@
  * the toolbar (Move | Measure | Area, the list view, the key and help, and on desktop the dock's size), and the
  * zoom / fit / centre buttons — the full non-gesture path (WCAG 2.5.1, 2.5.7).
  */
+import { memo } from 'react';
 import { ChevronUp, Ellipsis, Footprints, List, LocateFixed, Map as MapIcon, Maximize2, Minimize2, Minus, Plus, Radius, Ruler, Scan } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { Badge, Button, IconButton, Segmented } from '@/ui/components/ui';
@@ -13,11 +14,11 @@ import { MapKey } from './MapHelp';
 import type { BattleMapModel } from './model';
 import { turnPillText } from './text';
 
-export function TurnPill({ model, onStandUp }: { model: BattleMapModel; onStandUp(): void }) {
+export const TurnPill = memo(function TurnPill({ model, onStandUp }: { model: BattleMapModel; onStandUp(): void }) {
   const touch = useIsTouch();
-  const waiting = model.block === 'waiting';
   const currentName = model.currentId ? (model.combatants.get(model.currentId)?.name ?? null) : null;
-  const text = turnPillText({ yourTurn: model.yourTurn, waiting, currentName, budget: model.budget });
+  // Whose turn the player's view shows (D42): a hidden creature's turn never changes it.
+  const text = turnPillText({ yourTurn: model.yourTurn, currentName, budget: model.budget });
   const b = model.budget;
   const canStand = model.canMove && b !== null && b.prone && !b.stoodUp && !b.speedZero;
   return (
@@ -25,7 +26,7 @@ export function TurnPill({ model, onStandUp }: { model: BattleMapModel; onStandU
       <span
         className={cn(
           'inline-flex min-w-0 items-center rounded-full px-3 py-1 text-sm font-semibold whitespace-nowrap',
-          model.yourTurn && !waiting ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-muted',
+          model.yourTurn ? 'bg-accent-soft text-accent' : 'bg-surface-2 text-muted',
         )}
       >
         <span className="truncate">{text}</span>
@@ -38,7 +39,7 @@ export function TurnPill({ model, onStandUp }: { model: BattleMapModel; onStandU
       )}
     </div>
   );
-}
+});
 
 const MODES: { value: MapMode; label: string; key: string; Icon: typeof Footprints }[] = [
   { value: 'move', label: 'Move', key: 'V', Icon: Footprints },
@@ -46,7 +47,7 @@ const MODES: { value: MapMode; label: string; key: string; Icon: typeof Footprin
   { value: 'area', label: 'Area', key: 'A', Icon: Radius },
 ];
 
-export function MapToolbar({
+export const MapToolbar = memo(function MapToolbar({
   mode,
   onMode,
   variant,
@@ -70,6 +71,9 @@ export function MapToolbar({
   const touch = useIsTouch();
   const iconOnly = variant === 'tab';
   const buttonSize = touch ? 'lg' : 'sm';
+  // Phones keep the pill and the toolbar on one row (spec §7.1): the list view moves into the ⋯ menu, except while
+  // it is open (its way back to the map stays in sight).
+  const listInMenu = variant === 'tab' && !listOn;
   return (
     <div className="flex shrink-0 items-center gap-1">
       <Segmented
@@ -88,27 +92,42 @@ export function MapToolbar({
           ),
         }))}
       />
-      <IconButton
-        label={listOn ? 'Show the map' : 'List positions'}
-        aria-pressed={listOn}
-        size={buttonSize}
-        onClick={onList}
-        className={listOn ? 'bg-surface-2 text-text' : undefined}
-      >
-        {listOn ? <MapIcon className="size-4" aria-hidden /> : <List className="size-4" aria-hidden />}
-      </IconButton>
+      {!listInMenu && (
+        <IconButton
+          label={listOn ? 'Show the map' : 'List positions'}
+          aria-pressed={listOn}
+          size={buttonSize}
+          onClick={onList}
+          className={listOn ? 'bg-surface-2 text-text' : undefined}
+        >
+          {listOn ? <MapIcon className="size-4" aria-hidden /> : <List className="size-4" aria-hidden />}
+        </IconButton>
+      )}
       <Popover
         label="Map key"
         placement="bottom-end"
-        className="w-80"
+        className="w-80 max-w-[calc(100vw-2rem)]"
         trigger={(props) => (
-          <IconButton {...props} label="Map key and help" size={buttonSize}>
+          <IconButton {...props} label={listInMenu ? 'List, key and help' : 'Map key and help'} size={buttonSize}>
             <Ellipsis className="size-4" aria-hidden />
           </IconButton>
         )}
       >
         {(close) => (
           <div className="flex flex-col gap-3">
+            {listInMenu && (
+              <Button
+                size={touch ? 'lg' : 'sm'}
+                variant="secondary"
+                icon={<List className="size-4" aria-hidden />}
+                onClick={() => {
+                  close();
+                  onList();
+                }}
+              >
+                List positions
+              </Button>
+            )}
             <MapKey />
             <Button
               size="sm"
@@ -135,9 +154,9 @@ export function MapToolbar({
       )}
     </div>
   );
-}
+});
 
-export function ZoomControls({
+export const ZoomControls = memo(function ZoomControls({
   onZoom,
   onFit,
   onCenter,
@@ -150,7 +169,8 @@ export function ZoomControls({
   layout?: 'row' | 'column';
 }) {
   const touch = useIsTouch();
-  const size = touch ? 'lg' : 'sm';
+  // The non-gesture path (WCAG 2.5.1, 2.5.7): 48px on touch screens, 40px with a mouse.
+  const size = touch ? 'lg' : 'md';
   const button = 'border border-border bg-surface/90 text-text shadow-card hover:bg-surface-2';
   return (
     <div className={cn('pointer-events-auto flex gap-1.5', layout === 'column' ? 'flex-col' : 'flex-row')} role="group" aria-label="Zoom">
@@ -168,4 +188,4 @@ export function ZoomControls({
       </IconButton>
     </div>
   );
-}
+});

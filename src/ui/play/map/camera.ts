@@ -177,12 +177,18 @@ export function rectOnScreen(cam: Camera, view: ViewSize, r: GridRect, margin = 
   return a.x >= RULER_LEFT + margin && a.y >= RULER_TOP + margin && b.x <= view.width - margin && b.y <= view.height - margin;
 }
 
-/** The same camera when `r` is already on screen (clear of the rulers); otherwise one centred on it (same zoom). */
+/**
+ * The same camera when `r` is already on screen (clear of the rulers); otherwise one centred on it (same zoom),
+ * kept filling the view. A square on the map's edge can't come further in than the edge: then the camera (if it
+ * is already there) comes back unchanged, so nothing is written.
+ */
 export function revealRect(cam: MapCamera, view: ViewSize, map: MapExtent, r: GridRect, margin = 8): MapCamera {
   if (view.width <= 0 || view.height <= 0) return cam;
   if (rectOnScreen(liveCamera(cam, view), view, r, margin)) return cam;
   const c = rectCentre(r);
-  return fillCamera({ cellPx: cam.cellPx, cx: c.x, cy: c.y }, map, view);
+  const next = fillCamera({ cellPx: cam.cellPx, cx: c.x, cy: c.y }, map, view);
+  const same = Math.abs(next.cx - cam.cx) < 1e-6 && Math.abs(next.cy - cam.cy) < 1e-6 && next.cellPx === cam.cellPx;
+  return same ? cam : next;
 }
 
 /** Zoom by `factor` about the view's centre (the zoom buttons and keys). */

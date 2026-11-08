@@ -26,7 +26,6 @@ import {
   MOVE_FAILED_TOAST,
   rangeWarning,
   refusalText,
-  remindWords,
   stopText,
   UNDO_FAILED_TOAST,
   unseenStopText,
@@ -73,16 +72,15 @@ export interface MapController {
   endTurn(): void;
   tellDm(): void;
   standUp(): void;
-  remind(): void;
   addAreaToMessage(): void;
   planTo(to: GridPoint, target?: string | null): void;
 }
 
 /** A commit the store refused, in the bar's terms (a hidden creature's turn never reads "It isn't your turn"). */
-function noticeFor(result: Extract<HeroMoveResult, { ok: false }>, yourTurnInView: boolean): MapNotice {
+function noticeFor(result: Extract<HeroMoveResult, { ok: false }>, model: Pick<BattleMapModel, 'yourTurn' | 'dmBusy'>): MapNotice {
   if (result.refusal) return { kind: 'refusal', refusal: result.refusal };
   if (result.block === 'refused') return { kind: 'block', block: 'refused' };
-  return { kind: 'block', block: displayBlock(result.block, yourTurnInView) ?? 'refused' };
+  return { kind: 'block', block: displayBlock(result.block, model.yourTurn, model.dmBusy) ?? 'refused' };
 }
 
 function heroAnchor(model: BattleMapModel): GridPoint | null {
@@ -124,7 +122,7 @@ export function useMapController(model: BattleMapModel): MapController {
 
   const runCommit = useCallback(async (plan: MapPlan) => {
     const m = modelRef.current;
-    const preview = previewsRef.current.get(plan);
+    const preview = previewsRef.current.get(plan, { light: true });
     const finish = (notice: MapNotice | null) => dispatchRef.current({ type: 'committed', notice });
     if (preview.status === 'refused' && preview.refusal) {
       finish({ kind: 'refusal', refusal: preview.refusal });
@@ -139,7 +137,7 @@ export function useMapController(model: BattleMapModel): MapController {
         standUp: plan.standUp,
       });
       if (!result.ok) {
-        finish(noticeFor(result, m.yourTurn));
+        finish(noticeFor(result, m));
         return;
       }
       finish(null);
@@ -164,7 +162,7 @@ export function useMapController(model: BattleMapModel): MapController {
     (action: MapAction) => {
       const before = current();
       const m = modelRef.current;
-      const { state: next, commands } = mapReducer(before, action, { canMove: m.canMove, heroId: m.heroId, heroAt: heroAnchor(m) });
+      const { state: next, commands } = mapReducer(before, action, { canMove: m.canMove, heroId: m.heroId, heroAt: heroAnchor(m), yourTurn: m.yourTurn, block: m.block });
       if (next.mode !== before.mode || next.plan !== before.plan || next.measure !== before.measure || next.template !== before.template || next.cursor !== before.cursor) {
         usePlayView.setState({ mapMode: next.mode, plan: next.plan, measure: next.measure, template: next.template, cursor: next.cursor });
       }
@@ -209,7 +207,7 @@ export function useMapController(model: BattleMapModel): MapController {
   const hoverPreview = useMemo(() => {
     if (ui.plan || ui.mode !== 'move' || !model.canMove || !ui.hover) return null;
     if (tokenAt(model, ui.hover)) return null;
-    return previews.get({ ...DEFAULT_OPTIONS, to: ui.hover });
+    return previews.get({ ...DEFAULT_OPTIONS, to: ui.hover }, { light: true });
   }, [ui.plan, ui.mode, ui.hover, model, previews]);
 
   // Say the plan once it settles.
@@ -249,7 +247,7 @@ export function useMapController(model: BattleMapModel): MapController {
         target = { kind: 'token', id: token.id, role, approach };
       }
       const options = s.plan ?? DEFAULT_OPTIONS;
-      const warned = input === 'mouse' && s.mode === 'move' && m.canMove && target.kind === 'square' ? previewsRef.current.get({ ...options, to: at }).warned : false;
+      const warned = input === 'mouse' && s.mode === 'move' && m.canMove && target.kind === 'square' ? previewsRef.current.get({ ...options, to: at }, { light: true }).warned : false;
       dispatch({ type: 'tap', at, corner, input, target, warned });
     },
     [current, dispatch],
@@ -281,7 +279,7 @@ export function useMapController(model: BattleMapModel): MapController {
     const n = ui.notice;
     if (!n) return null;
     if (n.kind === 'refusal') return refusalText(n.refusal, { name: model.nameOf, budget: model.budget, map: model.map });
-    return blockText(n.block, { stopReactors: (model.pendingStop?.reactorIds ?? []).map(model.nameOf), dmBusy: model.dmBusy });
+    return blockText(n.block, { stopReactors: (model.pendingStop?.reactorIds ?? []).map(model.nameOf) });
   }, [ui.notice, model]);
 
   const undo = useCallback(() => {
@@ -312,21 +310,10 @@ export function useMapController(model: BattleMapModel): MapController {
       .commitHeroMove({ prefer: 'safest', dash: false, disengage: false, standUp: true })
       .then((result) => {
         if (result.ok) announce('You stand up.');
-        else dispatchRef.current({ type: 'committed', notice: noticeFor(result, modelRef.current.yourTurn) });
+        else dispatchRef.current({ type: 'committed', notice: noticeFor(result, modelRef.current) });
       })
       .catch(() => toast.error(MOVE_FAILED_TOAST));
   }, [announce]);
-
-  const remind = useCallback(() => {
-    const m = modelRef.current;
-    const name = m.currentId ? m.nameOf(m.currentId) : null;
-    if (!name) return;
-    const view = usePlayView.getState();
-    view.setOoc(true);
-    const words = remindWords(name);
-    if (view.draft.includes(words)) view.focusComposer();
-    else view.appendToDraft(words);
-  }, []);
 
   const addAreaToMessage = useCallback(() => {
     const m = modelRef.current;
@@ -369,7 +356,6 @@ export function useMapController(model: BattleMapModel): MapController {
     endTurn: () => void endTurn(),
     tellDm,
     standUp,
-    remind,
     addAreaToMessage,
     planTo,
   };

@@ -73,9 +73,10 @@ export function WaitingBanner({ model }: { model: BattleMapModel }) {
   const touch = useIsTouch();
   const current = model.currentId ? model.combatants.get(model.currentId) : undefined;
   if (!waitingVisible(model) || !current) return null;
+  const name = model.nameOf(current.id);
   const remind = () => {
     const view = usePlayView.getState();
-    const words = remindWords(current.name);
+    const words = remindWords(name);
     view.setOoc(true);
     if (view.draft.includes(words)) view.focusComposer();
     else view.appendToDraft(words);
@@ -84,7 +85,7 @@ export function WaitingBanner({ model }: { model: BattleMapModel }) {
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
       <p className="flex min-w-0 flex-1 items-center gap-2 text-sm text-muted">
         <Hourglass className="size-4 shrink-0" aria-hidden />
-        <span>{waitingText(current.name)}</span>
+        <span>{waitingText(name)}</span>
       </p>
       <Button size={touch ? 'lg' : 'sm'} variant="secondary" onClick={remind}>
         Remind the DM

@@ -23,7 +23,7 @@ import {
 } from '@/engine';
 import type { AdvantageState, Character, D20TestResult, KnownSpell, PlayerRollRequest } from '@/types';
 import { nameKey } from '@/lib/id';
-import { attackCheck } from '../mapText';
+import { attackCheck, namesHiddenCreature } from '../mapText';
 import { truncate } from '../narration';
 import type { ToolInput } from './definitions';
 import {
@@ -372,16 +372,26 @@ export async function rollDiceTool(input: ToolInput<'roll_dice'>, ctx: ToolConte
   }
   const rollType = input.is_attack ? 'attack' : 'check';
   result = withVerdict(rollType, result, input.dc);
-  // A creature the hero hasn't noticed rolls behind the screen, whatever the call said (D41).
+  // A creature the hero hasn't noticed rolls behind the screen, whatever the call said (D41); so does a roll at one,
+  // or one whose purpose (shown in the log) names one — nothing about a hidden creature reaches the log (amendment 8).
   const combat = ctx.deps.store().combat;
   const attacker = input.attacker && combat?.active ? findMapCombatant(combat, input.attacker) : undefined;
   const target = input.target && combat?.active ? findMapCombatant(combat, input.target) : undefined;
-  const forcedSecret = attacker?.hidden === true && input.secret !== true;
-  const secret = input.secret === true || forcedSecret;
+  const hiddenWhy =
+    input.secret === true || !combat?.active
+      ? null
+      : attacker?.hidden
+        ? 'the attacker is hidden from the player'
+        : target?.hidden
+          ? 'the target is hidden from the player'
+          : namesHiddenCreature(combat, input.purpose)
+            ? 'its purpose names a creature hidden from the player'
+            : null;
+  const secret = input.secret === true || hiddenWhy !== null;
   await logRoll(ctx, { actor: 'dm', purpose: input.purpose, result, secret, rollType: input.is_attack ? 'attack' : undefined });
 
   const line = describeRoll(input.purpose, rollType, result);
-  const secretNote = forcedSecret ? ' (secret: the attacker is hidden from the player)' : secret ? ' (secret: hidden from the player)' : '';
+  const secretNote = hiddenWhy ? ` (secret: ${hiddenWhy})` : secret ? ' (secret: hidden from the player)' : '';
   // On a battle map, the reach and cover the map shows (no line without a map or when a name is unknown: the roll stands).
   const check = input.is_attack && attacker && target && combat?.map ? attackCheck(combat, ctx.deps.store().character, attacker.id, target.id) : null;
   return ok([`${line}${secretNote}`, ...notes, ...(check ? [check] : [])].join('\n'));

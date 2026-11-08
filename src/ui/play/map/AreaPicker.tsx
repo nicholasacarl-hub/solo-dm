@@ -3,11 +3,13 @@
  * places a template without dragging — tap or Snap: corner for a centre, Rotate for an aim, nudge buttons — and
  * reads out who it catches on the player's map. Add to message appends exactly one [Area: …] line (D50).
  */
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, MessageSquareText, RotateCcw, RotateCw, X } from 'lucide-react';
+import { useRulesIndex } from '@/data';
+import type { Character } from '@/types';
 import { Button, Dialog, IconButton, Input, Segmented, Select } from '@/ui/components/ui';
 import { useIsTouch } from '../useMediaQuery';
-import { CUSTOM_SIZES, customPreset, SHAPE_LABEL, TEMPLATE_SHAPES, type AreaPreset, type TemplateShape } from './areaPresets';
+import { CUSTOM_SIZES, customPreset, SHAPE_LABEL, spellPresets, TEMPLATE_SHAPES, type AreaPreset, type TemplateShape } from './areaPresets';
 import type { BattleMapModel } from './model';
 import { areaReadout } from './text';
 import { isAimed, isCentred, nudgeTemplate, rotateTemplate, snapTemplate, templateLine } from './templates';
@@ -19,6 +21,16 @@ export function presetSummary(p: AreaPreset): string {
   if (p.shape === 'emanation') return `${size} around you`;
   if (p.fromSelf) return `${size} from you`;
   return p.rangeFt ? `${size} · range ${p.rangeFt} ft` : size;
+}
+
+/**
+ * The picker with the hero's own area spells. It loads the rules index (built on first use, then shared), so it is
+ * mounted only while open; until the index is ready it offers Custom alone.
+ */
+export function SpellAreaPicker({ hero, onPick, onClose }: { hero: Character; onPick(p: AreaPreset): void; onClose(): void }) {
+  const index = useRulesIndex();
+  const presets = useMemo(() => spellPresets(hero, index), [hero, index]);
+  return <AreaPicker open presets={presets} onPick={onPick} onClose={onClose} />;
 }
 
 export function AreaPicker({ open, presets, onPick, onClose }: { open: boolean; presets: AreaPreset[]; onPick(p: AreaPreset): void; onClose(): void }) {
@@ -75,20 +87,22 @@ export function AreaPicker({ open, presets, onPick, onClose }: { open: boolean; 
                 ))}
               </Select>
             </div>
-            <Input
-              type="number"
-              inputMode="numeric"
-              min={5}
-              max={500}
-              step={5}
-              aria-label="Size in feet"
-              className="w-24"
-              value={size}
-              onChange={(e) => {
-                const n = Number(e.target.value);
-                if (Number.isFinite(n) && n > 0) setSize(Math.min(500, n));
-              }}
-            />
+            {/* The shared control is full width; the wrapper sizes it. */}
+            <div className="w-24 shrink-0">
+              <Input
+                type="number"
+                inputMode="numeric"
+                min={5}
+                max={500}
+                step={5}
+                aria-label="Size in feet"
+                value={size}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (Number.isFinite(n) && n > 0) setSize(Math.min(500, n));
+                }}
+              />
+            </div>
           </div>
           {shape === 'line' && (
             <div className="flex flex-col gap-1.5">
@@ -139,12 +153,18 @@ export function TemplateBar({ model, controller }: { model: BattleMapModel; cont
   const heroRect = model.heroToken?.space ?? null;
   const readout = area?.problem ?? areaReadout(templateLine(t, heroName, area?.catches ?? [], model.nameOf));
   const nudge = (dx: number, dy: number) => dispatch({ type: 'template', template: nudgeTemplate(t, dx, dy, extent) });
+  const hint = isCentred(t) ? (touch ? 'Tap a square to move it.' : 'Click a square to move it.') : isAimed(t) ? (touch ? 'Tap a square to aim.' : 'Click a square to aim.') : 'It surrounds you.';
+  // Two rows, so the map above keeps its height: what it catches (with Change and Clear), then how to place it and
+  // Add to message. The hint gives way first when the bar is narrow.
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-start gap-2">
         <p className="min-w-0 flex-1 text-sm font-medium" data-testid="area-readout">
           {readout}
         </p>
+        <Button size={btn} variant="ghost" className="-my-1" onClick={() => dispatch({ type: 'picker', open: true })}>
+          Change
+        </Button>
         <IconButton label="Clear the area" size={touch ? 'md' : 'sm'} className="-my-1 -mr-1" onClick={() => dispatch({ type: 'template', template: null })}>
           <X className="size-4" aria-hidden />
         </IconButton>
@@ -196,21 +216,17 @@ export function TemplateBar({ model, controller }: { model: BattleMapModel; cont
             </IconButton>
           </div>
         )}
-        <span className="hidden text-xs text-faint sm:inline">{isCentred(t) ? (touch ? 'Tap a square to move it.' : 'Click a square to move it.') : isAimed(t) ? (touch ? 'Tap a square to aim.' : 'Click a square to aim.') : 'It surrounds you.'}</span>
-        <div className="ml-auto flex items-center gap-1.5">
-          <Button size={btn} variant="ghost" onClick={() => dispatch({ type: 'picker', open: true })}>
-            Change
-          </Button>
-          <Button
-            size={btn}
-            variant="arcane"
-            disabled={!area || area.problem !== null}
-            icon={<MessageSquareText className="size-4" aria-hidden />}
-            onClick={controller.addAreaToMessage}
-          >
-            Add to message
-          </Button>
-        </div>
+        <span className="hidden min-w-0 flex-1 truncate text-xs text-faint sm:inline">{hint}</span>
+        <Button
+          size={btn}
+          variant="arcane"
+          className="ml-auto"
+          disabled={!area || area.problem !== null}
+          icon={<MessageSquareText className="size-4" aria-hidden />}
+          onClick={controller.addAreaToMessage}
+        >
+          Add to message
+        </Button>
       </div>
     </div>
   );

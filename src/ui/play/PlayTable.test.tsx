@@ -4,13 +4,15 @@ import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dm } from '@/dm';
-import { useGame } from '@/state/gameStore';
+import { useGame, type GameStoreState } from '@/state/gameStore';
 import { useSettings } from '@/state/settingsStore';
-import type { CampaignSettings } from '@/types';
+import { sampleMappedCombat } from '@/test/fixtures';
+import type { CampaignSettings, CombatState } from '@/types';
 import { PlayTable } from './PlayTable';
 import { resetDmMock } from './testing/dmMock';
 import { seedGame } from './testing/seed';
-import { DESKTOP, setMatchMedia } from './testing/setup';
+import { DESKTOP, setMatchMedia, stubBoundingRect } from './testing/setup';
+import { usePlayView } from './playView';
 import { resetMediaQueryCache } from './useMediaQuery';
 
 vi.mock('@/dm', () => import('./testing/dmMock'));
@@ -255,5 +257,118 @@ describe('PlayTable — crossing the desktop breakpoint', () => {
     expect(screen.getByRole('textbox', { name: 'Out-of-character message to the DM' })).toHaveValue(
       'Can I climb the lighthouse in the fog?',
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The battle map's placements (spec §7.1, D58, D59)
+// ---------------------------------------------------------------------------
+
+function renderMapped(combat: CombatState = sampleMappedCombat({ heroTurn: true }), overrides: Partial<GameStoreState> = {}) {
+  const spies = seedGame({ combat, ...overrides });
+  render(
+    <MemoryRouter>
+      <PlayTable />
+    </MemoryRouter>,
+  );
+  return { spies, user: userEvent.setup() };
+}
+
+const dockSection = () => screen.queryByRole('region', { name: 'Battle map' });
+
+describe('PlayTable — the battle map on desktop (D59)', () => {
+  beforeEach(() => {
+    setMatchMedia(DESKTOP);
+    stubBoundingRect(608, 336);
+  });
+
+  it('docks the map above the story only while a fight has a map; the composer stays', () => {
+    renderTable();
+    expect(dockSection()).not.toBeInTheDocument();
+    act(() => useGame.setState({ combat: sampleMappedCombat({ heroTurn: true }) }));
+    const dock = dockSection() as HTMLElement;
+    expect(within(dock).getByRole('application', { name: 'Battle map: Dockside warehouse, 16 by 12 squares' })).toBeInTheDocument();
+    expect(dock).toHaveClass('h-[clamp(16rem,42vh,30rem)]');
+    const main = screen.getByRole('main');
+    expect(main.firstElementChild).toBe(dock);
+    expect(within(main).getByRole('textbox', { name: 'What do you do?' })).toBeInTheDocument();
+  });
+
+  it('collapses to the 44px bar and opens again', async () => {
+    const { user } = renderMapped();
+    await user.click(screen.getByRole('button', { name: 'Collapse the map' }));
+    expect(dockSection()).not.toBeInTheDocument();
+    const main = screen.getByRole('main');
+    expect(within(main).getByText('Ambush in the warehouse')).toBeInTheDocument();
+    expect(within(main).getByText('· Your turn · 30 ft')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Show map' }));
+    expect(dockSection()).toBeInTheDocument();
+  });
+
+  it('keeps the dock size across the 1024px remount', async () => {
+    const setDesktop = liveBreakpoint(true);
+    const { user } = renderMapped();
+    await user.click(screen.getByRole('button', { name: 'Larger map' }));
+    expect(dockSection()).toHaveClass('h-[clamp(20rem,62vh,44rem)]');
+    setDesktop(false);
+    expect(dockSection()).not.toBeInTheDocument();
+    setDesktop(true);
+    expect(dockSection()).toHaveClass('h-[clamp(20rem,62vh,44rem)]');
+  });
+
+  it('leaks nothing about the hidden Cutthroat during its turn, anywhere on the table, until "Show DM secrets"', async () => {
+    const { user } = renderMapped({ ...sampleMappedCombat(), turnIndex: 2 });
+    const said = () => [document.body.textContent ?? '', ...[...document.body.querySelectorAll('*')].flatMap((el) => [...el.attributes].map((a) => a.value))].join('\n');
+    expect(said()).not.toMatch(/Cutthroat/);
+    expect(screen.getAllByText("Bandit 1's turn").length).toBeGreaterThan(0);
+    await user.click(screen.getByRole('switch', { name: 'Show DM secrets (spoilers)' }));
+    expect(said()).toMatch(/Cutthroat/);
+    expect(screen.getByRole('application').querySelector('[data-token-id="c-5"]')).not.toBeNull();
+  });
+});
+
+describe('PlayTable — the battle map on phones (D58)', () => {
+  beforeEach(() => {
+    setMatchMedia(() => false);
+    stubBoundingRect(366, 366);
+  });
+
+  it('shows the BattleChip above the composer on Story; it opens the Combat tab with the map, the bar and the tracker', async () => {
+    const { user } = renderMapped();
+    const tabs = screen.getByRole('tablist', { name: 'Table views' });
+    // The tab labels don't change; the Combat dot says it's your turn.
+    expect(within(tabs).getAllByRole('tab').map((t) => t.textContent)).toEqual(['Story', 'Sheet', 'Combat(your turn)', 'Journal', 'Rules']);
+    await user.click(screen.getByRole('button', { name: 'Battle map · your turn · 30 ft' }));
+    expect(usePlayView.getState().mobileTab).toBe('combat');
+    const panel = screen.getByRole('tabpanel', { name: /Combat/ });
+    expect(within(panel).getByRole('application', { name: /Battle map: Dockside warehouse/ })).toBeInTheDocument();
+    expect(within(panel).getByRole('heading', { name: 'Ambush in the warehouse' })).toBeInTheDocument();
+  });
+
+  it('keeps the old Combat tab without a map', async () => {
+    const { user } = renderTable();
+    expect(screen.queryByRole('button', { name: /^Battle map/ })).not.toBeInTheDocument();
+    await user.click(within(screen.getByRole('tablist', { name: 'Table views' })).getByRole('tab', { name: /Combat/ }));
+    expect(screen.getByRole('heading', { name: 'Ambush on the docks' })).toBeInTheDocument();
+    expect(screen.queryByRole('application')).not.toBeInTheDocument();
+  });
+
+  it('keeps the Combat dot on "your turn" while a hidden creature acts right after the hero (D42)', () => {
+    const base = sampleMappedCombat({ heroTurn: true });
+    const [mira, bandit1, cutthroat, ...rest] = base.combatants;
+    renderMapped({ ...base, combatants: [mira, { ...cutthroat, initiative: 16 }, bandit1, ...rest], turnIndex: 1 });
+    const tabs = screen.getByRole('tablist', { name: 'Table views' });
+    expect(within(tabs).getByRole('tab', { name: /Combat/ })).toHaveTextContent('Combat(your turn)');
+    expect(screen.getByRole('button', { name: 'Battle map · your turn · 30 ft' })).toBeInTheDocument();
+  });
+
+  it('drops a plan made on the Combat tab when the DM starts working, even with the map off screen (spec §7.3)', async () => {
+    const { user } = renderMapped();
+    await user.click(screen.getByRole('button', { name: 'Battle map · your turn · 30 ft' }));
+    act(() => usePlayView.getState().setPlan({ to: { x: 3, y: 7 }, prefer: 'safest', dash: false, disengage: false, standUp: false }));
+    await user.click(within(screen.getByRole('tablist', { name: 'Table views' })).getByRole('tab', { name: /Story/ }));
+    expect(screen.queryByRole('application')).not.toBeInTheDocument();
+    act(() => useGame.setState({ dm: { ...useGame.getState().dm, phase: 'thinking' } }));
+    expect(usePlayView.getState().plan).toBeNull();
   });
 });
