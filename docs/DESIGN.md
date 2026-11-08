@@ -104,13 +104,17 @@ tool_result so Claude can correct itself.
 
 | Tool | Purpose |
 |---|---|
-| `roll_dice` | DM rolls (NPC attacks, damage, random tables, secret checks). `secret` hides it unless the campaign shows DM rolls. |
+| `roll_dice` | DM rolls (NPC attacks, damage, random tables, secret checks). `secret` hides it unless the campaign shows DM rolls. On a battle map, `attacker` and `target` add distance, reach, line of sight and cover, and warn when a melee attacker is out of reach. |
 | `request_player_roll` | Ask the player to roll a check/save/attack/damage/initiative/death save. Uses the sheet's modifiers; resolves per roll mode (auto / tap / physical). Returns total, natural, success vs DC. |
 | `update_character` | Batched sheet changes: HP (damage/healing/temp), conditions, exhaustion, slots, feature uses, inventory, currency, XP, inspiration, features, spells, concentration, AC/speed. Returns a summary and warnings. |
 | `take_rest` | Short rest (player chooses hit dice in a dialog) or long rest. |
 | `level_up` | Apply a level (HP, hit dice, slots, proficiency, new features) and return reminders for choices. |
 | `transform_character` | Begin, advance or end a **transformation** (vampirism, lycanthropy, a fey mark...): features, defenses, senses, speeds, size and ability changes applied atomically and recorded with what they granted, so ending one undoes exactly that. Enforces the campaign's transformations rule (see below). |
-| `start_combat` / `update_combat` / `end_combat` | Initiative tracker: add combatants (auto-numbered), roll NPC initiative, request the player's, advance turns, damage/heal/conditions on NPCs, end with a summary. |
+| `start_combat` / `update_combat` / `end_combat` | Initiative tracker: add combatants (auto-numbered), roll NPC initiative, request the player's, advance turns, damage/heal/conditions on NPCs, end with a summary. `start_combat` can lay out a battle map (size, terrain, places, positions; stats default from SRD stat blocks); `update_combat` can `reveal` / `hide` creatures, and its `next_turn` result says where everyone stands. |
+| `update_map` | Battle map: create, replace or remove it; add or clear terrain; open, close or lock doors; name places; set creatures' size, speeds and reach. |
+| `move_tokens` | Every position change on the map: moves on the creature's own turn (turn guard), off-turn moves, forced movement, teleports and placement. The engine prices the path (SRD grid rules), stops at Opportunity Attacks (asking the player in-tool when the hero can react), refuses illegal moves with the nearest reachable square, and records the turn's movement. |
+| `resolve_area` | Areas of effect (sphere, cylinder, cone, line, cube, emanation, listed squares): who is caught, with cover; lasting areas become terrain (difficult, obscured, hazard). |
+| `check_map` | Read-only: measure distance, line of sight and cover, plan a path, preview an area, or draw the map. |
 | `lookup_rules` | Search SRD 5.2.1 + enabled imports + homebrew. |
 | `get_entry` | Full text of one spell / monster / item / feature by name. |
 | `get_character_sheet` | Full current sheet. |
@@ -155,6 +159,41 @@ Rulings: when the DM makes a call the rules don't settle, it records it with `up
 - **Settings that change mid-session.** The frozen system prompt renders the current transformations
   rule and illustrations mode. When either changes, the next turn's system note carries a one-line
   "Setting update — …" with the new guidance (src/dm/modes.ts); nothing earlier is edited.
+
+### Battle map
+
+Fights where positions matter get a square grid (5-ft squares, SRD 5.2.1 "Playing on a Grid"). The campaign's
+battle-maps table rule picks *Off* (theater of the mind), *When it helps* (the default) or *Every fight*; it reaches
+the DM mid-session like the transformations rule.
+
+- **State.** The map lives on the combat (`CombatState.map`: size, terrain, places, lasting effects, this turn's
+  movement and any pending Opportunity Attack stop). Each `Combatant` carries its position, elevation, size, speeds,
+  reach, `hidden` and whether its Reaction is used. Everything is optional, so old saves load as "no map"; one
+  normalizer (`src/engine/mapNormalize.ts`) cleans maps on load and import.
+- **Engine** (`src/engine/grid|mapCells|sight|areas|movement|battleMap.ts`, pure and tested with SRD citations):
+  grid distance (diagonals count 5 ft), Difficult Terrain, the corner rule, moving through and ending in other
+  creatures' spaces, sizes, Prone, Speed 0, Frightened, Dash, switching speeds, swimming and flying, Opportunity
+  Attacks (reach with no Total Cover between, line of sight, Disengage), areas, line of sight and suggested cover.
+  Where the SRD is silent the app documents its convention: spheres and cylinders are round (square centres inside
+  the radius), cones start at the caster's centre with grid-counted length, lines step square by square, cover comes
+  from four corner lines. The engine returns data; `src/dm/mapText.ts` writes the DM's text and
+  `src/ui/play/map/text.ts` the player's.
+- **The DM.** A move is refused for anyone but the creature whose turn it is (catches a forgotten `next_turn`). A
+  move that provokes stops on the last square in reach; for the hero as the reactor the tool asks the player
+  ("Attack" / "Let it go") through the existing confirm interaction. Each player turn's `<game_state>` carries a
+  compact map block (about 100–350 tokens: positions, distances and cover from the hero, who reaches whom, effects,
+  the current creature's movement, anything new since the DM's last reply, a turn check). Terrain is never repeated
+  per turn. A DM turn may take 40 requests while a mapped fight is active (24 otherwise).
+- **The player.** On the hero's turn the player taps (or clicks, or uses the keyboard) to plan a move: the path, its
+  cost, movement left, and warnings for Opportunity Attacks, hazards, Dash and Frightened, with Disengage offered.
+  Moves commit at once and can be undone until the player sends; the DM learns about them from the next
+  `<game_state>`. A move is "seen" only once a DM reply follows the message that carried it, so a failed request or
+  a set-aside turn reports it again. Measure and area templates help plan; a template adds one `[Area: …]` line to
+  the message. Desktop docks the map above the story (three sizes); phones show it on the Combat tab with a chip on
+  the Story tab.
+- **Hidden creatures.** Every player-facing computation runs on one redacted player view (`playerView`): hidden
+  creatures, their turns, moves, reactions and effect labels never reach the player's screen, accessible text, log or
+  tracker unless "Show DM secrets" is on. A player move that runs into something unseen stops and can't be undone.
 
 ### Grounding each turn
 

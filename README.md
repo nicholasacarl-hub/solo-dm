@@ -14,6 +14,7 @@ Solo DM runs entirely in your browser. Claude narrates, plays every NPC, and mak
 - **A full character sheet** that Claude updates through tools (HP, conditions, exhaustion, spell slots, feature uses, inventory, coins, XP), and that you can edit too. The DM is told about your edits.
 - **Your dice, your way**: auto-roll, tap to roll, or roll physical dice and type in the result. The DM rolls monsters behind the screen, and you can reveal those rolls whenever you like.
 - **Combat tracker** with initiative, NPC hit points (shown as "bloodied" and so on when hidden) and conditions.
+- **Battle maps** for fights where positions matter: a square grid using the 2024 grid rules. On your turn, tap a square to see the path, what it costs and what it risks (opportunity attacks, hazards, needing to Dash), then move. You can undo until you send. Measure distances, place spell templates to plan a Fireball, and play it all by keyboard or screen reader. The app does all the measuring, so the DM never guesses a distance, and creatures you haven't spotted stay off your map. Prefer theater of the mind? Switch maps off in the campaign's table rules.
 - **Long-campaign memory**: a journal of NPCs, places, factions and house rules, a quest log, progress clocks for threats that advance offscreen, and session recaps. Each session starts with "previously on…".
 - **Solo-play tools**: a yes/no oracle, a tension dial that can twist scenes, an X-card, and out-of-character questions (`OOC: …`).
 - **Rules lookups**: the DM searches the bundled SRD 5.2.1 and anything you've imported.
@@ -43,7 +44,7 @@ You type → Claude (streaming, with tools) → tools run in the app → state u
 ```
 
 - **Sessions**: a campaign is played in sessions. Within a session, the conversation with Claude is *append-only*: the system prompt is frozen, and new state arrives as a short `<game_state>` block with each of your messages. Ending a session asks the DM for a recap and private notes. Those become the "chronicle" that starts the next session.
-- **Tools**: the DM acts through 21 tools. It can roll dice, ask you to roll, update your sheet, transform your hero, run combat, look up rules, write homebrew, keep the journal and quests, set the scene, ask for an illustration, and consult the oracle. See [docs/DESIGN.md](docs/DESIGN.md).
+- **Tools**: the DM acts through 25 tools. It can roll dice, ask you to roll, update your sheet, transform your hero, run combat on a battle map, look up rules, write homebrew, keep the journal and quests, set the scene, ask for an illustration, and consult the oracle. See [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Run it locally
 

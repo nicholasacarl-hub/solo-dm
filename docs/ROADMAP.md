@@ -7,8 +7,6 @@ vibe-coding session.
 
 - **Party play**: a DM-run companion with its own sheet in the combat tracker, or a second player
   character the player controls.
-- **Battle map**: a simple grid or zone map for combat positions (zones first, grid later), driven by
-  a `set_positions` tool so the DM keeps it consistent.
 - **Voice**: optional text-to-speech for narration and voice input for the composer.
 - **Downtime and Bastions** (2024 DMG concepts, from the player's imported books): between-session
   activities the DM resolves with tools.
@@ -40,3 +38,16 @@ vibe-coding session.
 - **Offline/PWA**: a service worker so the app (and demo mode) works offline; installable on phones.
 - **More sync targets**: an export to Google Drive or a GitHub Gist alongside the private-repo sync.
 - **End-to-end tests in CI**: run `e2e/` (demo flow + fake-API flow) on pull requests.
+
+## Battle map follow-ups
+
+The first battle map deliberately leaves these out (each has a documented stand-in today):
+
+- **A map band on the phone's Story tab**, so you can read, move and type without switching tabs.
+- **Drag-to-move and waypoints** for the player (the engine already supports `via`).
+- **Squeezing** through narrow openings, **raised floors, stairs and climbing** terrain, **doors that open during
+  movement**, and **hidden terrain** (secret doors, concealed pits).
+- **Movement traits** (Flyby, Swarm, Incorporeal Movement and the like), **grappled dragging**, **mounted combat**.
+- **Light and vision**: darkvision, dim light and fog of war on the map.
+- **Background art** for maps and **hex grids**.
+- **Companions the player moves** (today the DM moves allies).
