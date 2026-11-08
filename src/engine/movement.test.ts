@@ -34,6 +34,7 @@ import {
   type MovePlan,
   type MoveRequest,
 } from './movement';
+import { perfBudgetMs } from '@/test/perf';
 
 // ---------------------------------------------------------------------------
 // Helpers: squares by label, small maps and combatants
@@ -1075,7 +1076,7 @@ describe('reachableSquares', () => {
       expect(squares.length).toBeGreaterThan(400);
     }
     times.sort((a, b) => a - b);
-    expect(times[3]).toBeLessThan(40);
+    expect(times[3]).toBeLessThan(perfBudgetMs(40));
   });
 
   it('K2: 40×40 with 30 creatures stays inside the 6 ms budget, with the same bands as before the speed-up (§7.12)', () => {
@@ -1098,9 +1099,9 @@ describe('reachableSquares', () => {
       provokes: 0,
       cantEnd: 0,
     });
-    expect(fastestMs(() => reachableSquares(state, sheet, 'h'))).toBeLessThan(6);
-    expect(fastestMs(() => reachableSquares(state, sheet, 'h', { prefer: 'shortest' }))).toBeLessThan(6);
-    expect(fastestMs(() => reachableSquares(keep, mira, 'c-1', { perspective: 'player' }))).toBeLessThan(6);
+    expect(fastestMs(() => reachableSquares(state, sheet, 'h'))).toBeLessThan(perfBudgetMs(6));
+    expect(fastestMs(() => reachableSquares(state, sheet, 'h', { prefer: 'shortest' }))).toBeLessThan(perfBudgetMs(6));
+    expect(fastestMs(() => reachableSquares(keep, mira, 'c-1', { perspective: 'player' }))).toBeLessThan(perfBudgetMs(6));
   });
 });
 

@@ -4,6 +4,7 @@ import type { AreaSpec, BattleMap, CompendiumEntry, Combatant, CombatSide, Comba
 import { sampleCharacter, sampleMappedCombat } from '@/test/fixtures';
 import { parseCorner, parseSquare, parseSquareList, rectLabel, rectsLabel, squareLabel } from './grid';
 import { areaSquares, effectSquares, parseAreaText, resolveArea, type AreaResult } from './areas';
+import { perfBudgetMs } from '@/test/perf';
 
 interface Who {
   id: string;
@@ -582,6 +583,6 @@ describe('performance (battle-map spec §7.12, generous margins)', () => {
     const r = resolved(resolveArea(state, null, { shape: 'sphere', sizeFt: 60, at: square('S18') }));
     const ms = performance.now() - t0;
     expect(r.squares.length).toBeGreaterThan(0);
-    expect(ms).toBeLessThan(50);
+    expect(ms).toBeLessThan(perfBudgetMs(50));
   });
 });

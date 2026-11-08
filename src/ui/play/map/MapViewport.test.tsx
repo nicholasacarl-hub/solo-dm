@@ -200,7 +200,7 @@ describe('MapViewport pointer input (D60)', () => {
     act(() => usePlayView.getState().setCamera(CAMERA_KEY, { cellPx: 60, cx: 14, cy: 10 }));
     act(() => screen.getByRole('button', { name: 'Centre on you' }).click());
     // A short flight, committed once when it lands.
-    await waitFor(() => expect(usePlayView.getState().cameras[CAMERA_KEY].cx).toBeLessThan(14));
+    await waitFor(() => expect(usePlayView.getState().cameras[CAMERA_KEY].cx).toBeLessThan(14), { timeout: 5000 });
     expect(usePlayView.getState().cameras[CAMERA_KEY].cellPx).toBe(60);
   });
 

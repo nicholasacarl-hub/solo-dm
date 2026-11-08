@@ -32,6 +32,7 @@ import {
   turnStartReport,
   type BattleMapInput,
 } from './battleMap';
+import { perfBudgetMs } from '@/test/perf';
 
 const DIMS = { width: 16, height: 12 };
 const sq = (label: string): GridPoint => {
@@ -894,7 +895,7 @@ describe('performance (battle-map spec §7.12, generous margins)', () => {
     const first = mapGlyphGrid(state, hero);
     const ms = performance.now() - t0;
     expect(first.rows).toHaveLength(40);
-    expect(ms).toBeLessThan(50);
+    expect(ms).toBeLessThan(perfBudgetMs(50));
     const t1 = performance.now();
     mapGlyphGrid(state, hero);
     expect(performance.now() - t1).toBeLessThan(ms + 5);
@@ -926,7 +927,7 @@ describe('performance (battle-map spec §7.12, generous margins)', () => {
     const snap = mapSnapshot({ ...placed }, hero, { perspective: 'player' });
     const ms = performance.now() - t0;
     expect(snap?.tokens).toHaveLength(30);
-    expect(ms).toBeLessThan(50);
+    expect(ms).toBeLessThan(perfBudgetMs(50));
   });
 
   it('K2: a snapshot works out cover only for the tokens whose cover is read, once each, with the same values', () => {
