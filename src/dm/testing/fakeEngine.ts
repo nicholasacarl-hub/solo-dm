@@ -38,6 +38,14 @@ export {
   transformationFeatures,
   transformationGrants,
 } from '@/engine/transform';
+// The battle-map modules run the real engine too (pure; they use the real ./combat and ./conditions inside).
+export * from '@/engine/grid';
+export * from '@/engine/mapCells';
+export * from '@/engine/movement';
+export * from '@/engine/sight';
+export * from '@/engine/areas';
+export * from '@/engine/battleMap';
+export * from '@/engine/mapNormalize';
 
 // ---------------------------------------------------------------------------
 // Dice (queued values; default = the die's midpoint rounded up)

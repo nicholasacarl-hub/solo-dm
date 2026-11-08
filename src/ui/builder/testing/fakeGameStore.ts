@@ -59,6 +59,9 @@ function baseState(): GameStore {
     'updateLog',
     'removeLog',
     'setCombat',
+    'updateCombat',
+    'commitHeroMove',
+    'undoHeroMove',
     'upsertJournal',
     'deleteJournal',
     'upsertQuest',
@@ -92,6 +95,7 @@ function baseState(): GameStore {
     dm: initialDmStatus,
     interaction: null,
     pendingDmNotices: [],
+    heroMoveUndo: [],
     loading: false,
     loadError: null,
   } as GameStore;

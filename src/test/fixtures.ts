@@ -2,6 +2,7 @@
  * Sample data for tests and dev previews. Values follow the 2024 rules.
  */
 import type {
+  BattleMap,
   Campaign,
   CampaignSettings,
   Character,
@@ -254,6 +255,152 @@ export const sampleCombat = (): CombatState => ({
     },
   ],
 });
+
+// ---------------------------------------------------------------------------
+// Battle map (spec §9.6; worked examples in §5.4). Literal data: no engine calls.
+// ---------------------------------------------------------------------------
+
+// Squares are { x: column, y: row }, 0-based: A1 = { x: 0, y: 0 }, B6 = { x: 1, y: 5 }; rects are inclusive.
+
+/**
+ * "Dockside warehouse", 16×12 (the §4.5 setup): an office walled off in the north-east with a closed door, a
+ * pillar, crates (half cover), spilled grain (difficult), a flooded dock (deep water) and a brazier (hazard).
+ * Ids t1–t7, p8–p9 from one counter, so nextId is 10.
+ */
+export const sampleBattleMap = (): BattleMap => ({
+  id: 'map-1',
+  name: 'Dockside warehouse',
+  width: 16,
+  height: 12,
+  terrain: [
+    { id: 't1', kind: 'wall', rects: [{ x0: 11, y0: 4, x1: 15, y1: 4 }], label: 'office wall' }, // L5:P5
+    { id: 't2', kind: 'door', rects: [{ x0: 13, y0: 4, x1: 13, y1: 4 }], label: 'office door', door: 'closed' }, // N5
+    { id: 't3', kind: 'wall', rects: [{ x0: 8, y0: 3, x1: 8, y1: 3 }], label: 'pillar' }, // I4
+    { id: 't4', kind: 'half-cover', rects: [{ x0: 4, y0: 4, x1: 5, y1: 5 }], label: 'crates' }, // E5:F6
+    { id: 't5', kind: 'difficult', rects: [{ x0: 7, y0: 7, x1: 9, y1: 8 }], label: 'spilled grain' }, // H8:J9
+    { id: 't6', kind: 'deep-water', rects: [{ x0: 13, y0: 9, x1: 15, y1: 11 }], label: 'flooded dock' }, // N10:P12
+    { id: 't7', kind: 'hazard', rects: [{ x0: 6, y0: 10, x1: 6, y1: 10 }], label: 'brazier' }, // G11
+  ],
+  places: [
+    // A5:B7 (not A5:A7) so that B5 and B6 are "(the loading door)" as in the §5.4 examples.
+    { id: 'p8', name: 'the loading door', rects: [{ x0: 0, y0: 4, x1: 1, y1: 6 }] }, // A5:B7
+    { id: 'p9', name: 'the office', rects: [{ x0: 11, y0: 0, x1: 15, y1: 3 }] }, // L1:P4
+  ],
+  effects: [],
+  nextId: 10,
+  rev: 0,
+});
+
+/**
+ * sampleCombat() on the warehouse map, round 2: Mira Voss B6, Bandit 1 F4, the Cutthroat M8 (hidden from the
+ * player), Bandit 2 F3 (Prone), Old Tam B5, the Dock Ogre H10:I11 (Large, walk 40). Initiative order: Mira 17,
+ * Bandit 1 14, Cutthroat 12, Bandit 2 9, Old Tam 5, Dock Ogre 3. Bandit 1's turn, or the hero's with
+ * `heroTurn` (§5.4 Example 1). No turn record yet: everyone has a fresh turn.
+ */
+export const sampleMappedCombat = (opts: { heroTurn?: boolean } = {}): CombatState => {
+  const [mira, bandit1, bandit2, oldTam] = sampleCombat().combatants;
+  return {
+    ...sampleCombat(),
+    encounterName: 'Ambush in the warehouse',
+    turnIndex: opts.heroTurn ? 0 : 1,
+    combatants: [
+      { ...mira, position: { x: 1, y: 5 } }, // B6
+      { ...bandit1, position: { x: 5, y: 3 } }, // F4
+      {
+        id: 'c-5',
+        name: 'Cutthroat',
+        side: 'enemy',
+        isPlayer: false,
+        initiative: 12,
+        initiativeBonus: 3,
+        ac: 14,
+        hp: { max: 16, current: 16, temp: 0 },
+        conditions: [],
+        defeated: false,
+        hideHp: true,
+        position: { x: 12, y: 7 }, // M8
+        hidden: true,
+      },
+      { ...bandit2, position: { x: 5, y: 2 } }, // F3
+      { ...oldTam, position: { x: 1, y: 4 } }, // B5
+      {
+        id: 'c-6',
+        name: 'Dock Ogre',
+        side: 'enemy',
+        isPlayer: false,
+        initiative: 3,
+        initiativeBonus: -1,
+        ac: 11,
+        hp: { max: 59, current: 59, temp: 0 },
+        conditions: [],
+        statBlockName: 'Ogre',
+        defeated: false,
+        hideHp: true,
+        position: { x: 7, y: 9 }, // H10
+        size: 'Large',
+        speeds: { walk: 40 },
+      },
+    ],
+    map: sampleBattleMap(),
+  };
+};
+
+/**
+ * §5.4 Example 2, round 3, the hero's turn: Bandit 1 closed to C5 and spent its Reaction on Old Tam, the Dock Ogre
+ * closed to C7:D8, and the player's move B6 → A7 stopped at once on B6 (leaving the Ogre's reach provokes its
+ * Opportunity Attack). The stop and its 0-ft move are unseen by the DM (no toldSeq).
+ */
+export const sampleStopCombat = (): CombatState => {
+  const base = sampleMappedCombat({ heroTurn: true });
+  const [mira, bandit1, cutthroat, bandit2, oldTam, ogre] = base.combatants;
+  return {
+    ...base,
+    round: 3,
+    combatants: [
+      mira,
+      { ...bandit1, position: { x: 2, y: 4 }, reactionUsed: true }, // C5
+      cutthroat,
+      bandit2,
+      oldTam,
+      { ...ogre, position: { x: 2, y: 6 } }, // C7 (C7:D8)
+    ],
+    map: {
+      ...sampleBattleMap(),
+      turn: {
+        combatantId: 'c-1',
+        round: 3,
+        movedFt: 0,
+        dashFt: 0,
+        dashes: 0,
+        disengaged: false,
+        stoodUp: false,
+        moves: [
+          {
+            by: 'player',
+            kind: 'move',
+            from: { x: 1, y: 5 }, // B6
+            to: { x: 1, y: 5 }, // B6
+            path: [],
+            costFt: 0,
+            provoked: [{ reactorId: 'c-6', at: { x: 1, y: 5 }, hidden: false }], // B6
+            entered: [],
+          },
+        ],
+      },
+      stop: {
+        moverId: 'c-1',
+        by: 'player',
+        round: 3,
+        at: { x: 1, y: 5 }, // B6
+        destination: { x: 0, y: 6 }, // A7
+        route: [{ x: 0, y: 6 }], // A7
+        reactorIds: ['c-6'],
+        declinedIds: [],
+        opts: { prefer: 'safest' },
+      },
+    },
+  };
+};
 
 export const sampleJournal = (): JournalEntry[] => [
   {

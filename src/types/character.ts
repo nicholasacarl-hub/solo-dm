@@ -361,6 +361,9 @@ export interface Personality {
 
 export type CreatureSize = 'Tiny' | 'Small' | 'Medium' | 'Large' | 'Huge' | 'Gargantuan';
 
+/** Smallest to largest (SRD 5.2.1 Creature Size); index differences give "two sizes larger or smaller". */
+export const CREATURE_SIZES: readonly CreatureSize[] = ['Tiny', 'Small', 'Medium', 'Large', 'Huge', 'Gargantuan'];
+
 export interface Character {
   id: string;
   campaignId: string;

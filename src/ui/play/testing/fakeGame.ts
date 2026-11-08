@@ -65,6 +65,7 @@ export function fixtureState(): Partial<GameStoreState> {
     dm: initialDmStatus,
     interaction: null,
     pendingDmNotices: [],
+    heroMoveUndo: [],
     loading: false,
     loadError: null,
   };
@@ -151,6 +152,16 @@ export function createFakeActions(): GameStoreActions {
     },
     async setCombat(state) {
       set({ combat: state });
+    },
+    // Battle map (Day-0 stubs; engineer D implements them, commitHeroMove on the real engine).
+    async updateCombat() {
+      throw new Error('fakeGame: updateCombat not implemented');
+    },
+    async commitHeroMove() {
+      throw new Error('fakeGame: commitHeroMove not implemented');
+    },
+    async undoHeroMove() {
+      throw new Error('fakeGame: undoHeroMove not implemented');
     },
     async upsertJournal(entries) {
       const journal = [...get().journal];

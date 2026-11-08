@@ -4,10 +4,12 @@
 import type {
   Ability,
   ActiveCondition,
+  CreatureSize,
   HitDiceEntry,
   HitPoints,
   Skill,
 } from './character';
+import type { BattleMap, BattleMapsMode, CreatureSpeeds, GridPoint } from './map';
 
 // ---------------------------------------------------------------------------
 // Dice
@@ -74,6 +76,22 @@ export interface Combatant {
   defeated: boolean;
   /** Hide exact HP from the player (show a health descriptor instead). */
   hideHp?: boolean;
+  /** Battle map: the top-left square of its space. Absent = not placed (or no map). */
+  position?: GridPoint;
+  /** Feet above the ground, 0–500, multiple of 5. Absent = 0. Walking keeps it. */
+  elevationFt?: number;
+  /** NPCs: map size (default Medium). The hero: an override of the sheet's size (Enlarge); usually absent. */
+  size?: CreatureSize;
+  /** NPCs: speeds (default walk 30). The hero: speeds granted for now (the Fly spell), combined with the sheet's (higher wins). */
+  speeds?: CreatureSpeeds;
+  /** NPCs: longest melee reach in feet (default 5). The hero: an override of the sheet-derived reach. */
+  reachFt?: number;
+  /** An ongoing change to every speed, in feet (Haste +30, Slow −15, Ray of Frost −10). Ignored while a Speed-0 condition applies. */
+  speedChangeFt?: number;
+  /** The hero hasn't noticed it: off the player's tracker, map, log and accessible text unless "Show DM secrets" is on. Works without a map. */
+  hidden?: boolean;
+  /** It has used its Reaction since its last turn began. Cleared in advanceFrom when its turn starts. */
+  reactionUsed?: boolean;
 }
 
 export interface CombatState {
@@ -85,6 +103,8 @@ export interface CombatState {
   combatants: Combatant[];
   encounterName?: string;
   startedAt: number;
+  /** The battle map of this fight, if it has one. Removed with the combat row at end_combat. */
+  map?: BattleMap;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +152,8 @@ export interface CampaignSettings {
   transformations?: TransformationsMode;
   /** Visual style for illustrations, e.g. "painterly fantasy, muted palette, dramatic light". */
   artStyle?: string;
+  /** Battle maps for fights where positions matter. Missing = 'auto'. */
+  battleMaps?: BattleMapsMode;
 }
 
 export interface Scene {
@@ -313,6 +335,8 @@ export interface LogEntryBase {
 export interface PlayerLogEntry extends LogEntryBase {
   kind: 'player';
   text: string;
+  /** The hero's map moves this turn, set when the message is sent: "Moved C8 → F6 · 15 ft · Disengaged". Player-safe. */
+  mapNote?: string;
 }
 
 export interface DmLogEntry extends LogEntryBase {
@@ -360,7 +384,10 @@ export type ToolActivityIcon =
   | 'rules'
   | 'homebrew'
   | 'oracle'
-  | 'info';
+  | 'info'
+  | 'map' // map setup and edits (check_map is never logged)
+  | 'move' // move_tokens
+  | 'area'; // resolve_area
 
 export interface ToolLogEntry extends LogEntryBase {
   kind: 'tool';

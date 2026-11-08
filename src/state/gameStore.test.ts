@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { InteractionResponse, LogEntry } from '@/types';
-import { sampleCharacter, sampleSession, sampleSettings, zeroUsage } from '@/test/fixtures';
+import type { CombatState, InteractionResponse, LogEntry } from '@/types';
+import { sampleCharacter, sampleMappedCombat, sampleSession, sampleSettings, zeroUsage } from '@/test/fixtures';
 import * as storage from '@/storage';
 import { db } from '@/storage/db';
 import { emitCampaignChange } from '@/storage/events';
 import { resetDatabase, seedCampaign } from '@/storage/testData';
-import { queueCampaignNotice, STREAM_CHECKPOINT_MS, useGame, whenPersisted } from './gameStore';
+import {
+  canUndoHeroMove,
+  queueCampaignNotice,
+  STREAM_CHECKPOINT_MS,
+  useGame,
+  whenPersisted,
+  type HeroMoveSnapshot,
+} from './gameStore';
 
 // Real storage (fake-indexeddb), with putLog wrapped so a test can make one write fail.
 vi.mock('@/storage', async (importOriginal) => {
@@ -686,5 +693,36 @@ describe('narration cut off mid-stream', () => {
     await whenPersisted('a-camp');
     expect(await db.log.get(entry.id)).toMatchObject({ text: 'The fog parts, and', streaming: true });
     expect((await storage.getCampaign('a-camp'))?.updatedAt).toBe(game().campaign?.updatedAt);
+  });
+});
+
+describe('battle map: hero move undo (Day-0 contract)', () => {
+  const combat = (): CombatState => sampleMappedCombat({ heroTurn: true });
+  const snapshot = (before: CombatState, after: CombatState, patch: Partial<HeroMoveSnapshot> = {}): HeroMoveSnapshot => ({
+    before,
+    after,
+    stoodUp: false,
+    revealedHidden: false,
+    ...patch,
+  });
+
+  it('starts with an empty undo stack, and loading a campaign keeps it empty', async () => {
+    expect(game().heroMoveUndo).toEqual([]);
+    await loadSeeded('a');
+    expect(game().heroMoveUndo).toEqual([]);
+  });
+
+  it('canUndoHeroMove: only while the newest move is still the combat, the DM is idle and nothing is asked', () => {
+    const before = combat();
+    const after = combat();
+    const idle = { ...game(), combat: after, heroMoveUndo: [snapshot(before, after)] };
+    expect(canUndoHeroMove({ ...idle, heroMoveUndo: [] })).toBe(false);
+    expect(canUndoHeroMove(idle)).toBe(true);
+    expect(canUndoHeroMove({ ...idle, dm: { ...idle.dm, phase: 'error' } })).toBe(true);
+    // Any later write (the <game_state> stamp at send, a DM tool) replaces the combat object.
+    expect(canUndoHeroMove({ ...idle, combat: combat() })).toBe(false);
+    expect(canUndoHeroMove({ ...idle, dm: { ...idle.dm, phase: 'thinking' } })).toBe(false);
+    expect(canUndoHeroMove({ ...idle, interaction: { kind: 'confirm', id: 'i-1', title: 'Opportunity Attack', body: '…' } })).toBe(false);
+    expect(canUndoHeroMove({ ...idle, heroMoveUndo: [snapshot(before, after, { revealedHidden: true })] })).toBe(false);
   });
 });

@@ -70,6 +70,7 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
       dm: initialDmStatus,
       interaction: null,
       pendingDmNotices: [],
+      heroMoveUndo: [],
       loading: false,
       loadError: null,
       ...initial,
@@ -161,6 +162,17 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
 
       async setCombat(state) {
         set({ combat: state });
+      },
+      // Battle map (Day-0 stubs; engineer D implements them: functional updateCombat with the same-object skip,
+      // commitHeroMove / undoHeroMove on the real applyHeroMove).
+      async updateCombat() {
+        throw new Error('fakeStore: updateCombat not implemented');
+      },
+      async commitHeroMove() {
+        throw new Error('fakeStore: commitHeroMove not implemented');
+      },
+      async undoHeroMove() {
+        throw new Error('fakeStore: undoHeroMove not implemented');
       },
 
       async upsertJournal(entries) {

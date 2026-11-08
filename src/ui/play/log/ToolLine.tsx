@@ -9,14 +9,17 @@ import {
   Dna,
   EyeOff,
   FlaskConical,
+  Footprints,
   HeartCrack,
   HeartPulse,
   ImageIcon,
   Info,
+  MapIcon,
   MapPin,
   Moon,
   NotebookPen,
   Orbit,
+  Radius,
   ScrollText,
   Sparkles,
   Star,
@@ -51,6 +54,9 @@ const ICONS: Record<ToolActivityIcon, { Icon: LucideIcon; tone: string }> = {
   info: { Icon: Info, tone: 'text-muted' },
   transform: { Icon: Dna, tone: 'text-arcane' },
   image: { Icon: ImageIcon, tone: 'text-info' },
+  map: { Icon: MapIcon, tone: 'text-info' },
+  move: { Icon: Footprints, tone: 'text-muted' },
+  area: { Icon: Radius, tone: 'text-arcane' },
 };
 
 /** A compact "something changed" line: icon, one-line summary, optional expandable detail. */

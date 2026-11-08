@@ -19,6 +19,9 @@
  * - Pending DM notices are saved on the campaign record (campaign.pendingDmNotices), so leaving the
  *   table or reloading doesn't lose them. Notices queued from elsewhere (the Library, another tab)
  *   are kept by every save and picked up into memory.
+ * - Battle map: the store may import the engine by path (@/engine/movement, @/engine/battleMap,
+ *   @/engine/mapNormalize, @/engine/conditions) and @/lib/answered — a deliberate dependency, so the
+ *   player's own move (commitHeroMove) keeps every gate in one place. It imports nothing from @/dm or @/ui.
  */
 import { create } from 'zustand';
 import type { BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages/messages';
@@ -39,6 +42,7 @@ import type {
   TranscriptMessage,
   UsageTotals,
 } from '@/types';
+import type { HeroMoveOutcome, HeroMoveRequest, MoveRefusal } from '@/engine/movement';
 import { nameKey, newId } from '@/lib/id';
 import * as storage from '@/storage';
 import type { CampaignRecords } from '@/storage';
@@ -67,6 +71,32 @@ export type JournalUpsert = Partial<Omit<JournalEntry, 'campaignId'>> & Pick<Jou
 export type QuestUpsert = Partial<Omit<Quest, 'campaignId'>> & Pick<Quest, 'title'>;
 export type ClockUpsert = Partial<Omit<Clock, 'campaignId'>> & Pick<Clock, 'name'>;
 
+/** One hero move of this turn, for Undo (D49). */
+export interface HeroMoveSnapshot {
+  /** The combat before and after the move (reference identity is the undo check). */
+  before: CombatState;
+  after: CombatState;
+  /** The move stood the hero up (undo re-adds Prone). */
+  stoodUp: boolean;
+  /** It ran into something hidden: never undoable. */
+  revealedHidden: boolean;
+}
+
+/** Why commitHeroMove refused, checked in this order (the UI words each one). */
+export type HeroMoveBlock =
+  | 'no-map'
+  | 'not-your-turn'
+  | 'dm-busy'
+  | 'interaction'
+  | 'no-session'
+  | 'unplaced'
+  | 'stop-pending'
+  | 'refused';
+
+export type HeroMoveResult =
+  | { ok: true; outcome: Extract<HeroMoveOutcome, { status: 'moved' | 'stopped' }> }
+  | { ok: false; block: HeroMoveBlock; refusal?: MoveRefusal };
+
 export interface GameStoreState {
   campaignId: string | null;
   campaign: Campaign | null;
@@ -90,6 +120,11 @@ export interface GameStoreState {
   interaction: InteractionRequest | null;
   /** Notes for the DM about player-side changes (manual sheet edits...), delivered on the next turn. */
   pendingDmNotices: string[];
+  /**
+   * Snapshots of this turn's hero moves, newest last (D49). In memory only: never persisted; reset by
+   * loadCampaign / unloadCampaign.
+   */
+  heroMoveUndo: HeroMoveSnapshot[];
   loading: boolean;
   loadError: string | null;
 }
@@ -133,6 +168,17 @@ export interface GameStoreActions {
   removeLog(ids: string[]): Promise<void>;
 
   setCombat(state: CombatState | null): Promise<void>;
+  /**
+   * Functional update against the latest in-memory combat (mirrors updateCharacter). Rejects when no
+   * campaign or no combat is loaded. When fn returns the same object, nothing is set or persisted. Otherwise bumps
+   * campaign.updatedAt and persists like setCombat ("the combat tracker"). fn never returns null: end a fight with
+   * setCombat(null).
+   */
+  updateCombat(fn: (c: CombatState) => CombatState): Promise<CombatState>;
+  /** The player's own move on the battle map: gated, resolved by the engine on the true map. Never throws for game reasons. */
+  commitHeroMove(req: HeroMoveRequest): Promise<HeroMoveResult>;
+  /** Undo the newest hero move of this turn if nothing changed since and the DM hasn't been sent it. */
+  undoHeroMove(): Promise<boolean>;
 
   /** Insert or update journal entries matched by kind + case-insensitive name. Sets first/lastSession. */
   upsertJournal(entries: JournalUpsert[]): Promise<JournalEntry[]>;
@@ -169,6 +215,22 @@ export interface GameStoreActions {
 export type GameStore = GameStoreState & GameStoreActions;
 
 export const initialDmStatus: DmStatus = { phase: 'idle', activity: null, error: null, retryable: false };
+
+/**
+ * Pure selector for the UI: would undoHeroMove succeed now? Only when the newest snapshot is still the combat
+ * (reference identity: any later write, such as the <game_state> stamp at send, ends it), it ran into nothing
+ * hidden, the DM is idle (or errored) and no interaction is open.
+ */
+export function canUndoHeroMove(s: GameStoreState): boolean {
+  const top = s.heroMoveUndo.at(-1);
+  return (
+    top !== undefined &&
+    !top.revealedHidden &&
+    s.combat === top.after &&
+    (s.dm.phase === 'idle' || s.dm.phase === 'error') &&
+    s.interaction === null
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Ordered write-behind persistence
@@ -507,6 +569,7 @@ function emptyCampaignSlice(): CampaignSlice {
     clocks: [],
     homebrew: [],
     pendingDmNotices: [],
+    heroMoveUndo: [],
     loading: false,
     loadError: null,
   };
@@ -529,6 +592,7 @@ function sliceFromRecords(r: CampaignRecords): CampaignSlice {
     clocks: r.clocks,
     homebrew: r.homebrew,
     pendingDmNotices: r.campaign.pendingDmNotices ?? [],
+    heroMoveUndo: [],
     loading: false,
     loadError: null,
   };
@@ -839,6 +903,19 @@ export const useGame = create<GameStore>()((set, get) => ({
       await storage.putCombat(campaign.id, state);
       await saveCampaign(touched);
     });
+  },
+
+  // Battle map (CONTRACT — implemented by engineer D).
+  async updateCombat() {
+    throw new Error('gameStore: updateCombat not implemented');
+  },
+
+  async commitHeroMove() {
+    throw new Error('gameStore: commitHeroMove not implemented');
+  },
+
+  async undoHeroMove() {
+    throw new Error('gameStore: undoHeroMove not implemented');
   },
 
   async upsertJournal(entries) {

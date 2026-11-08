@@ -18,6 +18,16 @@ import type {
   RollResult,
 } from '@/types';
 
+// The battle-map modules are the real engine (pure, deterministic): playerView, playerTurnIndex, mapSnapshot,
+// reachableSquares, planMove, resolveArea, labels and parsers. Vitest throws on a missing mock export.
+export * from '@/engine/grid';
+export * from '@/engine/mapCells';
+export * from '@/engine/movement';
+export * from '@/engine/sight';
+export * from '@/engine/areas';
+export * from '@/engine/battleMap';
+export * from '@/engine/mapNormalize';
+
 const d20Queue: number[] = [];
 
 export function queueD20(...naturals: number[]): void {
