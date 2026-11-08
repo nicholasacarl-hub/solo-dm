@@ -292,9 +292,10 @@ export function currentTurn(state: CombatState): MapTurn | null {
 export interface TurnBudget {
   combatantId: string;
   mode: MoveMode;
-  /** The speed for `mode` after modifiers. */
+  /** The speed for `mode` after modifiers; the Swim Speed for a creature in deep water whose Swim Speed is higher. */
   speedFt: number;
   movedFt: number;
+  /** Extra movement from this turn's Dashes for that speed (a swimmer's Dash may use its Swim Speed, srd:rule:dash). */
   dashFt: number;
   dashes: number;
   /** max(0, speedFt + dashFt − movedFt): the SRD speed-switching formula. */

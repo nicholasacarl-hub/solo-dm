@@ -1318,7 +1318,7 @@ describe('determinism: the same plans on a shuffled combatant list (spec §9.1)'
 // ---------------------------------------------------------------------------
 
 /** A lasting 15-ft Spirit Guardians (Difficult Terrain) around `fromId`. */
-function guardians(fromId: string, extra: Partial<MapEffect> = {}, spec: Partial<Extract<MapEffect['spec'], { shape: 'emanation' }>> = {}): MapEffect {
+function guardians(fromId: string, extra: Partial<MapEffect> = {}, spec: Partial<MapEffect['spec']> = {}): MapEffect {
   return {
     id: 'e20',
     label: 'Spirit Guardians',
@@ -1333,7 +1333,7 @@ function guardians(fromId: string, extra: Partial<MapEffect> = {}, spec: Partial
 }
 
 describe('R4: a creature’s own lasting emanation moves with it (SRD 5.2.1 srd:rule:emanation, srd:spell:spirit-guardians)', () => {
-  it('R4: the hero walks inside its own Spirit Guardians at the normal cost and enters nothing; its bands reach as usual', () => {
+  it('R4: the hero walks inside the hero’s own Spirit Guardians at the normal cost, entering nothing, and the bands reach as usual', () => {
     const state = fight(battleMap(16, 16, [], [guardians('h')]), [creature('h', 'player', 'F6'), creature('b', 'enemy', 'P16')]);
     const out = applyHeroMove(state, mira, heroMove('H6'), { stopResolved: true });
     if (out.status === 'refused') throw new Error(JSON.stringify(out.refusal));
@@ -1387,7 +1387,7 @@ describe('R5: repeating a stopped move that used via (D33)', () => {
 
 describe('R8: standing up in a pit (SRD 5.2.1 srd:condition:prone; spec §3.4.2 step 7)', () => {
   const map = battleMap(12, 12, [terrain('pit', 'F6', 'F6', 'pit')]);
-  it('R8: the hero who fell in stands up where it is', () => {
+  it('R8: a hero who fell into the pit stands up in the pit', () => {
     const prone = sampleCharacter({ conditions: [{ id: 'prone' }] });
     const out = applyHeroMove(fight(map, [creature('h', 'player', 'F6'), creature('b', 'enemy', 'A1')]), prone, { prefer: 'safest', dash: false, disengage: false, standUp: true }, { stopResolved: true });
     if (out.status === 'refused') throw new Error(JSON.stringify(out.refusal));
@@ -1524,7 +1524,7 @@ describe('P3: a hidden creature that blocks the hero’s first step (app convent
 });
 
 describe('the hidden creature’s turn (D42; amendment 8: nothing about it reaches the player)', () => {
-  it('its moves keep the shown turn’s record and stop, so the player’s view doesn’t change', () => {
+  it('D42: its moves keep the shown turn’s record and stop (pruneMap’s rule), so the player’s view doesn’t change', () => {
     // Bandit 1's move stops for Old Tam and the hero; then the hidden Cutthroat has the turn, and the player still sees Bandit 1's.
     const during = nextTurn(stateOf(move(fixture({ at: { 'c-2': 'C5' } }), 'c-2', 'F4')));
     expect(during.combatants[during.turnIndex].id).toBe('c-5');
