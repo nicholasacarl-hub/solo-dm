@@ -121,12 +121,18 @@ function stopIsValid(state: CombatState, stop: MapStop): boolean {
   return isCurrentTurn(state, stop.round, stop.moverId);
 }
 
-/** Drop what readers already ignore: turn-scoped effects of other turns, a stale stop and a stale turn record. */
+/**
+ * Drop what every reader already ignores: turn-scoped effects of other turns, a stale stop and a stale turn record.
+ * During a hidden creature's turn the player view still shows the last visible creature's turn (D42), so what belongs
+ * to that turn stays until a visible creature's turn begins; otherwise the player would see it vanish mid-"turn".
+ */
 function pruneMap(state: CombatState, map: BattleMap): BattleMap {
-  const effects = map.effects.filter((e) => e.duration === 'lasting' || isCurrentTurn(state, e.round, e.turnOfId));
+  const shown = hiddenTurnShown(state);
+  const live = (round: number, id: string) => isCurrentTurn(state, round, id) || (shown !== null && round === shown.round && id === shown.id);
+  const effects = map.effects.filter((e) => e.duration === 'lasting' || live(e.round, e.turnOfId));
   let out: BattleMap = effects.length === map.effects.length ? map : { ...map, effects };
-  if (out.stop && !stopIsValid(state, out.stop)) out = withoutKeys(out, ['stop']);
-  if (out.turn && !isCurrentTurn(state, out.turn.round, out.turn.combatantId)) out = withoutKeys(out, ['turn']);
+  if (out.stop && !live(out.stop.round, out.stop.moverId)) out = withoutKeys(out, ['stop']);
+  if (out.turn && !live(out.turn.round, out.turn.combatantId)) out = withoutKeys(out, ['turn']);
   return out;
 }
 
@@ -795,17 +801,25 @@ export function turnStartReport(before: CombatState, after: CombatState, hero: C
   };
 }
 
-/** Where `c` can't stay after a re-fit: off the map, in a wall, or over a smaller creature (the one that grew moves). */
-function misfit(state: CombatState, hero: Character | null, cells: MapCells, c: Combatant, anchor: GridPoint): boolean {
+/**
+ * Where `c` can't stay after a re-fit: off the map, in a wall, or sharing a space. A creature whose size just changed
+ * (`resized`) moves out of any space it now shares, whatever the other creature's size (D39; shared as mapWarnings
+ * counts it: the 5-ft levels meet, and Tiny creatures may share); anyone else only from over a smaller creature (the
+ * one that grew moves).
+ */
+function misfit(state: CombatState, hero: Character | null, cells: MapCells, c: Combatant, anchor: GridPoint, resized: boolean): boolean {
   const size = combatantSize(c, hero);
   const rect = footprint(anchor, size);
   if (!rectInBounds(rect, cells)) return true;
   for (let y = rect.y0; y <= rect.y1; y++) for (let x = rect.x0; x <= rect.x1; x++) if (flagAt(cells, x, y) & CELL.BLOCKS_MOVE) return true;
   const n = sizeSquares(size);
+  const me = { elevationFt: c.elevationFt ?? 0, size };
   for (const o of state.combatants) {
     if (o.id === c.id || o.defeated || !o.position) continue;
     const oSize = combatantSize(o, hero);
-    if (sizeSquares(oSize) < n && rectsOverlap(footprint(o.position, oSize), rect)) return true;
+    if (!rectsOverlap(footprint(o.position, oSize), rect)) continue;
+    const shares = !(size === 'Tiny' && oSize === 'Tiny') && levelsOverlap(me, { elevationFt: o.elevationFt ?? 0, size: oSize });
+    if (resized ? shares : sizeSquares(oSize) < n) return true;
   }
   return false;
 }
@@ -823,7 +837,11 @@ function refitFree(state: CombatState, hero: Character | null, cells: MapCells, 
   return true;
 }
 
-/** After a size change: shift every footprint that no longer fits to the nearest legal anchor (D39). */
+/**
+ * After a size change: shift every footprint that no longer fits to the nearest legal anchor (D39). The hero's size is
+ * read live from the sheet, so this is the re-fit after the hero's size changed (update_character,
+ * transform_character): the hero moves out of any space it now shares, even a creature of its own size or larger.
+ */
 export function refitFootprints(
   state: CombatState,
   hero: Character | null,
@@ -831,7 +849,10 @@ export function refitFootprints(
   return refitSome(state, hero, null);
 }
 
-/** refitFootprints for `only` these creatures (null: everyone), in initiative order. */
+/**
+ * refitFootprints for `only` these creatures, whose size just changed (null: everyone, the hero counting as the one
+ * that changed), in initiative order.
+ */
 function refitSome(
   state: CombatState,
   hero: Character | null,
@@ -845,7 +866,8 @@ function refitSome(
   for (const original of state.combatants) {
     if (only && !only.has(original.id)) continue;
     const c = working.combatants.find((x) => x.id === original.id) as Combatant;
-    if (c.defeated || !c.position || !misfit(working, hero, cells, c, c.position)) continue;
+    const resized = only ? only.has(c.id) : c.isPlayer;
+    if (c.defeated || !c.position || !misfit(working, hero, cells, c, c.position, resized)) continue;
     const from = c.position;
     let to: GridPoint | null = null;
     const n = sizeSquares(combatantSize(c, hero));
@@ -894,31 +916,114 @@ export function stampMapTold(state: CombatState, seq: number, isAnswered: (seq: 
 // The player's view and lookups
 // ---------------------------------------------------------------------------
 
-/** D42: the index the player sees as "current": the current creature, or the last visible one before it in order. */
-export function playerTurnIndex(state: CombatState): number {
+/** D42: the creature the player sees as current, and whether finding it wrapped back past the top of the order. */
+function shownTurnIndex(state: CombatState): { index: number; wrapped: boolean } {
   const n = state.combatants.length;
-  if (n === 0) return 0;
+  if (n === 0) return { index: 0, wrapped: false };
   const start = Math.min(Math.max(0, state.turnIndex), n - 1);
   for (let step = 0; step < n; step++) {
     const i = (start - step + n) % n;
-    if (!state.combatants[i].hidden) return i;
+    if (!state.combatants[i].hidden) return { index: i, wrapped: i > start };
   }
-  return start;
+  return { index: start, wrapped: false };
+}
+
+/** D42: the index the player sees as "current": the current creature, or the last visible one before it in order. */
+export function playerTurnIndex(state: CombatState): number {
+  return shownTurnIndex(state).index;
+}
+
+/**
+ * The round the player sees: when the last visible creature before a hidden current creature acted in the previous
+ * round (the order wrapped), the view stays in that round, so "Round N" doesn't tick over before anyone visible acts.
+ * Never below 1 (a hidden creature first in round 1).
+ */
+function shownRound(state: CombatState, wrapped: boolean): number {
+  return wrapped ? Math.max(1, state.round - 1) : state.round;
+}
+
+/** During a hidden creature's turn: the turn the player view shows in its place (D42); null otherwise. */
+function hiddenTurnShown(state: CombatState): { id: string; round: number } | null {
+  if (!currentCombatant(state)?.hidden) return null;
+  const { index, wrapped } = shownTurnIndex(state);
+  const shown = state.combatants[index];
+  return shown && !shown.hidden ? { id: shown.id, round: shownRound(state, wrapped) } : null;
 }
 
 const viewMemo = new WeakMap<CombatState, CombatState>();
 
-function viewTurn(turn: MapTurn, hiddenIds: ReadonlySet<string>): MapTurn | undefined {
+/** What the player sees for an effect label that names a hidden creature: what an unlabelled area is called. */
+const NEUTRAL_EFFECT_LABEL = 'Area';
+
+/** Lower-case words of a name or a label ("Cutthroat's smoke" → cutthroat, s, smoke). */
+function nameWords(text: string): string[] {
+  return text.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/** Does the word list `label` contain `phrase` as a run of whole words (its last word also as a plural)? */
+function containsPhrase(label: readonly string[], phrase: readonly string[]): boolean {
+  const last = phrase.length - 1;
+  const same = (word: string, w: string, j: number) => word === w || (j === last && (word === `${w}s` || word === `${w}es`));
+  for (let i = 0; i + phrase.length <= label.length; i++) if (phrase.every((w, j) => same(label[i + j], w, j))) return true;
+  return false;
+}
+
+/**
+ * The words that single out a hidden creature in DM text: its name, its name without the number duplicates get
+ * ("Goblin 2" → "Goblin") and its stat block name — except words a visible creature also answers to (they say
+ * nothing the player doesn't know).
+ */
+function hiddenNamePhrases(state: CombatState): string[][] {
+  const phrasesOf = (c: Combatant) => [c.name, c.name.replace(/\s+\d+$/, ''), c.statBlockName ?? ''].map(nameWords).filter((w) => w.length > 0);
+  const visible = new Set(state.combatants.filter((c) => !c.hidden).flatMap(phrasesOf).map((w) => w.join(' ')));
+  const out = new Map<string, string[]>();
+  for (const c of state.combatants) {
+    if (!c.hidden) continue;
+    for (const words of phrasesOf(c)) if (!visible.has(words.join(' '))) out.set(words.join(' '), words);
+  }
+  return [...out.values()];
+}
+
+function shownLabel(label: string, phrases: readonly string[][]): string {
+  if (phrases.length === 0) return label;
+  const words = nameWords(label);
+  return phrases.some((p) => containsPhrase(words, p)) ? NEUTRAL_EFFECT_LABEL : label;
+}
+
+/**
+ * The label the player may see for an effect (the DM's free text): "Area" when it names a hidden creature, else the
+ * label itself. playerView applies it to every effect and entered-area label; for player text built elsewhere.
+ */
+export function playerEffectLabel(state: CombatState, label: string): string {
+  return shownLabel(label, hiddenNamePhrases(state));
+}
+
+function viewTurn(turn: MapTurn, hiddenIds: ReadonlySet<string>, phrases: readonly string[][]): MapTurn | undefined {
   if (hiddenIds.has(turn.combatantId)) return undefined;
   let changed = false;
   const moves = turn.moves.map((m): TurnMove => {
     const provoked = m.provoked.filter((p) => !p.hidden && !hiddenIds.has(p.reactorId));
-    if (provoked.length === m.provoked.length && m.blockedById === undefined) return m;
+    const entered = m.entered.map((label) => shownLabel(label, phrases));
+    const relabelled = entered.some((label, i) => label !== m.entered[i]);
+    if (provoked.length === m.provoked.length && m.blockedById === undefined && !relabelled) return m;
     changed = true;
     const { blockedById: _dmOnly, ...shown } = m;
-    return { ...shown, provoked };
+    return { ...shown, provoked, entered: relabelled ? entered : m.entered };
   });
   return changed ? { ...turn, moves } : turn;
+}
+
+/** K5: effects whose label names a hidden creature get a neutral label; the same array when none does. */
+function viewEffects(effects: MapEffect[], phrases: readonly string[][]): MapEffect[] {
+  if (phrases.length === 0) return effects;
+  let changed = false;
+  const out = effects.map((e) => {
+    const label = shownLabel(e.label, phrases);
+    if (label === e.label) return e;
+    changed = true;
+    return { ...e, label };
+  });
+  return changed ? out : effects;
 }
 
 function viewStop(stop: MapStop, hiddenIds: ReadonlySet<string>): MapStop | undefined {
@@ -932,29 +1037,35 @@ function viewStop(stop: MapStop, hiddenIds: ReadonlySet<string>): MapStop | unde
 
 /**
  * The player's world (D63): hidden combatants removed; `turn`/`stop` records rewritten to drop hidden reactors and
- * hidden-only notes; turnIndex moved to playerTurnIndex. Memoized on the state object. A turn record or stop that
- * belongs to a hidden creature is dropped whole; effects stay. Returns `state` itself when nothing is hidden.
+ * hidden-only notes; turnIndex moved to playerTurnIndex, and the round to the one that creature's turn belongs to
+ * (the previous round when the order wrapped to find it). Memoized on the state object. A turn record or stop that
+ * belongs to a hidden creature is dropped whole; effects stay, but an effect label (or an entered-area label) that
+ * names a hidden creature reads "Area" (playerEffectLabel). Returns `state` itself when nothing is hidden.
  */
 export function playerView(state: CombatState): CombatState {
   const memo = viewMemo.get(state);
   if (memo) return memo;
   const hiddenIds = new Set(state.combatants.filter((c) => c.hidden).map((c) => c.id));
-  const shownIndex = playerTurnIndex(state);
+  const { index: shownIndex, wrapped } = shownTurnIndex(state);
   const shownId = state.combatants[shownIndex]?.id;
+  const round = shownRound(state, wrapped);
   const combatants = hiddenIds.size ? state.combatants.filter((c) => !c.hidden) : state.combatants;
   const turnIndex = hiddenIds.size ? Math.max(0, combatants.findIndex((c) => c.id === shownId)) : state.turnIndex;
   let map = state.map;
   if (map) {
-    const turn = map.turn ? viewTurn(map.turn, hiddenIds) : undefined;
+    const phrases = hiddenIds.size ? hiddenNamePhrases(state) : [];
+    const turn = map.turn ? viewTurn(map.turn, hiddenIds, phrases) : undefined;
     const stop = map.stop ? viewStop(map.stop, hiddenIds) : undefined;
-    if (turn !== map.turn || stop !== map.stop) {
-      let next: BattleMap = withoutKeys(map, ['turn', 'stop']);
+    const effects = viewEffects(map.effects, phrases);
+    if (turn !== map.turn || stop !== map.stop || effects !== map.effects) {
+      let next: BattleMap = { ...withoutKeys(map, ['turn', 'stop']), effects };
       if (turn) next = { ...next, turn };
       if (stop) next = { ...next, stop };
       map = next;
     }
   }
-  const view = combatants === state.combatants && map === state.map && turnIndex === state.turnIndex ? state : { ...state, combatants, turnIndex, ...(map ? { map } : {}) };
+  const same = combatants === state.combatants && map === state.map && turnIndex === state.turnIndex && round === state.round;
+  const view = same ? state : { ...state, round, combatants, turnIndex, ...(map ? { map } : {}) };
   viewMemo.set(state, view);
   return view;
 }
@@ -1065,6 +1176,20 @@ function seesHero(state: CombatState, hero: Character | null, who: MoverStats, h
   return !who.blinded && !heroStats.invisible && lineOfSight(state, hero, who.id, heroStats.id);
 }
 
+/**
+ * Make `obj[key]` a value computed on its first read and kept. The property stays enumerable, so copies, JSON and
+ * equality checks see the value; assigning to it replaces it with a plain value.
+ */
+function defineLazy<T extends object, K extends keyof T>(obj: T, key: K, compute: () => T[K]): void {
+  let cached: { value: T[K] } | null = null;
+  Object.defineProperty(obj, key, {
+    enumerable: true,
+    configurable: true,
+    get: () => (cached ??= { value: compute() }).value,
+    set: (value: T[K]) => Object.defineProperty(obj, key, { value, enumerable: true, configurable: true, writable: true }),
+  });
+}
+
 function tokenOf(state: CombatState, hero: Character | null, cells: MapCells, c: Combatant, heroC: Combatant | undefined): SnapshotToken {
   const stats = moverStats(state, hero, c.id) as MoverStats;
   const space = spaceOf(c, hero);
@@ -1083,13 +1208,19 @@ function tokenOf(state: CombatState, hero: Character | null, cells: MapCells, c:
     elevationFt: c.elevationFt ?? 0,
     places: space ? placesOf(cells, space.rect) : [],
     distanceFromHeroFt: both ? spaceDistanceFt(heroSpace, space) : null,
-    coverFromHero: live ? coverAgainst(state, hero, heroC.id, c.id) : null,
-    heroCoverFromIt: live ? coverAgainst(state, hero, c.id, heroC.id) : null,
+    coverFromHero: null,
+    heroCoverFromIt: null,
     heroCanSee: c.isPlayer ? true : both ? lineOfSight(state, hero, heroC.id, c.id) : false,
     reachFt: stats.reachFt,
     reactionUsed: c.reactionUsed === true,
     prone: stats.prone,
   };
+  // Cover both ways for every creature is most of a snapshot's cost on a big map, and few readers need it (a token's
+  // card, the positions list): it is worked out when first read (K2). The values are the same either way.
+  if (live) {
+    defineLazy(token, 'coverFromHero', () => coverAgainst(state, hero, heroC.id, c.id));
+    defineLazy(token, 'heroCoverFromIt', () => coverAgainst(state, hero, c.id, heroC.id));
+  }
   if (c.isPlayer && space) {
     const enemies: string[] = [];
     for (const o of state.combatants) {
@@ -1167,10 +1298,12 @@ export function mapSnapshot(state: CombatState, hero: Character | null, opts: { 
   };
 }
 
+type Body = Pick<Occupant, 'elevationFt' | 'size'>;
+
 /** Do two creatures' 5-ft levels meet (C3)? A flier above another creature doesn't share its space. */
-function levelsOverlap(a: Occupant, b: Occupant): boolean {
-  const lo = (o: Occupant) => Math.floor(o.elevationFt / 5);
-  const hi = (o: Occupant) => lo(o) + sizeSquares(o.size) - 1;
+function levelsOverlap(a: Body, b: Body): boolean {
+  const lo = (o: Body) => Math.floor(o.elevationFt / 5);
+  const hi = (o: Body) => lo(o) + sizeSquares(o.size) - 1;
   return lo(a) <= hi(b) && lo(b) <= hi(a);
 }
 

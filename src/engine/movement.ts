@@ -578,17 +578,33 @@ function compareKeys(a: readonly number[], b: readonly number[]): number {
   return 0;
 }
 
+/**
+ * The tracker's name order: what localeCompare(b, 'en', { numeric: true, sensitivity: 'base' }) gives, with one
+ * collator made on first use instead of one per comparison.
+ */
+let nameCollator: Intl.Collator | null = null;
+function compareNames(a: string, b: string): number {
+  nameCollator ??= new Intl.Collator('en', { numeric: true, sensitivity: 'base' });
+  return nameCollator.compare(a, b);
+}
+
+const ranksMemo = new WeakMap<readonly Combatant[], Map<string, number>>();
+
 /** Canonical initiative ranks (the tracker's order, then id), so results never depend on array order. */
 function initiativeRanks(state: CombatState): Map<string, number> {
+  const memo = ranksMemo.get(state.combatants);
+  if (memo) return memo;
   const sorted = [...state.combatants].sort(
     (a, b) =>
       b.initiative - a.initiative ||
       b.initiativeBonus - a.initiativeBonus ||
       Number(b.isPlayer) - Number(a.isPlayer) ||
-      a.name.localeCompare(b.name, 'en', { numeric: true, sensitivity: 'base' }) ||
+      compareNames(a.name, b.name) ||
       (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
   );
-  return new Map(sorted.map((c, i) => [c.id, i]));
+  const ranks = new Map(sorted.map((c, i) => [c.id, i]));
+  ranksMemo.set(state.combatants, ranks);
+  return ranks;
 }
 
 /** Prefix sums of Total Cover squares and sight blockers (memoized per MapCells): a box with none needs no segment test. */
@@ -617,6 +633,18 @@ function blockerSums(cells: MapCells): BlockerSums {
   const sums = { stride: S, cover3, sight };
   sumsMemo.set(cells, sums);
   return sums;
+}
+
+const deepMemo = new WeakMap<MapCells, boolean>();
+
+/** Does any square hold deep water (memoized per MapCells)? */
+function hasDeepWater(cells: MapCells): boolean {
+  let v = deepMemo.get(cells);
+  if (v === undefined) {
+    v = cells.flags.some((f) => (f & CELL.DEEP) !== 0);
+    deepMemo.set(cells, v);
+  }
+  return v;
 }
 
 /** Any marked square in the box spanned by a and b (clipped to the map)? Segments between two spaces stay inside it. */
@@ -745,6 +773,8 @@ interface Ctx {
   /** Per anchor: -1 unknown, 0 / 1. */
   anchorBlock: Int8Array;
   anchorEnd: Int8Array;
+  /** Per square: some other creature on the end band stands there (built on first use; step rule 7). */
+  endOcc: Uint8Array | null;
   /** Per anchor × 8 directions: UNKNOWN, ILLEGAL, else units × 2 + deep. */
   steps: Int8Array;
   fear: Band[];
@@ -835,6 +865,7 @@ function buildCtx(state: CombatState, hero: Character | null, mover: Combatant, 
     sqDT: new Uint8Array(N),
     anchorBlock: new Int8Array(N).fill(-1),
     anchorEnd: new Int8Array(N).fill(-1),
+    endOcc: null,
     steps: new Int8Array(N * 8).fill(UNKNOWN),
     fear: [],
     reactors: [],
@@ -934,14 +965,6 @@ function ensureMask(ctx: Ctx, m: ReachMasks, a: number): void {
   }
 }
 
-/** Masks for the reactors' reach around the anchors of step a → b (the start has its own height). */
-function stepMasks(ctx: Ctx, a: number, b: number, startIdx: number): [ReachMasks, ReachMasks] {
-  const ma = (a === startIdx ? ctx.startMasks : ctx.masks) as ReachMasks;
-  const mb = ctx.masks as ReachMasks;
-  ensureMask(ctx, ma, a);
-  ensureMask(ctx, mb, b);
-  return [ma, mb];
-}
 
 // ---------------------------------------------------------------------------
 // Step rules (spec §3.4.2)
@@ -978,13 +1001,33 @@ function endable(ctx: Ctx, ax: number, ay: number): boolean {
   if (ctx.anchorEnd[a] < 0) {
     let ok = true;
     if (!ctx.stats.defeated && !(ctx.placed && ax === ctx.start.x && ay === ctx.start.y)) {
-      const here = occupantsAt(ctx, ax, ay, levelOf(ctx.endElev));
-      const tiny = ctx.stats.size === 'Tiny' && here.every((o) => o.size === 'Tiny');
-      ok = here.length === 0 || (tiny && here.length < 4);
+      if (ctx.stats.size === 'Tiny') {
+        const here = occupantsAt(ctx, ax, ay, levelOf(ctx.endElev));
+        ok = here.length === 0 || (here.length < 4 && here.every((o) => o.size === 'Tiny'));
+      } else {
+        const occ = ctx.endOcc ?? endOccupancy(ctx);
+        for (let y = ay; y < ay + ctx.n && ok; y++) for (let x = ax; x < ax + ctx.n; x++) if (occ[y * ctx.W + x]) ok = false;
+      }
     }
     ctx.anchorEnd[a] = ok ? 1 : 0;
   }
   return ctx.anchorEnd[a] === 1;
+}
+
+/** The squares other creatures hold on the band the move ends on (the same test as occupantsAt, once per square). */
+function endOccupancy(ctx: Ctx): Uint8Array {
+  const occ = new Uint8Array(ctx.W * ctx.H);
+  const lo = levelOf(ctx.endElev);
+  const hi = lo + ctx.n - 1;
+  for (const o of ctx.others) {
+    const olo = levelOf(o.elevationFt);
+    if (olo > hi || lo > olo + sizeSquares(o.size) - 1) continue;
+    for (let y = Math.max(0, o.rect.y0); y <= Math.min(ctx.H - 1, o.rect.y1); y++) {
+      for (let x = Math.max(0, o.rect.x0); x <= Math.min(ctx.W - 1, o.rect.x1); x++) occ[y * ctx.W + x] = 1;
+    }
+  }
+  ctx.endOcc = occ;
+  return occ;
 }
 
 /** C13: the step brings the mover closer to a source of its fear. */
@@ -1159,6 +1202,9 @@ function runSearch(ctx: Ctx, from: GridPoint, g0: number, caps: Caps, safest: bo
   const startIdx = from.y * W + from.x;
   const fromStart = ctx.start.y * W + ctx.start.x;
   const startLabel = startIdx * L;
+  const steps = ctx.steps;
+  const masked = counting || tracking;
+  const mb = ctx.masks;
   const heap = new MinHeap();
   let seq = 0;
   g[startLabel] = g0;
@@ -1171,27 +1217,38 @@ function runSearch(ctx: Ctx, from: GridPoint, g0: number, caps: Caps, safest: bo
     const dl = diag[label];
     const a = (label / L) | 0;
     const p = label - a * L;
+    if (p > 0 && dominated(g, done, a * L, p, gl)) continue;
     const ax = a % W;
     const ay = (a - ax) / W;
+    // The reactors' reach around the mover at a (the start has its own height); per neighbour b below.
+    const ma = masked ? ((a === fromStart ? ctx.startMasks : mb) as ReachMasks) : null;
+    if (ma && !ma.done[a]) ensureMask(ctx, ma, a);
     for (let d = 0; d < 8; d++) {
-      const code = stepCode(ctx, ax, ay, d);
+      const key = a * 8 + d;
+      let code = steps[key];
+      if (code === UNKNOWN) {
+        code = computeStep(ctx, ax, ay, d);
+        steps[key] = code;
+      }
       if (code < 0) continue;
       const cost = stepCost(ctx, code, gl, caps);
       if (cost < 0) continue;
       const ng = gl + cost;
       const b = a + DY[d] * W + DX[d];
       let np = 0;
-      let ma: ReachMasks | null = null;
-      let mb: ReachMasks | null = null;
-      if (counting || tracking) [ma, mb] = stepMasks(ctx, a, b, fromStart);
-      if (counting && ma && mb) {
-        // Reactors that see the mover at a and don't reach it at b: the step out of their reach (D30).
-        let count = 0;
-        for (let k = 0; k < chunks; k++) count += popcount(ma.seen[a * chunks + k] & ~mb.reach[b * chunks + k]);
-        np = Math.min(SAFEST_CAP, p + count);
+      if (ma && mb) {
+        if (!mb.done[b]) ensureMask(ctx, mb, b);
+        if (counting) {
+          // Reactors that see the mover at a and don't reach it at b: the step out of their reach (D30).
+          let count = 0;
+          for (let k = 0; k < chunks; k++) count += popcount(ma.seen[a * chunks + k] & ~mb.reach[b * chunks + k]);
+          np = Math.min(SAFEST_CAP, p + count);
+        }
       }
       const nl = b * L + np;
       const nd = dl + (d >= 4 ? 1 : 0);
+      // Dominated already (a settled label of b with fewer provocations costs less): it would never be expanded.
+      if (np > 0 && dominated(g, done, b * L, np, ng)) continue;
       if (ng < g[nl] || (ng === g[nl] && nd < diag[nl])) {
         g[nl] = ng;
         diag[nl] = nd;
@@ -1206,6 +1263,17 @@ function runSearch(ctx: Ctx, from: GridPoint, g0: number, caps: Caps, safest: bo
     }
   }
   return { L, g, diag, prev, startLabel, fired, chunks };
+}
+
+/**
+ * A settled label of the same anchor with fewer provocations and strictly fewer feet: every route through this label
+ * does better through that one (no more provocations, fewer feet, so a deep-water step is never dearer), so nothing
+ * the search reports can go through it and it needn't be expanded. Labels settle in (feet, diagonals) order, so any
+ * such label is already settled.
+ */
+function dominated(g: Int32Array, done: Uint8Array, base: number, p: number, gl: number): boolean {
+  for (let q = 0; q < p; q++) if (done[base + q] && g[base + q] < gl) return true;
+  return false;
 }
 
 /** The number of reactors the route to `label` provokes (a search with trackFired). */
@@ -2549,24 +2617,29 @@ export function reachableSquares(
   const g0 = budget.movedFt + standCost;
   const capMove: Caps = { main: budget.speedFt + budget.dashFt, swim: stats.swim + budget.dashFt };
   const dashAvailable = budget.dashes === 0 && budget.dashAddsFt > 0;
-  const near = runSearch(ctx, ctx.start, g0, capMove, safest, true);
   const far = dashAvailable
     ? runSearch(ctx, ctx.start, g0, { main: capMove.main + budget.dashAddsFt, swim: capMove.swim + budget.dashAddsFt }, safest, true)
     : null;
+  // One search serves both bands unless a step's price depends on the allowance (a swimmer in deep water pays a
+  // step with its Swim Speed only while that allowance lasts): every label the Dash search settles within the move
+  // allowance has the same route, cost and provocations as in a search capped there (spec §7.12).
+  const shared = far !== null && !(ctx.swims && hasDeepWater(ctx.cells));
+  const near = shared ? (far as Search) : runSearch(ctx, ctx.start, g0, capMove, safest, true);
+  const nearMaxG = shared ? capMove.main : INF - 1;
   const out: ReachableSquare[] = [];
   const startIdx = ctx.start.y * ctx.W + ctx.start.x;
   /** The route planMove would take there: fewest provocations first (one label per anchor when shortest). */
-  const best = (s: Search, a: number): { g: number; provokes: number } | null => {
+  const best = (s: Search, a: number, maxG: number): { g: number; provokes: number } | null => {
     for (let p = 0; p < s.L; p++) {
       const label = a * s.L + p;
-      if (s.g[label] < INF) return { g: s.g[label], provokes: firedCount(s, label) };
+      if (s.g[label] <= maxG) return { g: s.g[label], provokes: firedCount(s, label) };
     }
     return null;
   };
   for (let a = 0; a < ctx.W * ctx.H; a++) {
     if (a === startIdx) continue;
-    const inMove = best(near, a);
-    const hit = inMove ?? (far ? best(far, a) : null);
+    const inMove = best(near, a, nearMaxG);
+    const hit = inMove ?? (far ? best(far, a, INF - 1) : null);
     if (!hit) continue;
     const ax = a % ctx.W;
     const ay = (a - ax) / ctx.W;

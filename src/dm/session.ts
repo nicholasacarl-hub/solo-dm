@@ -11,12 +11,12 @@
 import type { BetaMessageParam, BetaTextBlockParam } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import type { DmStatus } from '@/state/gameStore';
 import { stampMapTold } from '@/engine';
-import { isSeqAnswered } from '@/lib/answered';
-import type { Campaign, Session, UsageTotals } from '@/types';
+import { freezeAnswered, isSeqAnswered, SEEN_SEQ } from '@/lib/answered';
+import type { Campaign, Session, TranscriptMessage, UsageTotals } from '@/types';
 import { AgentFailure, answerUnfinishedToolCalls, MAX_ITERATIONS, MAX_MAPPED_ITERATIONS, NOTES, runAgentLoop, type LoopResult } from './agent';
 import { deps as currentDeps, type DmDeps } from './deps';
 import { describeError, isAbortError } from './errors';
-import { mapNote } from './mapText';
+import { mapNote, mapStateLines, newSinceText } from './mapText';
 import { createMockClient } from './mock';
 import { battleMapsMode, illustrationMode, isModeNotice, modeNotices, modesTold, transformationsMode, type TableModes } from './modes';
 import { parseWrapUp, playerTextForModel } from './narration';
@@ -87,6 +87,13 @@ export function parseNotices(text: string): string[] {
     .filter((line) => line.startsWith('- '))
     .map((line) => line.slice(2).trim())
     .filter(Boolean);
+}
+
+/** Opens the app note that brings the DM up to date with map moves made after the message it answers (D6). */
+export const LATE_MOVES_NOTE = 'The player moved on the battle map after sending the message you are answering. The map now:';
+
+function isLateMovesNote(text: string): boolean {
+  return text.startsWith(LATE_MOVES_NOTE);
 }
 
 const UNANSWERED_OPEN = '<unanswered_turn>';
@@ -250,9 +257,13 @@ export class DmSessionController {
     const d = this.d;
     const client = d.settings().mockMode ? createMockClient(d) : d.client();
     // A mapped round moves every creature before it acts: more requests while the fight is on a battle map (D52).
+    // Read before every request, so a map set up mid-turn raises the cap; it never drops within a run, so the DM
+    // still gets to narrate after end_combat or update_map remove late in a long enemy phase.
+    let cap = MAX_ITERATIONS;
     const maxIterations = () => {
       const combat = d.store().combat;
-      return combat?.active && combat.map ? MAX_MAPPED_ITERATIONS : MAX_ITERATIONS;
+      cap = Math.max(cap, combat?.active && combat.map ? MAX_MAPPED_ITERATIONS : MAX_ITERATIONS);
+      return cap;
     };
     return runAgentLoop(d, { client, signal, mode, waitingText, maxIterations });
   }
@@ -271,10 +282,14 @@ export class DmSessionController {
     await answerUnfinishedToolCalls(this.d);
     const store = this.d.store();
     const transcript = store.transcript;
-    if (!isTurnUnanswered(transcript)) return [];
+    if (!isTurnUnanswered(transcript)) {
+      await this.setAsideTrailingNotes();
+      return [];
+    }
     const start = lastTurnStartIndex(transcript);
     const kind = appRequestKind(transcript[start].param);
-    const notices = noticesAfterLastTurn(transcript).flatMap(parseNotices);
+    // A late-moves note isn't queued again: the next <game_state> reports those moves itself.
+    const notices = noticesAfterLastTurn(transcript).flatMap(parseNotices).filter((n) => !isLateMovesNote(n));
     if (kind === 'session_start') {
       if (!endsWithSystem(transcript)) return [];
       await store.truncateTranscriptAfter(transcript[start].seq);
@@ -285,6 +300,63 @@ export class DmSessionController {
     await store.truncateTranscriptAfter(transcript[start].seq - 1);
     for (const notice of notices) store.queueDmNotice(notice);
     return carried;
+  }
+
+  /**
+   * A user turn can't follow a system message. After a turn the DM has answered, the only one that can trail is a
+   * late-moves note whose request then failed mid-turn: set it aside (the next <game_state> reports those moves).
+   */
+  private async setAsideTrailingNotes(): Promise<void> {
+    const store = this.d.store();
+    const transcript = store.transcript;
+    if (!endsWithSystem(transcript)) return;
+    let last = transcript.length - 1;
+    while (last >= 0 && transcript[last].param.role === 'system') last--;
+    if (last < 0) return;
+    const notices = systemNotes(transcript.slice(last + 1)).flatMap(parseNotices).filter((n) => !isLateMovesNote(n));
+    await store.truncateTranscriptAfter(transcript[last].seq);
+    for (const notice of notices) store.queueDmNotice(notice);
+  }
+
+  /**
+   * Before the DM answers the transcript as it stands (Retry, a resumed opening, Regenerate), the player may have
+   * moved the hero since the message it answers was sent (moving is allowed after a failed request or a reply). Those
+   * moves and a stop go to the DM in an appended app note, stamped with its seq, so they are never lost — not even
+   * when the DM then ends the turn (D6, D48). Moves a message in the transcript already carries are left to it.
+   */
+  private async reportLateMapMoves(): Promise<void> {
+    const store = this.d.store();
+    const combat = store.combat;
+    const transcript = store.transcript;
+    if (!combat?.active || !combat.map || !owesReply(transcript)) return;
+    const carried = (seq: number) => seq === SEEN_SEQ || transcript.some((m) => m.seq === seq);
+    if (!newSinceText(combat, store.character, carried)) return;
+    const note = await this.appendSystemNote([LATE_MOVES_NOTE, ...mapStateLines(combat, store.character, carried)].join('\n'));
+    if (!note) return;
+    try {
+      await store.updateCombat((c) => stampMapTold(c, note.seq, carried));
+    } catch (err) {
+      // Best effort: unstamped, they are reported again with the next turn.
+      console.warn("[dm] Couldn't mark the map moves as reported:", err);
+    }
+  }
+
+  /**
+   * Append an app note as a system message. A system message must follow a user message, not another system message,
+   * so a note still trailing the last user message (it was never answered: its request failed) is folded into one
+   * message with the new one — trimmed from the end and appended again, as one text block each; nothing before it
+   * changes.
+   */
+  private async appendSystemNote(text: string): Promise<TranscriptMessage | undefined> {
+    const store = this.d.store();
+    const transcript = store.transcript;
+    let last = transcript.length - 1;
+    while (last >= 0 && transcript[last].param.role === 'system') last--;
+    const trailing = last >= 0 ? systemNotes(transcript.slice(last + 1)) : [];
+    if (trailing.length === 0) return (await store.appendTranscript([{ role: 'system', content: text }]))[0];
+    await store.truncateTranscriptAfter(transcript[last].seq);
+    const content: BetaTextBlockParam[] = [...trailing, text].map((t) => ({ type: 'text', text: t }));
+    return (await store.appendTranscript([{ role: 'system', content }]))[0];
   }
 
   /** Log entries of the active session since its last player message (or since it started). */
@@ -334,6 +406,21 @@ export class DmSessionController {
     } catch (err) {
       // Best effort: an unstamped move is simply reported again with the next turn.
       console.warn("[dm] Couldn't mark the map moves as reported:", err);
+    }
+  }
+
+  /**
+   * Before a session ends: the map moves and the stop the DM has answered stay seen (D48). Their stamps are seqs of
+   * this session's transcript, which restarts with the next session, so they are frozen as seen for good.
+   */
+  private async freezeMapSeen(): Promise<void> {
+    const store = this.d.store();
+    if (!store.combat?.map) return;
+    try {
+      await store.updateCombat((c) => freezeAnswered(c, (seq) => this.answered(seq)));
+    } catch (err) {
+      // Best effort: the next session then reports them again.
+      console.warn("[dm] Couldn't keep the map moves marked as seen:", err);
     }
   }
 
@@ -487,6 +574,9 @@ export class DmSessionController {
       await this.finishEnding(signal);
       return;
     }
+    // Tool calls left hanging get their results first: a note can't sit between a call and its result.
+    await answerUnfinishedToolCalls(this.d);
+    await this.reportLateMapMoves();
     await this.loop(signal);
   }
 
@@ -550,6 +640,7 @@ export class DmSessionController {
       async (signal) => {
         await this.d.store().truncateTranscriptAfter(keepSeq);
         await this.removeLogAfterLast(anchorKind, session.id);
+        await this.reportLateMapMoves();
         await this.loop(signal);
       },
       (signal) => this.respondToTranscript(signal),
@@ -592,6 +683,9 @@ export class DmSessionController {
     await this.run(
       async (signal) => {
         await this.prepareForNewTurn();
+        // Before the wrap-up: anything first reported in it (the DM is told not to act on it) stays unseen and is
+        // reported again in the next session.
+        await this.freezeMapSeen();
         const store = this.d.store();
         if (!store.transcript.some((m) => m.param.role === 'assistant')) {
           // Nothing was played in this session: close it without a recap.

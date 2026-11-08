@@ -250,19 +250,35 @@ function containsPoint(r: GridRect, p: HalfPoint): boolean {
   return p.x2 > 2 * r.x0 && p.x2 < 2 * (r.x1 + 1) && p.y2 > 2 * r.y0 && p.y2 < 2 * (r.y1 + 1);
 }
 
+/** The square a point lies strictly inside (a square's centre), as a rect; none for a grid corner or an edge. */
+function squareContaining(p: HalfPoint): GridRect[] {
+  if (p.x2 % 2 === 0 || p.y2 % 2 === 0) return [];
+  const x = (p.x2 - 1) / 2;
+  const y = (p.y2 - 1) / 2;
+  return [{ x0: x, y0: y, x1: x, y1: y }];
+}
+
 /** Cover against an area's origin point (Dexterity saves). */
 export function coverFromPoint(state: CombatState, hero: Character | null, origin: HalfPoint, targetId: string): CoverResult {
   return coverFromPointAs(state, hero, origin, targetId, 'dm');
 }
 
-/** coverFromPoint, in a perspective ('player': hidden creatures give no cover). */
+/**
+ * coverFromPoint, in a perspective ('player': hidden creatures give no cover). Lines leave the origin's own spaces
+ * as an attack leaves the attacker's (coverAgainst): neither the square the point lies in nor the space of a creature
+ * it lies in (the caster's) gives cover against it — cover counts only when the effect comes from the far side of it
+ * (srd:rule:combat-cover).
+ */
 export function coverFromPointAs(state: CombatState, hero: Character | null, origin: HalfPoint, targetId: string, perspective: Perspective): CoverResult {
   const cells = mapCells(state, hero);
   if (!cells || !state.map) return { ...NO_COVER, byTerrain: [], byCreatureIds: [] };
   const t = spaceOf(state, hero, targetId, undefined, perspective);
   if (!t) return { ...NO_COVER, byTerrain: [], byCreatureIds: [] };
+  const seen = (o: { hidden: boolean }) => perspective !== 'player' || !o.hidden;
+  const sources = occupants(state, hero).filter((o) => seen(o) && containsPoint(o.rect, origin));
+  const own = [t, ...squareContaining(origin), ...sources.map((o) => o.rect)];
   const creatureAt = coverCreatures(state, hero, cells, (o) => o.id === targetId || containsPoint(o.rect, origin), perspective);
-  return coverCore({ map: state.map, cells, origins: [origin], target: t, own: [t], creatureAt });
+  return coverCore({ map: state.map, cells, origins: [origin], target: t, own, creatureAt });
 }
 
 /** True when every line between the two spaces is blocked by Total Cover terrain (used by inReach). */

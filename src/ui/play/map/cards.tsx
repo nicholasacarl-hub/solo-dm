@@ -27,7 +27,7 @@ function CardFrame({ title, onClose, children, actions }: { title: ReactNode; on
     <div className="flex flex-col gap-1.5">
       <div className="flex items-start gap-2">
         <div className="min-w-0 flex-1 text-sm font-semibold">{title}</div>
-        <IconButton label="Close" size={touch ? 'md' : 'sm'} onClick={onClose} className="-my-1 -mr-1">
+        <IconButton label="Close" size={touch ? 'lg' : 'sm'} onClick={onClose} className="-my-1 -mr-1">
           <X className="size-4" aria-hidden />
         </IconButton>
       </div>

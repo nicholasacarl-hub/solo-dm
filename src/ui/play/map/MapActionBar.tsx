@@ -51,7 +51,7 @@ function ToggleChip({ pressed, onClick, children, touch }: { pressed: boolean; o
         onClick={onClick}
         className={cn(
           'inline-flex items-center rounded-full border px-2.5 text-xs font-semibold transition-colors',
-          touch ? 'min-h-10' : 'min-h-7',
+          touch ? 'min-h-11' : 'min-h-7',
           pressed ? 'border-accent bg-accent-soft text-accent' : 'border-border bg-surface text-text hover:bg-surface-2',
         )}
       >

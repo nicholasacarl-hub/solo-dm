@@ -215,8 +215,13 @@ function mapPlace(value: unknown, dims: Dims): Read<MapPlace> | undefined {
   return { item: { id: '', name, rects: area }, rawId: value.id };
 }
 
-/** A map reference; undefined when unreadable, off the map, or naming a creature that isn't in the fight. */
-function mapRef(value: unknown, dims: Dims, known: ReadonlySet<string>, allowDirection: boolean): MapRef | undefined {
+/** A well-formed reference to a creature that has left the fight (update_combat remove): only the reference goes. */
+const GONE = 'gone';
+
+/**
+ * A map reference; undefined when unreadable or off the map; GONE when it names a creature that isn't in the fight.
+ */
+function mapRef(value: unknown, dims: Dims, known: ReadonlySet<string>, allowDirection: boolean): MapRef | typeof GONE | undefined {
   if (!isRecord(value)) return undefined;
   switch (value.kind) {
     case 'square': {
@@ -231,7 +236,8 @@ function mapRef(value: unknown, dims: Dims, known: ReadonlySet<string>, allowDir
       return inside ? { kind: 'corner', x, y } : undefined;
     }
     case 'creature':
-      return typeof value.id === 'string' && known.has(value.id) ? { kind: 'creature', id: value.id } : undefined;
+      if (typeof value.id !== 'string') return undefined;
+      return known.has(value.id) ? { kind: 'creature', id: value.id } : GONE;
     case 'direction':
       return allowDirection && oneOf(COMPASS_DIRECTIONS, value.dir) ? { kind: 'direction', dir: value.dir } : undefined;
     default:
@@ -241,7 +247,9 @@ function mapRef(value: unknown, dims: Dims, known: ReadonlySet<string>, allowDir
 
 /**
  * An area's parameters. Undefined (the effect is dropped) when its shape or size can't be read, or when `at`,
- * `fromId` or `toward` is present but unreadable or names a creature that isn't in the fight.
+ * `fromId` or `toward` is present but unreadable. A reference to a creature that has left the fight is dropped on
+ * its own (spec §6.4: dangling ids go) and the effect stays, as it does in memory: an effect keeps the squares it was
+ * made with, and an emanation without its creature has none (the orphan-effect warning, §3.10).
  */
 function areaSpec(value: unknown, dims: Dims, known: ReadonlySet<string>): AreaSpec | undefined {
   if (!isRecord(value) || !oneOf(AREA_SHAPES, value.shape)) return undefined;
@@ -258,16 +266,16 @@ function areaSpec(value: unknown, dims: Dims, known: ReadonlySet<string>): AreaS
   if (value.at !== undefined) {
     const at = mapRef(value.at, dims, known, false);
     if (!at) return undefined;
-    spec.at = at;
+    if (at !== GONE) spec.at = at;
   }
   if (value.fromId !== undefined) {
-    if (typeof value.fromId !== 'string' || !known.has(value.fromId)) return undefined;
-    spec.fromId = value.fromId;
+    if (typeof value.fromId !== 'string') return undefined;
+    if (known.has(value.fromId)) spec.fromId = value.fromId;
   }
   if (value.toward !== undefined) {
     const toward = mapRef(value.toward, dims, known, true);
     if (!toward) return undefined;
-    spec.toward = toward;
+    if (toward !== GONE) spec.toward = toward;
   }
   if (value.rects !== undefined) spec.rects = rects(value.rects, dims, MAX_AREA_RECTS);
   if (typeof value.includeOrigin === 'boolean') spec.includeOrigin = value.includeOrigin;
@@ -276,13 +284,19 @@ function areaSpec(value: unknown, dims: Dims, known: ReadonlySet<string>): AreaS
   return spec;
 }
 
+/**
+ * A turn-scoped effect belongs to (round, turnOfId) and is dropped when that creature has left the fight (readers
+ * already ignore it). A lasting effect lasts until effects_end or the end of the fight (§2.1) whoever made it:
+ * a turnOfId naming a creature that has left becomes '' (as addAreaEffect stores it with nobody's turn).
+ */
 function mapEffect(value: unknown, dims: Dims, known: ReadonlySet<string>): Read<MapEffect> | undefined {
   if (!isRecord(value)) return undefined;
   const label = text(value.label, MAP_LIMITS.maxLabel);
   const spec = areaSpec(value.spec, dims, known);
   const duration = value.duration === 'turn' || value.duration === 'lasting' ? value.duration : undefined;
-  const turnOfId = typeof value.turnOfId === 'string' && known.has(value.turnOfId) ? value.turnOfId : undefined;
-  if (!label || !spec || !duration || !turnOfId) return undefined;
+  const ownTurn = typeof value.turnOfId === 'string' && known.has(value.turnOfId) ? value.turnOfId : undefined;
+  const turnOfId = ownTurn ?? (duration === 'lasting' ? '' : undefined);
+  if (!label || !spec || !duration || turnOfId === undefined) return undefined;
   const terrain = [...new Set(list(value.terrain).filter((t): t is AreaTerrain => oneOf(AREA_TERRAIN, t)))];
   const effect: MapEffect = {
     id: '',
@@ -393,8 +407,9 @@ function mapStop(value: unknown, dims: Dims, known: ReadonlySet<string>): MapSto
 /**
  * A valid BattleMap from untrusted data, or undefined for anything without a numeric width and height
  * (null, a string, NaN, an array…). Clamps the size to MAP_LIMITS, coerces numbers with toInt, clips rects
- * to the map, drops unknown kinds, caps arrays (MAP_LIMITS), drops `turn`, `stop` and effects that name combatants
- * not in `combatantIds`, and repairs `nextId` above every id in use. Idempotent.
+ * to the map, drops unknown kinds, caps arrays (MAP_LIMITS), drops `turn`, `stop` and turn-scoped effects that name
+ * combatants not in `combatantIds` (an effect's other references to them go, the effect stays), and repairs `nextId`
+ * above every id in use. Idempotent.
  */
 export function normalizeBattleMap(raw: unknown, combatantIds: readonly string[]): BattleMap | undefined {
   if (!isRecord(raw) || !isFiniteNumber(raw.width) || !isFiniteNumber(raw.height)) return undefined;

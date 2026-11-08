@@ -4,6 +4,7 @@
  * words or the DM's last narration (cheap retrieval that keeps the DM from contradicting itself).
  */
 import { characterStatusLine, summarizeCombat } from '@/engine';
+import { isSeqAnswered } from '@/lib/answered';
 import type { Campaign, Character, Clock, CombatState, JournalEntry } from '@/types';
 import { mapStateLines } from './mapText';
 import { truncate } from './narration';
@@ -25,7 +26,8 @@ export interface GameStateInput {
   previousNarration: string;
   /**
    * True when the transcript holds the user message `seq` and an assistant message after it (isSeqAnswered): the
-   * player's map moves stamped with that seq count as seen by the DM (D48). Default: nothing has been seen.
+   * player's map moves stamped with that seq count as seen by the DM (D48). Default: only what an earlier session
+   * answered (frozen as SEEN_SEQ).
    */
   answered?: (seq: number) => boolean;
 }
@@ -101,7 +103,7 @@ export function buildGameState(input: GameStateInput): string {
   if (input.combat?.active) {
     lines.push(`Combat:\n${summarizeCombat(input.combat).trim()}`);
     // The battle map: positions, reach, the current turn and the player's unseen moves (spec §5.4).
-    if (input.combat.map) lines.push(...mapStateLines(input.combat, input.character, input.answered ?? (() => false)));
+    if (input.combat.map) lines.push(...mapStateLines(input.combat, input.character, input.answered ?? ((seq) => isSeqAnswered([], seq))));
   }
   const clocks = clocksLine(input.clocks);
   if (clocks) lines.push(clocks);

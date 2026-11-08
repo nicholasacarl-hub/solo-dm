@@ -40,6 +40,11 @@ export interface Camera {
 export interface ViewSize {
   width: number;
   height: number;
+  /**
+   * Px down the right edge that the zoom buttons cover. The cameras the app chooses (the opening view, Fit, centring
+   * and revealing a square) keep the map clear of it (E3); the player's own panning and zooming don't.
+   */
+  right?: number;
 }
 
 /** The map's size in squares. */
@@ -76,27 +81,28 @@ export function committedCamera(cam: Camera, view: ViewSize): MapCamera {
   return { cellPx: px, cx: (view.width / 2 - cam.x) / px, cy: (view.height / 2 - cam.y) / px };
 }
 
-/** The largest square size that shows the whole map beside the rulers, with `pad` px around it. */
+/** The largest square size that shows the whole map beside the rulers and clear of the zoom buttons, `pad` px around it. */
 export function fitCellPx(map: MapExtent, view: ViewSize, pad = 8): number {
   if (view.width <= 0 || view.height <= 0) return 0;
-  return Math.min((view.width - RULER_LEFT - 2 * pad) / map.cols, (view.height - RULER_TOP - 2 * pad) / map.rows);
+  return Math.min((view.width - RULER_LEFT - (view.right ?? 0) - 2 * pad) / map.cols, (view.height - RULER_TOP - 2 * pad) / map.rows);
 }
 
 /**
- * Keep the map filling the view beside the rulers when it is bigger than the view (no empty floor on one side),
- * or centred in it when it is smaller. Used for cameras the app chooses (the opening view, fit, recentring); the
- * player's own panning only keeps 96px on screen.
+ * Keep the map filling the view between the rulers and the zoom buttons when it is bigger than that (no empty floor
+ * on one side), or centred there when it is smaller. Used for cameras the app chooses (the opening view, fit,
+ * recentring); the player's own panning only keeps 96px on screen.
  */
 export function fillCamera(cam: MapCamera, map: MapExtent, view: ViewSize): MapCamera {
   if (view.width <= 0 || view.height <= 0) return cam;
   const px = clampCellPx(cam.cellPx);
-  const axis = (c: number, squares: number, size: number, gutter: number) => {
-    const lo = (size / 2 - gutter) / px;
-    const hi = squares - size / 2 / px;
-    return lo > hi ? squares / 2 - gutter / (2 * px) : clamp(c, lo, hi);
+  /** The view's centre (in squares) on one axis, with `lead` px kept clear before the map and `trail` px after it. */
+  const axis = (c: number, squares: number, size: number, lead: number, trail: number) => {
+    const lo = (size / 2 - lead) / px;
+    const hi = squares - (size / 2 - trail) / px;
+    return lo > hi ? squares / 2 - (lead - trail) / (2 * px) : clamp(c, lo, hi);
   };
-  const cx = axis(cam.cx, map.cols, view.width, RULER_LEFT);
-  const cy = axis(cam.cy, map.rows, view.height, RULER_TOP);
+  const cx = axis(cam.cx, map.cols, view.width, RULER_LEFT, view.right ?? 0);
+  const cy = axis(cam.cy, map.rows, view.height, RULER_TOP, 0);
   return cx === cam.cx && cy === cam.cy && px === cam.cellPx ? cam : { cellPx: px, cx, cy };
 }
 
@@ -119,6 +125,20 @@ export function defaultCamera(map: MapExtent, view: ViewSize, hero: GridRect | n
 export function fitCamera(map: MapExtent, view: ViewSize): MapCamera {
   const px = clamp(fitCellPx(map, view) || DESKTOP_CELL_PX, MIN_CELL_PX, FIT_MAX_CELL_PX);
   return fillCamera({ cellPx: px, cx: map.cols / 2, cy: map.rows / 2 }, map, view);
+}
+
+/**
+ * The opening camera again for a view that changed size before the player moved the camera (E2): the whole map if
+ * it now fits, otherwise the same centre at the opening square size — never a jump to wherever the hero is now.
+ */
+export function refitOpening(cam: MapCamera, map: MapExtent, view: ViewSize, compact: boolean): MapCamera {
+  if (fitCellPx(map, view) >= FIT_MIN_CELL_PX) return fitCamera(map, view);
+  return fillCamera({ cellPx: compact ? PHONE_CELL_PX : DESKTOP_CELL_PX, cx: cam.cx, cy: cam.cy }, map, view);
+}
+
+/** Two committed cameras that draw the same (to a hundredth of a px or square). */
+export function sameCamera(a: MapCamera, b: MapCamera): boolean {
+  return Math.abs(a.cellPx - b.cellPx) < 0.01 && Math.abs(a.cx - b.cx) < 0.001 && Math.abs(a.cy - b.cy) < 0.001;
 }
 
 /** Zoom by `factor` keeping the screen point (px, py) still. */
@@ -170,11 +190,11 @@ export function screenToCorner(cam: Camera, sx: number, sy: number, map: MapExte
   return { x: clamp(Math.round(w.x / CELL), 0, map.cols), y: clamp(Math.round(w.y / CELL), 0, map.rows) };
 }
 
-/** Is the whole rect on screen, clear of the rulers and `margin` px in from the edges? */
+/** Is the whole rect on screen, clear of the rulers and the zoom buttons and `margin` px in from the edges? */
 export function rectOnScreen(cam: Camera, view: ViewSize, r: GridRect, margin = 8): boolean {
   const a = worldToScreen(cam, r.x0 * CELL, r.y0 * CELL);
   const b = worldToScreen(cam, (r.x1 + 1) * CELL, (r.y1 + 1) * CELL);
-  return a.x >= RULER_LEFT + margin && a.y >= RULER_TOP + margin && b.x <= view.width - margin && b.y <= view.height - margin;
+  return a.x >= RULER_LEFT + margin && a.y >= RULER_TOP + margin && b.x <= view.width - (view.right ?? 0) - margin && b.y <= view.height - margin;
 }
 
 /**

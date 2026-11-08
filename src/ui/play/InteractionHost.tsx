@@ -5,6 +5,7 @@ import { Button, Dialog } from '@/ui/components/ui';
 import { ShortRestDialog } from '@/ui/sheet/ShortRestDialog';
 import { cancelDm } from './dmStatus';
 import { RollPromptDialog } from './RollPromptDialog';
+import { useIsTouch } from './useMediaQuery';
 
 /** Shows whatever the DM is waiting on (one interaction at a time) and hands the answer back. */
 export function InteractionHost() {
@@ -40,6 +41,8 @@ export function InteractionHost() {
 }
 
 function ConfirmInteraction({ interaction }: { interaction: Extract<InteractionRequest, { kind: 'confirm' }> }) {
+  // Touch targets of at least 44px on phones (spec §7.9): the battle map's Opportunity Attack question lands here.
+  const size = useIsTouch() ? 'lg' : 'md';
   const answer = (confirmed: boolean) =>
     useGame.getState().resolveInteraction(interaction.id, { kind: 'confirm', confirmed });
   return (
@@ -51,10 +54,10 @@ function ConfirmInteraction({ interaction }: { interaction: Extract<InteractionR
       title={interaction.title}
       footer={
         <>
-          <Button variant="ghost" onClick={() => answer(false)}>
+          <Button variant="ghost" size={size} onClick={() => answer(false)}>
             {interaction.cancelLabel ?? 'Not now'}
           </Button>
-          <Button variant="primary" onClick={() => answer(true)}>
+          <Button variant="primary" size={size} onClick={() => answer(true)}>
             {interaction.confirmLabel ?? 'Confirm'}
           </Button>
         </>

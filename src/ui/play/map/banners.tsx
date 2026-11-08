@@ -47,7 +47,7 @@ export function FirstFightTip({ fallback = null }: { fallback?: ReactNode }) {
       <p className="min-w-0 flex-1 py-1 leading-snug">{firstFightTip(touch)}</p>
       <IconButton
         label="Dismiss the tip"
-        size={touch ? 'md' : 'sm'}
+        size={touch ? 'lg' : 'sm'}
         className="text-info hover:bg-info/10 hover:text-info"
         onClick={() => {
           dismissTip();

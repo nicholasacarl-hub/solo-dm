@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { applyHeroMove, reachableSquares } from '@/engine';
+import { applyHeroMove, applyMove, nextTurn, reachableSquares } from '@/engine';
 import { heroMoveBlock } from '@/state/gameStore';
 import { sampleCharacter, sampleMappedCombat } from '@/test/fixtures';
 import type { CombatState, TranscriptMessage } from '@/types';
 import { changesSince, movedAnnouncement, planAnnouncement, squareAnnouncement, terrainWords, tokenAt, turnStartAnnouncement } from './announcer';
-import { buildModelCore, displayBlock, resetShownBudgetForTests, secretTokensOf, unseenHeroMoves, type BattleMapModel, type ModelInputs } from './model';
+import { buildModelCore, displayBlock, resetShownBudgetForTests, secretTokensOf, turnRecordHidden, unseenHeroMoves, type BattleMapModel, type ModelInputs } from './model';
+import { turnPillText } from './text';
 import { previewMove } from './preview';
 
 const hero = sampleCharacter();
@@ -82,6 +83,33 @@ describe('the map model: one player view (D63)', () => {
     const during = modelFor(hiddenTurn, { rawBlock: 'not-your-turn', dmPhase: 'tool' });
     expect(during.yourTurn).toBe(true);
     expect(during.budget?.leftFt).toBe(25);
+  });
+
+  it('U8: a page loaded during the hidden turn never shows the hero’s movement reset to full Speed', () => {
+    // Mira 17, the Cutthroat 16 (hidden), Bandit 1 14…: the hero moves B6 → B8 (10 ft) on the hero's own turn.
+    const base = sampleMappedCombat({ heroTurn: true });
+    const [mira, bandit1, cutthroat, ...rest] = base.combatants;
+    const ordered: CombatState = { ...base, combatants: [mira, { ...cutthroat, initiative: 16 }, bandit1, ...rest], turnIndex: 0 };
+    const moved = applyHeroMove(ordered, hero, { to: { x: 1, y: 7 }, prefer: 'safest', dash: false, disengage: false, standUp: false }, { stopResolved: true });
+    if (moved.status === 'refused') throw new Error('refused');
+    expect(modelFor(moved.state).budget?.leftFt).toBe(20);
+    const hiddenTurn = nextTurn(moved.state);
+    // Reloaded before the Cutthroat does anything: the hero's record is still on the map, and it tells the truth…
+    resetShownBudgetForTests();
+    expect(turnRecordHidden(hiddenTurn)).toBe(false);
+    expect(modelFor(hiddenTurn, { rawBlock: 'not-your-turn' }).budget?.leftFt).toBe(20);
+    // …and is kept when the Cutthroat's move replaces that record on the same page.
+    const cutMoved = applyMove(hiddenTurn, hero, { moverId: 'c-5', kind: 'move', by: 'dm', to: { kind: 'square', at: { x: 11, y: 7 } } });
+    if (cutMoved.status === 'refused') throw new Error('refused');
+    expect(turnRecordHidden(cutMoved.state)).toBe(true);
+    expect(modelFor(cutMoved.state, { rawBlock: 'not-your-turn' }).budget?.leftFt).toBe(20);
+    // Reloaded after the Cutthroat moved: the hero's movement can't be known here; no fresh "30 ft" (the turn would
+    // look restarted), just "Your turn".
+    resetShownBudgetForTests();
+    const reloaded = modelFor(cutMoved.state, { rawBlock: 'not-your-turn' });
+    expect(reloaded.yourTurn).toBe(true);
+    expect(reloaded.budget).toBeNull();
+    expect(turnPillText({ yourTurn: reloaded.yourTurn, currentName: null, budget: reloaded.budget })).toBe('Your turn');
   });
 
   it('lists the hero’s moves the DM hasn’t answered yet (D48)', () => {

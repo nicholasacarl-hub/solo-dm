@@ -95,18 +95,29 @@ export function displayBlock(rawBlock: ModelInputs['rawBlock'], yourTurnInView: 
 
 /**
  * The hero's movement as last shown on the hero's own turn. When a hidden creature acts right after the hero, the
- * player view keeps showing the hero's turn (D42), but the hidden creature's turn record replaces the hero's, so a
- * fresh budget ("30 ft" again) would give the hidden turn away: the readouts keep the last budget the hero had.
+ * player view keeps showing the hero's turn (D42), but once that creature moves its turn record replaces the hero's,
+ * so a fresh budget ("30 ft" again) would give the hidden turn away: the readouts keep the last budget the hero had.
  * Shared by every map surface (pill, bar, chip), so a surface that mounts during the hidden turn agrees with them.
+ *
+ * A page loaded during the hidden turn has nothing kept (U8). While the hero's record is still on the map, the budget
+ * read from it is the truth (and is kept for the rest of the hidden turn); once the hidden creature's record has
+ * replaced it (`recordHidden`), the hero's movement is unknown here and the feet are left out rather than reset.
  */
 let lastHeroBudget: { key: string; budget: TurnBudget | null } | null = null;
 
-export function shownHeroBudget(view: CombatState, hero: Character | null, heroId: string, hiddenTurn: boolean): TurnBudget | null {
+export function shownHeroBudget(view: CombatState, hero: Character | null, heroId: string, hiddenTurn: boolean, recordHidden = false): TurnBudget | null {
   const key = `${view.startedAt}:${view.round}:${heroId}`;
   if (hiddenTurn && lastHeroBudget?.key === key) return lastHeroBudget.budget;
+  if (hiddenTurn && recordHidden) return null;
   const budget = turnBudget(view, hero, heroId);
-  if (!hiddenTurn) lastHeroBudget = { key, budget };
+  lastHeroBudget = { key, budget };
   return budget;
+}
+
+/** The true map's turn record belongs to a hidden creature (its move replaced the record of the turn before it). */
+export function turnRecordHidden(combat: CombatState): boolean {
+  const turn = combat.map?.turn;
+  return !!turn && combat.combatants.some((c) => c.id === turn.combatantId && c.hidden === true);
 }
 
 /** Tests: forget the cached budget. */
@@ -149,7 +160,7 @@ export function buildModelCore(input: ModelInputs): Omit<BattleMapModel, 'reacha
     hero,
     heroId: heroC.id,
     heroToken: tokens.get(heroC.id) ?? null,
-    budget: yourTurn ? shownHeroBudget(view, hero, heroC.id, hiddenTurn) : null,
+    budget: yourTurn ? shownHeroBudget(view, hero, heroC.id, hiddenTurn, turnRecordHidden(combat)) : null,
     canMove: block === null,
     block,
     currentId: current?.id ?? null,

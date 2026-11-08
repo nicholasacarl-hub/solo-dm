@@ -1,5 +1,5 @@
-import './testing/setup';
-import { act, render, screen } from '@testing-library/react';
+import { setMatchMedia, TOUCH } from './testing/setup';
+import { act, cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dm } from '@/dm';
@@ -171,6 +171,18 @@ describe('InteractionHost', () => {
     });
     await user.click(screen.getByRole('button', { name: 'Attack' }));
     await expect(second).resolves.toEqual({ kind: 'confirm', confirmed: true });
+  });
+
+  it('K4: the confirm buttons are touch targets of at least 44px on phones (spec §7.9), 40px with a mouse', () => {
+    setMatchMedia(TOUCH);
+    request({ kind: 'confirm', id: 'oa3', title: 'Opportunity Attack', body: 'Bandit 1 is leaving your reach.', confirmLabel: 'Attack', cancelLabel: 'Let it go' });
+    // Button size lg is h-12 (48px); md is h-10 (40px).
+    expect(screen.getByRole('button', { name: 'Attack' })).toHaveClass('h-12');
+    expect(screen.getByRole('button', { name: 'Let it go' })).toHaveClass('h-12');
+    cleanup();
+    setMatchMedia(() => false);
+    request({ kind: 'confirm', id: 'oa4', title: 'Opportunity Attack', body: 'Bandit 1 is leaving your reach.', confirmLabel: 'Attack', cancelLabel: 'Let it go' });
+    expect(screen.getByRole('button', { name: 'Attack' })).toHaveClass('h-10');
   });
 
   it('hands short rests to the sheet dialog and reports cancellation', async () => {

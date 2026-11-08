@@ -1,8 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { BattleMap, Combatant, CombatState, GridPoint, MapEffect, MapTurn, TurnMove } from '@/types';
 import { sampleBattleMap, sampleCharacter, sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
 import { nextTurn } from './combat';
 import { parseSquare, parseSquareList, rectLabel, squareLabel } from './grid';
+import { mapCells } from './mapCells';
+import { applyHeroMove } from './movement';
+import { coverAgainst } from './sight';
+
+// A pass-through spy, so a test can count how often a snapshot works out cover (K2); results are the real ones.
+vi.mock('./sight', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./sight')>();
+  return { ...actual, coverAgainst: vi.fn(actual.coverAgainst) };
+});
 import {
   addAreaEffect,
   createBattleMap,
@@ -14,6 +23,7 @@ import {
   mapSnapshot,
   mapWarnings,
   placeCombatants,
+  playerEffectLabel,
   playerTurnIndex,
   playerView,
   refitFootprints,
@@ -356,8 +366,9 @@ describe('addAreaEffect', () => {
       ok: false,
       problem: 'Fireball: G4 is 25 ft from Mira Voss, beyond its 20-ft range.',
     });
-    // The next turn's write prunes the expired Fireball.
-    const later = addAreaEffect(nextTurn(web.state), hero, { shape: 'emanation', sizeFt: 10, fromId: 'c-4' }, { label: 'Aura', lasting: false });
+    // The next visible turn's write prunes the expired Fireball (through the hidden Cutthroat's turn the player
+    // still sees Bandit 1's: U9).
+    const later = addAreaEffect(nextTurn(nextTurn(web.state)), hero, { shape: 'emanation', sizeFt: 10, fromId: 'c-4' }, { label: 'Aura', lasting: false });
     if (!later.ok) throw new Error(later.problem);
     expect(later.state.map?.effects.map((e) => e.label)).toEqual(['Web', 'Aura']);
   });
@@ -424,6 +435,29 @@ describe('refitFootprints (D39)', () => {
     expect(at(refit, 'c-1')).toBe('A6');
     // Nothing to do: the same positions.
     expect(refitFootprints(sampleMappedCombat(), hero).moved).toEqual([]);
+  });
+
+  it('R6: the hero grown to Large beside a Large ogre moves out of the space they would share (D39; SRD Moving around Other Creatures)', () => {
+    // Enlarged on the sheet (update_character): B6:C7 would take C7 from the Dock Ogre at C7:D8.
+    const enlarged = { ...hero, size: 'Large' as const };
+    const state = move(sampleMappedCombat(), 'c-6', 'C7');
+    const { state: refit, moved, unplaced } = refitFootprints(state, enlarged);
+    expect(moved).toEqual([{ id: 'c-1', from: sq('B6'), to: sq('A6') }]);
+    expect(unplaced).toEqual([]);
+    expect(at(refit, 'c-6')).toBe('C7');
+    expect(mapWarnings(refit, enlarged).filter((w) => w.kind === 'shared-space')).toEqual([]);
+    // A flier 15 ft above the ogre's head shares no space with it and stays put (C3).
+    const aloft = patch(state, 'c-1', { elevationFt: 15 });
+    expect(refitFootprints(aloft, enlarged).moved).toEqual([]);
+  });
+
+  it('R6: update_map creatures making Bandit 1 Large beside a Large creature moves Bandit 1 (D39)', () => {
+    const state = move(sampleMappedCombat(), 'c-6', 'G5'); // the Dock Ogre at G5:H6; Bandit 1 at F4 would grow to F4:G5
+    const edited = editMap(state, hero, { creatures: [{ id: 'c-2', size: 'Large' }] });
+    if (!edited.ok) throw new Error(edited.problem);
+    expect(edited.changes).toEqual([{ kind: 'creature', id: 'c-2', patch: { size: 'Large' }, moved: { from: sq('F4'), to: sq('E4') } }]);
+    expect(at(edited.state, 'c-6')).toBe('G5');
+    expect(mapWarnings(edited.state, hero).filter((w) => w.kind === 'shared-space')).toEqual([]);
   });
 
   it('a creature that no longer fits anywhere is unplaced', () => {
@@ -527,6 +561,85 @@ describe('the player view (D42, D63)', () => {
     const first = { ...patch(sampleMappedCombat(), 'c-1', {}), combatants: [{ ...sampleMappedCombat().combatants[2] }, ...sampleMappedCombat().combatants.filter((c) => c.id !== 'c-5')], turnIndex: 0 };
     expect(playerTurnIndex(first)).toBe(5);
     expect(playerView(first).turnIndex).toBe(4);
+  });
+
+  const okState = (r: { ok: true; state: CombatState } | { ok: false; problem: string }): CombatState => {
+    if (!r.ok) throw new Error(r.problem);
+    return r.state;
+  };
+  const playerEffects = (s: CombatState) => (mapSnapshot(s, hero, { perspective: 'player' })?.effects ?? []).map((e) => e.label);
+  const dmEffects = (s: CombatState) => (mapSnapshot(s, hero, { perspective: 'dm' })?.effects ?? []).map((e) => e.label);
+
+  it('K1: when a hidden creature opens a new round, the view stays in the round of the creature it shows (D42)', () => {
+    // The Cutthroat first in the order: round 3 opens with its hidden turn, after the Dock Ogre's turn of round 2.
+    const base = sampleMappedCombat();
+    const [mira, bandit1, cutthroat, ...rest] = base.combatants;
+    const ogresTurn: CombatState = { ...base, combatants: [{ ...cutthroat, initiative: 20 }, mira, bandit1, ...rest], turnIndex: 5 };
+    const barrel = okState(addAreaEffect(ogresTurn, hero, { shape: 'sphere', sizeFt: 5, at: { kind: 'square', at: sq('H9') } }, { label: 'Thrown barrel', lasting: false }));
+    const hiddenTurn = nextTurn(barrel);
+    expect([hiddenTurn.round, hiddenTurn.turnIndex]).toEqual([3, 0]);
+    const view = playerView(hiddenTurn);
+    expect(view.round).toBe(2);
+    expect(view.combatants[view.turnIndex].name).toBe('Dock Ogre');
+    // What belongs to the Ogre's turn stays in view; the DM's view is the true turn.
+    expect(playerEffects(hiddenTurn)).toEqual(['Thrown barrel']);
+    expect(dmEffects(hiddenTurn)).toEqual([]);
+    // The first visible turn of round 3 brings the round in, and the barrel goes.
+    const mirasTurn = nextTurn(hiddenTurn);
+    expect(playerView(mirasTurn).round).toBe(3);
+    expect(playerEffects(mirasTurn)).toEqual([]);
+    // Without a wrap the round is the true one; a hidden creature first in round 1 never shows round 0.
+    expect(playerView(cutthroatsTurn()).round).toBe(2);
+    expect(playerView({ ...ogresTurn, round: 1, turnIndex: 0 }).round).toBe(1);
+  });
+
+  it("U9: a visible creature's turn-scoped area stays in the player's view through the next (hidden) creature's turn, map writes included", () => {
+    const flask = okState(addAreaEffect(sampleMappedCombat(), hero, { shape: 'sphere', sizeFt: 5, at: { kind: 'square', at: sq('J6') } }, { label: 'Oil flask', lasting: false }));
+    const hiddenTurn = nextTurn(flask); // Bandit 1 → the hidden Cutthroat
+    expect(playerEffects(hiddenTurn)).toEqual(['Oil flask']);
+    // The DM writes the map during the hidden turn: a door, a quiet stat change, an area that catches nobody visible.
+    const writes = [
+      okState(editMap(hiddenTurn, hero, { doors: [{ at: { label: 'office door' }, state: 'open' }] })),
+      okState(editMap(hiddenTurn, hero, { creatures: [{ id: 'c-5', reachFt: 10 }] })),
+      okState(addAreaEffect(hiddenTurn, hero, { shape: 'sphere', sizeFt: 5, at: { kind: 'square', at: sq('N9') } }, { label: 'Smoke dart', lasting: false })),
+    ];
+    for (const s of writes) {
+      expect(playerEffects(s)).toEqual(['Oil flask']);
+      expect(dmEffects(s)).not.toContain('Oil flask');
+    }
+    expect(dmEffects(writes[2])).toEqual(['Smoke dart']);
+    // It ends when the next visible creature's turn begins, and the next map write prunes it.
+    const bandit2 = nextTurn(writes[0]);
+    expect(playerEffects(bandit2)).toEqual([]);
+    expect(okState(editMap(bandit2, hero, { doors: [{ at: { label: 'office door' }, state: 'closed' }] })).map?.effects).toEqual([]);
+  });
+
+  it("K5: an effect label that names a hidden creature reads 'Area' on every player surface; the DM keeps it (D41, D63)", () => {
+    let state = okState(addAreaEffect(sampleMappedCombat({ heroTurn: true }), hero, { shape: 'squares', rects: rects('C7') }, { label: "Cutthroat's caltrops", lasting: true, terrain: ['hazard'] }));
+    state = okState(addAreaEffect(state, hero, { shape: 'squares', rects: rects('D7') }, { label: 'Bandit net', lasting: true, terrain: ['difficult'] }));
+    // Mira steps into the caltrops on her turn: the move records the label on the true map.
+    const moved = applyHeroMove(state, hero, { to: sq('C7'), prefer: 'safest', dash: false, disengage: false, standUp: false }, { stopResolved: true });
+    if (moved.status === 'refused') throw new Error(JSON.stringify(moved.refusal));
+    expect(moved.state.map?.turn?.moves[0].entered).toEqual(["Cutthroat's caltrops"]);
+    const view = playerView(moved.state);
+    expect(view.map?.effects.map((e) => e.label)).toEqual(['Area', 'Bandit net']);
+    expect(view.map?.turn?.moves[0].entered).toEqual(['Area']);
+    expect(playerEffects(moved.state)).toEqual(['Area', 'Bandit net']);
+    expect(mapCells(view, hero)?.hazardsAt.get(6 * 16 + 2)).toEqual(['Area']); // C7, what previews and the announcer read
+    expect(JSON.stringify(view)).not.toMatch(/cutthroat/i);
+    // The DM keeps the label, and so does the player once the Cutthroat is revealed.
+    expect(dmEffects(moved.state)).toEqual(["Cutthroat's caltrops", 'Bandit net']);
+    expect(playerEffects(patch(moved.state, 'c-5', { hidden: false }))).toEqual(["Cutthroat's caltrops", 'Bandit net']);
+    // Plurals count; names a visible creature also answers to say nothing new (Bandit 2 hidden, Bandit 1 in sight).
+    expect(playerEffectLabel(moved.state, "the cutthroats' den")).toBe('Area');
+    const bandit2Hidden = patch(moved.state, 'c-3', { hidden: true });
+    expect(playerEffectLabel(bandit2Hidden, 'Bandit net')).toBe('Bandit net');
+    expect(playerEffectLabel(bandit2Hidden, 'Bandit 2’s net')).toBe('Area');
+    expect(playerEffectLabel(patch(bandit2Hidden, 'c-2', { hidden: true }), 'Bandit net')).toBe('Area');
+    expect(playerEffectLabel(bandit2Hidden, 'Ogre smash')).toBe('Ogre smash');
+    // Nothing hidden: the same objects come back.
+    const open = patch(moved.state, 'c-5', { hidden: false });
+    expect(playerView(open)).toBe(open);
   });
 });
 
@@ -787,7 +900,8 @@ describe('performance (battle-map spec §7.12, generous margins)', () => {
     expect(performance.now() - t1).toBeLessThan(ms + 5);
   });
 
-  it('builds the player snapshot of a 40×40 map with 30 creatures and walls in under 50 ms', () => {
+  /** A 40×40 map with walls, crates and 30 creatures, the hero first. */
+  const bigFight = (): CombatState => {
     const terrain: BattleMapInput['terrain'] = [
       { kind: 'wall', rects: [{ x0: 0, y0: 20, x1: 30, y1: 20 }] },
       { kind: 'wall', rects: [{ x0: 20, y0: 0, x1: 20, y1: 15 }] },
@@ -802,12 +916,41 @@ describe('performance (battle-map spec §7.12, generous margins)', () => {
       position: { x: (i * 7) % 38, y: 2 + ((i * 5) % 36) },
     }));
     const state: CombatState = { ...sampleMappedCombat(), combatants, turnIndex: 0, map };
-    const placed = placeCombatants(state, hero, [{ ids: combatants.map((c) => c.id), anchor: { kind: 'auto' } }]).state;
+    return placeCombatants(state, hero, [{ ids: combatants.map((c) => c.id), anchor: { kind: 'auto' } }]).state;
+  };
+
+  it('builds the player snapshot of a 40×40 map with 30 creatures and walls in under 50 ms', () => {
+    const placed = bigFight();
     mapSnapshot(placed, hero, { perspective: 'player' }); // warm up
     const t0 = performance.now();
     const snap = mapSnapshot({ ...placed }, hero, { perspective: 'player' });
     const ms = performance.now() - t0;
     expect(snap?.tokens).toHaveLength(30);
     expect(ms).toBeLessThan(50);
+  });
+
+  it('K2: a snapshot works out cover only for the tokens whose cover is read, once each, with the same values', () => {
+    const state = bigFight();
+    const spy = vi.mocked(coverAgainst);
+    spy.mockClear();
+    const snap = mapSnapshot(state, hero, { perspective: 'dm' });
+    if (!snap) throw new Error('expected a snapshot');
+    expect(spy).not.toHaveBeenCalled();
+    const heroId = state.combatants[0].id;
+    const foe = snap.tokens[7];
+    const first = foe.coverFromHero;
+    expect(spy).toHaveBeenCalledTimes(1);
+    expect(foe.coverFromHero).toBe(first);
+    expect(spy).toHaveBeenCalledTimes(1);
+    // Every reader gets exactly what the eager snapshot gave: cover both ways for the living, null for the hero.
+    for (const t of snap.tokens) {
+      const live = !t.isHero && t.space !== null && !t.defeated;
+      expect(t.coverFromHero).toEqual(live ? coverAgainst(state, hero, heroId, t.id) : null);
+      expect(t.heroCoverFromIt).toEqual(live ? coverAgainst(state, hero, t.id, heroId) : null);
+    }
+    expect(snap.tokens.some((t) => t.coverFromHero && t.coverFromHero.degree !== 'none')).toBe(true);
+    // Copies and JSON carry the values.
+    expect(JSON.parse(JSON.stringify(foe)).coverFromHero).toEqual(first);
+    expect({ ...foe }.coverFromHero).toEqual(first);
   });
 });

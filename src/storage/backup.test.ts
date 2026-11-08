@@ -363,6 +363,27 @@ describe('parseCampaignBundle', () => {
     expect(bundle.log.find((e) => e.id === 'plain-error')).toMatchObject({ retryable: false });
   });
 
+  it("P4: keeps a player entry's map note when it is text, and sets aside one it can't show (the entry stays; app convention)", () => {
+    const data = valid();
+    const log = data.log as Record<string, unknown>[];
+    const player = log.find((e) => e.kind === 'player') as Record<string, unknown>;
+    const bundle = parseCampaignBundle({
+      ...data,
+      log: [
+        ...log,
+        { ...player, id: 'note-text', seq: 60, mapNote: 'Moved B6 → C7 · 5 ft' },
+        { ...player, id: 'note-object', seq: 61, mapNote: { moved: 'B6' } },
+        { ...player, id: 'note-number', seq: 62, mapNote: 5 },
+      ],
+    });
+    expect(bundle.log.find((e) => e.id === 'note-text')).toMatchObject({ kind: 'player', mapNote: 'Moved B6 → C7 · 5 ft' });
+    for (const id of ['note-object', 'note-number']) {
+      const entry = bundle.log.find((e) => e.id === id) as LogEntry & { mapNote?: unknown };
+      expect(entry).toMatchObject({ kind: 'player', text: player.text });
+      expect(entry.mapNote).toBeUndefined();
+    }
+  });
+
   it('is lenient: keeps unknown fields and fills missing optional ones', () => {
     const data = valid();
     const campaign = data.campaign as Record<string, unknown>;

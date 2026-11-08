@@ -236,8 +236,10 @@ function lineSquares(apex: HalfPoint, u: { x: number; y: number }, n: number, w:
   let counted = 0;
   for (let k = 1; counted < n && k <= n + 8; k++) {
     const mainIndex = aheadIndex(apexMain + 2 * k * sign, sign);
-    // The axis crosses at (apexCross + cross·2k/d) in doubled units; scaled by d to stay integer.
-    const at = apexCross * d + 2 * k * cross;
+    // Where the axis crosses the centre line of that column, in doubled units scaled by d to stay integer. Measuring
+    // at the column's centre (not at the grid line an even-sized caster's apex steps onto) keeps a line aimed at a
+    // square passing through that square's centre (§3.6) on exact diagonals too; for odd sizes it is the same point.
+    const at = apexCross * d + (2 * mainIndex + 1 - apexMain) * sign * cross;
     const base = Math.floor(at / (2 * d));
     const candidates: { i: number; dist: number; right: boolean }[] = [];
     for (let i = base - w - 1; i <= base + w + 1; i++) {

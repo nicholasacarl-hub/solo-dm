@@ -1,4 +1,5 @@
 import '../testing/setup';
+import type { ReactNode } from 'react';
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,6 +15,7 @@ import { DESKTOP, setMatchMedia, stubBoundingRect, TOUCH } from '../testing/setu
 import { resetTipForTests, TIP_STORAGE_KEY } from './banners';
 import { BattleMapPanel } from './BattleMapPanel';
 import { resetShownBudgetForTests } from './model';
+import { useMapPlanExpiry } from './placements';
 
 vi.mock('@/dm', () => import('../testing/dmMock'));
 vi.mock('@/engine', () => import('../testing/engineMock'));
@@ -40,7 +42,8 @@ function renderPanel(overrides: Partial<GameStoreState> = {}, variant: 'dock' | 
 
 const map = () => screen.getByRole('application', { name: /Battle map: Dockside warehouse, 16 by 12 squares/ });
 const bar = () => document.querySelector('[data-map-part="bar"]') as HTMLElement;
-const liveRegion = () => map().querySelector('[aria-live="polite"]') as HTMLElement;
+/** The map's polite live region (BattleMapPanel's, so the list view has it too). */
+const liveRegion = () => document.querySelector('[data-map-part="live"]') as HTMLElement;
 
 async function key(name: string, opts: { shiftKey?: boolean } = {}) {
   await act(async () => {
@@ -462,5 +465,229 @@ describe('BattleMapPanel: plans expire', () => {
     expect(usePlayView.getState().plan).not.toBeNull();
     act(() => useGame.setState({ combat: { ...(useGame.getState().combat as CombatState), turnIndex: 1 } }));
     expect(usePlayView.getState().plan).toBeNull();
+  });
+});
+
+describe('U6: touch targets of at least 44px on phones (spec §7.9)', () => {
+  /** lg Buttons are h-12 (48px) and lg IconButtons size-12; the rest carry min-h-11 (44px). */
+  const expectTouchTarget = (el: Element) => expect(el.className).toMatch(/(^|\s)(h-12|size-12|min-h-11)(\s|$)/);
+
+  it('the mode radios, Keys and help, the plan’s toggles, Stand up, a card’s Close and the tip’s Dismiss', async () => {
+    setMatchMedia(TOUCH);
+    const { user } = renderPanel(
+      { combat: heroTurnWithBanditAdjacent(), character: { ...sampleCharacter(), conditions: [{ id: 'prone' }] } },
+      'tab',
+    );
+    expect(screen.getByRole('radiogroup').className).toContain('[&_button]:min-h-11');
+    expectTouchTarget(screen.getByRole('button', { name: 'Stand up · 15 ft' }));
+    expectTouchTarget(screen.getByRole('button', { name: 'Dismiss the tip' }));
+    await user.click(screen.getByRole('button', { name: 'List, key and help' }));
+    expectTouchTarget(screen.getByRole('button', { name: 'Keys and help' }));
+    await key('Escape');
+    // A plan that provokes: the Disengage and Stand up first toggles.
+    await enterOn(3, 7);
+    expectTouchTarget(screen.getByRole('button', { name: 'Disengage (uses your action)' }));
+    expectTouchTarget(screen.getByRole('button', { name: /^Stand up first/ }));
+    await key('Escape');
+    // A creature's card.
+    act(() => usePlayView.getState().setCursor({ x: 1, y: 4 }));
+    await key('Enter');
+    expectTouchTarget(within(bar()).getByRole('button', { name: 'Close' }));
+  });
+
+  it('the list’s Show on map, Move next to and Move to square, and the area bar’s Clear and Snap', async () => {
+    setMatchMedia(TOUCH);
+    const { user } = renderPanel({ combat: heroTurnWithBanditAdjacent() }, 'tab');
+    await key('l');
+    expectTouchTarget(screen.getByRole('button', { name: 'Show Bandit 1 on the map' }));
+    expectTouchTarget(screen.getByRole('button', { name: 'Move next to Bandit 1' }));
+    expectTouchTarget(screen.getByRole('textbox', { name: 'Move to square' }));
+    await user.click(screen.getByRole('button', { name: 'Show the map' }));
+    await key('a');
+    await user.click(screen.getByRole('button', { name: 'Place it' }));
+    expectTouchTarget(screen.getByRole('button', { name: 'Clear the area' }));
+    expect(screen.getByRole('radio', { name: 'Snap: square' }).parentElement?.className).toContain('[&_button]:min-h-11');
+  });
+});
+
+describe('the list view (spec §7.9: the complete path without a pointer or sight)', () => {
+  const field = () => screen.getByRole('textbox', { name: 'Move to square' }) as HTMLInputElement;
+  const listMove = () => within(field().closest('form') as HTMLElement).getByRole('button', { name: /Move/ });
+
+  it('U3: Move to square commits what its own readout previewed, not an earlier map plan’s Disengage', async () => {
+    const { spies, user } = renderPanel({ combat: heroTurnWithBanditAdjacent() });
+    await enterOn(3, 7); // D8 on the map…
+    await key('g'); // …with Disengage
+    expect(usePlayView.getState().plan?.disengage).toBe(true);
+    await key('l');
+    await user.type(field(), 'C8');
+    expect(screen.getByText(/^To C8 · 10 ft · 20 ft left · ⚠ Leaves Bandit 1's reach: Opportunity Attack$/)).toBeInTheDocument();
+    await user.click(listMove());
+    await waitFor(() => expect(spies.commitHeroMove).toHaveBeenCalledTimes(1));
+    expect(spies.commitHeroMove).toHaveBeenCalledWith({ to: { x: 2, y: 7 }, prefer: 'safest', dash: false, disengage: false, standUp: false });
+  });
+
+  it('U3: …nor an earlier plan’s Dash', async () => {
+    const { spies, user } = renderPanel();
+    await enterOn(3, 7);
+    await key('d');
+    expect(usePlayView.getState().plan?.dash).toBe(true);
+    await key('l');
+    await user.type(field(), 'C7');
+    expect(listMove()).toHaveTextContent(/^Move$/);
+    await user.click(listMove());
+    await waitFor(() => expect(spies.commitHeroMove).toHaveBeenCalledWith({ to: { x: 2, y: 6 }, prefer: 'safest', dash: false, disengage: false, standUp: false }));
+  });
+
+  it('U2: a move from the list that stops for an Opportunity Attack is announced, and the list says why you can’t move on', async () => {
+    const { user } = renderPanel({ combat: heroTurnWithBanditAdjacent() });
+    await user.click(screen.getByRole('button', { name: 'List positions' }));
+    await user.type(field(), 'D8');
+    await user.click(listMove());
+    await waitFor(() => expect(liveRegion()).toHaveTextContent("You stop at B6: leaving Bandit 1's reach gives it an Opportunity Attack."));
+    const list = screen.getByRole('region', { name: 'Positions on the battle map' });
+    expect(within(list).getByText('Tell the DM what you do first — Bandit 1 gets an Opportunity Attack.')).toBeInTheDocument();
+    expect(within(list).queryByText('You can move on your turn.')).not.toBeInTheDocument();
+    // The field doesn't hold on to the square (its readout would re-read a plan to where you stand).
+    expect(field()).toHaveValue('');
+  });
+
+  it('U2: a move from the list is announced as moved, and the field clears', async () => {
+    const { user } = renderPanel();
+    await user.click(screen.getByRole('button', { name: 'List positions' }));
+    await user.type(field(), 'C8');
+    await user.click(listMove());
+    await waitFor(() => expect(liveRegion()).toHaveTextContent('Moved to C8.'));
+    expect(field()).toHaveValue('');
+    expect(screen.queryByText(/^To C8/)).not.toBeInTheDocument();
+  });
+
+  it('U2: the hero’s turn starting while the list is open is announced, and the list gives the DM’s reason while it works', async () => {
+    renderPanel({ combat: sampleMappedCombat(), dm: { phase: 'tool', activity: null, error: null } as GameStoreState['dm'] });
+    act(() => usePlayView.getState().setMapList(true));
+    expect(screen.getByText("It isn't your turn.")).toBeInTheDocument();
+    const c = useGame.getState().combat as CombatState;
+    act(() => useGame.setState({ combat: { ...c, turnIndex: 0, round: c.round + 1 } }));
+    expect(screen.getByText('The DM is still working.')).toBeInTheDocument();
+    act(() => useGame.setState({ dm: { ...useGame.getState().dm, phase: 'idle' } }));
+    await waitFor(() => expect(liveRegion()).toHaveTextContent(/^Your turn\. 30 feet of movement\./));
+  });
+});
+
+describe('U1: focus after the action bar’s own buttons act', () => {
+  /** Press a bar button from the keyboard (it has focus, Enter activates it). */
+  async function pressInBar(user: ReturnType<typeof userEvent.setup>, name: string | RegExp) {
+    const button = within(bar()).getByRole('button', { name });
+    act(() => button.focus());
+    expect(document.activeElement).toBe(button);
+    await user.keyboard('{Enter}');
+  }
+
+  it('Move and Undo: focus returns to the map, not the page', async () => {
+    const { user } = renderPanel();
+    await enterOn(3, 7);
+    await pressInBar(user, 'Move');
+    expect(await screen.findByTestId('moved-readout')).toHaveTextContent('Moved to D8 · 20 ft left');
+    expect(document.activeElement).toBe(map());
+    await pressInBar(user, 'Undo');
+    await waitFor(() => expect(within(bar()).queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument());
+    expect(document.activeElement).toBe(map());
+  });
+
+  it('Cancel, a card’s Close, Dismiss the tip and Clear the area: back to the map', async () => {
+    const { user } = renderPanel();
+    await enterOn(3, 7);
+    await pressInBar(user, 'Cancel');
+    expect(usePlayView.getState().plan).toBeNull();
+    expect(document.activeElement).toBe(map());
+
+    act(() => usePlayView.getState().setCursor({ x: 1, y: 4 })); // Old Tam: his card
+    await key('Enter');
+    await pressInBar(user, 'Close');
+    expect(within(bar()).queryByRole('button', { name: 'Close' })).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(map());
+
+    await pressInBar(user, 'Dismiss the tip');
+    expect(document.activeElement).toBe(map());
+
+    await key('a');
+    await user.click(screen.getByRole('button', { name: 'Place it' }));
+    await pressInBar(user, 'Clear the area');
+    expect(usePlayView.getState().template).toBeNull();
+    expect(document.activeElement).toBe(map());
+  });
+
+  it('in the list view focus goes to the list; focus that moved on elsewhere is left alone', async () => {
+    const { user } = renderPanel({ combat: heroTurnWithBanditAdjacent() });
+    await key('l');
+    await user.click(screen.getByRole('button', { name: 'Move next to Bandit 1' }));
+    await pressInBar(user, 'Cancel');
+    expect(document.activeElement).toBe(screen.getByRole('region', { name: 'Positions on the battle map' }));
+
+    // A plan, then the player tabs on to the list's field: the bar changing under it doesn't steal focus.
+    await user.click(screen.getByRole('button', { name: 'Move next to Bandit 1' }));
+    act(() => within(bar()).getByRole('button', { name: 'Cancel' }).focus());
+    const field = screen.getByRole('textbox', { name: 'Move to square' });
+    act(() => field.focus());
+    act(() => usePlayView.getState().setPlan(null));
+    expect(document.activeElement).toBe(field);
+  });
+});
+
+describe('U10: the next fight on the same table', () => {
+  /** The Play table mounts the expiry once, beside the map. */
+  function Table({ children }: { children: ReactNode }) {
+    useMapPlanExpiry();
+    return <>{children}</>;
+  }
+
+  /** A second, smaller fight (10×8, a new map id and start) with the visible creatures where they stood. */
+  function smallerFight(): CombatState {
+    const base = sampleMappedCombat({ heroTurn: true });
+    return {
+      ...base,
+      startedAt: base.startedAt + 1000,
+      combatants: base.combatants.filter((c) => c.id !== 'c-5' && c.id !== 'c-6'),
+      map: { ...(base.map as NonNullable<CombatState['map']>), id: 'map-7', name: 'The Crooked Lantern', width: 10, height: 8, terrain: [], places: [], effects: [] },
+    };
+  }
+
+  it('opens in Move mode with no cursor or highlight left from the last fight, so the keyboard starts on the hero', async () => {
+    seedGame({ combat: sampleMappedCombat({ heroTurn: true }) });
+    render(
+      <Table>
+        <BattleMapPanel variant="dock" />
+      </Table>,
+    );
+    act(() => usePlayView.getState().setCursor({ x: 15, y: 11 })); // P12
+    await key('m');
+    act(() => usePlayView.getState().setHighlighted('c-2'));
+    act(() => usePlayView.getState().setMapList(true));
+    act(() => useGame.setState({ combat: null }));
+    act(() => useGame.setState({ combat: smallerFight() }));
+    expect(usePlayView.getState()).toMatchObject({ mapMode: 'move', cursor: null, highlightedId: null, plan: null, measure: null, template: null });
+    // The list view is a way of playing: it stays.
+    expect(usePlayView.getState().mapList).toBe(true);
+    act(() => usePlayView.getState().setMapList(false));
+    const app = screen.getByRole('application', { name: /The Crooked Lantern, 10 by 8 squares/ });
+    act(() => app.focus());
+    expect(usePlayView.getState().cursor).toEqual({ x: 1, y: 5 }); // the hero, B6
+    await act(async () => {
+      fireEvent.keyDown(app, { key: 'Enter' });
+    });
+    expect(within(bar()).queryByText("That's off the map.")).not.toBeInTheDocument();
+  });
+
+  it('a map replaced mid-fight drops the old map’s cursor too', () => {
+    seedGame({ combat: sampleMappedCombat({ heroTurn: true }) });
+    render(
+      <Table>
+        <BattleMapPanel variant="dock" />
+      </Table>,
+    );
+    act(() => usePlayView.getState().setCursor({ x: 15, y: 11 }));
+    const c = useGame.getState().combat as CombatState;
+    act(() => useGame.setState({ combat: { ...c, map: { ...(c.map as NonNullable<CombatState['map']>), id: 'map-2' } } }));
+    expect(usePlayView.getState().cursor).toBeNull();
   });
 });

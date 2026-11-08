@@ -10,7 +10,7 @@ import { Button, Input } from '@/ui/components/ui';
 import { useIsTouch } from '../useMediaQuery';
 import type { BattleMapModel } from './model';
 import { previewMove } from './preview';
-import { capitalize, conditionLabel, coverName, moveReadout, refusalText, turnPillText } from './text';
+import { blockText, capitalize, conditionLabel, coverName, moveReadout, refusalText, turnPillText } from './text';
 import { SIDE_WORD } from './tokenStyle';
 
 const TERRAIN_WORD: Record<TerrainFeature['kind'], string> = {
@@ -56,6 +56,8 @@ export function PositionsList({
   const hero = model.heroToken;
   const heroSpace = hero?.space ?? null;
   const btn = touch ? 'lg' : 'sm';
+  // Touch targets of at least 44px on phones (spec §7.9), kept narrow enough for the table's last column.
+  const rowBtn = touch ? 'px-3! text-sm!' : undefined;
 
   const creatures = useMemo(
     () =>
@@ -91,7 +93,8 @@ export function PositionsList({
   const conditions = [...model.hero.conditions.map((k) => conditionLabel(k.id, k.level)), ...(model.hero.exhaustion ? [conditionLabel('exhaustion', model.hero.exhaustion)] : [])];
 
   return (
-    <section aria-labelledby={titleId} className="flex h-full flex-col gap-4 overflow-y-auto p-3 text-sm scroll-thin">
+    // tabIndex -1: where focus returns when the action bar's focused button goes (U1).
+    <section aria-labelledby={titleId} tabIndex={-1} data-map-part="list" className="flex h-full flex-col gap-4 overflow-y-auto p-3 text-sm outline-none scroll-thin focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--ring)]">
       <h2 id={titleId} className="sr-only">
         Positions on the battle map
       </h2>
@@ -144,11 +147,11 @@ export function PositionsList({
                     <td className="py-1.5 pr-2">{cover}</td>
                     <td className="py-1 whitespace-nowrap">
                       <div className="flex gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => onShow(t.id)} aria-label={`Show ${t.name} on the map`}>
+                        <Button size={btn} variant="ghost" className={rowBtn} onClick={() => onShow(t.id)} aria-label={`Show ${t.name} on the map`}>
                           Show on map
                         </Button>
                         {onMoveNextTo && model.canMove && t.side === 'enemy' && !t.defeated && (
-                          <Button size="sm" variant="secondary" onClick={() => onMoveNextTo(t.id)} aria-label={`Move next to ${t.name}`}>
+                          <Button size={btn} variant="secondary" className={rowBtn} onClick={() => onMoveNextTo(t.id)} aria-label={`Move next to ${t.name}`}>
                             Move next to
                           </Button>
                         )}
@@ -179,7 +182,11 @@ export function PositionsList({
         className="flex flex-col gap-1.5"
         onSubmit={(e) => {
           e.preventDefault();
-          if (target && preview && !preview.refusal) onMoveTo(target);
+          if (!target || !preview || preview.refusal) return;
+          onMoveTo(target);
+          // The result is announced by the map's live region; a field still holding the square would re-read a
+          // plan to where you now stand (U2).
+          setText('');
         }}
       >
         <label htmlFor={fieldId} className="font-semibold">
@@ -193,6 +200,7 @@ export function PositionsList({
               onChange={(e) => setText(e.target.value)}
               placeholder="E6"
               autoComplete="off"
+              className={touch ? 'min-h-11' : undefined}
               aria-describedby={readout ? readoutId : undefined}
             />
           </div>
@@ -205,7 +213,10 @@ export function PositionsList({
             {readout}
           </p>
         )}
-        {!model.canMove && <p className="text-xs text-faint">You can move on your turn.</p>}
+        {/* Why you can't move right now, in the bar's words (U2): the DM working, a stop to tell the DM about… */}
+        {model.block && (
+          <p className="text-xs text-faint">{capitalize(blockText(model.block, { stopReactors: (model.pendingStop?.reactorIds ?? []).map(model.nameOf) }))}</p>
+        )}
       </form>
     </section>
   );

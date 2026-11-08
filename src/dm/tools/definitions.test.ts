@@ -67,6 +67,15 @@ describe('descriptions stand alone for sessions whose frozen prompt predates the
     expect(TOOL_DESCRIPTIONS.update_combat).toContain('`reveal` a hidden creature');
     expect(TOOL_DESCRIPTIONS.update_map).toContain("`create` is refused when the campaign's battle maps are Off");
   });
+
+  it('D8: promises from check_map `from` alone only what it returns (spec §4.10), and points to `to` for sight and cover', () => {
+    const schema = DM_TOOLS.find((t) => t.name === 'check_map')?.input_schema as { properties: Record<string, { description?: string }> };
+    const from = schema.properties.from.description ?? '';
+    expect(from).toBe(
+      'A creature or square to measure from. Alone: the distance to everyone and, for a creature, the best cover it can reach this turn (add `to` for line of sight, cover and reach).',
+    );
+    expect(schema.properties.to.description).toBe('Creatures or squares to measure to: distance, line of sight, cover and reach, both ways.');
+  });
 });
 
 describe('toolActivity never names a creature for the map tools (hidden creatures, D41)', () => {

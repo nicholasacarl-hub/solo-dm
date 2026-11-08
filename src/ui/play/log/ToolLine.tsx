@@ -33,6 +33,7 @@ import { Markdown } from '@/ui/components/Markdown';
 import { HomebrewViewer } from '../HomebrewViewer';
 import { findHomebrewInText, homebrewNameFromSummary, isHomebrewLine, vetoHomebrew } from '../homebrew';
 import { usePlayView } from '../playView';
+import { useIsTouch } from '../useMediaQuery';
 
 const ICONS: Record<ToolActivityIcon, { Icon: LucideIcon; tone: string }> = {
   hp: { Icon: HeartCrack, tone: 'text-danger' },
@@ -128,12 +129,14 @@ function isMapSetupLine(entry: ToolLogEntry): boolean {
 /** "Show map" while that fight's map is on the table (desktop: open the dock; phone: the Combat tab). */
 function ShowMapButton({ since }: { since: number }) {
   const shown = useGame((s) => Boolean(s.combat?.active && s.combat.map && since >= s.combat.startedAt));
+  // At least 44px tall on touch screens (spec §7.9).
+  const touch = useIsTouch();
   if (!shown) return null;
   return (
     <button
       type="button"
       onClick={() => usePlayView.getState().focusMap()}
-      className="inline-flex items-center gap-1 rounded-md px-1.5 text-xs font-medium text-info hover:bg-info-soft"
+      className={cn('inline-flex items-center gap-1 rounded-md text-xs font-medium text-info hover:bg-info-soft', touch ? 'min-h-11 px-2.5' : 'px-1.5')}
     >
       <MapIcon className="size-3.5" aria-hidden />
       Show map

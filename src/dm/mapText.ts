@@ -27,11 +27,13 @@ import {
   mapGlyphGrid,
   mapSnapshot,
   moverStats,
+  occupants,
   planMove,
   playerView,
   rectLabel,
   rectsContain,
   rectsLabel,
+  rectsOverlap,
   segmentBlockers,
   spaceDistanceFt,
   spaceLabel,
@@ -67,6 +69,7 @@ import type {
   CreatureSpeeds,
   GridPoint,
   GridRect,
+  MapEffect,
   MapRef,
   MapStop,
   TerrainFeature,
@@ -166,6 +169,24 @@ export function insideLabel(map: BattleMap, label: string): string {
   const hazard = map.terrain.find((f) => f.kind === 'hazard' && (f.label ?? 'hazard') === label);
   if (!hazard) return label;
   return hazard.label ? `the ${hazard.label} (hazard)` : 'a hazard';
+}
+
+function isOwnEmanation(e: MapEffect, creatureId: string): boolean {
+  return e.duration === 'lasting' && e.spec.shape === 'emanation' && e.spec.fromId === creatureId;
+}
+
+/**
+ * The hazards and lasting effects a creature really entered, from the labels a move recorded. Never its own lasting
+ * emanation: that moves with it and leaves out its own space (srd:rule:emanation), so walking can't take it inside —
+ * unless a hazard or another lasting effect has the same label.
+ */
+function enteredLabels(map: BattleMap, moverId: string, labels: readonly string[]): string[] {
+  const own = new Set(map.effects.filter((e) => isOwnEmanation(e, moverId)).map((e) => e.label));
+  if (own.size === 0) return [...labels];
+  const elsewhere = (label: string) =>
+    map.terrain.some((f) => f.kind === 'hazard' && (f.label ?? 'hazard') === label) ||
+    map.effects.some((e) => e.duration === 'lasting' && e.label === label && !isOwnEmanation(e, moverId));
+  return labels.filter((label) => !own.has(label) || elsewhere(label));
 }
 
 const COVER_TITLE: Readonly<Record<CoverResult['degree'], string>> = {
@@ -562,6 +583,100 @@ function reactorsReach(state: CombatState, ids: readonly string[]): { reach: str
   return { reach: `the reach of ${listAnd(names)}`, attack: 'their Opportunity Attacks (their Reactions are unused)' };
 }
 
+/** Where a creature of this size first stands on a hazard or lasting effect with this label along a route (anchors). */
+function entrySquare(state: CombatState, hero: Character | null, size: CreatureSize, route: readonly GridPoint[], label: string): GridPoint | null {
+  const cells = mapCells(state, hero);
+  if (!cells) return null;
+  for (const p of route) {
+    const r = footprint(p, size);
+    for (let y = Math.max(0, r.y0); y <= Math.min(cells.height - 1, r.y1); y++) {
+      for (let x = Math.max(0, r.x0); x <= Math.min(cells.width - 1, r.x1); x++) {
+        if (cells.hazardsAt.get(y * cells.width + x)?.includes(label)) return p;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Who a creature's own lasting emanations cover with it at `to` that they didn't cover with it at `from` — what a
+ * DM-made move reports as "Its Spirit Guardians now covers …" (srd:spell:spirit-guardians), for a player's move.
+ */
+function emanationsNowCover(state: CombatState, hero: Character | null, moverId: string, from: GridPoint, to: GridPoint): { label: string; ids: string[] }[] {
+  const own = (state.map?.effects ?? []).filter((e) => isOwnEmanation(e, moverId));
+  if (own.length === 0 || (from.x === to.x && from.y === to.y)) return [];
+  const standingAt = (p: GridPoint): CombatState => ({ ...state, combatants: state.combatants.map((c) => (c.id === moverId ? { ...c, position: p } : c)) });
+  const covered = (s: CombatState, e: MapEffect): string[] => {
+    const rects = effectSquares(s, hero, e);
+    return occupants(s, hero)
+      .filter((o) => o.id !== moverId && rects.some((r) => rectsOverlap(r, o.rect)))
+      .map((o) => o.id);
+  };
+  const before = standingAt(from);
+  const after = standingAt(to);
+  const out: { label: string; ids: string[] }[] = [];
+  for (const e of own) {
+    const was = new Set(covered(before, e));
+    const ids = covered(after, e).filter((id) => !was.has(id));
+    if (ids.length) out.push({ label: e.label, ids });
+  }
+  return out;
+}
+
+/** What else the DM must hear about one of the player's moves (D1, D2, D35, amendment 11). */
+interface PlayerMoveFacts {
+  /** "leaving B6 gave the [hidden] Cutthroat an unseen Opportunity Attack — …", one per hidden reactor. */
+  unseenAttacks: string[];
+  /** "Mira Voss entered the brazier (hazard) at G11", or null. */
+  entered: string | null;
+  /** "Mira Voss's Spirit Guardians now covers Bandit 1 and Bandit 2", one per emanation. */
+  covers: string[];
+  /** "Mira Voss's move stopped at C7: the [hidden] Cutthroat (M8) blocks the way — …", or null. */
+  blocked: string | null;
+}
+
+/**
+ * The facts of a player's move beyond its route. `stop`: the move ended at this Opportunity Attack stop. A hidden
+ * reactor whose reach the stopped step would have left gets its attack when the move goes on (the repeat provokes it
+ * again), so it isn't reported now; one earlier on the route is resolved first, since it may stop the hero there.
+ */
+function playerMoveFacts(state: CombatState, hero: Character | null, m: TurnMove, stop: MapStop | null): PlayerMoveFacts {
+  const heroC = heroOf(state);
+  const heroName = heroC?.name ?? 'the hero';
+  const map = state.map;
+  const trigger = stop ? (stop.triggerAt ?? stop.at) : null;
+  const unseenAttacks = m.provoked
+    .filter((p) => p.hidden && !(trigger && p.at.x === trigger.x && p.at.y === trigger.y))
+    .map((p) => {
+      const at = squareLabel(p.at);
+      const attack = `leaving ${at} gave the ${dmName(state, p.reactorId)} an unseen Opportunity Attack`;
+      return stop
+        ? `${attack} — resolve it first if it takes it; if it stops the hero, put ${heroName} back on ${at} with move_tokens kind "place" and skip the rest of this move`
+        : `${attack} — resolve it if it takes it; if it stops the hero, put ${heroName} back on ${at} with move_tokens kind "place"`;
+    });
+  let entered: string | null = null;
+  const labels = map && heroC ? enteredLabels(map, heroC.id, m.entered) : [];
+  if (map && heroC && labels.length) {
+    const size = combatantSize(heroC, hero);
+    const places = labels.map((label) => {
+      const at = entrySquare(state, hero, size, m.path, label);
+      return `${insideLabel(map, label)}${at ? ` at ${spaceLabel(at, size)}` : ''}`;
+    });
+    entered = `${heroName} entered ${listAnd(places)}`;
+  }
+  const covers = heroC
+    ? emanationsNowCover(state, hero, heroC.id, m.from, m.to).map((c) => `${heroName}'s ${c.label} now covers ${listAnd(c.ids.map((id) => dmName(state, id)))}`)
+    : [];
+  let blocked: string | null = null;
+  if (m.revealedHidden) {
+    const blocker = m.blockedById ? combatant(state, m.blockedById) : undefined;
+    const who = blocker ? `the ${dmName(state, blocker.id)} (${spaceText(blocker, hero) ?? 'not on the map'})` : 'something hidden';
+    const what = blocker ? `${who} blocks the way` : `${who} cost more movement than the player could see`;
+    blocked = `${heroName}'s move stopped at ${squareLabel(m.to)}: ${what} — the player saw the hero stop and nothing more`;
+  }
+  return { unseenAttacks, entered, covers, blocked };
+}
+
 function playerStopText(state: CombatState, hero: Character | null, stop: MapStop, move: TurnMove | null): string {
   const heroName = combatant(state, stop.moverId)?.name ?? 'the hero';
   const dest = squareLabel(stop.destination);
@@ -573,37 +688,38 @@ function playerStopText(state: CombatState, hero: Character | null, stop: MapSto
     ? ` while passing through ${passer ? `${dmName(state, passer.id)}'s space` : 'a space'} at ${squareLabel(stop.triggerAt)}`
     : ' there';
   const remaining = remainingStopFt(state, hero, stop);
-  return (
-    `the player moved ${heroName}${walked} toward ${dest} and the move stopped at ${at} — leaving ${reach}${where} provokes ${attack}. ` +
+  const sentences = [`the player moved ${heroName}${walked} toward ${dest} and the move stopped at ${at} — leaving ${reach}${where} provokes ${attack}.`];
+  if (move) {
+    const facts = playerMoveFacts(state, hero, move, stop);
+    const onTheWay = [...facts.unseenAttacks, ...(facts.entered ? [facts.entered] : [])];
+    if (onTheWay.length) sentences.push(`On the way, ${onTheWay.join('; ')}.`);
+    if (facts.covers.length) sentences.push(`${capitalize(facts.covers.join('; '))}.`);
+  }
+  sentences.push(
     `The player meant to go on to ${dest} (${remaining} ft more). Resolve the attack (roll_dice), then finish the move with ` +
-    `move_tokens {"moves":[{"who":"hero","to":"${dest}"}]} unless it stops the hero.`
+      `move_tokens {"moves":[{"who":"hero","to":"${dest}"}]} unless it stops the hero.`,
   );
+  return sentences.join(' ');
 }
 
 function playerMoveText(state: CombatState, hero: Character | null, m: TurnMove, budget: TurnBudget | null): string {
-  const heroC = heroOf(state);
-  const heroName = heroC?.name ?? 'the hero';
+  const heroName = heroOf(state)?.name ?? 'the hero';
   const standFt = budget?.standCostFt ?? 0;
-  if (m.kind === 'stand' || (m.path.length === 0 && m.stoodUp && m.from.x === m.to.x && m.from.y === m.to.y)) {
-    return `the player stood ${heroName} up (${standFt} ft).`;
-  }
-  const route = [m.from, ...m.path].map(squareLabel).join(' → ');
   const actions = [m.disengaged ? 'the Disengage action' : '', m.dashed ? 'the Dash action' : ''].filter(Boolean);
   const flags = actions.length ? ` after taking ${actions.join(' and ')}` : '';
-  const stood = m.stoodUp ? `the player stood ${heroName} up (${standFt} ft), then moved` : 'the player moved';
-  const parts = [`${stood} ${heroName} ${route} (${m.costFt} ft)${flags}`];
-  for (const p of m.provoked.filter((x) => x.hidden)) {
-    const at = squareLabel(p.at);
-    parts.push(
-      `leaving ${at} gave the ${dmName(state, p.reactorId)} an unseen Opportunity Attack — resolve it if it takes it; if it stops the hero, put ${heroName} back on ${at} with move_tokens kind "place"`,
-    );
+  let head: string;
+  if (m.kind === 'stand' || (m.path.length === 0 && m.stoodUp && m.from.x === m.to.x && m.from.y === m.to.y)) {
+    head = `the player stood ${heroName} up (${standFt} ft)`;
+  } else if (m.path.length === 0) {
+    // Not a step taken: something hidden held the first square (amendment 11).
+    head = `the player tried to move ${heroName} from ${squareLabel(m.from)}${flags}`;
+  } else {
+    const route = [m.from, ...m.path].map(squareLabel).join(' → ');
+    const stood = m.stoodUp ? `the player stood ${heroName} up (${standFt} ft), then moved` : 'the player moved';
+    head = `${stood} ${heroName} ${route} (${m.costFt} ft)${flags}`;
   }
-  if (m.revealedHidden) {
-    const blocker = m.blockedById ? combatant(state, m.blockedById) : undefined;
-    const who = blocker ? `the ${dmName(state, blocker.id)} (${spaceText(blocker, hero) ?? 'not on the map'})` : 'something hidden';
-    const what = blocker ? `${who} blocks the way` : `${who} cost more movement than the player could see`;
-    parts.push(`${heroName}'s move stopped at ${squareLabel(m.to)}: ${what} — the player saw the hero stop and nothing more`);
-  }
+  const facts = playerMoveFacts(state, hero, m, null);
+  const parts = [head, ...facts.unseenAttacks, ...(facts.entered ? [facts.entered] : []), ...facts.covers, ...(facts.blocked ? [facts.blocked] : [])];
   return `${parts.join('; ')}.`;
 }
 
@@ -972,6 +1088,8 @@ export function moveNotes(state: CombatState, hero: Character | null, moverId: s
         out.push(`${It} crawled (Prone).`);
         break;
       case 'entered': {
+        // Never its own lasting emanation: that moves with it (D11).
+        if (map && enteredLabels(map, moverId, [n.label]).length === 0) break;
         // `at` is the mover's anchor at that step: name its whole space, which is what overlaps the hazard.
         const where = mover ? spaceLabel(n.at, combatantSize(mover, hero)) : squareLabel(n.at);
         out.push(`${It} entered ${map ? insideLabel(map, n.label) : n.label} at ${where}.`);

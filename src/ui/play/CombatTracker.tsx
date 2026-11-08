@@ -1,4 +1,4 @@
-import { useId, useMemo } from 'react';
+import { memo, useId, useMemo, useRef, type MouseEvent } from 'react';
 import { EyeOff, LocateFixed, Shield, Skull, Swords } from 'lucide-react';
 import { CONDITIONS, footprint, healthDescriptor, playerView, spaceDistanceFt, spaceLabel, type Space } from '@/engine';
 import { cn } from '@/lib/cn';
@@ -68,7 +68,7 @@ function placeChips(combatants: readonly Combatant[], hero: Character | null): M
  * the current-turn marker stays on the last creature the player saw act. "Show DM secrets" adds the hidden rows back
  * (dimmed, "Unseen") without moving the marker.
  */
-function trackerRows(combat: CombatState, hero: Character | null, showSecrets: boolean): { rows: TrackerRow[]; yourTurn: boolean } {
+function trackerRows(combat: CombatState, hero: Character | null, showSecrets: boolean): { rows: TrackerRow[]; yourTurn: boolean; round: number } {
   // With nobody hidden, the player's view is the fight itself.
   const view = combat.combatants.some((c) => c.hidden) ? playerView(combat) : combat;
   const current = view.combatants[view.turnIndex];
@@ -82,6 +82,9 @@ function trackerRows(combat: CombatState, hero: Character | null, showSecrets: b
       place: chips.get(c.id) ?? null,
     })),
     yourTurn: current?.isPlayer ?? false,
+    // The player view's round (K1): a hidden creature first in a new round doesn't tick "Round N" over before anyone
+    // the player can see acts.
+    round: view.round,
   };
 }
 
@@ -90,7 +93,6 @@ export function CombatTracker({ className }: { className?: string }) {
   const combat = useGame((s) => s.combat);
   const hero = useGame((s) => s.character);
   const showSecrets = usePlayView((s) => s.showSpoilers);
-  const highlightedId = usePlayView((s) => s.highlightedId);
   const titleId = useId();
   const tracker = useMemo(
     () => (combat?.active ? trackerRows(combat, hero, showSecrets) : null),
@@ -111,7 +113,7 @@ export function CombatTracker({ className }: { className?: string }) {
             {combat.encounterName || 'Combat'}
           </h2>
         </div>
-        <Badge>Round {combat.round}</Badge>
+        <Badge>Round {tracker.round}</Badge>
       </div>
       {tracker.yourTurn && (
         <p role="status" className="border-b border-border bg-accent-soft px-4 py-2 text-sm font-semibold text-accent">
@@ -120,47 +122,59 @@ export function CombatTracker({ className }: { className?: string }) {
       )}
       <ol aria-label="Initiative order" className="divide-y divide-border">
         {tracker.rows.map((row) => (
-          <CombatantRow
-            key={row.combatant.id}
-            row={row}
-            highlighted={row.combatant.id === highlightedId}
-            onMap={onMap}
-            playerHp={row.combatant.isPlayer ? (hero?.hp ?? null) : null}
-          />
+          <CombatantRow key={row.combatant.id} row={row} onMap={onMap} playerHp={row.combatant.isPlayer ? (hero?.hp ?? null) : null} />
         ))}
       </ol>
     </section>
   );
 }
 
-function CombatantRow({
+/**
+ * On phones the tracker sits under the map in the Combat tab's scrolling panel: bring the map back into view, so
+ * "Show on map" shows something (U5). Elsewhere the map is already on screen and nothing scrolls.
+ */
+function revealMapFrom(button: Element): void {
+  const panel = button.closest('#play-panel-combat')?.querySelector<HTMLElement>('[data-map-part="panel"]');
+  panel?.scrollIntoView?.({ block: 'nearest' });
+}
+
+/**
+ * One row. Memoized, and it watches only whether its own creature is highlighted, so the highlight following the
+ * pointer over the map re-renders two rows, not the whole tracker (K3).
+ */
+const CombatantRow = memo(function CombatantRow({
   row: { combatant: c, current, unseen, place },
-  highlighted,
   onMap,
   playerHp,
 }: {
   row: TrackerRow;
-  highlighted: boolean;
   onMap: boolean;
   playerHp: HitPoints | null;
 }) {
   const touch = useIsTouch();
+  const highlighted = usePlayView((s) => s.highlightedId === c.id);
+  /** "Show on map" marked this creature: leaving the row keeps it marked until something else is highlighted. */
+  const shown = useRef(false);
   const hp = c.isPlayer ? playerHp : (c.hp ?? null);
   // The DM hides this creature's numbers (the default for enemies): its exact HP and its AC, which
   // would give away a disguised creature's stat block or how hard it is to hit.
   const numbersHidden = !c.isPlayer && c.hideHp === true;
-  const { setHighlighted } = usePlayView.getState();
   const position = c.position;
-  const showOnMap = () => {
+  const showOnMap = (e: MouseEvent<HTMLButtonElement>) => {
     const view = usePlayView.getState();
+    shown.current = true;
     view.setHighlighted(c.id);
     if (position) view.setCursor(position);
     view.focusMap();
+    revealMapFrom(e.currentTarget);
   };
   // Hovering or focusing a row highlights its token on the map (and the map's hover highlights the row).
-  const highlight = () => setHighlighted(c.id);
+  const highlight = () => {
+    shown.current = false;
+    usePlayView.getState().setHighlighted(c.id);
+  };
   const unhighlight = () => {
-    if (usePlayView.getState().highlightedId === c.id) setHighlighted(null);
+    if (!shown.current && usePlayView.getState().highlightedId === c.id) usePlayView.getState().setHighlighted(null);
   };
   return (
     <li
@@ -187,9 +201,11 @@ function CombatantRow({
         {c.initiative}
       </span>
       <div className="min-w-0 flex-1">
-        <p className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
+        {/* Wraps instead of squeezing the name: the side, the Unseen badge and the square go to the next line when
+            the rail is narrow (E1), and only a name too long for a line of its own is cut. */}
+        <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-sm font-medium">
           <span className={cn('size-2 shrink-0 rounded-full', SIDE_DOT[c.side])} aria-hidden />
-          <span className={cn('truncate', c.defeated && 'line-through')}>{c.name}</span>
+          <span className={cn('min-w-0 truncate', c.defeated && 'line-through')}>{c.name}</span>
           <span className="shrink-0 text-xs font-normal text-faint">({SIDE_LABEL[c.side]})</span>
           {current && <span className="sr-only">, current turn</span>}
           {unseen && (
@@ -237,7 +253,7 @@ function CombatantRow({
       )}
     </li>
   );
-}
+});
 
 function HealthLine({ hp, hidden }: { hp: HitPoints; hidden: boolean }) {
   if (hidden) {

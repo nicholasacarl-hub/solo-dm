@@ -324,7 +324,8 @@ const UNFINISHED_PICTURE = 'This picture wasn’t finished when the game was sav
 
 /** What each kind of display-log entry needs to be shown (defaults fill what can be guessed). */
 const logKindSchemas = {
-  player: z.looseObject({ text: z.string() }),
+  // mapNote is rendered as text under the bubble: anything else (a damaged or foreign file) is set aside, not shown.
+  player: z.looseObject({ text: z.string(), mapNote: z.string().optional().catch(undefined) }),
   dm: z.looseObject({
     text: z.string(),
     choices: z.array(z.string()).optional().catch(undefined),

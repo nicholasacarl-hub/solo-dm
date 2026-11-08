@@ -7,16 +7,18 @@ import { useCallback, useId, useRef, useState } from 'react';
 import { cn } from '@/lib/cn';
 import type { GridPoint, MapRef } from '@/types';
 import { usePlayView, type MapMode } from '../playView';
+import { useIsTouch } from '../useMediaQuery';
 import type { AreaPreset } from './areaPresets';
 import { SpellAreaPicker } from './AreaPicker';
 import { MapActionBar } from './MapActionBar';
 import { MapHelpDialog } from './MapHelp';
-import { MapToolbar, TurnPill, ZoomControls } from './MapToolbar';
+import { MapToolbar, TurnPill, ZoomControls, zoomControlsInset } from './MapToolbar';
 import { MapViewport, type MapViewportHandle } from './MapViewport';
 import { useBattleMapModel, type BattleMapModel } from './model';
 import { PositionsList } from './PositionsList';
 import { approachSquare } from './preview';
 import { templateFromPreset } from './templates';
+import { useFocusReturn } from './useFocusReturn';
 import { useMapController } from './useMapController';
 
 const HELP_TEXT =
@@ -32,10 +34,13 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
   const controller = useMapController(model);
   const { ui, dispatch } = controller;
   const viewport = useRef<MapViewportHandle>(null);
+  const area = useRef<HTMLDivElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
   const helpId = useId();
   const [helpOpen, setHelpOpen] = useState(false);
   const mapList = usePlayView((s) => s.mapList);
   const dock = usePlayView((s) => s.mapDock);
+  const touch = useIsTouch();
 
   // Stable handlers: the chrome (toolbar, zoom buttons, pill) is memoized and must not re-render on every hovered
   // square (spec §7.12: hover re-renders only the path, the bands and the bar).
@@ -50,6 +55,13 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
   const onZoom = useCallback((factor: number) => viewport.current?.zoom(factor), []);
   const onFit = useCallback(() => viewport.current?.fit(), []);
   const onCenter = useCallback(() => viewport.current?.centre(), []);
+  // The bar's buttons replace the bar (Move, Cancel, Undo, a card's Close…): focus goes back to the map, or to the
+  // list while it is open, instead of falling to the page (U1).
+  const refocus = useCallback(() => {
+    if (viewport.current) viewport.current.focus();
+    else area.current?.querySelector<HTMLElement>('[data-map-part="list"]')?.focus({ preventScroll: true });
+  }, []);
+  useFocusReturn(barRef, refocus);
   const showOnMap = (id: string) => {
     const t = model.tokens.get(id);
     const view = usePlayView.getState();
@@ -57,7 +69,10 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
     if (t?.space) dispatch({ type: 'cursor', at: { x: t.space.x0, y: t.space.y0 } });
     view.setMapList(false);
   };
+  // The list's Move to square commits exactly what its readout previewed (the default options): an earlier plan's
+  // Disengage, Dash, Stand up or route choice must not ride along (U3).
   const moveTo = (square: GridPoint) => {
+    dispatch({ type: 'cancel' });
     dispatch({ type: 'plan-to', to: square });
     dispatch({ type: 'confirm' });
   };
@@ -91,9 +106,10 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
         helpId={helpId}
         onHelp={openHelp}
         onList={toggleList}
+        controlsInset={zoomControlsInset(touch)}
       />
       <div className="pointer-events-none absolute right-2 bottom-2 flex flex-col">
-        <ZoomControls layout={variant === 'dock' ? 'row' : 'column'} onZoom={onZoom} onFit={onFit} onCenter={onCenter} />
+        <ZoomControls onZoom={onZoom} onFit={onFit} onCenter={onCenter} />
       </div>
     </>
   );
@@ -117,18 +133,37 @@ function PanelBody({ model, variant }: { model: BattleMapModel; variant: 'dock' 
         />
       </div>
       <div
+        ref={area}
         data-map-part="viewport"
         className={cn('relative min-h-0 overflow-hidden', variant === 'dock' ? 'flex-1' : 'h-[min(calc(100vw-24px),58dvh)] shrink-0')}
       >
         {viewportArea}
       </div>
-      {/* Below the map, never over it: a plan's destination is never hidden under its own readout. */}
-      <div data-map-part="bar" className={cn('border-border bg-surface px-3 py-2 empty:hidden', variant === 'dock' ? 'border-t' : 'border-b')}>
-        {bar}
-      </div>
+      {variant === 'dock' ? (
+        // Desktop: below the map in a strip of fixed height, so the map keeps its size whatever the bar holds — a
+        // map that shrank and grew with the bar would shift under the pointer, and an opening fit would stop fitting
+        // (E2). A bar taller than the strip (a card, a plan with chips) grows up over the map's bottom edge instead.
+        <div data-map-part="strip" className="relative h-14 shrink-0">
+          <div className="absolute inset-x-0 bottom-0 z-10 flex max-h-44 min-h-full flex-col overflow-y-auto border-t border-border bg-surface px-3 py-2 scroll-thin">
+            <div ref={barRef} data-map-part="bar" className="@container my-auto">
+              {bar}
+            </div>
+          </div>
+        </div>
+      ) : (
+        // Phones: below the map, never over it (portrait), or in the side column (landscape, index.css).
+        <div ref={barRef} data-map-part="bar" className="@container border-b border-border bg-surface px-3 py-2 empty:hidden">
+          {bar}
+        </div>
+      )}
       <p id={helpId} className="sr-only">
         {HELP_TEXT}
       </p>
+      {/* The map's one polite live region (spec §7.9), here so it serves the list view too (U2): moves, stops and
+          turn starts are announced whichever view is open. */}
+      <div aria-live="polite" className="sr-only" data-map-part="live">
+        {controller.announcement}
+      </div>
       {/* Mounted only while open: "Your spells" needs the rules index, which isn't worth building for every fight. */}
       {ui.picker && <SpellAreaPicker hero={model.hero} onPick={pick} onClose={() => dispatch({ type: 'picker', open: false })} />}
       {helpOpen && <MapHelpDialog open onClose={() => setHelpOpen(false)} />}

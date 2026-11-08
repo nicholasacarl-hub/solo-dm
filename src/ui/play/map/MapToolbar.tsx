@@ -33,7 +33,7 @@ export const TurnPill = memo(function TurnPill({ model, onStandUp }: { model: Ba
       </span>
       {model.heroToken?.reactionUsed && <Badge tone="danger">Reaction used</Badge>}
       {canStand && (
-        <Button size={touch ? 'md' : 'sm'} variant="secondary" onClick={onStandUp} disabled={b.leftFt < b.standCostFt}>
+        <Button size={touch ? 'md' : 'sm'} variant="secondary" className={touch ? 'min-h-11' : undefined} onClick={onStandUp} disabled={b.leftFt < b.standCostFt}>
           Stand up · {b.standCostFt} ft
         </Button>
       )}
@@ -80,7 +80,7 @@ export const MapToolbar = memo(function MapToolbar({
         size="sm"
         value={mode}
         onChange={onMode}
-        className={touch ? '[&_button]:min-h-10 [&_button]:min-w-11' : undefined}
+        className={touch ? '[&_button]:min-h-11 [&_button]:min-w-11' : undefined}
         options={MODES.map(({ value, label, key, Icon }) => ({
           value,
           title: `${label} (${key})`,
@@ -130,7 +130,7 @@ export const MapToolbar = memo(function MapToolbar({
             )}
             <MapKey />
             <Button
-              size="sm"
+              size={touch ? 'lg' : 'sm'}
               variant="secondary"
               onClick={() => {
                 close();
@@ -156,24 +156,22 @@ export const MapToolbar = memo(function MapToolbar({
   );
 });
 
-export const ZoomControls = memo(function ZoomControls({
-  onZoom,
-  onFit,
-  onCenter,
-  layout = 'column',
-}: {
-  onZoom(factor: number): void;
-  onFit(): void;
-  onCenter(): void;
-  /** A row in the desktop dock (short), a column on phones. */
-  layout?: 'row' | 'column';
-}) {
+/**
+ * Px down the map's right edge that the zoom buttons cover — the buttons (IconButton lg, 48px, on touch screens; md,
+ * 40px, with a mouse), their 8px margin and a gap — which the cameras the app chooses keep clear (E3).
+ */
+export function zoomControlsInset(touch: boolean): number {
+  return (touch ? 48 : 40) + 16;
+}
+
+/** The zoom, fit and centre buttons: a column at the map's bottom-right corner (beside the map, never on it, E3). */
+export const ZoomControls = memo(function ZoomControls({ onZoom, onFit, onCenter }: { onZoom(factor: number): void; onFit(): void; onCenter(): void }) {
   const touch = useIsTouch();
   // The non-gesture path (WCAG 2.5.1, 2.5.7): 48px on touch screens, 40px with a mouse.
   const size = touch ? 'lg' : 'md';
   const button = 'border border-border bg-surface/90 text-text shadow-card hover:bg-surface-2';
   return (
-    <div className={cn('pointer-events-auto flex gap-1.5', layout === 'column' ? 'flex-col' : 'flex-row')} role="group" aria-label="Zoom">
+    <div className="pointer-events-auto flex flex-col gap-1.5" role="group" aria-label="Zoom">
       <IconButton label="Zoom in" size={size} className={button} onClick={() => onZoom(1.25)}>
         <Plus className="size-4" aria-hidden />
       </IconButton>

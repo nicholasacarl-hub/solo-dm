@@ -216,6 +216,31 @@ describe('cover (SRD 5.2.1 Cover: srd:rule:combat-cover; app convention C21)', (
     expect(coverFromPoint(state, null, { x2: 1, y2: 5 }, 't')).toEqual({ degree: 'half', byTerrain: ['half cover'], byCreatureIds: [] });
     expect(coverFromPoint(state, null, { x2: 1, y2: 5 }, 'u').degree).toBe('none');
   });
+
+  it("R3: an area gets no cover from the square its origin lies in, nor from its caster's own space (srd:rule:combat-cover; app convention C21)", () => {
+    const state = scene(
+      [
+        ['half-cover', 'E5'],
+        ['half-cover', 'G7'],
+        ['half-cover', 'L6'],
+      ],
+      [
+        { id: 'mira', at: 'E5' }, // standing on the crates
+        { id: 'b1', at: 'D5' }, // open ground beside her
+        { id: 'b2', at: 'H7' }, // open ground beside the G7 crates
+        { id: 'ogre', at: 'K5', size: 'Large' }, // K5:L6, one of its squares on crates
+        { id: 'b3', at: 'N6' },
+      ],
+    );
+    const none = { degree: 'none', byTerrain: [], byCreatureIds: [] };
+    // Burning Hands from Mira's centre (E5) west at D5; a Fireball centred on the crate square G7 at H7.
+    expect(coverFromPoint(state, null, { x2: 9, y2: 9 }, 'b1')).toEqual(none);
+    expect(coverFromPoint(state, null, { x2: 13, y2: 13 }, 'b2')).toEqual(none);
+    // A cone from the Large ogre's centre (the corner K5/L6) toward N6: its own crates on L6 don't shield N6.
+    expect(coverFromPoint(state, null, { x2: 22, y2: 10 }, 'b3')).toEqual(none);
+    // Cover on the far side still counts: centred on F7, the G7 crates stand between the blast and H7.
+    expect(coverFromPoint(state, null, { x2: 11, y2: 13 }, 'b2')).toEqual({ degree: 'half', byTerrain: ['half cover'], byCreatureIds: [] });
+  });
 });
 
 describe('line of sight (app convention C20; srd:rule:heavily-obscured)', () => {

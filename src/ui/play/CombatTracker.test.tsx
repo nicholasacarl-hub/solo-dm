@@ -1,12 +1,14 @@
 import './testing/setup';
-import { act, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { sampleCombat, sampleMappedCombat } from '@/test/fixtures';
 import type { CombatState } from '@/types';
 import { CombatTracker } from './CombatTracker';
+import { BattleBar } from './map';
 import { usePlayView } from './playView';
 import { seedGame } from './testing/seed';
+import { useIsTouch } from './useMediaQuery';
 
 /** Top-level initiative rows (condition chips are a nested list). */
 function initiativeRows(): HTMLElement[] {
@@ -17,6 +19,20 @@ function initiativeRows(): HTMLElement[] {
 }
 
 vi.mock('@/engine', () => import('./testing/engineMock'));
+vi.mock('@/dm', () => import('./testing/dmMock'));
+vi.mock('@/data', () => ({ useRulesIndex: () => null }));
+// Every tracker row asks useIsTouch once per render: counting its calls counts row renders (K3).
+vi.mock('./useMediaQuery', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./useMediaQuery')>();
+  return { ...actual, useIsTouch: vi.fn(actual.useIsTouch) };
+});
+
+// jsdom has no scrollIntoView: the U5 tests stub it.
+const realScrollIntoView = Element.prototype.scrollIntoView;
+afterEach(() => {
+  vi.restoreAllMocks();
+  Element.prototype.scrollIntoView = realScrollIntoView;
+});
 
 describe('CombatTracker', () => {
   it('lists the initiative order with the current turn marked', () => {
@@ -155,6 +171,58 @@ describe('CombatTracker on a battle map', () => {
     await user.tab();
     expect(usePlayView.getState().highlightedId).toBe('c-2');
   });
+
+  it('K3: a highlight change re-renders only the rows it touches, not every row', () => {
+    seedGame({ combat: visibleOnly() });
+    render(<CombatTracker />);
+    const rowRenders = vi.mocked(useIsTouch);
+    rowRenders.mockClear();
+    act(() => usePlayView.getState().setHighlighted('c-3'));
+    expect(rowOf('Bandit 2')).toHaveClass('outline-2');
+    expect(rowRenders).toHaveBeenCalledTimes(1);
+    rowRenders.mockClear();
+    act(() => usePlayView.getState().setHighlighted('c-4'));
+    expect(rowOf('Old Tam')).toHaveClass('outline-2');
+    expect(rowOf('Bandit 2')).not.toHaveClass('outline-2');
+    expect(rowRenders).toHaveBeenCalledTimes(2);
+  });
+
+  it('U5: on a phone, "Show on map" scrolls the map back into view and keeps the creature marked after the row is left', async () => {
+    const user = userEvent.setup();
+    const scrolled: Element[] = [];
+    Element.prototype.scrollIntoView = vi.fn(function scrollIntoView(this: Element) {
+      scrolled.push(this);
+    });
+    seedGame({ combat: visibleOnly() });
+    // The Combat tab's layout: the map panel above the tracker in one scrolling panel.
+    render(
+      <section id="play-panel-combat">
+        <div data-map-part="panel">the map</div>
+        <CombatTracker />
+      </section>,
+    );
+    await user.click(screen.getByRole('button', { name: 'Show Bandit 2 on the map' }));
+    expect(scrolled).toEqual([document.querySelector('[data-map-part="panel"]')]);
+    expect(Element.prototype.scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+    // Leaving the row (pointer or focus) doesn't unmark the creature the player asked to see…
+    await user.unhover(rowOf('Bandit 2'));
+    fireEvent.blur(screen.getByRole('button', { name: 'Show Bandit 2 on the map' }));
+    expect(usePlayView.getState().highlightedId).toBe('c-3');
+    // …another row's hover takes over as usual.
+    await user.hover(rowOf('Old Tam'));
+    expect(usePlayView.getState().highlightedId).toBe('c-4');
+    await user.unhover(rowOf('Old Tam'));
+    expect(usePlayView.getState().highlightedId).toBeNull();
+  });
+
+  it('U5: on the desktop (no Combat tab panel) nothing scrolls', async () => {
+    const user = userEvent.setup();
+    Element.prototype.scrollIntoView = vi.fn();
+    seedGame({ combat: visibleOnly() });
+    render(<CombatTracker />);
+    await user.click(screen.getByRole('button', { name: 'Show Bandit 2 on the map' }));
+    expect(Element.prototype.scrollIntoView).not.toHaveBeenCalled();
+  });
 });
 
 describe('CombatTracker with a hidden creature (D41, D42; no leaks unless "Show DM secrets")', () => {
@@ -197,6 +265,32 @@ describe('CombatTracker with a hidden creature (D41, D42; no leaks unless "Show 
     expect(screen.getByRole('status')).toHaveTextContent('Your turn');
     expect(initiativeRows()[0]).toHaveAttribute('aria-current', 'true');
     expectNoCutthroat(container);
+  });
+
+  it('K1: a hidden creature first in a new round leaves "Round N" on the round the player saw (tracker and collapsed map bar)', () => {
+    const state = sampleMappedCombat();
+    const cutthroat = state.combatants.find((c) => c.hidden) as CombatState['combatants'][number];
+    const others = state.combatants.filter((c) => !c.hidden);
+    // Round 2 has just begun with the hidden Cutthroat: the player still sees round 1's last turn (the Dock Ogre's).
+    seedGame({ combat: { ...state, round: 2, turnIndex: 0, combatants: [{ ...cutthroat, initiative: 30 }, ...others] } });
+    render(<CombatTracker />);
+    expect(screen.getByText('Round 1')).toBeInTheDocument();
+    expect(screen.queryByText('Round 2')).not.toBeInTheDocument();
+    expect(initiativeRows().find((r) => r.getAttribute('aria-current') === 'true')).toHaveTextContent('Dock Ogre');
+    render(<BattleBar onExpand={() => {}} />);
+    expect(screen.getByText(/· Round 1/)).toBeInTheDocument();
+    expect(screen.queryByText(/Round 2/)).not.toBeInTheDocument();
+  });
+
+  it('E1: with "Show DM secrets" the hidden creature keeps its name: the side, badge and square wrap instead of squeezing it', () => {
+    seedGame({ combat: fight(2) });
+    usePlayView.setState({ showSpoilers: true });
+    render(<CombatTracker />);
+    const name = within(initiativeRows()[2]).getByText('Cutthroat');
+    const line = name.parentElement as HTMLElement;
+    expect(line).toHaveClass('flex-wrap');
+    expect(within(line).getByText('Unseen')).toBeInTheDocument();
+    expect(within(line).getByTitle('Square and distance from you')).toHaveTextContent('M8 · 55 ft');
   });
 
   it('shows the hidden creature dimmed and marked "Unseen" with "Show DM secrets", without moving the marker', () => {

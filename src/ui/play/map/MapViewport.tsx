@@ -1,7 +1,8 @@
 /**
  * The battle map's surface (spec §7.5, §7.9): one tab stop — a role="application" div whose <svg> is aria-hidden,
- * with a drawn keyboard cursor and one polite live region. Pointer gestures go through useMapGestures (native
- * listeners); the keyboard works only while the map has focus, so the composer's caret is never hijacked.
+ * with a drawn keyboard cursor (the polite live region is BattleMapPanel's, so the list view has it too). Pointer
+ * gestures go through useMapGestures (native listeners); the keyboard works only while the map has focus, so the
+ * composer's caret is never hijacked.
  */
 import { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState, type FocusEvent, type KeyboardEvent, type RefObject } from 'react';
 import { dirVector, healthDescriptor, squareLabel } from '@/engine';
@@ -18,7 +19,9 @@ import {
   defaultCamera,
   liveCamera,
   rectCentre,
+  refitOpening,
   revealRect,
+  sameCamera,
   rulerStep,
   screenToCorner,
   screenToSquare,
@@ -78,6 +81,8 @@ export interface MapViewportProps {
   helpId: string;
   onHelp(): void;
   onList(): void;
+  /** Px down the right edge that the zoom buttons cover: the cameras the app chooses keep the map clear of it (E3). */
+  controlsInset?: number;
 }
 
 /** Imperative handles for the toolbar's zoom buttons. */
@@ -184,7 +189,7 @@ function anchorOf(rect: GridRect | null | undefined): GridPoint | null {
 }
 
 export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(function MapViewport(
-  { model, controller, cameraKey, compact, helpId, onHelp, onList },
+  { model, controller, cameraKey, compact, helpId, onHelp, onList, controlsInset = 0 },
   ref,
 ) {
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -193,7 +198,8 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
   const rulersRef = useRef<RulersHandle>(null);
   const ids = useMapIds();
   const reducedMotion = usePrefersReducedMotion();
-  const size = useViewSize(wrapRef);
+  const measured = useViewSize(wrapRef);
+  const size = useMemo<ViewSize>(() => ({ ...measured, right: controlsInset }), [measured, controlsInset]);
   const map = model.map;
   const extent = useMemo<MapExtent>(() => ({ cols: map.width, rows: map.height }), [map.width, map.height]);
   const stored = usePlayView((s) => s.cameras[cameraKey]);
@@ -210,10 +216,28 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     usePlayView.getState().setCamera(cameraKey, committedCamera(clampCamera(cam, extent, size), size));
   }, [cameraKey, extent, size, hasSize]);
 
-  // Keep the opening camera once the viewport has a size, so it doesn't follow the hero around afterwards.
+  // Keep the opening camera once the viewport has a size, so it doesn't follow the hero around afterwards. Until the
+  // player (or the app, revealing a square) moves it, it is still the app's own choice and follows the view's size:
+  // a view that settles or is resized after it was chosen gets it chosen again, so a fit stays a fit (E2).
+  const opening = useRef<{ cam: MapCamera; width: number; height: number } | null>(null);
   useEffect(() => {
-    if (!stored && hasSize) usePlayView.getState().setCamera(cameraKey, committed);
-  }, [stored, hasSize, cameraKey, committed]);
+    if (!hasSize) return;
+    const { width, height } = size;
+    if (!stored) {
+      opening.current = { cam: committed, width, height };
+      usePlayView.getState().setCamera(cameraKey, committed);
+      return;
+    }
+    const o = opening.current;
+    if (!o || o.cam !== stored || (o.width === width && o.height === height)) return;
+    const next = refitOpening(stored, extent, size, compact);
+    if (sameCamera(next, stored)) {
+      opening.current = { cam: stored, width, height };
+      return;
+    }
+    opening.current = { cam: next, width, height };
+    usePlayView.getState().setCamera(cameraKey, next);
+  }, [stored, hasSize, cameraKey, committed, size, extent, compact]);
 
   const pointToSquare = useCallback((at: Pt, cam: Camera) => screenToSquare(cam, at.x, at.y, extent), [extent]);
 
@@ -295,7 +319,7 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
     const c = rectCentre(heroRect);
     flyTo(fillCamera({ cellPx: committed.cellPx, cx: c.x, cy: c.y }, extent, size));
   }, [committed.cellPx, heroRect, hasSize, extent, size, flyTo]);
-  useImperativeHandle(ref, () => ({ zoom, fit, centre, focus: () => wrapRef.current?.focus() }), [zoom, fit, centre]);
+  useImperativeHandle(ref, () => ({ zoom, fit, centre, focus: () => wrapRef.current?.focus({ preventScroll: true }) }), [zoom, fit, centre]);
 
   // The camera follows the keyboard cursor, and "Show on map" (the tracker and the list set the cursor; a new
   // object each time, so showing the same creature again after panning away brings it back).
@@ -446,7 +470,8 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
   const showLabels = cellPx >= 20;
   const showTerrainLabels = cellPx >= 30;
   const quadrants = useMemo(() => tinyQuadrants(tokenList), [tokenList]);
-  const unseenTrail = model.unseenMoves.at(-1)?.path ?? null;
+  // The hero's last move this turn: the tween follows its route when the hero arrives by it (an Undo slides back).
+  const unseenTrail = model.unseenMoves.at(-1) ?? null;
 
   const drawings = useMemo(() => {
     const draw = (t: (typeof tokenList)[number], secret: boolean): TokenDrawing => {
@@ -552,9 +577,6 @@ export const MapViewport = forwardRef<MapViewportHandle, MapViewportProps>(funct
         </g>
         {hasSize && <Rulers ref={rulersRef} camera={camera} extent={extent} size={size} />}
       </svg>
-      <div aria-live="polite" className="sr-only">
-        {controller.announcement}
-      </div>
     </div>
   );
 });

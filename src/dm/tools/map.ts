@@ -992,7 +992,15 @@ function pathSection(state: CombatState, hero: Character | null, mover: Combatan
   } else {
     return '';
   }
-  const triggers = opportunityTriggers(state, hero, mover.id, [from, ...route], { disengaged: false, kind: 'move' });
+  // As the move itself would run (D5): no Opportunity Attacks after this turn's Disengage, and none from the reactors
+  // of a stop this mover is continuing (repeating the move ignores them).
+  const stop = state.map?.stop;
+  const continuing = stop && stop.moverId === mover.id && stop.round === state.round && stop.at.x === from.x && stop.at.y === from.y ? stop : null;
+  const triggers = opportunityTriggers(state, hero, mover.id, [from, ...route], {
+    disengaged: current ? (budget?.disengaged ?? false) : false,
+    kind: 'move',
+    ...(continuing ? { ignoreIds: [...continuing.reactorIds, ...continuing.declinedIds] } : {}),
+  });
   const routeText = [from, ...route].map(squareLabel).join(' ');
   const provokes = triggers.length
     ? `Provokes: ${triggers.map((t) => `${dmName(state, t.reactorId)}'s Opportunity Attack leaving ${squareLabel(t.at)}`).join(' · ')}.`

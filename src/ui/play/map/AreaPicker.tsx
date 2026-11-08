@@ -6,6 +6,7 @@
 import { useId, useMemo, useState } from 'react';
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp, MessageSquareText, RotateCcw, RotateCw, X } from 'lucide-react';
 import { useRulesIndex } from '@/data';
+import { cn } from '@/lib/cn';
 import type { Character } from '@/types';
 import { Button, Dialog, IconButton, Input, Segmented, Select } from '@/ui/components/ui';
 import { useIsTouch } from '../useMediaQuery';
@@ -42,6 +43,8 @@ export function AreaPicker({ open, presets, onPick, onClose }: { open: boolean; 
   const widthId = useId();
   const nameId = useId();
   const touch = useIsTouch();
+  // Touch targets of at least 44px on phones (spec §7.9).
+  const tall = touch ? 'min-h-11' : undefined;
   return (
     <Dialog open={open} onClose={onClose} size="sm" title="Area of effect" description="See who an area would catch. It stays on your map only, until you add it to your message.">
       <div className="flex flex-col gap-4">
@@ -54,7 +57,7 @@ export function AreaPicker({ open, presets, onPick, onClose }: { open: boolean; 
                   <button
                     type="button"
                     onClick={() => onPick(p)}
-                    className="flex w-full items-baseline justify-between gap-3 rounded-xl border border-border px-3 py-2 text-left text-sm hover:bg-surface-2"
+                    className="flex min-h-11 w-full items-center justify-between gap-3 rounded-xl border border-border px-3 py-2 text-left text-sm hover:bg-surface-2"
                   >
                     <span className="font-medium">{p.label}</span>
                     <span className="text-xs text-muted">{presetSummary(p)}</span>
@@ -70,7 +73,7 @@ export function AreaPicker({ open, presets, onPick, onClose }: { open: boolean; 
             size="sm"
             value={shape}
             onChange={setShape}
-            className="flex-wrap"
+            className={cn('flex-wrap', touch && '[&_button]:min-h-11')}
             options={TEMPLATE_SHAPES.map((s) => ({ value: s, label: SHAPE_LABEL[s] }))}
           />
           <div className="flex items-end gap-2">
@@ -78,7 +81,7 @@ export function AreaPicker({ open, presets, onPick, onClose }: { open: boolean; 
               <label htmlFor={sizeId} className="text-sm font-medium">
                 {shape === 'sphere' || shape === 'cylinder' ? 'Radius' : shape === 'cube' ? 'Side' : shape === 'emanation' ? 'Distance' : 'Length'}
               </label>
-              <Select id={sizeId} value={CUSTOM_SIZES.includes(size) ? String(size) : ''} onChange={(e) => e.target.value && setSize(Number(e.target.value))}>
+              <Select id={sizeId} className={tall} value={CUSTOM_SIZES.includes(size) ? String(size) : ''} onChange={(e) => e.target.value && setSize(Number(e.target.value))}>
                 {!CUSTOM_SIZES.includes(size) && <option value="">{size} ft</option>}
                 {CUSTOM_SIZES.map((n) => (
                   <option key={n} value={n}>
@@ -96,6 +99,7 @@ export function AreaPicker({ open, presets, onPick, onClose }: { open: boolean; 
                 max={500}
                 step={5}
                 aria-label="Size in feet"
+                className={tall}
                 value={size}
                 onChange={(e) => {
                   const n = Number(e.target.value);
@@ -109,7 +113,7 @@ export function AreaPicker({ open, presets, onPick, onClose }: { open: boolean; 
               <label htmlFor={widthId} className="text-sm font-medium">
                 Width
               </label>
-              <Select id={widthId} value={String(width)} onChange={(e) => setWidth(Number(e.target.value))}>
+              <Select id={widthId} className={tall} value={String(width)} onChange={(e) => setWidth(Number(e.target.value))}>
                 {[5, 10, 15, 20].map((n) => (
                   <option key={n} value={n}>
                     {n} ft
@@ -122,7 +126,7 @@ export function AreaPicker({ open, presets, onPick, onClose }: { open: boolean; 
             <label htmlFor={nameId} className="text-sm font-medium">
               What is it? <span className="font-normal text-muted">(optional)</span>
             </label>
-            <Input id={nameId} value={name} maxLength={40} placeholder={SHAPE_LABEL[shape]} onChange={(e) => setName(e.target.value)} />
+            <Input id={nameId} className={tall} value={name} maxLength={40} placeholder={SHAPE_LABEL[shape]} onChange={(e) => setName(e.target.value)} />
           </div>
           <Button variant="primary" size={touch ? 'lg' : 'md'} onClick={() => onPick(customPreset(shape, size, width, name))}>
             Place it
@@ -138,6 +142,8 @@ export function TemplateBar({ model, controller }: { model: BattleMapModel; cont
   const { ui, dispatch, area } = controller;
   const t = ui.template;
   const btn = touch ? 'lg' : 'sm';
+  // Big targets on touch screens (48px tall), narrow enough to share a row in phone landscape's side column.
+  const pad = touch ? 'px-3! text-sm!' : undefined;
   if (!t) {
     return (
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -154,18 +160,16 @@ export function TemplateBar({ model, controller }: { model: BattleMapModel; cont
   const readout = area?.problem ?? areaReadout(templateLine(t, heroName, area?.catches ?? [], model.nameOf));
   const nudge = (dx: number, dy: number) => dispatch({ type: 'template', template: nudgeTemplate(t, dx, dy, extent) });
   const hint = isCentred(t) ? (touch ? 'Tap a square to move it.' : 'Click a square to move it.') : isAimed(t) ? (touch ? 'Tap a square to aim.' : 'Click a square to aim.') : 'It surrounds you.';
-  // Two rows, so the map above keeps its height: what it catches (with Change and Clear), then how to place it and
-  // Add to message. The hint gives way first when the bar is narrow.
+  // What it catches (with Clear), then how to place it with Change and Add to message — one row when the bar is wide.
+  // When it is narrow (a phone; phone landscape's side column scrolls), Change and Add to message take a row of their
+  // own above the placement controls, so the primary action never starts out of view (U12). The hint goes first.
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-start gap-2">
         <p className="min-w-0 flex-1 text-sm font-medium" data-testid="area-readout">
           {readout}
         </p>
-        <Button size={btn} variant="ghost" className="-my-1" onClick={() => dispatch({ type: 'picker', open: true })}>
-          Change
-        </Button>
-        <IconButton label="Clear the area" size={touch ? 'md' : 'sm'} className="-my-1 -mr-1" onClick={() => dispatch({ type: 'template', template: null })}>
+        <IconButton label="Clear the area" size={touch ? 'lg' : 'sm'} className="-my-1 -mr-1" onClick={() => dispatch({ type: 'template', template: null })}>
           <X className="size-4" aria-hidden />
         </IconButton>
       </div>
@@ -183,6 +187,7 @@ export function TemplateBar({ model, controller }: { model: BattleMapModel; cont
           <>
             <Segmented<'square' | 'corner'>
               size="sm"
+              className={touch ? '[&_button]:min-h-11' : undefined}
               value={t.snap}
               onChange={(snap) => dispatch({ type: 'template', template: snapTemplate(t, snap, extent) })}
               options={[
@@ -216,17 +221,22 @@ export function TemplateBar({ model, controller }: { model: BattleMapModel; cont
             </IconButton>
           </div>
         )}
-        <span className="hidden min-w-0 flex-1 truncate text-xs text-faint sm:inline">{hint}</span>
-        <Button
-          size={btn}
-          variant="arcane"
-          className="ml-auto"
-          disabled={!area || area.problem !== null}
-          icon={<MessageSquareText className="size-4" aria-hidden />}
-          onClick={controller.addAreaToMessage}
-        >
-          Add to message
-        </Button>
+        <span className="hidden min-w-0 flex-1 truncate text-xs text-faint @lg:inline">{hint}</span>
+        <div className="ml-auto flex flex-wrap items-center justify-end gap-1.5 @max-md:order-first @max-md:basis-full" data-template-actions>
+          <Button size={btn} variant="ghost" className={pad} onClick={() => dispatch({ type: 'picker', open: true })}>
+            Change
+          </Button>
+          <Button
+            size={btn}
+            variant="arcane"
+            className={pad}
+            disabled={!area || area.problem !== null}
+            icon={<MessageSquareText className="size-4" aria-hidden />}
+            onClick={controller.addAreaToMessage}
+          >
+            Add to message
+          </Button>
+        </div>
       </div>
     </div>
   );

@@ -632,7 +632,9 @@ export const TOOL_SCHEMAS = {
   check_map: z.strictObject({
     from: str(80)
       .optional()
-      .describe('A creature or square to measure from. Alone: distances, line of sight and cover to everyone, and the cover it can reach this turn.'),
+      .describe(
+        'A creature or square to measure from. Alone: the distance to everyone and, for a creature, the best cover it can reach this turn (add `to` for line of sight, cover and reach).',
+      ),
     to: z.array(str(80)).min(1).max(8).optional().describe('Creatures or squares to measure to: distance, line of sight, cover and reach, both ways.'),
     path_to: str(80)
       .optional()

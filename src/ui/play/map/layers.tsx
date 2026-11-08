@@ -527,9 +527,15 @@ export interface TokenDrawing {
   /** Tiny creatures share a square: their quadrant (0–3). */
   quadrant: number;
   showLabels: boolean;
-  /** The route of its last move (anchors entered), for the tween. */
-  trail: readonly GridPoint[] | null;
+  /** Its last move (where it started and the anchors it entered), for the tween. */
+  trail: TokenTrail | null;
   reducedMotion: boolean;
+}
+
+/** A move as the tween follows it (a TurnMove is one). */
+export interface TokenTrail {
+  from: GridPoint;
+  path: readonly GridPoint[];
 }
 
 function drawingKey(d: TokenDrawing): string {
@@ -569,19 +575,32 @@ function anchorWorld(d: TokenDrawing): Pt {
   return { x: s.x0 * CELL, y: s.y0 * CELL };
 }
 
+/**
+ * The way a token travels from where it was drawn (`from`) to where it is now: along its last move's route when it
+ * arrived by that move — it was drawn at the move's start and the route ends here — else straight. An Undo lands the
+ * token at the end of the move before the undone one, so it slides straight back instead of walking that move's
+ * route again (U14).
+ */
+export function tweenRoute(from: Pt, target: Pt, trail: TokenTrail | null): Pt[] {
+  const at = (p: GridPoint): Pt => ({ x: p.x * CELL, y: p.y * CELL });
+  const end = trail?.path.at(-1);
+  if (trail && end) {
+    const start = at(trail.from);
+    const last = at(end);
+    if (start.x === from.x && start.y === from.y && last.x === target.x && last.y === target.y) return [from, ...trail.path.map(at)];
+  }
+  return [from, target];
+}
+
 /** Animate a token's <g> from where it was along its route (or straight) to where it is now. */
-function useTween(ref: RefObject<SVGGElement | null>, target: Pt, trail: readonly GridPoint[] | null, reducedMotion: boolean) {
+function useTween(ref: RefObject<SVGGElement | null>, target: Pt, trail: TokenTrail | null, reducedMotion: boolean) {
   const prev = useRef<Pt | null>(null);
   useLayoutEffect(() => {
     const from = prev.current;
     prev.current = target;
     const el = ref.current;
     if (!el || !from || (from.x === target.x && from.y === target.y) || reducedMotion) return undefined;
-    const lastTrail = trail?.at(-1);
-    const route: Pt[] =
-      trail && lastTrail && lastTrail.x * CELL === target.x && lastTrail.y * CELL === target.y
-        ? [from, ...trail.map((p) => ({ x: p.x * CELL, y: p.y * CELL }))]
-        : [from, target];
+    const route = tweenRoute(from, target, trail);
     const squares = Math.max(1, route.length - 1, Math.round(Math.hypot(target.x - from.x, target.y - from.y) / CELL));
     const duration = Math.min(TWEEN_MAX_MS, TWEEN_MS_PER_SQUARE * squares);
     if (typeof window.requestAnimationFrame !== 'function') return undefined;

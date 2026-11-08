@@ -14,6 +14,7 @@ import type {
 import { APIConnectionError } from '@anthropic-ai/sdk';
 import { isToldAndAnswered } from '@/engine';
 import { isSeqAnswered } from '@/lib/answered';
+import { heroMoveBlock, pendingPlayerStop } from '@/state/heroMove';
 import { sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
 import type { BattleMap, CombatState, DmLogEntry, PlayerLogEntry, TurnMove } from '@/types';
 import { MAX_ITERATIONS, MAX_MAPPED_ITERATIONS, NOTES } from './agent';
@@ -21,7 +22,7 @@ import { resetDmDeps } from './deps';
 import { DM_INSTRUCTIONS } from './prompts';
 import { makeMessage, textBlock, thinkingBlock, toolUseBlock } from './scripted';
 import { canRegenerate } from './index';
-import { WRAP_UP_REQUEST } from './session';
+import { LATE_MOVES_NOTE, WRAP_UP_REQUEST } from './session';
 import { fakeDice } from './testing/fakeEngine';
 import { autoRespond } from './testing/fakeStore';
 import { answerRolls, NO_IMAGE_KEY, setupHarness } from './testing/harness';
@@ -607,6 +608,195 @@ describe("the player's map moves reach the DM once, with the next message (D48, 
   });
 });
 
+describe('moves made after a failed request or a reply reach the DM with Retry and Regenerate (D6)', () => {
+  const C7 = { x: 2, y: 6 };
+  const moveToC7 = (h: ReturnType<typeof setupHarness>) => h.s().commitHeroMove({ to: C7, prefer: 'safest', dash: false, disengage: false, standUp: false });
+  const systemBlocks = (m: BetaMessageParam | undefined): string[] => {
+    if (m?.role !== 'system') return [];
+    if (typeof m.content === 'string') return [m.content];
+    return (m.content ?? []).map((b) => (b.type === 'text' ? b.text : ''));
+  };
+  const systemText = (m: BetaMessageParam | undefined) => systemBlocks(m).join('\n');
+  const seen = (h: ReturnType<typeof setupHarness>) =>
+    (h.s().combat?.map?.turn?.moves ?? []).every((m) => isToldAndAnswered(m, (seq) => isSeqAnswered(h.s().transcript, seq)));
+
+  it('D6: Retry tells the DM about a move made after the failure, even when the DM then ends the turn', async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: sampleMappedCombat({ heroTurn: true }) },
+      steps: [
+        { error: new APIConnectionError({ message: 'offline' }) },
+        makeMessage([toolUseBlock('toolu_next', 'update_combat', { action: 'next_turn' })], 'tool_use'),
+        end('You strike; Bandit 1 snarls.'),
+      ],
+    });
+    await h.controller.sendPlayerMessage('I attack the bandit.');
+    expect(h.s().dm.phase).toBe('error');
+    expect((await moveToC7(h)).ok).toBe(true);
+    await h.controller.retry();
+
+    const note = systemText(h.client.requests[1].messages.at(-1));
+    expect(note.startsWith(`${LATE_MOVES_NOTE}\nMap: Dockside warehouse 16×12`)).toBe(true);
+    expect(note).toContain('\n- Mira Voss (hero) C7 · reach 5 ft');
+    expect(note).toContain('\nNew since your last reply: the player moved Mira Voss B6 → C7 (5 ft).');
+    expectAppendOnly(h.client.requests);
+    // The turn moved on, and the move counts as seen: the next message doesn't report it again.
+    expect(h.s().combat?.turnIndex).toBe(1);
+    expect(seen(h)).toBe(true);
+  });
+
+  it('D6: Regenerate after moving re-runs on the same message plus a note with the move', async () => {
+    const h = setupHarness({ withSession: true, state: { combat: sampleMappedCombat({ heroTurn: true }) }, steps: [end('First draft.'), end('Second draft.')] });
+    await h.controller.sendPlayerMessage('I look around.');
+    expect((await moveToC7(h)).ok).toBe(true);
+    await h.controller.regenerate();
+    const [first, second] = h.client.requests;
+    expect(second.messages.slice(0, -1)).toEqual(first.messages);
+    expect(systemText(second.messages.at(-1))).toContain('New since your last reply: the player moved Mira Voss B6 → C7 (5 ft).');
+    expect(seen(h)).toBe(true);
+    // Nothing new since: a second regenerate adds no note.
+    h.client.push(end('Third draft.'));
+    await h.controller.regenerate();
+    expect(h.client.requests[2].messages).toEqual(second.messages);
+  });
+
+  it("D6: folds the note into the turn's unanswered app notes, so a system message only ever follows a user message", async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: sampleMappedCombat({ heroTurn: true }) },
+      steps: [{ error: new APIConnectionError({ message: 'offline' }) }, end('You strike.')],
+    });
+    h.s().queueDmNotice('The player renamed the hero’s sword.');
+    await h.controller.sendPlayerMessage('I attack the bandit.');
+    const [notices] = systemBlocks(h.client.requests[0].messages[1]);
+    expect(notices).toContain('The player renamed the hero’s sword.');
+    expect((await moveToC7(h)).ok).toBe(true);
+    await h.controller.retry();
+    const messages = h.client.requests[1].messages;
+    expect(messages.map((m) => m.role)).toEqual(['user', 'system']);
+    expect(messages[0]).toEqual(h.client.requests[0].messages[0]);
+    const blocks = systemBlocks(messages[1]);
+    expect(blocks).toHaveLength(2);
+    expect(blocks[0]).toBe(notices);
+    expect(blocks[1].startsWith(LATE_MOVES_NOTE)).toBe(true);
+    expect(seen(h)).toBe(true);
+  });
+
+  it('D6: adds no note when nothing moved, and leaves the moves the message already carries to it', async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: heroMovedToC7() },
+      steps: [{ error: new APIConnectionError({ message: 'offline' }) }, end('You step aside.')],
+    });
+    await h.controller.sendPlayerMessage('I step aside.');
+    await h.controller.retry();
+    expect(h.client.requests[1].messages).toEqual(h.client.requests[0].messages);
+    expect(seen(h)).toBe(true);
+  });
+
+  it('D6: a note whose request fails is set aside with the turn, and the next message reports the move once', async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: sampleMappedCombat({ heroTurn: true }) },
+      steps: [{ error: new APIConnectionError({ message: 'offline' }) }, { error: new APIConnectionError({ message: 'offline' }) }, end('You hold.')],
+    });
+    await h.controller.sendPlayerMessage('I attack the bandit.');
+    expect((await moveToC7(h)).ok).toBe(true);
+    await h.controller.retry();
+    expect(h.s().dm.phase).toBe('error');
+    await h.controller.sendPlayerMessage('I hold my ground.');
+    const last = h.client.requests[2].messages;
+    expect(last.some((m) => systemText(m).startsWith(LATE_MOVES_NOTE))).toBe(false);
+    expect(lastUserState(h.client.requests[2])).toContain('New since your last reply: the player moved Mira Voss B6 → C7 (5 ft).');
+    expect(h.s().pendingDmNotices).toEqual([]);
+    expect(seen(h)).toBe(true);
+  });
+
+  it('D6: after a failure mid-turn, a failed note never leaves a user turn following a system message', async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: sampleMappedCombat({ heroTurn: true }) },
+      steps: [
+        makeMessage([toolUseBlock('toolu_look', 'check_map', { from: 'hero' })], 'tool_use'),
+        { error: new APIConnectionError({ message: 'offline' }) },
+        { error: new APIConnectionError({ message: 'offline' }) },
+        end('You hold.'),
+      ],
+    });
+    await h.controller.sendPlayerMessage('Where is everyone?');
+    expect(h.s().dm.phase).toBe('error');
+    expect((await moveToC7(h)).ok).toBe(true);
+    await h.controller.retry();
+    expect(systemText(h.client.requests[2].messages.at(-1))).toContain('the player moved Mira Voss B6 → C7 (5 ft).');
+    await h.controller.sendPlayerMessage('I hold my ground.');
+    const messages = h.client.requests[3].messages;
+    messages.forEach((m, i) => {
+      if (m.role === 'system') expect(messages[i + 1]?.role, `after message ${i}`).not.toBe('user');
+    });
+    expect(lastUserState(h.client.requests[3])).toContain('New since your last reply: the player moved Mira Voss B6 → C7 (5 ft).');
+    expect(seen(h)).toBe(true);
+  });
+});
+
+describe('what the DM saw stays seen in the next session (D3, P2)', () => {
+  const RECAP = '## Recap\nYou fought in the warehouse.\n\n## DM Notes\nThe ogre is tired.';
+  const openingState = (h: ReturnType<typeof setupHarness>) => lastUserState(h.client.requests.at(-1) as MessageCreateParamsBase);
+
+  it('D3: a stop the DM answered is not reported again when the next session opens, and the map is not blocked', async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: sampleStopCombat() },
+      steps: [end('The ogre swings as you go — it misses.'), end(RECAP), end('Previously… the warehouse.')],
+    });
+    await h.controller.sendPlayerMessage('I keep moving to A7.');
+    expect(lastUserState(h.client.requests[0])).toContain('the move stopped at B6');
+    await h.controller.endSession();
+    expect(h.s().activeSession).toBeNull();
+    await h.controller.beginOrResume();
+    const opening = openingState(h);
+    expect(opening).toContain('Map: Dockside warehouse');
+    expect(opening).not.toContain('New since your last reply');
+    expect(pendingPlayerStop(h.s().combat as CombatState, h.s().transcript)).toBeNull();
+    expect(heroMoveBlock(h.s())).toBeNull();
+  });
+
+  it("P2: a hidden creature's Opportunity Attack the DM already handled is not re-issued", async () => {
+    const base = heroMovedToC7();
+    const map = base.map as BattleMap;
+    const turn = map.turn as NonNullable<BattleMap['turn']>;
+    const combat: CombatState = {
+      ...base,
+      map: { ...map, turn: { ...turn, moves: [{ ...turn.moves[0], provoked: [{ reactorId: 'c-5', at: { x: 1, y: 5 }, hidden: true }] }] } },
+    };
+    const h = setupHarness({
+      withSession: true,
+      state: { combat },
+      steps: [end('The cutthroat lunges from the dark — a miss.'), end(RECAP), end('Previously… the warehouse.')],
+    });
+    await h.controller.sendPlayerMessage('I step to C7.');
+    expect(lastUserState(h.client.requests[0])).toContain('gave the [hidden] Cutthroat an unseen Opportunity Attack');
+    await h.controller.endSession();
+    await h.controller.beginOrResume();
+    expect(openingState(h)).not.toContain('unseen Opportunity Attack');
+    expect(openingState(h)).not.toContain('New since your last reply');
+  });
+
+  it('D3: a move first reported in the wrap-up (which the DM is told not to act on) is reported again', async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: sampleMappedCombat({ heroTurn: true }) },
+      steps: [end('The bandits wait.'), end(RECAP), end('Previously… the warehouse.')],
+    });
+    await h.controller.sendPlayerMessage('I look around.');
+    const moved = await h.s().commitHeroMove({ to: { x: 2, y: 6 }, prefer: 'safest', dash: false, disengage: false, standUp: false });
+    expect(moved.ok).toBe(true);
+    await h.controller.endSession();
+    expect(lastUserState(h.client.requests[1])).toContain('New since your last reply: the player moved Mira Voss B6 → C7 (5 ft).');
+    await h.controller.beginOrResume();
+    expect(openingState(h)).toContain('New since your last reply: the player moved Mira Voss B6 → C7 (5 ft).');
+  });
+});
+
 describe('the request cap (D52)', () => {
   const reading = (n: number) => Array.from({ length: n }, (_, i) => makeMessage([toolUseBlock(`toolu_r${i}`, 'get_character_sheet', {})], 'tool_use'));
 
@@ -623,6 +813,41 @@ describe('the request cap (D52)', () => {
     await h.controller.sendPlayerMessage('I wait and watch.');
     expect(h.client.requests).toHaveLength(MAX_ITERATIONS);
     expect(MAX_ITERATIONS).toBe(24);
+  });
+
+  it('D4: never drops within a run, so the DM still narrates after end_combat late in a long turn', async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: sampleMappedCombat({ heroTurn: true }) },
+      steps: [
+        ...reading(25),
+        makeMessage([toolUseBlock('toolu_end', 'end_combat', { summary: 'The bandits flee.' })], 'tool_use'),
+        end('The last bandit bolts out the loading door.'),
+      ],
+    });
+    await h.controller.sendPlayerMessage('I charge.');
+    expect(h.s().combat).toBeNull();
+    expect(h.client.requests).toHaveLength(27);
+    expect(h.s().log.at(-1)).toMatchObject({ kind: 'dm', text: 'The last bandit bolts out the loading door.' });
+    expect(h.s().log.some((e) => e.kind === 'system' && e.text === NOTES.iterationLimit)).toBe(false);
+  });
+
+  it('D4: still rises when the fight goes onto a map mid-turn', async () => {
+    const START = {
+      encounter_name: 'Ambush in the warehouse',
+      map: { name: 'Dockside warehouse', width: 16, height: 12 },
+      hero_position: 'B6',
+      combatants: [{ name: 'Bandit', side: 'enemy', ac: 12, hp_max: 11, initiative_bonus: 1, stat_block: 'Bandit', position: 'F4' }],
+    };
+    fakeDice.queue(20, 1);
+    const h = setupHarness({
+      withSession: true,
+      campaignSettings: { playerRollMode: 'auto' },
+      steps: [makeMessage([toolUseBlock('toolu_start', 'start_combat', START)], 'tool_use'), ...reading(MAX_MAPPED_ITERATIONS)],
+    });
+    await h.controller.sendPlayerMessage('I draw my dagger.');
+    expect(h.s().combat?.map).toBeDefined();
+    expect(h.client.requests).toHaveLength(MAX_MAPPED_ITERATIONS);
   });
 });
 

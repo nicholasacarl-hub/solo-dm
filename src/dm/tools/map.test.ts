@@ -518,6 +518,24 @@ describe('check_map (spec §4.10): read-only', () => {
     expect(provoking.s().combat?.map?.stop).toBeUndefined();
   });
 
+  it("D5: lists no Opportunity Attacks that this turn's Disengage or a stop being continued prevents", async () => {
+    // Bandit 1 at C5 has taken the Disengage action this turn (srd:action:disengage).
+    const turn = { combatantId: 'c-2', round: 2, movedFt: 0, dashFt: 0, dashes: 0, disengaged: true, stoodUp: false, moves: [] };
+    const disengaged = setup(fixture({ at: { 'Bandit 1': 'C5' }, map: { turn } }));
+    const out = await disengaged.run('check_map', { from: 'Bandit 1', path_to: 'F4' });
+    expect(out.content).toMatch(/^Bandit 1 \(C5\) → F4: .* No Opportunity Attacks on that route\.$/);
+
+    // A move that stopped at C5 (the player let Mira Voss's attack go; Old Tam's stopped it): its repeat provokes nothing.
+    const stopped = setup(fixture({ at: { 'Bandit 1': 'C5' } }));
+    answerConfirm(stopped, false);
+    expect((await stopped.run('move_tokens', { moves: [{ who: 'Bandit 1', to: 'F4' }] })).content).toMatch(/^1\. Bandit 1 stopped at C5 on the way to F4/);
+    const planned = await stopped.run('check_map', { from: 'Bandit 1', path_to: 'F4' });
+    expect(planned.content).toContain('No Opportunity Attacks on that route.');
+    const repeat = await stopped.run('move_tokens', { moves: [{ who: 'Bandit 1', to: 'F4' }] });
+    expect(repeat.content).toMatch(/^1\. Bandit 1 moved C5 → F4/);
+    expect(repeat.content).not.toMatch(/provoked/);
+  });
+
   it('previews an area without showing it to the player', async () => {
     const h = setup(fixture({ heroTurn: true }));
     const out = await h.run('check_map', { area: { shape: 'sphere', size_ft: 20, at: 'G4' } });

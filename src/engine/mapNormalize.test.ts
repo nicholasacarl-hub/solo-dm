@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { sampleBattleMap, sampleCombat, sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
-import { MAP_LIMITS, type BattleMap, type CombatState } from '@/types';
+import { sampleBattleMap, sampleCharacter, sampleCombat, sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
+import { MAP_LIMITS, type AreaSpec, type AreaTerrain, type BattleMap, type CombatState } from '@/types';
+import { addAreaEffect, mapSnapshot, mapWarnings } from './battleMap';
+import { removeCombatant } from './combat';
+import { CELL, mapCells } from './mapCells';
 import { normalizeBattleMap, normalizeCombatState } from './mapNormalize';
 
 // Saves are read leniently (app convention, spec §6.4 and D69): nothing here is an SRD rule.
@@ -59,7 +62,7 @@ describe('normalizeBattleMap (app convention: lenient saves)', () => {
     expect(map.name).toHaveLength(MAP_LIMITS.maxMapName);
   });
 
-  it('N2: drops a turn record, a stop and effects that name combatants not in the fight', () => {
+  it('N2: drops a turn record, a stop and turn-scoped effects that name combatants not in the fight; other effects lose only the dangling reference', () => {
     const stopMap = sampleStopCombat().map as BattleMap;
     const effect = {
       id: 'e10',
@@ -76,13 +79,28 @@ describe('normalizeBattleMap (app convention: lenient saves)', () => {
     expect(known.stop?.reactorIds).toEqual(['c-6']);
     expect(known.effects.map((e) => e.label)).toEqual(['Spirit Guardians']);
 
+    const burning = { id: 'e12', label: 'Burning Hands', spec: { shape: 'cone', sizeFt: 15, fromId: 'c-1', toward: { kind: 'creature', id: 'c-2' } }, rects: [{ x0: 2, y0: 4, x1: 3, y1: 6 }], terrain: [], duration: 'turn', round: 2 };
     const withoutHero = normalized(
-      { turn: stopMap.turn, stop: stopMap.stop, effects: [effect, { ...effect, id: 'e11', turnOfId: 'c-9' }] },
+      {
+        turn: stopMap.turn,
+        stop: stopMap.stop,
+        effects: [effect, { ...effect, id: 'e11', turnOfId: 'c-9' }, { ...burning, turnOfId: 'c-1' }, { ...burning, id: 'e13', turnOfId: 'c-2' }],
+      },
       ['c-2', 'c-3', 'c-4', 'c-5', 'c-6'],
     );
     expect(withoutHero.turn).toBeUndefined();
     expect(withoutHero.stop).toBeUndefined();
-    expect(withoutHero.effects).toEqual([]);
+    // Lasting effects stay (spec §2.1: until effects_end); the orphaned emanation has no creature (§3.10's warning).
+    expect(withoutHero.effects.map((e) => [e.id, e.label, e.duration, e.turnOfId, e.spec.fromId])).toEqual([
+      ['e10', 'Spirit Guardians', 'lasting', '', undefined],
+      ['e11', 'Spirit Guardians', 'lasting', '', undefined],
+      // The turn of a creature that has left is over; this one's turn creature is still here.
+      ['e13', 'Burning Hands', 'turn', 'c-2', undefined],
+    ]);
+    expect(withoutHero.effects[2]).toMatchObject({ spec: { shape: 'cone', toward: { kind: 'creature', id: 'c-2' } }, rects: [{ x0: 2, y0: 4, x1: 3, y1: 6 }] });
+    // An unreadable reference still drops the effect (a damaged save), as before.
+    const broken = normalized({ effects: [{ ...effect, spec: { ...effect.spec, fromId: 7 } }, { ...burning, turnOfId: 'c-1', spec: { ...burning.spec, toward: { kind: 'creature', id: 3 } } }] });
+    expect(broken.effects).toEqual([]);
 
     // A stop whose every reactor has gone is dropped; unknown reactors in move records are left out.
     const noOgre = normalized({ turn: stopMap.turn, stop: stopMap.stop }, ['c-1', 'c-2']);
@@ -242,6 +260,42 @@ describe('normalizeCombatState (app convention: lenient saves)', () => {
     expect(d).not.toHaveProperty('speeds');
     expect(e).toMatchObject({ reachFt: 60, speedChangeFt: 30 });
     expect(f).not.toHaveProperty('speeds');
+  });
+
+  it('R1/P1: a reload keeps the lasting effects of a creature that has left the fight, as memory does (app convention; spec §2.1, §3.10)', () => {
+    const hero = sampleCharacter();
+    let state: CombatState = sampleMappedCombat(); // Bandit 1's turn
+    const add = (spec: AreaSpec, label: string, lasting: boolean, terrain: AreaTerrain[] = []) => {
+      const added = addAreaEffect(state, hero, spec, { label, lasting, terrain });
+      if (!added.ok) throw new Error(added.problem);
+      state = added.state;
+    };
+    add({ shape: 'cube', sizeFt: 20, at: { kind: 'square', at: { x: 8, y: 6 } }, fromId: 'c-2' }, 'Web', true, ['difficult', 'obscured']); // I7 → H6:K9
+    add({ shape: 'sphere', sizeFt: 10, at: { kind: 'creature', id: 'c-2' } }, 'Fog Cloud', true, ['obscured']);
+    add({ shape: 'emanation', sizeFt: 10, fromId: 'c-2' }, 'Spirit Guardians', true, ['difficult']);
+    add({ shape: 'cone', sizeFt: 15, fromId: 'c-2', toward: { kind: 'creature', id: 'c-1' } }, 'Burning Hands', false);
+    expect(state.map?.effects.every((e) => e.turnOfId === 'c-2')).toBe(true);
+
+    // Bandit 1 flees (update_combat remove); the turn passes to the Cutthroat. Then the page reloads.
+    const live = removeCombatant(state, 'c-2');
+    const reloaded = normalizeCombatState(JSON.parse(JSON.stringify(live)));
+
+    expect(reloaded.map?.effects.map((e) => e.label)).toEqual(['Web', 'Fog Cloud', 'Spirit Guardians']);
+    // Everything a reader sees is the same: squares and terrain, both snapshots, the orphan warning.
+    const cells = (s: CombatState) => mapCells(s, hero);
+    expect(cells(reloaded)?.flags).toEqual(cells(live)?.flags);
+    expect(cells(reloaded)?.hazardsAt).toEqual(cells(live)?.hazardsAt);
+    expect(cells(reloaded)!.flags[6 * 16 + 8] & (CELL.DIFFICULT | CELL.OBSCURED)).toBe(CELL.DIFFICULT | CELL.OBSCURED); // I7
+    for (const perspective of ['dm', 'player'] as const) {
+      expect(mapSnapshot(reloaded, hero, { perspective })?.effects).toEqual(mapSnapshot(live, hero, { perspective })?.effects);
+    }
+    expect(mapWarnings(reloaded, hero)).toEqual(mapWarnings(live, hero));
+    expect(mapWarnings(live, hero)).toContainEqual({ kind: 'orphan-effect', label: 'Spirit Guardians' });
+    // Only the dangling references went; normalizing again changes nothing.
+    const [web, fog, guardians] = reloaded.map?.effects ?? [];
+    expect([web.spec.fromId, fog.spec.at, guardians.spec.fromId, web.turnOfId]).toEqual([undefined, undefined, undefined, '']);
+    expect(web.rects).toEqual([{ x0: 7, y0: 5, x1: 10, y1: 8 }]);
+    expect(normalizeCombatState(reloaded)).toEqual(reloaded);
   });
 
   it('keeps the rest of the combat as it was, unknown fields included', () => {

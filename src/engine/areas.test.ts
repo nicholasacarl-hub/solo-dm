@@ -170,6 +170,44 @@ describe('lines are stepped (srd:rule:line; app convention D10)', () => {
     expect(rectsLabel(resolved(resolveArea(state, null, { shape: 'line', sizeFt: 30, fromId: 'huge', toward: dir('east') })).squares)).toBe('N12:S12');
   });
 
+  it('R2: from a Large or Gargantuan caster, a line aimed exactly north-east or south-west passes through its target (srd:rule:line; app convention D10)', () => {
+    const state = board(40, 40, [], [
+      { id: 'dragon', at: 'G9', size: 'Large' }, // G9:H10
+      { id: 'hero', at: 'J7', side: 'player' }, // on the dragon's exact north-east diagonal
+      { id: 'ancient', at: 'G25', size: 'Gargantuan' }, // G25:J28
+      { id: 'scout', at: 'K24', side: 'player' }, // on its exact north-east diagonal
+    ]);
+    const line = (from: string, toward: MapRef) => resolved(resolveArea(state, null, { shape: 'line', sizeFt: 30, widthFt: 5, fromId: from, toward }));
+    const ne = line('dragon', creature('hero'));
+    expect(labels(areaSquares(state, null, { shape: 'line', sizeFt: 30, fromId: 'dragon', toward: creature('hero') }))).toEqual(['N3', 'M4', 'L5', 'K6', 'J7', 'I8']);
+    expect(ids(ne)).toEqual(['hero']);
+    expect(labels(areaSquares(state, null, { shape: 'line', sizeFt: 30, fromId: 'dragon', toward: dir('north-east') }))).toEqual(['N3', 'M4', 'L5', 'K6', 'J7', 'I8']);
+    expect(labels(areaSquares(state, null, { shape: 'line', sizeFt: 30, fromId: 'dragon', toward: dir('south-west') }))).toEqual(['F11', 'E12', 'D13', 'C14', 'B15', 'A16']);
+    // The other two diagonals were already right and stay so.
+    expect(labels(areaSquares(state, null, { shape: 'line', sizeFt: 30, fromId: 'dragon', toward: dir('north-west') }))).toEqual(['A3', 'B4', 'C5', 'D6', 'E7', 'F8']);
+    expect(labels(areaSquares(state, null, { shape: 'line', sizeFt: 30, fromId: 'dragon', toward: dir('south-east') }))).toEqual(['I11', 'J12', 'K13', 'L14', 'M15', 'N16']);
+    expect(ids(line('ancient', creature('scout')))).toEqual(['scout']);
+  });
+
+  it('R2: every square a line is aimed at is inside it, from every size of caster, and the line keeps its length (app convention D10; spec §3.6)', () => {
+    const misses: string[] = [];
+    for (const size of ['Medium', 'Large', 'Huge', 'Gargantuan'] as const) {
+      const n = { Medium: 1, Large: 2, Huge: 3, Gargantuan: 4 }[size];
+      const state = board(40, 40, [], [{ id: 'c', at: 'S19', size }]); // S19 = (18, 18): every line stays on the map
+      for (let y = 18 - 11; y <= 18 + n - 1 + 11; y++) {
+        for (let x = 18 - 11; x <= 18 + n - 1 + 11; x++) {
+          if (x >= 18 && x < 18 + n && y >= 18 && y < 18 + n) continue;
+          const got = areaSquares(state, null, { shape: 'line', sizeFt: 60, fromId: 'c', toward: { kind: 'square', at: { x, y } } });
+          const gap = (p: GridPoint) => Math.max(0, p.x - (18 + n - 1), 18 - p.x, p.y - (18 + n - 1), 18 - p.y);
+          if (!got.some((p) => p.x === x && p.y === y)) misses.push(`${size} → ${squareLabel({ x, y })}`);
+          expect(got).toHaveLength(12);
+          expect(Math.max(...got.map(gap))).toBe(12);
+        }
+      }
+    }
+    expect(misses).toEqual([]);
+  });
+
   it("a 30×5 line is 6 squares at every aim, and its last square is 30 ft away by the grid count", () => {
     const state = board(40, 40, [], [{ id: 'c', at: 'T20' }]);
     for (let y = 10; y <= 30; y++) {
@@ -319,6 +357,21 @@ describe('the warehouse fixture (spells as named)', () => {
     const b2 = r.inside.find((h) => h.id === 'c-3');
     expect(b2?.cover).toEqual({ degree: 'half', byTerrain: [], byCreatureIds: ['c-2'] });
     expect(r.inside.find((h) => h.id === 'c-2')?.cover.degree).toBe('none');
+  });
+
+  it('R3: Burning Hands cast from the crates, and a Fireball centred on them, give no cover from those crates (srd:rule:combat-cover)', () => {
+    const state = board(12, 12, [['half-cover', 'E5', { label: 'crates' }], ['half-cover', 'G7', { label: 'crates' }]], [
+      { id: 'mira', at: 'E5', side: 'player' },
+      { id: 'b1', at: 'D5' },
+      { id: 'b2', at: 'H7' },
+    ]);
+    const cone = resolved(resolveArea(state, null, { shape: 'cone', sizeFt: 15, fromId: 'mira', toward: dir('west') }));
+    expect(cone.inside).toEqual([{ id: 'b1', squaresInside: 1, cover: { degree: 'none', byTerrain: [], byCreatureIds: [] } }]);
+    const fireball = resolved(resolveArea(state, null, { shape: 'sphere', sizeFt: 5, at: square('G7', { width: 12, height: 12 }) }));
+    expect(fireball.inside.find((h) => h.id === 'b2')?.cover.degree).toBe('none');
+    // One square further off, the same crates stand between the blast and H7.
+    const beside = resolved(resolveArea(state, null, { shape: 'sphere', sizeFt: 10, at: square('F7', { width: 12, height: 12 }) }));
+    expect(beside.inside.find((h) => h.id === 'b2')?.cover).toEqual({ degree: 'half', byTerrain: ['crates'], byCreatureIds: [] });
   });
 
   it('reports a corner centre, and whether the caster can see the centre (the "near side" rule is the DM\'s call)', () => {

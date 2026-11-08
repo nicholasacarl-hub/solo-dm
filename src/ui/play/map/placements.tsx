@@ -15,8 +15,9 @@ import { DmActivityBar } from '../composer/DmActivityBar';
 import { isBusyPhase } from '../dmStatus';
 import { PanelBoundary } from '../PanelBoundary';
 import { usePlayView } from '../playView';
+import { useIsTouch } from '../useMediaQuery';
 import { BattleMapPanel } from './BattleMapPanel';
-import { shownHeroBudget } from './model';
+import { shownHeroBudget, turnRecordHidden } from './model';
 import { battleChipText, possessive } from './text';
 
 export interface BattleSummary {
@@ -36,7 +37,7 @@ export function useBattleSummary(): BattleSummary | null {
     const view = playerView(combat);
     const current = view.combatants[view.turnIndex];
     const yourTurn = current?.isPlayer === true;
-    const budget = yourTurn && current ? shownHeroBudget(view, hero, current.id, rawBlock === 'not-your-turn') : null;
+    const budget = yourTurn && current ? shownHeroBudget(view, hero, current.id, rawBlock === 'not-your-turn', turnRecordHidden(combat)) : null;
     return {
       encounter: combat.encounterName || 'Combat',
       // The player view's round, like every other "whose turn" surface (D42).
@@ -57,6 +58,10 @@ export function useMappedFight(): boolean {
  * Plans, measurements and area templates belong to the moment they were made (spec §7.3): they go when the DM
  * starts working or the turn the player sees moves on — also while the map is off screen (the phone Story tab, the
  * collapsed dock), so a stale plan never comes back with the map. Mounted once by the Play table.
+ *
+ * The keyboard cursor, the highlight and Measure / Area mode belong to one fight's map: a new fight, a new map or
+ * the end of the fight starts them afresh, so a cursor can't be left off a smaller map (U10). The list view is a way
+ * of playing, not part of a moment, and stays.
  */
 export function useMapPlanExpiry(): void {
   const turnKey = useGame((s) => {
@@ -66,20 +71,27 @@ export function useMapPlanExpiry(): void {
     return `${view.round}:${view.combatants[view.turnIndex]?.id ?? ''}`;
   });
   const busy = useGame((s) => isBusyPhase(s.dm.phase));
-  const seen = useRef({ turnKey, busy });
+  /** The fight and its map, like the camera's key: null without a mapped fight. */
+  const mapKey = useGame((s) => (s.combat?.active && s.combat.map ? `${s.combat.startedAt}:${s.combat.map.id}` : null));
+  const seen = useRef({ turnKey, busy, mapKey });
   useEffect(() => {
     const prev = seen.current;
-    seen.current = { turnKey, busy };
+    seen.current = { turnKey, busy, mapKey };
+    if (mapKey !== prev.mapKey) {
+      usePlayView.setState({ plan: null, measure: null, template: null, cursor: null, highlightedId: null, mapMode: 'move' });
+      return;
+    }
     if ((busy && !prev.busy) || turnKey !== prev.turnKey) {
       const view = usePlayView.getState();
       if (view.plan || view.measure || view.template) usePlayView.setState({ plan: null, measure: null, template: null });
     }
-  }, [turnKey, busy]);
+  }, [turnKey, busy, mapKey]);
 }
 
 /** The collapsed dock: "⚔ Ambush in the warehouse · Round 2 · Your turn · 30 ft [Show map ▾]". */
 export function BattleBar({ onExpand }: { onExpand(): void }) {
   const summary = useBattleSummary();
+  const touch = useIsTouch();
   if (!summary) return null;
   const turn = summary.yourTurn
     ? `Your turn${summary.leftFt !== null ? ` · ${summary.leftFt} ft` : ''}`
@@ -94,7 +106,7 @@ export function BattleBar({ onExpand }: { onExpand(): void }) {
         <span className="text-muted"> · Round {summary.round}</span>
         {turn && <span className={summary.yourTurn ? 'font-semibold text-accent' : 'text-muted'}> · {turn}</span>}
       </p>
-      <Button size="sm" variant="secondary" onClick={onExpand} icon={<ChevronDown className="size-4" aria-hidden />}>
+      <Button size={touch ? 'md' : 'sm'} variant="secondary" className={touch ? 'min-h-11' : undefined} onClick={onExpand} icon={<ChevronDown className="size-4" aria-hidden />}>
         Show map
       </Button>
     </div>
