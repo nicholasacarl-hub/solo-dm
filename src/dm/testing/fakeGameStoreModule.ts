@@ -9,3 +9,6 @@ import type { DmStatus, GameStore } from '@/state/gameStore';
 export const initialDmStatus: DmStatus = { phase: 'idle', activity: null, error: null, retryable: false };
 
 export const useGame = create<Partial<GameStore>>()(() => ({}));
+
+// The store's pure battle-map selectors (storage-free), as the real module re-exports them.
+export { canUndoHeroMove, heroMoveBlock, pendingPlayerStop } from '@/state/heroMove';

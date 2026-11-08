@@ -13,17 +13,38 @@ import {
 } from '@/storage';
 import { characterStatusLine } from '@/engine';
 import { wrapImported } from '@/lib/importedContent';
-import type { LogEntry, TranscriptMessage } from '@/types';
+import { sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
+import { BATTLE_MAPS_MODES, CREATURE_SIZES, type CombatState, type LogEntry, type TranscriptMessage } from '@/types';
 import { db } from './db';
-import { serializeBundle } from './backup';
+import { writeCampaignData } from './campaignData';
+import { SAVE_BATTLE_MAPS_MODES, SAVE_CREATURE_SIZES, serializeBundle } from './backup';
 import { onCampaignChange, type CampaignChange } from './events';
 import { allIds, campaignGraph, resetDatabase, seedCampaign, sharedHomebrew } from './testData';
+import type { CampaignData } from './types';
 
 beforeEach(resetDatabase);
 
 /** A bundle as it would come back from a file: serialized and parsed again. */
 function roundTrip(bundle: CampaignBundle): unknown {
   return JSON.parse(serializeBundle(bundle)) as unknown;
+}
+
+/**
+ * Campaign `tag` in the middle of a fight on the warehouse battle map (§5.4 Example 2: positions, a Large ogre, a
+ * hidden cutthroat, a spent Reaction, the hero's turn record and a pending stop), Bandit 1 using the campaign's
+ * homebrew stat block like the plain graph's.
+ */
+function mappedGraph(tag = 'a', combat: CombatState = sampleStopCombat()): CampaignData {
+  const graph = campaignGraph(tag);
+  const homebrewId = graph.homebrew[0].id;
+  return {
+    ...graph,
+    combat: { ...combat, combatants: combat.combatants.map((c) => (c.id === 'c-2' ? { ...c, statBlockId: homebrewId } : c)) },
+  };
+}
+
+function mappedBundle(tag = 'a', combat?: CombatState): Record<string, unknown> {
+  return roundTrip({ format: 'solo-dm-campaign', version: 1, exportedAt: 1, ...mappedGraph(tag, combat) }) as Record<string, unknown>;
 }
 
 describe('exportCampaignBundle', () => {
@@ -193,6 +214,39 @@ describe('importCampaignBundle', () => {
     expect(imported.activeSessionId).toBeNull();
     expect((await db.journal.where('campaignId').equals('a-camp').count())).toBe(graph.journal.length);
     expect(await db.transcript.get('orphan')).toBeUndefined();
+  });
+
+  it.each([
+    ['sampleMappedCombat', sampleMappedCombat()],
+    ['sampleStopCombat (turn record and stop)', sampleStopCombat()],
+  ])('round-trips a fight on a battle map (%s): it comes back equal', async (_label, combat) => {
+    const graph = mappedGraph('a', combat);
+    await writeCampaignData(graph);
+    const bundle = parseCampaignBundle(roundTrip(await exportCampaignBundle('a-camp')));
+    expect(bundle.combat).toEqual(graph.combat);
+    // The fight went on after the backup was made.
+    await db.combat.put({ campaignId: 'a-camp', state: { ...sampleStopCombat(), round: 9, map: undefined } });
+
+    await importCampaignBundle(bundle, 'replace');
+
+    const { exportedAt: _e, format: _f, version: _v, ...data } = await exportCampaignBundle('a-camp');
+    expect(data).toEqual(graph);
+    expect((await loadCampaignRecords('a-camp'))?.combat).toEqual(graph.combat);
+  });
+
+  it('imports a mapped fight as a copy with every map reference intact (combatant ids are kept)', async () => {
+    const graph = mappedGraph('a');
+    await writeCampaignData(graph);
+    const bundle = parseCampaignBundle(roundTrip(await exportCampaignBundle('a-camp')));
+
+    const copy = await importCampaignBundle(bundle, 'copy');
+
+    const combat = (await exportCampaignBundle(copy.id)).combat as CombatState;
+    const original = graph.combat as CombatState;
+    expect(combat.map).toEqual(original.map);
+    expect(combat.combatants.map(({ statBlockId: _s, ...c }) => c)).toEqual(original.combatants.map(({ statBlockId: _s, ...c }) => c));
+    // Only the homebrew stat block moved to the copy's own id.
+    expect(combat.combatants.find((c) => c.id === 'c-2')?.statBlockId).toBe((await exportCampaignBundle(copy.id)).homebrew[0].id);
   });
 
   it('imports as a copy when record ids already belong to another campaign', async () => {
@@ -368,6 +422,83 @@ describe('parseCampaignBundle', () => {
     const odd = parseCampaignBundle({ ...data, campaign: { ...campaign, settings: { ...campaign.settings, transformations: 'always' } } });
     expect(odd.campaign.settings.transformations).toBeUndefined();
     expect(parseCampaignBundle(data).character).not.toHaveProperty('transformations');
+  });
+
+  it('reads the battle-maps table rule, treating an unknown value as missing (When it helps)', () => {
+    const data = valid();
+    const campaign = data.campaign as { settings: Record<string, unknown> };
+    const withRule = (battleMaps: unknown) =>
+      parseCampaignBundle({ ...data, campaign: { ...campaign, settings: { ...campaign.settings, battleMaps } } }).campaign.settings;
+    expect(withRule('always').battleMaps).toBe('always');
+    expect(withRule('off').battleMaps).toBe('off');
+    expect(withRule('sometimes').battleMaps).toBeUndefined();
+    expect(withRule(3).battleMaps).toBeUndefined();
+    expect(parseCampaignBundle(data).campaign.settings).not.toHaveProperty('battleMaps');
+  });
+
+  it('loads an old save (no battle map, none of the new fields) unchanged', () => {
+    const combat = parseCampaignBundle(valid()).combat;
+    expect(combat).toEqual(campaignGraph('a').combat);
+    expect(combat).not.toHaveProperty('map');
+  });
+
+  it('reads a mapped fight exactly as it was saved', () => {
+    expect(parseCampaignBundle(mappedBundle()).combat).toEqual(mappedGraph().combat);
+    const mapped = sampleMappedCombat({ heroTurn: true });
+    expect(parseCampaignBundle(mappedBundle('a', mapped)).combat).toEqual(mappedGraph('a', mapped).combat);
+  });
+
+  it('drops a battle map it cannot read and keeps the fight (and nobody keeps a position)', () => {
+    const data = mappedBundle();
+    const combat = data.combat as Record<string, unknown>;
+    for (const map of [{ width: 'wide', height: 12 }, 'the warehouse', [1, 2], null]) {
+      const parsed = parseCampaignBundle({ ...data, combat: { ...combat, map } }).combat;
+      expect(parsed?.map).toBeUndefined();
+      expect(parsed).toMatchObject({ active: true, round: 3, encounterName: 'Ambush in the warehouse' });
+      expect(parsed?.combatants.map((c) => c.name)).toEqual(['Mira Voss', 'Bandit 1', 'Cutthroat', 'Bandit 2', 'Old Tam', 'Dock Ogre']);
+      expect(parsed?.combatants.some((c) => c.position !== undefined)).toBe(false);
+      // What doesn't need a map stays.
+      expect(parsed?.combatants.find((c) => c.name === 'Cutthroat')?.hidden).toBe(true);
+    }
+  });
+
+  it('reads what it can of a damaged map: clips it, leaves out unknown terrain and dangling references', () => {
+    const data = mappedBundle();
+    const combat = data.combat as Record<string, unknown> & { map: Record<string, unknown>; combatants: Record<string, unknown>[] };
+    const parsed = parseCampaignBundle({
+      ...data,
+      combat: {
+        ...combat,
+        combatants: combat.combatants.filter((c) => c.id !== 'c-6').map((c) => (c.id === 'c-2' ? { ...c, position: { x: 99, y: 2 } } : c)),
+        map: {
+          ...combat.map,
+          width: 120,
+          terrain: [...(combat.map.terrain as unknown[]), { id: 't20', kind: 'lava', rects: [{ x0: 0, y0: 0, x1: 1, y1: 1 }] }],
+        },
+      },
+    }).combat;
+    expect(parsed?.map).toMatchObject({ width: 40, height: 12 });
+    expect(parsed?.map?.terrain.map((t) => t.label)).toEqual(['office wall', 'office door', 'pillar', 'crates', 'spilled grain', 'flooded dock', 'brazier']);
+    // The ogre (the stop's only reactor) has left the fight, so the stop goes; Bandit 1 was off the map.
+    expect(parsed?.map?.stop).toBeUndefined();
+    expect(parsed?.map?.turn?.moves[0].provoked).toEqual([]);
+    expect(parsed?.combatants.find((c) => c.id === 'c-2')).not.toHaveProperty('position');
+  });
+
+  it('gives a combatant without conditions an empty list (the tracker lists them)', () => {
+    const data = mappedBundle();
+    const combat = data.combat as Record<string, unknown> & { combatants: Record<string, unknown>[] };
+    const [first, second, ...others] = combat.combatants;
+    const { conditions: _c, ...noConditions } = second;
+    const parsed = parseCampaignBundle({ ...data, combat: { ...combat, combatants: [{ ...first, conditions: 'prone' }, noConditions, ...others] } });
+    expect(parsed.combat?.combatants[0].conditions).toEqual([]);
+    expect(parsed.combat?.combatants[1].conditions).toEqual([]);
+    expect(parsed.combat?.combatants[3].conditions).toEqual([{ id: 'prone' }]);
+  });
+
+  it('keeps its z.enum tuples equal to the shared vocabularies', () => {
+    expect([...SAVE_CREATURE_SIZES]).toEqual(CREATURE_SIZES);
+    expect([...SAVE_BATTLE_MAPS_MODES]).toEqual(BATTLE_MAPS_MODES);
   });
 });
 

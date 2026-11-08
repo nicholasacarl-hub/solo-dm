@@ -20,8 +20,9 @@
  *   table or reloading doesn't lose them. Notices queued from elsewhere (the Library, another tab)
  *   are kept by every save and picked up into memory.
  * - Battle map: the store may import the engine by path (@/engine/movement, @/engine/battleMap,
- *   @/engine/mapNormalize, @/engine/conditions) and @/lib/answered — a deliberate dependency, so the
- *   player's own move (commitHeroMove) keeps every gate in one place. It imports nothing from @/dm or @/ui.
+ *   @/engine/mapNormalize, @/engine/character, @/engine/combat) and @/lib/answered — a deliberate dependency, so
+ *   the player's own move (commitHeroMove) keeps every gate in one place: ./heroMove.ts, pure, shared with the
+ *   test fakes. Combat rows are normalized on load (mapNormalize). It imports nothing from @/dm or @/ui.
  */
 import { create } from 'zustand';
 import type { BetaMessageParam } from '@anthropic-ai/sdk/resources/beta/messages/messages';
@@ -43,10 +44,14 @@ import type {
   UsageTotals,
 } from '@/types';
 import type { HeroMoveOutcome, HeroMoveRequest, MoveRefusal } from '@/engine/movement';
+import { normalizeCombatState } from '@/engine/mapNormalize';
 import { nameKey, newId } from '@/lib/id';
 import * as storage from '@/storage';
 import type { CampaignRecords } from '@/storage';
 import { onCampaignChange } from '@/storage/events';
+import { isBusyDmPhase, planHeroMoveCommit, planHeroMoveUndo } from './heroMove';
+
+export { canUndoHeroMove, heroMoveBlock, pendingPlayerStop } from './heroMove';
 
 export type DmPhase =
   | 'idle'
@@ -215,22 +220,6 @@ export interface GameStoreActions {
 export type GameStore = GameStoreState & GameStoreActions;
 
 export const initialDmStatus: DmStatus = { phase: 'idle', activity: null, error: null, retryable: false };
-
-/**
- * Pure selector for the UI: would undoHeroMove succeed now? Only when the newest snapshot is still the combat
- * (reference identity: any later write, such as the <game_state> stamp at send, ends it), it ran into nothing
- * hidden, the DM is idle (or errored) and no interaction is open.
- */
-export function canUndoHeroMove(s: GameStoreState): boolean {
-  const top = s.heroMoveUndo.at(-1);
-  return (
-    top !== undefined &&
-    !top.revealedHidden &&
-    s.combat === top.after &&
-    (s.dm.phase === 'idle' || s.dm.phase === 'error') &&
-    s.interaction === null
-  );
-}
 
 // ---------------------------------------------------------------------------
 // Ordered write-behind persistence
@@ -412,6 +401,23 @@ function touch(campaign: Campaign, now = Date.now()): Campaign {
   return { ...campaign, updatedAt: nextUpdatedAt(campaign.updatedAt, now) };
 }
 
+/** A Character the engine changed, saved the way updateCharacter saves one: same id and campaign, newer updatedAt. */
+function sheetWrite(next: Character, current: Character, campaign: Campaign, now: number): Character {
+  return { ...next, id: current.id, campaignId: campaign.id, updatedAt: nextUpdatedAt(current.updatedAt, now) };
+}
+
+/**
+ * One persist chain for a hero move or its undo. The Character (standing up, or Prone again) goes first, so a crash
+ * between the writes leaves the more conservative state (spec §6.2); then the combat, then the campaign.
+ */
+function persistHeroMove(campaign: Campaign, combat: CombatState, character: Character | null): Promise<void> {
+  return persist(campaign.id, 'the battle map', async () => {
+    if (character) await storage.putCharacter(character);
+    await storage.putCombat(campaign.id, combat);
+    await saveCampaign(campaign);
+  });
+}
+
 /** Comparison key for names: nameKey, falling back to lowercase for names it strips entirely (e.g. CJK). */
 function matchKey(name: string): string {
   return nameKey(name) || name.trim().toLowerCase();
@@ -586,7 +592,8 @@ function sliceFromRecords(r: CampaignRecords): CampaignSlice {
     activeSession,
     transcript: activeSession ? r.transcript : [],
     log: r.log,
-    combat: r.combat,
+    // IndexedDB rows are never validated on the way in (old saves, other versions): read leniently, write nothing back.
+    combat: r.combat ? normalizeCombatState(r.combat) : null,
     journal: r.journal,
     quests: r.quests,
     clocks: r.clocks,
@@ -905,17 +912,48 @@ export const useGame = create<GameStore>()((set, get) => ({
     });
   },
 
-  // Battle map (CONTRACT — implemented by engineer D).
-  async updateCombat() {
-    throw new Error('gameStore: updateCombat not implemented');
+  async updateCombat(fn) {
+    const { campaign: loaded, combat } = get();
+    const campaign = requireCampaign(loaded);
+    if (!combat) throw new Error('There is no combat running.');
+    const next = fn(combat);
+    // Ending a fight is setCombat(null): a functional update can never delete the row by accident.
+    if (!next) throw new Error('updateCombat must return a combat state; end a fight with setCombat(null).');
+    if (next === combat) return combat;
+    const touched = touch(campaign);
+    set({ combat: next, campaign: touched });
+    await persist(campaign.id, 'the combat tracker', async () => {
+      await storage.putCombat(campaign.id, next);
+      await saveCampaign(touched);
+    });
+    return next;
   },
 
-  async commitHeroMove() {
-    throw new Error('gameStore: commitHeroMove not implemented');
+  async commitHeroMove(req) {
+    const s = get();
+    const plan = planHeroMoveCommit(s, req);
+    if (!plan.ok) return plan;
+    if (!plan.changed) return { ok: true, outcome: plan.outcome };
+    const campaign = requireCampaign(s.campaign);
+    const now = Date.now();
+    const character = plan.character && s.character ? sheetWrite(plan.character, s.character, campaign, now) : null;
+    const touched = touch(campaign, now);
+    set({ combat: plan.outcome.state, ...(character && { character }), campaign: touched, heroMoveUndo: plan.heroMoveUndo });
+    await persistHeroMove(touched, plan.outcome.state, character);
+    return { ok: true, outcome: plan.outcome };
   },
 
   async undoHeroMove() {
-    throw new Error('gameStore: undoHeroMove not implemented');
+    const s = get();
+    const undo = planHeroMoveUndo(s);
+    if (!undo) return false;
+    const campaign = requireCampaign(s.campaign);
+    const now = Date.now();
+    const character = undo.character && s.character ? sheetWrite(undo.character, s.character, campaign, now) : null;
+    const touched = touch(campaign, now);
+    set({ combat: undo.combat, ...(character && { character }), campaign: touched, heroMoveUndo: undo.heroMoveUndo });
+    await persistHeroMove(touched, undo.combat, character);
+    return true;
   },
 
   async upsertJournal(entries) {
@@ -1097,7 +1135,10 @@ export const useGame = create<GameStore>()((set, get) => ({
   },
 
   setDmStatus(patch) {
-    set({ dm: { ...get().dm, ...patch } });
+    const dm = { ...get().dm, ...patch };
+    // A DM run has started: this turn's hero moves are on their way to the DM (D49), so they can't be undone.
+    const sent = isBusyDmPhase(dm.phase) && get().heroMoveUndo.length > 0;
+    set(sent ? { dm, heroMoveUndo: [] } : { dm });
   },
 
   requestInteraction(request) {

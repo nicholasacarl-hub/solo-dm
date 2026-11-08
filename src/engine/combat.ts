@@ -6,6 +6,7 @@
  */
 import type { Combatant, CombatState, GameEvent, HitPoints } from '@/types';
 import { nameKey } from '@/lib/id';
+import { playerTurnIndex } from './battleMap';
 import { conditionName } from './conditions';
 import { gameEvent, matchByName, toInt, warning } from './util';
 
@@ -70,9 +71,17 @@ function firstActiveIndex(combatants: readonly Combatant[]): number {
   return index < 0 ? 0 : index;
 }
 
-/** Start a combat at round 1. Duplicate names are numbered ("Goblin 1", "Goblin 2"). */
+/** The combatant with its Reaction back (srd:rule:reaction: "until the start of your next turn"). */
+function withReaction(c: Combatant): Combatant {
+  if (c.reactionUsed === undefined) return c;
+  const next = { ...c };
+  delete next.reactionUsed;
+  return next;
+}
+
+/** Start a combat at round 1, everyone with their Reaction. Duplicate names are numbered ("Goblin 1", "Goblin 2"). */
 export function createCombat(combatants: Combatant[], encounterName?: string): CombatState {
-  const sorted = sortCombatants(numberDuplicates(combatants));
+  const sorted = sortCombatants(numberDuplicates(combatants)).map(withReaction);
   const state: CombatState = { active: true, round: 1, turnIndex: firstActiveIndex(sorted), combatants: sorted, startedAt: Date.now() };
   return encounterName?.trim() ? { ...state, encounterName: encounterName.trim() } : state;
 }
@@ -82,6 +91,16 @@ export function currentCombatant(state: CombatState): Combatant | null {
   return state.combatants[Math.min(Math.max(0, state.turnIndex), state.combatants.length - 1)] ?? null;
 }
 
+/**
+ * The turn of the combatant at `index` begins: its Reaction comes back (srd:rule:reaction). The single reset
+ * point for reactionUsed: nextTurn, a wrap into the next round and removing the current creature all come here.
+ */
+function beginTurn(state: CombatState, index: number, round: number): CombatState {
+  const c = state.combatants[index];
+  const combatants = c.reactionUsed === undefined ? state.combatants : state.combatants.map((x, i) => (i === index ? withReaction(x) : x));
+  return { ...state, combatants, turnIndex: index, round };
+}
+
 /** First non-defeated combatant at or after `start` (wrapping, which starts a new round). */
 function advanceFrom(state: CombatState, start: number): CombatState {
   const n = state.combatants.length;
@@ -89,7 +108,7 @@ function advanceFrom(state: CombatState, start: number): CombatState {
   for (let step = 0; step < n; step++) {
     const raw = start + step;
     const index = raw % n;
-    if (!state.combatants[index].defeated) return { ...state, turnIndex: index, round: state.round + (raw >= n ? 1 : 0) };
+    if (!state.combatants[index].defeated) return beginTurn(state, index, state.round + (raw >= n ? 1 : 0));
   }
   return { ...state, turnIndex: Math.min(Math.max(0, state.turnIndex), n - 1) };
 }
@@ -226,19 +245,29 @@ function combatantLine(c: Combatant, position: number, current: boolean, forPlay
   const showKind = !forPlayer && c.statBlockName && nameKey(c.statBlockName) !== nameKey(c.name.replace(/\s+\d+$/, ''));
   const kind = showKind ? ` [${c.statBlockName}]` : '';
   const notes = c.notes?.trim() && !forPlayer ? ` — ${c.notes.trim()}` : '';
-  return `${current ? '→' : ' '} ${position}. ${c.name} (${sideLabel(c, forPlayer)})${kind} · ${bits.join(' · ')}${notes}`;
+  // The DM's view marks creatures the hero hasn't noticed (the player's view leaves them out).
+  const hidden = !forPlayer && c.hidden ? ' [hidden]' : '';
+  return `${current ? '→' : ' '} ${position}. ${c.name} (${sideLabel(c, forPlayer)})${hidden}${kind} · ${bits.join(' · ')}${notes}`;
 }
 
 /**
  * Text summary of the tracker: round, turn order with initiative, HP, AC, conditions.
- * forPlayer = true is safe to show the player: no stat block names or DM notes, and for hideHp
- * combatants a health descriptor instead of exact HP and no AC.
+ * forPlayer = true is safe to show the player: no stat block names or DM notes, for hideHp
+ * combatants a health descriptor instead of exact HP and no AC, and no hidden combatants at all —
+ * during a hidden creature's turn the last visible creature before it reads as current (D42).
+ * The DM's view tags hidden combatants "[hidden]".
  */
 export function summarizeCombat(state: CombatState, opts: { forPlayer?: boolean } = {}): string {
   if (!state.active) return `Combat ended${state.encounterName ? `: ${state.encounterName}` : ''}.`;
   const forPlayer = !!opts.forPlayer;
-  const current = currentCombatant(state);
+  let current = currentCombatant(state);
+  let currentIndex = state.turnIndex;
+  if (forPlayer && current?.hidden) {
+    currentIndex = playerTurnIndex(state);
+    current = state.combatants[currentIndex] ?? null;
+  }
   const header = `Combat${state.encounterName ? `: ${state.encounterName}` : ''} — round ${state.round}${current ? `, ${current.name}'s turn` : ''}`;
-  const lines = state.combatants.map((c, i) => combatantLine(c, i + 1, i === state.turnIndex, forPlayer));
+  const shown = state.combatants.map((c, i) => ({ c, i })).filter(({ c }) => !(forPlayer && c.hidden));
+  const lines = shown.map(({ c, i }, n) => combatantLine(c, n + 1, i === currentIndex, forPlayer));
   return [header, ...lines].join('\n');
 }

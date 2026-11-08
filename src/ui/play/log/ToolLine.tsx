@@ -104,6 +104,7 @@ export function ToolLine({ entry }: { entry: ToolLogEntry }) {
             </button>
           )}
           {isHomebrewLine(entry) && <HomebrewActions entry={entry} />}
+          {isMapSetupLine(entry) && <ShowMapButton since={entry.createdAt} />}
         </div>
         {entry.detail && open && (
           <div id={detailId} className="mt-1.5 rounded-xl border border-border bg-surface px-3 py-2">
@@ -112,6 +113,31 @@ export function ToolLine({ entry }: { entry: ToolLogEntry }) {
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * The line that put a fight on a battle map: "Battle map: Dockside warehouse (16×12)" (update_map), or the
+ * combat-start line whose details name the map (start_combat with a map).
+ */
+function isMapSetupLine(entry: ToolLogEntry): boolean {
+  if (entry.icon === 'map') return /^\s*battle map\b/i.test(entry.summary);
+  return entry.tool === 'start_combat' && /\bbattle map:/i.test(entry.detail ?? '');
+}
+
+/** "Show map" while that fight's map is on the table (desktop: open the dock; phone: the Combat tab). */
+function ShowMapButton({ since }: { since: number }) {
+  const shown = useGame((s) => Boolean(s.combat?.active && s.combat.map && since >= s.combat.startedAt));
+  if (!shown) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => usePlayView.getState().focusMap()}
+      className="inline-flex items-center gap-1 rounded-md px-1.5 text-xs font-medium text-info hover:bg-info-soft"
+    >
+      <MapIcon className="size-3.5" aria-hidden />
+      Show map
+    </button>
   );
 }
 

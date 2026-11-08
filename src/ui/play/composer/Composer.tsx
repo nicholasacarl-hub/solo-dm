@@ -8,6 +8,7 @@ import { withOocPrefix } from '../format';
 import { usePlayView } from '../playView';
 import { useIsTouch } from '../useMediaQuery';
 import { QuickActions } from './QuickActions';
+import { emptySendWords } from './turnWords';
 import { XCardButton } from './XCardButton';
 
 /** Tallest the textarea grows before it scrolls. */
@@ -15,17 +16,24 @@ const MAX_HEIGHT_PX = 208;
 
 /**
  * The player's input. Desktop: Enter sends, Shift+Enter adds a line. Touch: Enter adds a line and
- * the Send button sends. While the DM is busy, Send becomes Stop.
+ * the Send button sends. While the DM is busy, Send becomes Stop. On the hero's battle-map turn an
+ * empty Send tells the DM about the hero's moves ("I move to D8.").
  */
 export function Composer() {
   const busy = useGame((s) => isBusyPhase(s.dm.phase));
+  // A string or null, so streaming narration (which changes the store constantly) doesn't re-render this; while the
+  // DM is busy Send is Stop, so there is nothing to work out.
+  const moveWords = useGame((s) => (isBusyPhase(s.dm.phase) ? null : emptySendWords(s.combat, s.transcript)));
   const prefill = usePlayView((s) => s.prefill);
+  const focusRequest = usePlayView((s) => s.composerFocus);
   // The draft lives in the view store so it survives a remount (crossing the desktop breakpoint).
   const text = usePlayView((s) => s.draft);
   const ooc = usePlayView((s) => s.ooc);
   const { setDraft: setText, setOoc } = usePlayView.getState();
   const isTouch = useIsTouch();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  // Focus requests made before this composer mounted (it remounts across the desktop breakpoint) are old news.
+  const seenFocusRequest = useRef(focusRequest);
   const inputId = useId();
   const hintId = useId();
 
@@ -48,13 +56,26 @@ export function Composer() {
     el.setSelectionRange(end, end);
   }, [prefill]);
 
+  // "Tell the DM", an [Area: …] line and friends focus the box without touching the draft (it may have just grown).
+  useEffect(() => {
+    if (focusRequest === seenFocusRequest.current) return;
+    seenFocusRequest.current = focusRequest;
+    const el = textareaRef.current;
+    if (!el) return;
+    el.focus();
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
+  }, [focusRequest]);
+
   const send = async () => {
-    const words = text.trim();
+    const typed = text.trim();
+    // An empty Send on the hero's map turn: the hero's moves speak for themselves (in character).
+    const words = typed || moveWords;
     if (!words || busy) return;
     setText('');
-    const ok = await sendToDm(ooc ? withOocPrefix(words) : words);
-    // The DM refused the message (e.g. no session yet): give the words back.
-    if (!ok && !usePlayView.getState().draft) setText(words);
+    const ok = await sendToDm(typed && ooc ? withOocPrefix(typed) : words);
+    // The DM refused the message (e.g. no session yet): give the typed words back.
+    if (!ok && typed && !usePlayView.getState().draft) setText(typed);
   };
 
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -63,7 +84,8 @@ export function Composer() {
     void send();
   };
 
-  const canSend = text.trim().length > 0;
+  const canSend = text.trim().length > 0 || moveWords !== null;
+  const placeholder = moveWords ?? (ooc ? 'Ask the DM out of character…' : 'What do you do?');
 
   // Not a <form>: the X-card popover and the roll dialog inside the toolbar have forms of their own.
   return (
@@ -83,7 +105,7 @@ export function Composer() {
         value={text}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
-        placeholder={ooc ? 'Ask the DM out of character…' : 'What do you do?'}
+        placeholder={placeholder}
         enterKeyHint={isTouch ? 'enter' : 'send'}
         aria-describedby={isTouch ? undefined : hintId}
         className={cn(
@@ -129,6 +151,7 @@ export function Composer() {
               size="sm"
               disabled={!canSend}
               onClick={() => void send()}
+              title={!text.trim() && moveWords ? `Send “${moveWords}”` : undefined}
               icon={<SendHorizontal className="size-4" aria-hidden />}
             >
               Send

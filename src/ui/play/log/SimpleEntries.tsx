@@ -1,4 +1,4 @@
-import { Clock, Info, OctagonX, RotateCcw, Square, TriangleAlert } from 'lucide-react';
+import { Clock, Footprints, Info, OctagonX, RotateCcw, Square, TriangleAlert } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { dm } from '@/dm';
 import { useGame } from '@/state/gameStore';
@@ -38,6 +38,7 @@ export function PlayerEntry({ entry, pending = false }: { entry: PlayerLogEntry;
         <span className="sr-only">You: </span>
         {text}
       </div>
+      {entry.mapNote && <MapNoteChip note={entry.mapNote} />}
       {pending && (
         <p className="mt-1.5 flex items-center gap-1.5 text-right text-xs text-muted">
           <Clock className="size-3.5 shrink-0" aria-hidden />
@@ -45,6 +46,17 @@ export function PlayerEntry({ entry, pending = false }: { entry: PlayerLogEntry;
         </p>
       )}
     </div>
+  );
+}
+
+/** The hero's moves on the battle map that went with this message: "Moved B6 → C7 → D8 · 10 ft · Disengaged". */
+function MapNoteChip({ note }: { note: string }) {
+  return (
+    <p className="mt-1.5 inline-flex max-w-[85%] items-center gap-1.5 rounded-full border border-border bg-surface px-2.5 py-1 text-xs text-muted">
+      <Footprints className="size-3.5 shrink-0" aria-hidden />
+      <span className="sr-only">On the battle map: </span>
+      <span className="min-w-0 break-words">{note}</span>
+    </p>
   );
 }
 

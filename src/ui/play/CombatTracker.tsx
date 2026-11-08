@@ -1,15 +1,18 @@
-import { useId } from 'react';
-import { Shield, Skull, Swords } from 'lucide-react';
-import { CONDITIONS, healthDescriptor } from '@/engine';
+import { useId, useMemo } from 'react';
+import { EyeOff, LocateFixed, Shield, Skull, Swords } from 'lucide-react';
+import { CONDITIONS, footprint, healthDescriptor, playerView, spaceDistanceFt, spaceLabel, type Space } from '@/engine';
 import { cn } from '@/lib/cn';
 import { useGame } from '@/state/gameStore';
-import type { ActiveCondition, Combatant, CombatSide, ConditionId, HitPoints } from '@/types';
-import { Badge } from '@/ui/components/ui';
+import type { ActiveCondition, Character, Combatant, CombatSide, CombatState, ConditionId, HitPoints } from '@/types';
+import { Badge, IconButton } from '@/ui/components/ui';
 import { capitalize } from './format';
+import { usePlayView } from './playView';
+import { useIsTouch } from './useMediaQuery';
 
 const SIDE_DOT: Record<CombatSide, string> = {
   player: 'bg-accent',
-  ally: 'bg-success',
+  // Blue, not green: green and red collapse for deuteranopia (the map's ally tokens are blue too).
+  ally: 'bg-info',
   enemy: 'bg-danger',
   neutral: 'bg-faint',
 };
@@ -31,15 +34,70 @@ const DESCRIPTOR_TONE: Record<Descriptor, string> = {
   down: 'text-faint',
 };
 
+interface TrackerRow {
+  combatant: Combatant;
+  /** The creature the player sees acting (D42: never a hidden one). */
+  current: boolean;
+  /** Hidden from the player, shown only because "Show DM secrets" is on. */
+  unseen: boolean;
+  /** "F4 · 20 ft" (distance from the hero), "B6" for the hero; null off the map. */
+  place: string | null;
+}
+
+/** A combatant's space on the battle map (the hero's size comes from the sheet unless overridden, spec §2.3). */
+function spaceOf(c: Combatant & { position: NonNullable<Combatant['position']> }, hero: Character | null): Space {
+  const size = c.size ?? (c.isPlayer ? hero?.size : undefined) ?? 'Medium';
+  return { rect: footprint(c.position, size), elevationFt: c.elevationFt ?? 0, size };
+}
+
+function placeChips(combatants: readonly Combatant[], hero: Character | null): Map<string, string> {
+  const chips = new Map<string, string>();
+  const you = combatants.find((c) => c.isPlayer);
+  const yourSpace = you?.position ? spaceOf({ ...you, position: you.position }, hero) : null;
+  for (const c of combatants) {
+    if (!c.position) continue;
+    const space = spaceOf({ ...c, position: c.position }, hero);
+    const square = spaceLabel(c.position, space.size);
+    chips.set(c.id, c.isPlayer || !yourSpace ? square : `${square} · ${spaceDistanceFt(yourSpace, space)} ft`);
+  }
+  return chips;
+}
+
+/**
+ * The tracker as the player sees it (D42, D63): the player view of the fight, so hidden creatures are left out and
+ * the current-turn marker stays on the last creature the player saw act. "Show DM secrets" adds the hidden rows back
+ * (dimmed, "Unseen") without moving the marker.
+ */
+function trackerRows(combat: CombatState, hero: Character | null, showSecrets: boolean): { rows: TrackerRow[]; yourTurn: boolean } {
+  // With nobody hidden, the player's view is the fight itself.
+  const view = combat.combatants.some((c) => c.hidden) ? playerView(combat) : combat;
+  const current = view.combatants[view.turnIndex];
+  const shown = showSecrets ? combat.combatants : view.combatants;
+  const chips = combat.map ? placeChips(shown, hero) : new Map<string, string>();
+  return {
+    rows: shown.map((c) => ({
+      combatant: c,
+      current: c.id === current?.id,
+      unseen: c.hidden === true,
+      place: chips.get(c.id) ?? null,
+    })),
+    yourTurn: current?.isPlayer ?? false,
+  };
+}
+
 /** Read-only initiative tracker. The DM runs it through its combat tools. */
 export function CombatTracker({ className }: { className?: string }) {
   const combat = useGame((s) => s.combat);
-  const playerHp = useGame((s) => s.character?.hp ?? null);
+  const hero = useGame((s) => s.character);
+  const showSecrets = usePlayView((s) => s.showSpoilers);
+  const highlightedId = usePlayView((s) => s.highlightedId);
   const titleId = useId();
-  if (!combat?.active) return null;
-
-  const current = combat.combatants[combat.turnIndex];
-  const yourTurn = current?.isPlayer ?? false;
+  const tracker = useMemo(
+    () => (combat?.active ? trackerRows(combat, hero, showSecrets) : null),
+    [combat, hero, showSecrets],
+  );
+  if (!combat?.active || !tracker) return null;
+  const onMap = combat.map !== undefined;
 
   return (
     <section
@@ -55,18 +113,19 @@ export function CombatTracker({ className }: { className?: string }) {
         </div>
         <Badge>Round {combat.round}</Badge>
       </div>
-      {yourTurn && (
+      {tracker.yourTurn && (
         <p role="status" className="border-b border-border bg-accent-soft px-4 py-2 text-sm font-semibold text-accent">
           Your turn
         </p>
       )}
       <ol aria-label="Initiative order" className="divide-y divide-border">
-        {combat.combatants.map((c, i) => (
+        {tracker.rows.map((row) => (
           <CombatantRow
-            key={c.id}
-            combatant={c}
-            current={i === combat.turnIndex}
-            playerHp={c.isPlayer ? playerHp : null}
+            key={row.combatant.id}
+            row={row}
+            highlighted={row.combatant.id === highlightedId}
+            onMap={onMap}
+            playerHp={row.combatant.isPlayer ? (hero?.hp ?? null) : null}
           />
         ))}
       </ol>
@@ -75,25 +134,46 @@ export function CombatTracker({ className }: { className?: string }) {
 }
 
 function CombatantRow({
-  combatant: c,
-  current,
+  row: { combatant: c, current, unseen, place },
+  highlighted,
+  onMap,
   playerHp,
 }: {
-  combatant: Combatant;
-  current: boolean;
+  row: TrackerRow;
+  highlighted: boolean;
+  onMap: boolean;
   playerHp: HitPoints | null;
 }) {
+  const touch = useIsTouch();
   const hp = c.isPlayer ? playerHp : (c.hp ?? null);
   // The DM hides this creature's numbers (the default for enemies): its exact HP and its AC, which
   // would give away a disguised creature's stat block or how hard it is to hit.
   const numbersHidden = !c.isPlayer && c.hideHp === true;
+  const { setHighlighted } = usePlayView.getState();
+  const position = c.position;
+  const showOnMap = () => {
+    const view = usePlayView.getState();
+    view.setHighlighted(c.id);
+    if (position) view.setCursor(position);
+    view.focusMap();
+  };
+  // Hovering or focusing a row highlights its token on the map (and the map's hover highlights the row).
+  const highlight = () => setHighlighted(c.id);
+  const unhighlight = () => {
+    if (usePlayView.getState().highlightedId === c.id) setHighlighted(null);
+  };
   return (
     <li
       aria-current={current ? 'true' : undefined}
+      onMouseEnter={highlight}
+      onMouseLeave={unhighlight}
+      onFocus={highlight}
+      onBlur={unhighlight}
       className={cn(
         'flex items-start gap-3 px-4 py-2.5',
         current && 'bg-surface-2 shadow-[inset_3px_0_0_var(--accent)]',
-        c.defeated && 'opacity-55',
+        highlighted && 'outline-2 -outline-offset-2 outline-text/40',
+        (c.defeated || unseen) && 'opacity-55',
       )}
     >
       <span
@@ -112,6 +192,18 @@ function CombatantRow({
           <span className={cn('truncate', c.defeated && 'line-through')}>{c.name}</span>
           <span className="shrink-0 text-xs font-normal text-faint">({SIDE_LABEL[c.side]})</span>
           {current && <span className="sr-only">, current turn</span>}
+          {unseen && (
+            <Badge className="shrink-0 border-dashed">
+              <EyeOff className="size-3" aria-hidden />
+              Unseen
+            </Badge>
+          )}
+          {place && (
+            <span className="ml-auto shrink-0 pl-1 text-xs font-normal text-muted tabular-nums" title="Square and distance from you">
+              <span className="sr-only">On the map: </span>
+              {place}
+            </span>
+          )}
         </p>
         {c.defeated ? (
           <p className="mt-1 flex items-center gap-1 text-xs text-muted">
@@ -137,6 +229,11 @@ function CombatantRow({
           <span className="sr-only">Armor Class </span>
           {c.ac}
         </span>
+      )}
+      {onMap && position && (
+        <IconButton label={`Show ${c.name} on the map`} size={touch ? 'lg' : 'sm'} className="-my-1 -mr-2" onClick={showOnMap}>
+          <LocateFixed className="size-4" aria-hidden />
+        </IconButton>
       )}
     </li>
   );

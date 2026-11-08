@@ -4,6 +4,7 @@
  */
 import {
   SRD_SOURCE_ID,
+  type BattleMapsMode,
   type CampaignSettings,
   type Difficulty,
   type HomebrewFreedom,
@@ -85,6 +86,38 @@ export const TRANSFORMATION_SHORT: Record<TransformationsMode, string> = {
   off: 'off',
   offered: 'offered (you choose)',
   consequences: 'consequences can stick',
+};
+
+export const BATTLE_MAPS_OPTIONS: readonly ChoiceOption<BattleMapsMode>[] = [
+  {
+    value: 'off',
+    label: 'Off — theater of the mind',
+    description: 'Fights are told in words. The DM keeps track of who is where.',
+  },
+  {
+    value: 'auto',
+    label: 'When it helps',
+    description: 'A battle map when positions matter: ambushes, chokepoints, archers on a ledge. Quick scuffles stay in words.',
+  },
+  {
+    value: 'always',
+    label: 'Every fight',
+    description: 'Every fight is played on a battle map, square by square.',
+  },
+];
+
+/** Campaigns made before battle maps existed have no setting: they are 'auto' (When it helps). */
+export const DEFAULT_BATTLE_MAPS: BattleMapsMode = 'auto';
+
+export function battleMapsMode(settings: Pick<CampaignSettings, 'battleMaps'>): BattleMapsMode {
+  return settings.battleMaps ?? DEFAULT_BATTLE_MAPS;
+}
+
+/** Short summary labels ("Battle maps: when it helps"). */
+export const BATTLE_MAPS_SHORT: Record<BattleMapsMode, string> = {
+  off: 'off (theater of the mind)',
+  auto: 'when it helps',
+  always: 'every fight',
 };
 
 export type DmRollsChoice = 'hidden' | 'shown';
@@ -235,6 +268,7 @@ export function defaultCampaignSettings(): CampaignSettings {
     veils: [],
     playerNotes: '',
     transformations: DEFAULT_TRANSFORMATIONS,
+    battleMaps: DEFAULT_BATTLE_MAPS,
     // artStyle stays unset in the wizard (it follows the tone); creating the campaign fills it in.
   };
 }

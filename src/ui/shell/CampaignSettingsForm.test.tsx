@@ -95,6 +95,28 @@ describe('CampaignSettingsForm', () => {
     expect(lastCall(onChange).transformations).toBe('off');
   });
 
+  it('offers battle maps Off / When it helps / Every fight, as "When it helps" for campaigns made before', async () => {
+    const onChange = vi.fn();
+    const user = userEvent.setup();
+    render(<Harness initial={sampleSettings()} sections={['rules']} onChange={onChange} />);
+
+    const group = screen.getByRole('group', { name: 'Battle maps' });
+    const radios = within(group).getAllByRole('radio');
+    expect(radios.map((r) => r.closest('label')?.querySelector('.font-medium')?.textContent)).toEqual([
+      'Off — theater of the mind',
+      'When it helps',
+      'Every fight',
+    ]);
+    expect(within(group).getByRole('radio', { name: /When it helps/ })).toBeChecked();
+    expect(within(group).getByText('Default')).toBeInTheDocument();
+    expect(within(group).getByText(/A grid of 5-foot squares/)).toBeInTheDocument();
+
+    await user.click(within(group).getByRole('radio', { name: /Every fight/ }));
+    expect(lastCall(onChange).battleMaps).toBe('always');
+    await user.click(within(group).getByRole('radio', { name: /Off — theater of the mind/ }));
+    expect(lastCall(onChange).battleMaps).toBe('off');
+  });
+
   it('suggests art styles that suit the tone, and takes the player’s own', async () => {
     const onChange = vi.fn();
     const user = userEvent.setup();

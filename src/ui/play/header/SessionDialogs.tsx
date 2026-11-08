@@ -9,7 +9,7 @@ import { runDm } from '../dmStatus';
 import { errorMessage } from '../format';
 import { PanelBoundary } from '../PanelBoundary';
 import { RulesPanel } from '../RulesPanel';
-import { describeSettingsChanges, quietSettingsChanges, settingsChangeNotice } from './settingsDiff';
+import { describeSettingsChanges, dmHearsQuietChange, quietSettingsChanges, settingsChangeNotice } from './settingsDiff';
 
 /** Confirm, then ask the DM to wrap up: final journal/quest updates and the recap. */
 export function EndSessionDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -67,7 +67,8 @@ function TableRulesEditor({ onClose }: { onClose: () => void }) {
       const { updateCampaign, queueDmNotice } = useGame.getState();
       await updateCampaign((c) => ({ ...c, settings: draft }));
       if (changes.length > 0) queueDmNotice(settingsChangeNotice(changes));
-      const dmHears = changes.length > 0 || quiet.includes('transformations');
+      // The DM harness tells the DM about a new transformations or battle-maps rule itself.
+      const dmHears = changes.length > 0 || dmHearsQuietChange(quiet);
       toast.success(dmHears ? 'Table rules updated. The DM will hear about it on your next turn.' : 'Table rules updated.');
       onClose();
     } catch (err) {

@@ -8,7 +8,7 @@
 import { vi } from 'vitest';
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
 import type { GameStore } from '@/state/gameStore';
-import type { Campaign, Character, LogEntry } from '@/types';
+import type { Campaign, Character, CombatState, LogEntry } from '@/types';
 
 export type FakeGame = UseBoundStore<StoreApi<GameStore>>;
 
@@ -37,6 +37,13 @@ function actions(get: () => GameStore, set: (partial: Partial<GameStore>) => voi
       set({ character: next });
       return next;
     }),
+    updateCombat: vi.fn(async (fn: (c: CombatState) => CombatState) => {
+      const combat = get().combat;
+      if (!combat) throw new Error('There is no combat running.');
+      const next = fn(combat);
+      if (next !== combat) set({ combat: next });
+      return next;
+    }),
     queueDmNotice: vi.fn((text: string) => set({ pendingDmNotices: [...get().pendingDmNotices, text] })),
     appendLog: vi.fn(async (entry) => {
       const log = get().log;
@@ -59,7 +66,6 @@ function baseState(): GameStore {
     'updateLog',
     'removeLog',
     'setCombat',
-    'updateCombat',
     'commitHeroMove',
     'undoHeroMove',
     'upsertJournal',

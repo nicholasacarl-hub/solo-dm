@@ -1,6 +1,6 @@
 /**
  * The campaign "table rules" form: story (tone, setting, notes, art style), rules (fidelity, homebrew,
- * transformations, difficulty, narration, roll mode, leveling, DM rolls, rules sources) and safety
+ * transformations, battle maps, difficulty, narration, roll mode, leveling, DM rolls, rules sources) and safety
  * (lines & veils). Used by the New Campaign wizard (one section per step) and by the Play screen's
  * "Table rules" dialog (all sections). Every option carries a one-line explanation.
  */
@@ -9,11 +9,12 @@ import { Link } from 'react-router';
 import { Check, ShieldCheck } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import { defaultArtStyle } from '@/images';
-import type { CampaignSettings, TransformationsMode } from '@/types';
+import type { BattleMapsMode, CampaignSettings, TransformationsMode } from '@/types';
 import { Badge, Field, Input, SectionTitle, Textarea } from '@/ui/components/ui';
 import { OptionCards, type OptionCardOption } from '@/ui/components/OptionCards';
 import { TagInput } from '@/ui/components/TagInput';
 import {
+  BATTLE_MAPS_OPTIONS,
   DIFFICULTY_OPTIONS,
   DM_ROLLS_OPTIONS,
   HOMEBREW_OPTIONS,
@@ -25,6 +26,7 @@ import {
   TONE_PRESETS,
   TRANSFORMATION_OPTIONS,
   artStyleSuggestions,
+  battleMapsMode,
   findTonePreset,
   tonePreset,
   toneText,
@@ -223,6 +225,10 @@ const TRANSFORMATION_CARDS: readonly OptionCardOption<TransformationsMode>[] = T
   option.value === 'offered' ? { ...option, aside: <Badge tone="arcane">Default</Badge> } : option,
 );
 
+const BATTLE_MAP_CARDS: readonly OptionCardOption<BattleMapsMode>[] = BATTLE_MAPS_OPTIONS.map((option) =>
+  option.value === 'auto' ? { ...option, aside: <Badge tone="arcane">Default</Badge> } : option,
+);
+
 function RulesFields({ value, patch }: { value: CampaignSettings; patch: Patch }) {
   return (
     <>
@@ -248,6 +254,13 @@ function RulesFields({ value, patch }: { value: CampaignSettings; patch: Patch }
         value={transformationsMode(value)}
         options={TRANSFORMATION_CARDS}
         onChange={(transformations) => patch({ transformations })}
+      />
+      <OptionCards
+        legend="Battle maps"
+        hint="A grid of 5-foot squares with tokens for everyone in the fight. You move your hero on your turn; the app measures distance, reach and cover by the rules. A map already on the table stays until that fight ends."
+        value={battleMapsMode(value)}
+        options={BATTLE_MAP_CARDS}
+        onChange={(battleMaps) => patch({ battleMaps })}
       />
       <OptionCards
         legend="Difficulty"

@@ -5,6 +5,9 @@ import { MemoryRouter } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { dm } from '@/dm';
 import { useGame } from '@/state/gameStore';
+import { sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
+import type { CombatState, GridPoint, TranscriptMessage, TurnMove } from '@/types';
+import { usePlayView } from '../playView';
 import { resetDmMock } from '../testing/dmMock';
 import { resetEngineMock } from '../testing/engineMock';
 import { resetImagesMock, withImages } from '../testing/imagesMock';
@@ -12,15 +15,16 @@ import { seedGame } from '../testing/seed';
 import { setMatchMedia, TOUCH } from '../testing/setup';
 import { Composer } from './Composer';
 import { SHOW_SCENE_MESSAGE } from './QuickActions';
+import { END_TURN_WORDS, emptySendWords, endTurn } from './turnWords';
 
 vi.mock('@/dm', () => import('../testing/dmMock'));
 vi.mock('@/engine', () => import('../testing/engineMock'));
 vi.mock('@/images', () => import('../testing/imagesMock'));
 vi.mock('@/ui/sheet/LevelUpDialog', () => ({ LevelUpDialog: () => null }));
 
-function setup() {
+function setup(state: Parameters<typeof seedGame>[0] = {}) {
   const user = userEvent.setup();
-  const spies = seedGame();
+  const spies = seedGame(state);
   render(
     <MemoryRouter>
       <Composer />
@@ -250,5 +254,131 @@ describe('Composer', () => {
     expect(screen.getByRole('dialog', { name: 'Turn on illustrations' })).toHaveAccessibleDescription(
       'Illustrations are turned off in Settings.',
     );
+  });
+});
+
+describe('Composer: requests from the battle map', () => {
+  it('focuses itself on a focus request ("Tell the DM") without touching the draft', () => {
+    const { box } = setup();
+    act(() => usePlayView.getState().setDraft('I draw my dagger'));
+    act(() => box.blur());
+    act(() => usePlayView.getState().focusComposer());
+    expect(box).toHaveFocus();
+    expect(box).toHaveValue('I draw my dagger');
+    expect((box as HTMLTextAreaElement).selectionStart).toBe('I draw my dagger'.length);
+  });
+
+  it('ignores a focus request made before it mounted (it remounts across the desktop breakpoint)', () => {
+    usePlayView.setState({ composerFocus: 3, draft: 'Hold the line' });
+    const { box } = setup();
+    expect(box).not.toHaveFocus();
+    expect(box).toHaveValue('Hold the line');
+  });
+
+  it('shows an [Area: …] line added to the draft on its own line, and focuses', async () => {
+    const { user, box } = setup();
+    await user.type(box, 'I cast Burning Hands!');
+    act(() => box.blur());
+    const area = '[Area: Burning Hands — 15-ft cone from Mira Voss toward C5; on my map it catches Bandit 1]';
+    act(() => usePlayView.getState().appendToDraft(area));
+    expect(box).toHaveValue(`I cast Burning Hands!\n${area}`);
+    expect(box).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(dm.sendPlayerMessage).toHaveBeenCalledWith(`I cast Burning Hands!\n${area}`);
+  });
+});
+
+describe("Composer: an empty Send on the hero's map turn (spec §7.4)", () => {
+  const B6 = { x: 1, y: 5 };
+  const message = (seq: number, role: 'user' | 'assistant'): TranscriptMessage => ({
+    id: `t-${seq}`,
+    sessionId: 'sess-1',
+    seq,
+    param: role === 'user' ? { role, content: 'I move.' } : { role, content: [{ type: 'text', text: 'You move.' }] },
+    createdAt: seq,
+  });
+
+  /** The hero's turn on the warehouse map after the player moved the hero to `at` (not yet told to the DM). */
+  function movedTo(at: GridPoint, patch: Partial<TurnMove> = {}): CombatState {
+    const state = sampleMappedCombat({ heroTurn: true });
+    const move: TurnMove = { by: 'player', kind: 'move', from: B6, to: at, path: [at], costFt: 10, provoked: [], entered: [], ...patch };
+    return {
+      ...state,
+      combatants: state.combatants.map((c) => (c.isPlayer ? { ...c, position: at } : c)),
+      map: state.map && {
+        ...state.map,
+        turn: { combatantId: 'c-1', round: 2, movedFt: move.costFt, dashFt: 0, dashes: 0, disengaged: false, stoodUp: false, moves: [move] },
+      },
+    };
+  }
+
+  it('sends "I move to D8." when the hero moved and the draft is empty', async () => {
+    const { user } = setup({ combat: movedTo({ x: 3, y: 7 }) });
+    const box = screen.getByRole('textbox', { name: 'What do you do?' });
+    expect(box).toHaveAttribute('placeholder', 'I move to D8.');
+    const send = screen.getByRole('button', { name: 'Send' });
+    expect(send).toBeEnabled();
+    await user.click(send);
+    expect(dm.sendPlayerMessage).toHaveBeenCalledWith('I move to D8.');
+  });
+
+  it('names the place the hero ended in, keeps typed words first, and keeps OOC for typed words only', async () => {
+    const { user, box } = setup({ combat: movedTo({ x: 0, y: 6 }) });
+    await user.click(screen.getByRole('button', { name: 'OOC' }));
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(dm.sendPlayerMessage).toHaveBeenLastCalledWith('I move to A7, by the loading door.');
+
+    await user.type(box, 'How far is the ogre?{Enter}');
+    expect(dm.sendPlayerMessage).toHaveBeenLastCalledWith('OOC: How far is the ogre?');
+  });
+
+  it("says 'I keep moving to A7.' while the hero's stop is waiting for the DM", async () => {
+    const { user } = setup({ combat: sampleStopCombat() });
+    await user.click(screen.getByRole('button', { name: 'Send' }));
+    expect(dm.sendPlayerMessage).toHaveBeenCalledWith('I keep moving to A7.');
+  });
+
+  it('says "I stand up." when the hero only stood up', () => {
+    const combat = movedTo(B6, { kind: 'stand', to: B6, path: [], costFt: 15 });
+    expect(emptySendWords(combat, [])).toBe('I stand up.');
+  });
+
+  it('has nothing to say once the DM has answered the message that carried the moves, or on another turn', () => {
+    const told = movedTo({ x: 3, y: 7 }, { toldSeq: 1 });
+    expect(emptySendWords(told, [message(1, 'user')])).toBe('I move to D8.');
+    expect(emptySendWords(told, [message(1, 'user'), message(2, 'assistant')])).toBeNull();
+    setup({ combat: told, transcript: [message(1, 'user'), message(2, 'assistant')] });
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDisabled();
+    expect(screen.getByRole('textbox', { name: 'What do you do?' })).toHaveAttribute('placeholder', 'What do you do?');
+
+    expect(emptySendWords({ ...movedTo({ x: 3, y: 7 }), turnIndex: 1 }, [])).toBeNull();
+    expect(emptySendWords(sampleMappedCombat({ heroTurn: true }), [])).toBeNull();
+    expect(emptySendWords(null, [])).toBeNull();
+  });
+});
+
+describe('End turn', () => {
+  it('sends "I end my turn." with an empty draft', async () => {
+    seedGame();
+    await endTurn();
+    expect(dm.sendPlayerMessage).toHaveBeenCalledWith(END_TURN_WORDS);
+    expect(END_TURN_WORDS).toBe('I end my turn.');
+  });
+
+  it('adds it to a draft with words in it (never sends or discards them), and while the DM is busy', async () => {
+    const { box } = setup();
+    act(() => usePlayView.getState().setDraft('I shove the bandit'));
+    await act(() => endTurn());
+    expect(dm.sendPlayerMessage).not.toHaveBeenCalled();
+    expect(box).toHaveValue('I shove the bandit\nI end my turn.');
+    expect(box).toHaveFocus();
+
+    act(() => {
+      usePlayView.getState().setDraft('');
+      useGame.setState({ dm: { phase: 'streaming', activity: null, error: null, retryable: false } });
+    });
+    await act(() => endTurn());
+    expect(dm.sendPlayerMessage).not.toHaveBeenCalled();
+    expect(usePlayView.getState().draft).toBe('I end my turn.');
   });
 });

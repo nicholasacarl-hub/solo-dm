@@ -66,16 +66,24 @@ export function describeSettingsChanges(before: CampaignSettings, after: Campaig
   return lines;
 }
 
+/** A change that needs no DM notice from here. */
+export type QuietSettingsChange = 'transformations' | 'battle maps' | 'art style';
+
 /**
- * Changes that need no DM notice from here but still count as changes: the transformations rule
- * (the DM harness tells the DM about it itself, see src/dm/modes.ts) and the art style (only
- * pictures use it).
+ * Changes that need no DM notice from here but still count as changes: the transformations and battle-maps rules
+ * (the DM harness tells the DM about them itself, see src/dm/modes.ts) and the art style (only pictures use it).
  */
-export function quietSettingsChanges(before: CampaignSettings, after: CampaignSettings): ('transformations' | 'art style')[] {
-  const changes: ('transformations' | 'art style')[] = [];
+export function quietSettingsChanges(before: CampaignSettings, after: CampaignSettings): QuietSettingsChange[] {
+  const changes: QuietSettingsChange[] = [];
   if ((before.transformations ?? 'offered') !== (after.transformations ?? 'offered')) changes.push('transformations');
+  if ((before.battleMaps ?? 'auto') !== (after.battleMaps ?? 'auto')) changes.push('battle maps');
   if ((before.artStyle ?? '').trim() !== (after.artStyle ?? '').trim()) changes.push('art style');
   return changes;
+}
+
+/** Quiet changes the DM still hears about on the next turn (from the DM harness, src/dm/modes.ts). */
+export function dmHearsQuietChange(changes: readonly QuietSettingsChange[]): boolean {
+  return changes.includes('transformations') || changes.includes('battle maps');
 }
 
 /** The DM notice for a set of changes. */

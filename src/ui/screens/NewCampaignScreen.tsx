@@ -14,6 +14,7 @@ import { ButtonLink } from '@/ui/components/ButtonLink';
 import { toast } from '@/ui/components/toast';
 import { CampaignSettingsForm } from '@/ui/shell/CampaignSettingsForm';
 import {
+  BATTLE_MAPS_SHORT,
   COVER_COLORS,
   COVER_EMOJIS,
   DEFAULT_COVER_COLOR,
@@ -23,6 +24,7 @@ import {
   ROLL_MODE_OPTIONS,
   RULES_FIDELITY_OPTIONS,
   TRANSFORMATION_SHORT,
+  battleMapsMode,
   coverTint,
   defaultCampaignSettings,
   suggestCampaignName,
@@ -84,6 +86,7 @@ export function toCampaignInput(draft: CampaignDraft): NewCampaignInput {
       setting: s.setting.trim(),
       playerNotes: s.playerNotes?.trim() || undefined,
       transformations: transformationsMode(s),
+      battleMaps: battleMapsMode(s),
       // Fixed at creation (from the tone unless the player chose one), so every picture matches.
       artStyle: s.artStyle?.trim() || defaultArtStyle(tone),
     },
@@ -526,6 +529,7 @@ function ReadySummary({ draft }: { draft: CampaignDraft }) {
       `${labelOf(ROLL_MODE_OPTIONS, s.playerRollMode)} · DM rolls ${s.showDmRolls ? 'shown' : 'hidden'} · ${s.milestoneLeveling ? 'milestones' : 'XP'}`,
     ],
     ['Transformations', capitalize(TRANSFORMATION_SHORT[transformationsMode(s)])],
+    ['Battle maps', capitalize(BATTLE_MAPS_SHORT[battleMapsMode(s)])],
     ['Safety', `${plural(s.lines.length, 'line')}, ${plural(s.veils.length, 'veil')}`],
   ];
   return (

@@ -1,26 +1,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CombatState, InteractionResponse, LogEntry } from '@/types';
-import { sampleCharacter, sampleMappedCombat, sampleSession, sampleSettings, zeroUsage } from '@/test/fixtures';
+import type { HeroMoveRequest } from '@/engine/movement';
+import type { CombatState, GridPoint, InteractionResponse, LogEntry } from '@/types';
+import { sampleCharacter, sampleMappedCombat, sampleSession, sampleSettings, sampleStopCombat, zeroUsage } from '@/test/fixtures';
 import * as storage from '@/storage';
 import { db } from '@/storage/db';
 import { emitCampaignChange } from '@/storage/events';
 import { resetDatabase, seedCampaign } from '@/storage/testData';
 import {
   canUndoHeroMove,
+  heroMoveBlock,
+  initialDmStatus,
+  pendingPlayerStop,
   queueCampaignNotice,
   STREAM_CHECKPOINT_MS,
   useGame,
   whenPersisted,
+  type HeroMoveResult,
   type HeroMoveSnapshot,
 } from './gameStore';
 
-// Real storage (fake-indexeddb), with putLog wrapped so a test can make one write fail.
+// Real storage (fake-indexeddb), with some writes wrapped so a test can make one fail or check their order.
 vi.mock('@/storage', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/storage')>();
   return {
     ...actual,
     putLog: vi.fn(actual.putLog),
     putTranscript: vi.fn(actual.putTranscript),
+    putCombat: vi.fn(actual.putCombat),
+    putCharacter: vi.fn(actual.putCharacter),
     isCampaignOpenElsewhere: vi.fn(actual.isCampaignOpenElsewhere),
   };
 });
@@ -42,7 +49,9 @@ beforeEach(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   // Back to the real implementations (restoreAllMocks only undoes vi.spyOn).
-  for (const fn of [storage.putLog, storage.putTranscript, storage.isCampaignOpenElsewhere]) vi.mocked(fn).mockReset();
+  for (const fn of [storage.putLog, storage.putTranscript, storage.putCombat, storage.putCharacter, storage.isCampaignOpenElsewhere]) {
+    vi.mocked(fn).mockReset();
+  }
 });
 
 describe('loading', () => {
@@ -696,33 +705,428 @@ describe('narration cut off mid-stream', () => {
   });
 });
 
-describe('battle map: hero move undo (Day-0 contract)', () => {
-  const combat = (): CombatState => sampleMappedCombat({ heroTurn: true });
-  const snapshot = (before: CombatState, after: CombatState, patch: Partial<HeroMoveSnapshot> = {}): HeroMoveSnapshot => ({
-    before,
-    after,
-    stoodUp: false,
-    revealedHidden: false,
-    ...patch,
+// ---------------------------------------------------------------------------
+// Battle map (spec §6): updateCombat, loading, the hero's own move and its undo
+// ---------------------------------------------------------------------------
+
+const B6 = { x: 1, y: 5 };
+const C5 = { x: 2, y: 4 };
+const C7 = { x: 2, y: 6 };
+const D8 = { x: 3, y: 7 };
+
+const moveTo = (to?: GridPoint, patch: Partial<HeroMoveRequest> = {}): HeroMoveRequest => ({
+  to,
+  prefer: 'safest',
+  dash: false,
+  disengage: false,
+  standUp: false,
+  ...patch,
+});
+
+/** Campaign a, loaded, in a fight on the warehouse map (the hero's turn unless the state says otherwise). */
+async function loadMapped(combat: CombatState = sampleMappedCombat({ heroTurn: true })) {
+  const graph = await seedCampaign('a');
+  await db.combat.put({ campaignId: 'a-camp', state: combat });
+  await game().loadCampaign('a-camp');
+  return graph;
+}
+
+/** The fixture with Bandit 1 at C5, next to the hero (B6) and Old Tam (B5): leaving it provokes (M24). */
+function banditAdjacent(): CombatState {
+  const state = sampleMappedCombat({ heroTurn: true });
+  return { ...state, combatants: state.combatants.map((c) => (c.id === 'c-2' ? { ...c, position: C5 } : c)) };
+}
+
+/** How many times the store's state is set while `run` runs. */
+async function countSets(run: () => Promise<unknown>): Promise<number> {
+  let sets = 0;
+  const unsubscribe = useGame.subscribe(() => (sets += 1));
+  try {
+    await run();
+  } finally {
+    unsubscribe();
+  }
+  return sets;
+}
+
+const heroOf = (c: CombatState | null) => c?.combatants.find((x) => x.isPlayer);
+const snapshot = (before: CombatState, after: CombatState, patch: Partial<HeroMoveSnapshot> = {}): HeroMoveSnapshot => ({
+  before,
+  after,
+  stoodUp: false,
+  revealedHidden: false,
+  ...patch,
+});
+
+describe('battle map: updateCombat', () => {
+  it('applies a pure update to the latest combat, bumps updatedAt and persists', async () => {
+    const graph = await loadMapped();
+    const next = await game().updateCombat((c) => ({ ...c, round: c.round + 1 }));
+    expect(next.round).toBe(3);
+    expect(game().combat).toBe(next);
+    expect(game().campaign?.updatedAt).toBeGreaterThan(graph.campaign.updatedAt);
+    expect((await db.combat.get('a-camp'))?.state).toEqual(next);
+    expect((await storage.getCampaign('a-camp'))?.updatedAt).toBe(game().campaign?.updatedAt);
   });
 
-  it('starts with an empty undo stack, and loading a campaign keeps it empty', async () => {
-    expect(game().heroMoveUndo).toEqual([]);
+  it('is functional: unawaited updates each see the one before (a DM write during a player move loses nothing)', async () => {
+    await loadMapped();
+    const writes = Array.from({ length: 10 }, (_, i) =>
+      game().updateCombat((c) => ({ ...c, round: c.round + 1, encounterName: `update ${i}` })),
+    );
+    expect(game().combat?.round).toBe(12);
+    await Promise.all(writes);
+    expect((await db.combat.get('a-camp'))?.state).toMatchObject({ round: 12, encounterName: 'update 9' });
+  });
+
+  it('skips the write when fn returns the same object', async () => {
+    await loadMapped();
+    const before = game().combat;
+    const updatedAt = game().campaign?.updatedAt;
+    vi.mocked(storage.putCombat).mockClear();
+    const sets = await countSets(() => game().updateCombat((c) => c));
+    expect(sets).toBe(0);
+    expect(game().combat).toBe(before);
+    expect(game().campaign?.updatedAt).toBe(updatedAt);
+    expect(storage.putCombat).not.toHaveBeenCalled();
+  });
+
+  it('rejects without a combat or a campaign, and never ends a fight (that is setCombat(null))', async () => {
     await loadSeeded('a');
+    await game().setCombat(null);
+    await expect(game().updateCombat((c) => c)).rejects.toThrow('There is no combat running.');
+    await game().setCombat(sampleMappedCombat());
+    await expect(game().updateCombat(() => null as unknown as CombatState)).rejects.toThrow(/setCombat\(null\)/);
+    expect(game().combat).toEqual(sampleMappedCombat());
+    game().unloadCampaign();
+    await expect(game().updateCombat((c) => c)).rejects.toThrow('No campaign is loaded.');
+  });
+});
+
+describe('battle map: loading a fight', () => {
+  it('reads the stored combat leniently and writes nothing back', async () => {
+    const graph = await seedCampaign('a');
+    const fixture = sampleMappedCombat();
+    const [mira, bandit1, ...others] = fixture.combatants;
+    const { conditions: _conditions, ...noConditions } = bandit1;
+    const stored = {
+      ...fixture,
+      combatants: [{ ...mira, position: { x: 99, y: 5 } }, noConditions, ...others],
+      map: { ...fixture.map, width: 100, terrain: [...(fixture.map?.terrain ?? []), { id: 't40', kind: 'lava', rects: [] }] },
+    };
+    await db.combat.put({ campaignId: 'a-camp', state: stored as unknown as CombatState });
+    vi.mocked(storage.putCombat).mockClear();
+
+    await game().loadCampaign('a-camp');
+
+    const combat = game().combat;
+    expect(combat?.map).toMatchObject({ width: 40, height: 12 });
+    expect(combat?.map?.terrain).toHaveLength(7);
+    expect(heroOf(combat)).not.toHaveProperty('position');
+    expect(combat?.combatants[1].conditions).toEqual([]);
+    await whenPersisted('a-camp');
+    expect(storage.putCombat).not.toHaveBeenCalled();
+    expect((await db.combat.get('a-camp'))?.state).toEqual(stored);
+    expect((await storage.getCampaign('a-camp'))?.updatedAt).toBe(graph.campaign.updatedAt);
+  });
+
+  it('loads an old fight (no map) unchanged', async () => {
+    const graph = await loadSeeded('a');
+    expect(game().combat).toEqual(graph.combat);
+  });
+});
+
+describe('battle map: commitHeroMove gates (spec §6.2, checked in this order)', () => {
+  const busy = { phase: 'thinking' as const, activity: null, error: null, retryable: false };
+  const ask = { kind: 'confirm' as const, id: 'i-1', title: 'Opportunity Attack', body: '…' };
+
+  it('no-map: no fight, a finished fight, or a fight without a map', async () => {
+    await loadSeeded('a');
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'no-map' });
+    await game().setCombat({ ...sampleMappedCombat({ heroTurn: true }), active: false });
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'no-map' });
+    await game().setCombat(null);
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'no-map' });
+    game().unloadCampaign();
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'no-map' });
+  });
+
+  it("not-your-turn: on any other creature's turn, a hidden one included (it reads the same), before any other gate", async () => {
+    await loadMapped(sampleMappedCombat());
+    useGame.setState({ dm: busy, interaction: ask, activeSession: null });
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'not-your-turn' });
+    await game().updateCombat((c) => ({ ...c, turnIndex: 2 })); // the Cutthroat (hidden)
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'not-your-turn' });
+  });
+
+  it('dm-busy, then interaction, then no-session, then unplaced', async () => {
+    await loadMapped();
+    useGame.setState({ dm: busy, interaction: ask, activeSession: null });
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'dm-busy' });
+    useGame.setState({ dm: initialDmStatus });
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'interaction' });
+    useGame.setState({ interaction: null });
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'no-session' });
+    await game().loadCampaign('a-camp');
+    await game().updateCombat((c) => ({ ...c, combatants: c.combatants.map(({ position, ...x }) => (x.isPlayer ? x : { ...x, position })) }));
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'unplaced' });
+    // Nothing was written by a refused move.
+    expect(game().heroMoveUndo).toEqual([]);
+  });
+
+  it('an errored DM is not busy', async () => {
+    await loadMapped();
+    useGame.setState({ dm: { ...initialDmStatus, phase: 'error' }, activeSession: null });
+    expect(await game().commitHeroMove(moveTo(C7))).toEqual({ ok: false, block: 'no-session' });
+  });
+
+  it('stop-pending: a stop by the player blocks until the DM has answered the message that carried it', async () => {
+    await loadMapped(sampleStopCombat());
+    const pending = await game().commitHeroMove(moveTo({ x: 0, y: 6 }));
+    expect(pending).toEqual({ ok: false, block: 'stop-pending' });
+
+    // The player sends: the session stamps the stop with the user message's seq (stampMapTold).
+    const [sent] = await game().appendTranscript([{ role: 'user', content: 'I keep moving to A7.' }]);
+    await game().updateCombat((c) => ({ ...c, map: c.map && { ...c.map, stop: c.map.stop && { ...c.map.stop, toldSeq: sent.seq } } }));
+    expect(await game().commitHeroMove(moveTo({ x: 0, y: 6 }))).toEqual({ ok: false, block: 'stop-pending' });
+    // The request failed and the turn was set aside: the stamp points at a message that no longer exists.
+    await game().truncateTranscriptAfter(sent.seq - 1);
+    await game().appendTranscript([{ role: 'user', content: 'Again: I keep moving to A7.' }]);
+    expect(await game().commitHeroMove(moveTo({ x: 0, y: 6 }))).toEqual({ ok: false, block: 'stop-pending' });
+  });
+
+  it('a stop from an earlier round is stale and no longer blocks', () => {
+    const state = sampleStopCombat();
+    const stale = { ...state, round: 4 };
+    expect(pendingPlayerStop(state, [])).toBe(state.map?.stop);
+    expect(pendingPlayerStop(stale, [])).toBeNull();
+  });
+
+  it("refused: the engine's refusal is passed through and nothing changes", async () => {
+    await loadMapped();
+    const before = game().combat;
+    const result = await game().commitHeroMove(moveTo({ x: 15, y: 11 })); // far beyond 30 ft
+    expect(result).toMatchObject({ ok: false, block: 'refused', refusal: { code: 'too-far' } });
+    expect(game().combat).toBe(before);
+    expect(game().heroMoveUndo).toEqual([]);
+  });
+});
+
+describe('battle map: commitHeroMove writes', () => {
+  it('one set and one persist chain per move; the move can be undone', async () => {
+    await loadMapped();
+    const before = game().combat;
+    vi.mocked(storage.putCombat).mockClear();
+    vi.mocked(storage.putCharacter).mockClear();
+    let result: HeroMoveResult | undefined;
+    const sets = await countSets(async () => {
+      result = await game().commitHeroMove(moveTo(C7));
+    });
+    expect(sets).toBe(1);
+    expect(result).toMatchObject({ ok: true, outcome: { status: 'moved', move: { by: 'player', from: B6, to: C7, costFt: 5 } } });
+    expect(heroOf(game().combat)?.position).toEqual(C7);
+    expect(storage.putCombat).toHaveBeenCalledTimes(1);
+    expect(storage.putCharacter).not.toHaveBeenCalled();
+    expect((await db.combat.get('a-camp'))?.state).toEqual(game().combat);
+    expect(game().heroMoveUndo).toEqual([snapshot(before as CombatState, game().combat as CombatState)]);
+    expect(canUndoHeroMove(game())).toBe(true);
+  });
+
+  it("a move to the square the hero is on writes nothing and adds no undo step (spec §3.10)", async () => {
+    await loadMapped();
+    const before = game().combat;
+    vi.mocked(storage.putCombat).mockClear();
+    let result: HeroMoveResult | undefined;
+    const sets = await countSets(async () => {
+      result = await game().commitHeroMove(moveTo(B6));
+    });
+    expect(result).toMatchObject({ ok: true, outcome: { status: 'moved', move: { path: [] } } });
+    expect(sets).toBe(0);
+    expect(game().combat).toBe(before);
+    expect(storage.putCombat).not.toHaveBeenCalled();
+    expect(game().heroMoveUndo).toEqual([]);
+  });
+
+  it('standing up writes the Character (Prone removed) before the combat', async () => {
+    await loadMapped();
+    await game().updateCharacter((c) => ({ ...c, conditions: [{ id: 'prone' }] }));
+    vi.mocked(storage.putCombat).mockClear();
+    vi.mocked(storage.putCharacter).mockClear();
+
+    const result = await game().commitHeroMove(moveTo(undefined, { standUp: true }));
+
+    expect(result).toMatchObject({ ok: true, outcome: { heroStoodUp: true } });
+    expect(game().character?.conditions).toEqual([]);
+    expect(storage.putCharacter).toHaveBeenCalledTimes(1);
+    expect(storage.putCombat).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(storage.putCharacter).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(storage.putCombat).mock.invocationCallOrder[0]);
+    expect((await db.characters.get('a-char'))?.conditions).toEqual([]);
+    expect(game().heroMoveUndo.at(-1)?.stoodUp).toBe(true);
+  });
+
+  it("a move that leaves an enemy's reach stops there, and the next one waits for the DM's reply", async () => {
+    await loadMapped(banditAdjacent());
+    const first = await game().commitHeroMove(moveTo(D8));
+    expect(first).toMatchObject({
+      ok: true,
+      outcome: { status: 'stopped', stoppedFor: { kind: 'opportunity-attack', reactorIds: ['c-2'] } },
+    });
+    expect(heroOf(game().combat)?.position).toEqual(B6);
+    expect(game().combat?.map?.stop).toMatchObject({ by: 'player', moverId: 'c-1', destination: D8 });
+    expect(await game().commitHeroMove(moveTo(D8))).toEqual({ ok: false, block: 'stop-pending' });
+
+    const [sent] = await game().appendTranscript([{ role: 'user', content: 'I keep moving to D8.' }]);
+    await game().updateCombat((c) => ({ ...c, map: c.map && { ...c.map, stop: c.map.stop && { ...c.map.stop, toldSeq: sent.seq } } }));
+    expect(await game().commitHeroMove(moveTo(D8))).toEqual({ ok: false, block: 'stop-pending' });
+    await game().appendTranscript([{ role: 'assistant', content: [{ type: 'text', text: 'The bandit lunges and misses.' }] }]);
+
+    const second = await game().commitHeroMove(moveTo(D8));
+    expect(second).toMatchObject({ ok: true, outcome: { status: 'moved', move: { from: B6, to: D8, costFt: 10 } } });
+    expect(game().combat?.combatants.find((c) => c.id === 'c-2')?.reactionUsed).toBe(true);
+  });
+});
+
+describe('battle map: undoHeroMove', () => {
+  it('restores the combat from before the move by identity, newest first, one move per call', async () => {
+    await loadMapped();
+    const c0 = game().combat as CombatState;
+    const c1 = { ...c0, round: 5 };
+    const c2 = { ...c1, round: 6 };
+    useGame.setState({ combat: c2, heroMoveUndo: [snapshot(c0, c1), snapshot(c1, c2)] });
+
+    expect(await game().undoHeroMove()).toBe(true);
+    expect(game().combat).toBe(c1);
+    expect(game().heroMoveUndo).toEqual([snapshot(c0, c1)]);
+    expect(canUndoHeroMove(game())).toBe(true);
+    expect(await game().undoHeroMove()).toBe(true);
+    expect(game().combat).toBe(c0);
+    expect((await db.combat.get('a-camp'))?.state).toEqual(c0);
+    expect(game().heroMoveUndo).toEqual([]);
+    expect(canUndoHeroMove(game())).toBe(false);
+    expect(await game().undoHeroMove()).toBe(false);
+  });
+
+  it('re-adds Prone after undoing a stand-up without overwriting a later sheet edit (Character first)', async () => {
+    await loadMapped();
+    const c0 = game().combat as CombatState;
+    const c1 = { ...c0, round: 5 };
+    useGame.setState({ combat: c1, heroMoveUndo: [snapshot(c0, c1, { stoodUp: true })] });
+    await game().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 3 } }));
+    vi.mocked(storage.putCombat).mockClear();
+    vi.mocked(storage.putCharacter).mockClear();
+
+    expect(await game().undoHeroMove()).toBe(true);
+
+    expect(game().character?.conditions.map((c) => c.id)).toEqual(['prone']);
+    expect(game().character?.hp.current).toBe(3);
+    expect(vi.mocked(storage.putCharacter).mock.invocationCallOrder[0]).toBeLessThan(vi.mocked(storage.putCombat).mock.invocationCallOrder[0]);
+    expect((await db.characters.get('a-char'))?.conditions.map((c) => c.id)).toEqual(['prone']);
+  });
+
+  it('is refused once anything else wrote the combat (the <game_state> stamp at send, a DM tool)', async () => {
+    await loadMapped();
+    const c0 = game().combat as CombatState;
+    const c1 = { ...c0, round: 5 };
+    useGame.setState({ combat: c1, heroMoveUndo: [snapshot(c0, c1)] });
+    await game().updateCombat((c) => ({ ...c, map: c.map && { ...c.map } })); // the stamp
+    expect(canUndoHeroMove(game())).toBe(false);
+    expect(await game().undoHeroMove()).toBe(false);
+
+    useGame.setState({ combat: c1, heroMoveUndo: [snapshot(c0, c1)] });
+    await game().setCombat({ ...c1, round: 6 }); // a DM tool
+    expect(await game().undoHeroMove()).toBe(false);
+    expect(game().combat?.round).toBe(6);
+  });
+
+  it('is refused while the DM is busy or asks something, and for a move that ran into something hidden', async () => {
+    await loadMapped();
+    const c0 = game().combat as CombatState;
+    const c1 = { ...c0, round: 5 };
+    useGame.setState({ combat: c1, heroMoveUndo: [snapshot(c0, c1)], dm: { ...initialDmStatus, phase: 'tool' } });
+    expect(await game().undoHeroMove()).toBe(false);
+    useGame.setState({ dm: initialDmStatus, interaction: { kind: 'confirm', id: 'i-1', title: 'Opportunity Attack', body: '…' } });
+    expect(await game().undoHeroMove()).toBe(false);
+    useGame.setState({ interaction: null, heroMoveUndo: [snapshot(c0, c1, { revealedHidden: true })] });
+    expect(canUndoHeroMove(game())).toBe(false);
+    expect(await game().undoHeroMove()).toBe(false);
+    expect(game().combat).toBe(c1);
+  });
+
+  it("can't undo a move that ran into something hidden, so moving and undoing can't probe (C24, D49)", async () => {
+    const state = sampleMappedCombat({ heroTurn: true });
+    // The Cutthroat (hidden) stands on C6, in the way of the route the player sees: B6 → C6 → D6.
+    await loadMapped({ ...state, combatants: state.combatants.map((c) => (c.id === 'c-5' ? { ...c, position: { x: 2, y: 5 } } : c)) });
+
+    const result = await game().commitHeroMove(moveTo({ x: 3, y: 5 }));
+
+    expect(result).toMatchObject({ ok: true, outcome: { status: 'stopped', stoppedFor: { kind: 'unseen' }, revealedHidden: true } });
+    expect(heroOf(game().combat)?.position).toEqual(B6);
+    expect(game().heroMoveUndo.at(-1)?.revealedHidden).toBe(true);
+    expect(canUndoHeroMove(game())).toBe(false);
+    expect(await game().undoHeroMove()).toBe(false);
+  });
+
+  it('undoes a real move, and a new move after an outside write starts a fresh stack', async () => {
+    await loadMapped();
+    const start = game().combat;
+    await game().commitHeroMove(moveTo(C7));
+    expect(await game().undoHeroMove()).toBe(true);
+    expect(game().combat).toBe(start);
+    expect(heroOf(game().combat)?.position).toEqual(B6);
+
+    await game().commitHeroMove(moveTo(C7));
+    await game().updateCombat((c) => ({ ...c })); // stamped at send
+    await game().commitHeroMove(moveTo(D8));
+    expect(game().heroMoveUndo).toHaveLength(1);
+    expect(await game().undoHeroMove()).toBe(true);
+    expect(await game().undoHeroMove()).toBe(false);
+    expect(heroOf(game().combat)?.position).toEqual(C7);
+  });
+});
+
+describe('battle map: hero move undo stack', () => {
+  it('starts empty and clears on load, on unload and when a DM run starts (a busy setDmStatus)', async () => {
+    expect(game().heroMoveUndo).toEqual([]);
+    await loadMapped();
+    expect(game().heroMoveUndo).toEqual([]);
+    const c0 = game().combat as CombatState;
+    const stack = [snapshot(c0, { ...c0 })];
+
+    useGame.setState({ heroMoveUndo: stack });
+    game().setDmStatus({ phase: 'idle', activity: null });
+    game().setDmStatus({ phase: 'error', error: 'Overloaded' });
+    expect(game().heroMoveUndo).toBe(stack);
+    game().setDmStatus({ phase: 'thinking', activity: 'The DM is thinking…' });
+    expect(game().heroMoveUndo).toEqual([]);
+    game().setDmStatus({ phase: 'idle', activity: null, error: null });
+
+    useGame.setState({ heroMoveUndo: stack });
+    await game().reload();
+    expect(game().heroMoveUndo).toEqual([]);
+
+    useGame.setState({ heroMoveUndo: stack });
+    game().unloadCampaign();
     expect(game().heroMoveUndo).toEqual([]);
   });
 
   it('canUndoHeroMove: only while the newest move is still the combat, the DM is idle and nothing is asked', () => {
-    const before = combat();
-    const after = combat();
+    const before = sampleMappedCombat({ heroTurn: true });
+    const after = sampleMappedCombat({ heroTurn: true });
     const idle = { ...game(), combat: after, heroMoveUndo: [snapshot(before, after)] };
     expect(canUndoHeroMove({ ...idle, heroMoveUndo: [] })).toBe(false);
     expect(canUndoHeroMove(idle)).toBe(true);
     expect(canUndoHeroMove({ ...idle, dm: { ...idle.dm, phase: 'error' } })).toBe(true);
     // Any later write (the <game_state> stamp at send, a DM tool) replaces the combat object.
-    expect(canUndoHeroMove({ ...idle, combat: combat() })).toBe(false);
+    expect(canUndoHeroMove({ ...idle, combat: sampleMappedCombat({ heroTurn: true }) })).toBe(false);
     expect(canUndoHeroMove({ ...idle, dm: { ...idle.dm, phase: 'thinking' } })).toBe(false);
     expect(canUndoHeroMove({ ...idle, interaction: { kind: 'confirm', id: 'i-1', title: 'Opportunity Attack', body: '…' } })).toBe(false);
     expect(canUndoHeroMove({ ...idle, heroMoveUndo: [snapshot(before, after, { revealedHidden: true })] })).toBe(false);
+  });
+
+  it('heroMoveBlock mirrors the gates for display (the UI never needs to guess)', async () => {
+    await loadMapped();
+    expect(heroMoveBlock(game())).toBeNull();
+    useGame.setState({ dm: { ...initialDmStatus, phase: 'streaming' } });
+    expect(heroMoveBlock(game())).toBe('dm-busy');
   });
 });

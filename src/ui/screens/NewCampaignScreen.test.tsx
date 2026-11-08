@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor } from '@testing-library/react';
+import { screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { sampleCampaign } from '@/test/fixtures';
 import { autoCleanup, renderRoute } from '@/ui/shell/testUtils';
@@ -99,8 +99,10 @@ describe('NewCampaignScreen', () => {
         enabledSources: ['srd-5.2.1'],
         lines: ['Torture'],
         veils: ['Drowning'],
-        // New campaigns offer transformations, and their pictures get an art style that suits the tone.
+        // New campaigns offer transformations, play battle maps when they help, and their pictures get an art
+        // style that suits the tone.
         transformations: 'offered',
+        battleMaps: 'auto',
         artStyle: 'eerie atmospheric illustration, sickly muted colors, deep shadows, fog',
       }),
     });
@@ -133,6 +135,26 @@ describe('NewCampaignScreen', () => {
       transformations: 'consequences',
       artStyle: 'ink and wash illustration, loose linework, limited palette with one accent color',
     });
+  });
+
+  it('lets the player choose when fights use a battle map, and shows it in the summary', async () => {
+    vi.mocked(createCampaign).mockResolvedValue(sampleCampaign({ id: 'camp-new', status: 'setup', characterId: null }));
+    const user = userEvent.setup();
+    renderWizard();
+    await user.type(screen.getByLabelText('Campaign name'), 'Siege of Thornwall');
+    await user.click(nextButton());
+
+    const group = screen.getByRole('group', { name: 'Battle maps' });
+    expect(within(group).getByRole('radio', { name: /When it helps/ })).toBeChecked();
+    await user.click(within(group).getByRole('radio', { name: /Every fight/ }));
+    await user.click(nextButton());
+    const summary = screen.getByRole('region', { name: 'Summary' });
+    expect(within(summary).getByText('Battle maps')).toBeInTheDocument();
+    expect(within(summary).getByText('Every fight')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Create campaign' }));
+
+    await waitFor(() => expect(createCampaign).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createCampaign).mock.calls[0][0].settings.battleMaps).toBe('always');
   });
 
   it('lets the player go back without losing choices', async () => {
@@ -207,5 +229,13 @@ describe('wizard helpers', () => {
     expect(chosen.settings.artStyle).toBe('woodcut print');
     const { transformations: _t, ...older } = draft.settings;
     expect(toCampaignInput({ ...draft, settings: older }).settings.transformations).toBe('offered');
+  });
+
+  it('starts with battle maps "when it helps" and always writes the rule', () => {
+    const draft = newCampaignDraft();
+    expect(draft.settings.battleMaps).toBe('auto');
+    const { battleMaps: _b, ...older } = draft.settings;
+    expect(toCampaignInput({ ...draft, settings: older }).settings.battleMaps).toBe('auto');
+    expect(toCampaignInput({ ...draft, settings: { ...draft.settings, battleMaps: 'off' } }).settings.battleMaps).toBe('off');
   });
 });

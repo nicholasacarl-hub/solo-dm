@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { sampleSettings } from '@/test/fixtures';
+import { sampleSettings, sampleStopCombat } from '@/test/fixtures';
 import {
   createCampaign,
   deleteCampaign,
@@ -12,6 +12,7 @@ import {
   putHomebrew,
 } from '@/storage';
 import { db } from './db';
+import { writeCampaignData } from './campaignData';
 import { allIds, campaignGraph, resetDatabase, seedCampaign, sharedHomebrew } from './testData';
 
 beforeEach(resetDatabase);
@@ -172,6 +173,23 @@ describe('duplicateCampaign', () => {
     const original = await exportCampaignBundle('a-camp');
     const { exportedAt: _e, format: _f, version: _v, ...originalData } = original;
     expect(originalData).toEqual(campaignGraph('a'));
+  });
+
+  it('keeps a fight on a battle map: the map, positions and every map reference (they are combatant ids)', async () => {
+    const graph = campaignGraph('a');
+    const combat = sampleStopCombat();
+    await writeCampaignData({ ...graph, combat });
+
+    const copy = await duplicateCampaign('a-camp');
+    const copied = (await exportCampaignBundle(copy.id)).combat;
+
+    // Combatant ids are kept, so the turn record, the stop and its reactors still point at the right creatures.
+    expect(copied).toEqual(combat);
+    expect(copied?.map?.turn?.combatantId).toBe('c-1');
+    expect(copied?.map?.stop).toMatchObject({ moverId: 'c-1', reactorIds: ['c-6'] });
+    expect(copied?.combatants.map((c) => [c.id, c.position])).toEqual(combat.combatants.map((c) => [c.id, c.position]));
+    // The original is unchanged.
+    expect((await exportCampaignBundle('a-camp')).combat).toEqual(combat);
   });
 
   it('uses the given name', async () => {

@@ -8,6 +8,8 @@ import {
   type GameStore,
   type GameStoreState,
 } from '@/state/gameStore';
+// By path, not through '@/state/gameStore': DM tests replace that module with a stand-in.
+import { isBusyDmPhase, planHeroMoveCommit, planHeroMoveUndo } from '@/state/heroMove';
 import type {
   InteractionRequest,
   InteractionResponse,
@@ -163,16 +165,36 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
       async setCombat(state) {
         set({ combat: state });
       },
-      // Battle map (Day-0 stubs; engineer D implements them: functional updateCombat with the same-object skip,
-      // commitHeroMove / undoHeroMove on the real applyHeroMove).
-      async updateCombat() {
-        throw new Error('fakeStore: updateCombat not implemented');
+      // Battle map: the store's own rules (src/state/heroMove.ts) on the real engine.
+      async updateCombat(fn) {
+        requireCampaign();
+        const combat = get().combat;
+        if (!combat) throw new Error('There is no combat running.');
+        const next = fn(combat);
+        if (!next) throw new Error('updateCombat must return a combat state; end a fight with setCombat(null).');
+        if (next !== combat) set({ combat: next });
+        return next;
       },
-      async commitHeroMove() {
-        throw new Error('fakeStore: commitHeroMove not implemented');
+      async commitHeroMove(req) {
+        const plan = planHeroMoveCommit(get(), req);
+        if (!plan.ok) return plan;
+        if (!plan.changed) return { ok: true, outcome: plan.outcome };
+        set({
+          combat: plan.outcome.state,
+          ...(plan.character && { character: { ...plan.character, updatedAt: now() } }),
+          heroMoveUndo: plan.heroMoveUndo,
+        });
+        return { ok: true, outcome: plan.outcome };
       },
       async undoHeroMove() {
-        throw new Error('fakeStore: undoHeroMove not implemented');
+        const undo = planHeroMoveUndo(get());
+        if (!undo) return false;
+        set({
+          combat: undo.combat,
+          ...(undo.character && { character: { ...undo.character, updatedAt: now() } }),
+          heroMoveUndo: undo.heroMoveUndo,
+        });
+        return true;
       },
 
       async upsertJournal(entries) {
@@ -247,7 +269,9 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
       },
 
       setDmStatus(patch) {
-        set({ dm: { ...get().dm, ...patch } });
+        const dm = { ...get().dm, ...patch };
+        // Like the store: once a DM run starts, this turn's hero moves can't be undone.
+        set(isBusyDmPhase(dm.phase) && get().heroMoveUndo.length > 0 ? { dm, heroMoveUndo: [] } : { dm });
       },
 
       requestInteraction(request) {

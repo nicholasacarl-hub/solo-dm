@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sampleSettings } from '@/test/fixtures';
-import { describeSettingsChanges, quietSettingsChanges, settingsChangeNotice } from './settingsDiff';
+import { describeSettingsChanges, dmHearsQuietChange, quietSettingsChanges, settingsChangeNotice } from './settingsDiff';
 
 describe('describeSettingsChanges', () => {
   it('is empty when nothing changed', () => {
@@ -53,6 +53,18 @@ describe('describeSettingsChanges', () => {
 });
 
 describe('quietSettingsChanges', () => {
+  it('counts the battle-maps rule (missing = when it helps); the DM hears about it from the harness', () => {
+    const before = sampleSettings();
+    expect(quietSettingsChanges(before, { ...before, battleMaps: 'auto' })).toEqual([]);
+    const changes = quietSettingsChanges(before, { ...before, battleMaps: 'off' });
+    expect(changes).toEqual(['battle maps']);
+    expect(dmHearsQuietChange(changes)).toBe(true);
+    expect(quietSettingsChanges({ ...before, battleMaps: 'always' }, { ...before, battleMaps: 'auto' })).toEqual(['battle maps']);
+    expect(describeSettingsChanges(before, { ...before, battleMaps: 'always' })).toEqual([]);
+    expect(dmHearsQuietChange(['art style'])).toBe(false);
+    expect(dmHearsQuietChange(['transformations', 'art style'])).toBe(true);
+  });
+
   it('counts the transformations rule (missing = offered) and the art style, which need no notice here', () => {
     const before = sampleSettings();
     expect(quietSettingsChanges(before, { ...before, transformations: 'offered' })).toEqual([]);

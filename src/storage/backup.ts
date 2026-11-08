@@ -7,9 +7,10 @@
  */
 import { z } from 'zod';
 import { findSrdClass } from '@/engine/classData';
+import { normalizeCombatState } from '@/engine/mapNormalize';
 import { slugify } from '@/lib/id';
 import { hasImported, redactImported } from '@/lib/importedContent';
-import type { Campaign, HitDiceEntry, HitDie } from '@/types';
+import type { Campaign, CombatState, HitDiceEntry, HitDie } from '@/types';
 import { campaignAndImageTables, db } from './db';
 import { deleteCampaignData, normalizeCampaignData, readCampaignData, writeCampaignData } from './campaignData';
 import { isCampaignOpenElsewhere, OPEN_ELSEWHERE_ERROR } from './campaignLock';
@@ -100,6 +101,10 @@ export async function downloadCampaign(campaignId: string): Promise<void> {
 
 const id = z.string().min(1);
 const timestamp = z.number();
+
+/** z.enum needs tuples; tests keep these equal to CREATURE_SIZES and BATTLE_MAPS_MODES (src/types). */
+export const SAVE_CREATURE_SIZES = ['Tiny', 'Small', 'Medium', 'Large', 'Huge', 'Gargantuan'] as const;
+export const SAVE_BATTLE_MAPS_MODES = ['off', 'auto', 'always'] as const;
 const strings = z.array(z.string()).default([]);
 
 const usageSchema = z
@@ -136,6 +141,8 @@ const settingsSchema = z.looseObject({
   // Missing means 'offered'; anything unreadable is treated as missing.
   transformations: z.enum(['off', 'offered', 'consequences']).optional().catch(undefined),
   artStyle: z.string().optional().catch(undefined),
+  // Missing means 'auto' (When it helps); anything unreadable is treated as missing.
+  battleMaps: z.enum(SAVE_BATTLE_MAPS_MODES).optional().catch(undefined),
 });
 
 const campaignSchema = z.looseObject({
@@ -238,7 +245,7 @@ const characterSchema = z
     armorTraining: strings,
     armorClass: z.number().default(10),
     speed: z.number().default(30),
-    size: z.enum(['Tiny', 'Small', 'Medium', 'Large', 'Huge', 'Gargantuan']).catch('Medium'),
+    size: z.enum(SAVE_CREATURE_SIZES).catch('Medium'),
     deathSaves: z
       .looseObject({
         successes: z.number().default(0),
@@ -417,13 +424,25 @@ const homebrewSchema = z.looseObject({
   updatedAt: timestamp.default(0),
 });
 
-const combatSchema = z.looseObject({
-  active: z.boolean().default(true),
-  round: z.number().default(1),
-  turnIndex: z.number().default(0),
-  combatants: z.array(z.looseObject({ id, name: z.string() })),
-  startedAt: timestamp.default(0),
+const combatantSchema = z.looseObject({
+  id,
+  name: z.string(),
+  // The tracker lists a combatant's conditions, so they must be a list (unreadable ones are dropped).
+  conditions: z.array(z.looseObject({ id: z.string() })).default([]).catch([]),
 });
+
+const combatSchema = z
+  .looseObject({
+    active: z.boolean().default(true),
+    round: z.number().default(1),
+    turnIndex: z.number().default(0),
+    combatants: z.array(combatantSchema),
+    startedAt: timestamp.default(0),
+    map: z.unknown().optional(),
+  })
+  // One source of truth for every battle-map field (positions, sizes, speeds, hidden, reactions, the map), shared
+  // with the IndexedDB load path: it never throws, drops what it can't read, and keeps the combat.
+  .transform((c): CombatState => normalizeCombatState(c));
 
 const bundleSchema = z.looseObject({
   format: z.literal(BUNDLE_FORMAT),
