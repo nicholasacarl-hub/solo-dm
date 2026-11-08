@@ -1,14 +1,26 @@
 import { useEffect, useState } from 'react';
 import { Library, NotebookPen, ScrollText, Swords, UserRound } from 'lucide-react';
-import { useGame } from '@/state/gameStore';
+import { playerTurnIndex } from '@/engine';
+import { useGame, type GameStoreState } from '@/state/gameStore';
 import { TabStrip, type TabStripItem } from './components/TabStrip';
 import { usePlayView, type MobileTab } from './playView';
+
+/**
+ * The hero's turn in a fight on a battle map, as the player sees it: playerTurnIndex, so a hidden creature's turn
+ * never changes the dot (D42).
+ */
+function heroTurnOnMap(s: Pick<GameStoreState, 'combat'>): boolean {
+  const combat = s.combat;
+  if (!combat?.active || !combat.map) return false;
+  return combat.combatants[playerTurnIndex(combat)]?.isPlayer === true;
+}
 
 /** Bottom tab bar on phones: Story · Sheet · Combat · Journal · Rules. */
 export function MobileTabBar() {
   const tab = usePlayView((s) => s.mobileTab);
   const setTab = usePlayView((s) => s.setMobileTab);
   const combatActive = useGame((s) => s.combat?.active ?? false);
+  const yourTurn = useGame(heroTurnOnMap);
   const logLength = useGame((s) => s.log.length);
   const [seenLength, setSeenLength] = useState(logLength);
 
@@ -31,8 +43,8 @@ export function MobileTabBar() {
       value: 'combat',
       label: 'Combat',
       icon: <Swords className="size-5" aria-hidden />,
-      dot: combatActive ? 'danger' : undefined,
-      dotLabel: 'combat in progress',
+      dot: yourTurn ? 'accent' : combatActive ? 'danger' : undefined,
+      dotLabel: yourTurn ? 'your turn' : 'combat in progress',
     },
     { value: 'journal', label: 'Journal', icon: <NotebookPen className="size-5" aria-hidden /> },
     { value: 'rules', label: 'Rules', icon: <Library className="size-5" aria-hidden /> },

@@ -1,12 +1,19 @@
 /**
- * Two settings decide how the DM may use transform_character and show_image, and both can change
- * mid-session: the campaign's transformations rule (Table rules) and the player's illustrations
- * setting (Settings → Illustrations, plus whether an OpenAI key is set up). The frozen system prompt
- * renders the current mode of each as a section; when one changes later, the next turn carries a
- * one-line app note with the new mode's guidance. Nothing earlier is edited (append-only): what the
- * DM was last told is read back from the prompt and the notes already in the transcript.
+ * Three settings decide how the DM may use transform_character, show_image and the battle map, and each can
+ * change mid-session: the campaign's transformations rule and battle-maps rule (Table rules) and the player's
+ * illustrations setting (Settings → Illustrations, plus whether an OpenAI key is set up). The frozen system prompt
+ * renders the current mode of each as a section; when one changes later, the next turn carries a one-line app note
+ * with the new mode's guidance. Nothing earlier is edited (append-only): what the DM was last told is read back from
+ * the prompt and the notes already in the transcript.
  */
-import { DEFAULT_IMAGE_SETTINGS, type AppSettings, type CampaignSettings, type TransformationsMode } from '@/types';
+import {
+  BATTLE_MAPS_MODES,
+  DEFAULT_IMAGE_SETTINGS,
+  type AppSettings,
+  type BattleMapsMode,
+  type CampaignSettings,
+  type TransformationsMode,
+} from '@/types';
 import type { DmImages } from './deps';
 
 /** off = the player switched illustrations off; unavailable = no OpenAI key (or images can't run). */
@@ -15,6 +22,7 @@ export type IllustrationMode = 'off' | 'unavailable' | 'request' | 'moments';
 export interface TableModes {
   transformations: TransformationsMode;
   illustrations: IllustrationMode;
+  battleMaps: BattleMapsMode;
 }
 
 const TRANSFORMATION_MODES: readonly TransformationsMode[] = ['off', 'offered', 'consequences'];
@@ -99,12 +107,49 @@ export function illustrationsSection(mode: IllustrationMode): string {
 }
 
 // ---------------------------------------------------------------------------
+// Battle maps (spec §5.2)
+// ---------------------------------------------------------------------------
+
+const BATTLE_MAPS_LABEL: Record<BattleMapsMode, string> = { off: 'Off', auto: 'When it helps', always: 'Every fight' };
+
+/** A campaign's battle-maps rule (missing = 'auto'). */
+export function battleMapsMode(settings: Pick<CampaignSettings, 'battleMaps'>): BattleMapsMode {
+  return settings.battleMaps ?? 'auto';
+}
+
+const BATTLE_MAPS_RULE: Record<BattleMapsMode, string> = {
+  off: "The player prefers the theater of the mind: don't put fights on a battle map (start_combat ignores `map`, and update_map create is refused). Describe distances and positions in words and keep them consistent. A map already on the table stays until that fight ends; you may take it away with update_map remove.",
+  auto: "Put a fight on the battle map when positions will matter: several foes, ranged attackers, cover, chokepoints, hazards, area spells — or whenever the player plays tactically. Keep a quick scuffle, a single exchange or a chase in the mind's eye. If the player asks for a map, set one up.",
+  always: 'The player loves tactical play: put every fight on a battle map, even a small one (start_combat with `map`, or update_map create for a fight already running).',
+};
+
+const BATTLE_MAPS_PRINCIPLES: readonly string[] = [
+  'Setting up is one call: start_combat with `map` — its size in 5-ft squares (10–20 a side for most rooms; A1 is the top-left, letters run left to right, numbers top to bottom), walls, doors and terrain as squares and ranges ("A1:P1"), named places ("the balcony"), and where the hero and each group start (`hero_position`, `position`: a square or a place). Anything you leave out is placed for you, and an SRD stat block supplies size, speed and reach.',
+  'Draw the battlefield the narration describes, with options for both sides — cover, a chokepoint or high ground, a hazard — and start foes at the distance the scene implies (30–60 ft unless it is an ambush). Map only what the hero can perceive; add the rest when it is found.',
+  "The app owns positions and geometry: read distances, reach, cover and who stands where from <game_state> and tool results, or ask check_map. Never estimate them. Its cover is what the map shows; you may still rule on what the map can't show.",
+  "On each creature's turn move it with move_tokens, one creature at a time, then update_combat next_turn. `to` can be a creature (it ends within reach) or a place; an illegal move is refused with the closest square it can reach. A melee attack needs the attacker in reach: give roll_dice `attacker` and `target` and it checks.",
+  "A move stops where leaving a creature's reach provokes an Opportunity Attack. If the hero can take it, move_tokens asks the player itself and tells you the answer; otherwise roll the monster's attack, then repeat the same move to finish it.",
+  'The player moves the hero on the map during their turn; <game_state> reports the moves, any Dash or Disengage, and any Opportunity Attack a move provoked — resolve that first, then finish the move as they declared it (move_tokens who "hero"). Otherwise move the hero only as the player declared, or by forced movement.',
+  "Resolve every area of effect with resolve_area (it shows on the map and lists exactly who is caught, with cover), then roll saves for exactly those creatures. A player's [Area: …] note gives the parameters to use.",
+  "Creatures the hero hasn't noticed are hidden ([hidden] in <game_state>): roll for them with secret: true, and reveal them with update_combat reveal when they are seen.",
+  'Narrate places and features ("behind the crates", "up on the gantry"), not square labels, unless the player talks in squares.',
+];
+
+/** The campaign-part section for the battle-maps rule (rendered after the illustrations section). */
+export function battleMapsSection(mode: BattleMapsMode): string {
+  const lines = [`## Battle maps: ${BATTLE_MAPS_LABEL[mode]}`, BATTLE_MAPS_RULE[mode]];
+  if (mode !== 'off') lines.push(...BATTLE_MAPS_PRINCIPLES.map((p) => `- ${p}`));
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Mid-session changes: one-line notes (notes are single lines, so parseNotices keeps them whole)
 // ---------------------------------------------------------------------------
 
 const NOTICE_PREFIX = 'Setting update — ';
 const TRANSFORMATIONS_NOTICE = `${NOTICE_PREFIX}Transformations: `;
 const ILLUSTRATIONS_NOTICE = `${NOTICE_PREFIX}Illustrations: `;
+const BATTLE_MAPS_NOTICE = `${NOTICE_PREFIX}Battle maps: `;
 
 /** The note for a new transformations rule (with the general guidance when the DM hasn't had it). */
 export function transformationsNotice(mode: TransformationsMode, opts: { withPrinciples: boolean }): string {
@@ -114,6 +159,12 @@ export function transformationsNotice(mode: TransformationsMode, opts: { withPri
 
 export function illustrationsNotice(mode: IllustrationMode): string {
   return `${ILLUSTRATIONS_NOTICE}${ILLUSTRATION_LABEL[mode]}. ${ILLUSTRATION_RULE[mode]}`;
+}
+
+/** "Setting update — Battle maps: <Label>. <rule> [<principles…>]" (one line; the guidance when the DM hasn't had it). */
+export function battleMapsNotice(mode: BattleMapsMode, opts: { withPrinciples: boolean }): string {
+  const principles = opts.withPrinciples && mode !== 'off' ? BATTLE_MAPS_PRINCIPLES : [];
+  return `${BATTLE_MAPS_NOTICE}${BATTLE_MAPS_LABEL[mode]}. ${[BATTLE_MAPS_RULE[mode], ...principles].join(' ')}`;
 }
 
 /** A note written by modeNotices() (superseded by a fresh one whenever a turn is re-sent). */
@@ -133,10 +184,12 @@ export function modesTold(systemPrompt: string, notices: readonly string[]): Par
   const told: Partial<TableModes> = {
     transformations: TRANSFORMATION_MODES.find((m) => systemPrompt.includes(transformationsSection(m))),
     illustrations: ILLUSTRATION_MODES.find((m) => systemPrompt.includes(illustrationsSection(m))),
+    battleMaps: BATTLE_MAPS_MODES.find((m) => systemPrompt.includes(battleMapsSection(m))),
   };
   for (const text of notices) {
     told.transformations = noticeMode(text, TRANSFORMATIONS_NOTICE, TRANSFORMATION_MODES, TRANSFORMATION_LABEL) ?? told.transformations;
     told.illustrations = noticeMode(text, ILLUSTRATIONS_NOTICE, ILLUSTRATION_MODES, ILLUSTRATION_LABEL) ?? told.illustrations;
+    told.battleMaps = noticeMode(text, BATTLE_MAPS_NOTICE, BATTLE_MAPS_MODES, BATTLE_MAPS_LABEL) ?? told.battleMaps;
   }
   return told;
 }
@@ -148,5 +201,8 @@ export function modeNotices(told: Partial<TableModes>, current: TableModes): str
     notices.push(transformationsNotice(current.transformations, { withPrinciples: told.transformations === 'off' }));
   }
   if (told.illustrations && told.illustrations !== current.illustrations) notices.push(illustrationsNotice(current.illustrations));
+  if (told.battleMaps && told.battleMaps !== current.battleMaps) {
+    notices.push(battleMapsNotice(current.battleMaps, { withPrinciples: told.battleMaps === 'off' }));
+  }
   return notices;
 }

@@ -10,6 +10,7 @@ import { endCombatTool, startCombatTool, updateCombatTool } from './combat';
 import { ToolInputError, type ToolContext, type ToolOutcome } from './context';
 import { isToolName, TOOL_SCHEMAS, type ToolInput, type ToolName } from './definitions';
 import { showImageTool } from './images';
+import { checkMapTool, moveTokensTool, resolveAreaTool, updateMapTool } from './map';
 import { requestPlayerRoll, rollDiceTool } from './rolls';
 import { createHomebrewTool, getEntryTool, lookupRulesTool, updateHomebrewTool } from './rules';
 import { transformCharacterTool } from './transform';
@@ -34,6 +35,10 @@ const HANDLERS: { [N in ToolName]: Handler<N> } = {
   start_combat: startCombatTool,
   update_combat: updateCombatTool,
   end_combat: endCombatTool,
+  move_tokens: moveTokensTool,
+  update_map: updateMapTool,
+  resolve_area: resolveAreaTool,
+  check_map: checkMapTool,
   lookup_rules: lookupRulesTool,
   get_entry: getEntryTool,
   get_character_sheet: getCharacterSheetTool,

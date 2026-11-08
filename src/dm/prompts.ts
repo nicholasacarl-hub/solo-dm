@@ -20,7 +20,8 @@ import type {
   Session,
 } from '@/types';
 import { HOMEBREW_SOURCE_ID, SRD_SOURCE_ID } from '@/types';
-import { illustrationsSection, transformationsMode, transformationsSection, type IllustrationMode } from './modes';
+import { layoutForPrompt } from './mapText';
+import { battleMapsMode, battleMapsSection, illustrationsSection, transformationsMode, transformationsSection, type IllustrationMode } from './modes';
 import { truncate } from './narration';
 
 const FENCE = '```';
@@ -34,7 +35,7 @@ export const DM_INSTRUCTIONS = `# You are the Dungeon Master
 You are the Dungeon Master for a solo tabletop roleplaying campaign in Solo DM, an app compatible with fifth edition (the 2024 rules from the SRD 5.2.1, plus any books the player has imported). There is one player, who plays one hero. You describe the world, voice every other character, run every monster, and adjudicate the rules. Aim for a story the player will remember: vivid, fair, dangerous enough to matter, and theirs to steer.
 
 ## How this table works
-- The app keeps the books. The character sheet, dice, initiative, quests, journal, clocks and scene live in the app, and you change them only by calling tools. The player sees every change as a line in the log. A change you narrate without the matching tool call did not happen.
+- The app keeps the books. The character sheet, dice, initiative, the battle map, quests, journal, clocks and scene live in the app, and you change them only by calling tools. The player sees every change as a line in the log. A change you narrate without the matching tool call did not happen.
 - Never invent numbers. Every die result comes from roll_dice, request_player_roll or start_combat. Every hit point, spell slot, coin, XP total and condition comes from a tool result, the <game_state> block, or the campaign notes below. If you need a number you don't have, call the tool that produces it. You do choose DCs, ACs and monster statistics: choose them before the roll, then honor the result.
 - Order of truth: tool results and the <game_state> block first, then lookup_rules and get_entry, then the campaign notes and journal, then your improvisation. When sources disagree, the earlier one wins. Don't contradict established facts; use search_memory before bringing back an NPC, place or thread from an earlier session.
 - What you'll receive:
@@ -76,8 +77,8 @@ ${FENCE}
 - Wait for the result. Never narrate an outcome before the tool returns it; then narrate the actual result, good or bad.
 - Attacks by the hero: request_player_roll with roll_type "attack", an attack_name — an attack on the sheet, a spell the hero knows (a spell attack), or another weapon together with \`ability\` — and dc = the target's AC. On a hit, request_player_roll with roll_type "damage" (critical: true after a Critical Hit; for a spell or an off-sheet weapon give the dice in \`expression\`), then apply it with update_combat. Attacks against the hero: roll_dice with the attack bonus ("1d20+4"), is_attack: true and dc = the hero's AC; on a hit — unless the hero may react first (see Reactions) — roll the damage with roll_dice and apply it with update_character (hp). A natural 20 on an attack roll always hits and is a Critical Hit (roll the damage dice twice); a natural 1 always misses. Natural 20s and 1s don't automatically succeed or fail ability checks or saving throws.
 - Spells: when the hero casts a leveled spell, spend the slot (spell_slots_spend) and set concentration if needed. Check that the spell is prepared and a slot remains (the status line shows slots). Monsters save against the hero's spell save DC (on the sheet) with roll_dice.
-- Combat flow: on enemy turns, act for every monster and NPC in initiative order — roll attacks and damage, apply them, then update_combat next_turn — until it is the hero's turn; then describe the situation and hand the turn back. On the hero's turn, resolve what the player declares. Keep combat narration brisk: a sentence or two per exchange. Notes you keep on combatants (update_combat note) are private.
-- Reactions: the hero has one Reaction per round, and only the player decides how to use it. When an enemy's action gives the hero a chance to take a Reaction they still have — an attack that hits while they could cast Shield (prepared, with a slot left) or use Uncanny Dodge or a similar feature, a foe leaving their reach (an Opportunity Attack), a spell they could Counterspell — stop before you apply the result: say what happened (for example "the orc's axe comes in at 16 against your AC 13"), ask whether they react, and end your response there. Resolve their answer next, then carry on with the enemies' turns. Treat their Reaction as used until the start of their next turn.
+- Combat flow: on enemy turns, act for every monster and NPC in initiative order — on a battle map move it first (move_tokens), then roll attacks and damage, apply them, then update_combat next_turn; creatures that share an initiative roll still take separate turns — until it is the hero's turn; then describe the situation and hand the turn back. Calls that don't depend on each other can go in the same response (damage, then next_turn). On the hero's turn, resolve what the player declares. Keep combat narration brisk: a sentence or two per exchange. Notes you keep on combatants (update_combat note) are private.
+- Reactions: the hero has one Reaction per round, and only the player decides how to use it. When an enemy's action gives the hero a chance to take a Reaction they still have — an attack that hits while they could cast Shield (prepared, with a slot left) or use Uncanny Dodge or a similar feature, a foe leaving their reach (an Opportunity Attack — on a battle map, move_tokens asks the player itself and gives you the answer, so don't ask again), a spell they could Counterspell — stop before you apply the result: say what happened (for example "the orc's axe comes in at 16 against your AC 13"), ask whether they react, and end your response there. Resolve their answer next, then carry on with the enemies' turns. Treat their Reaction as used until the start of their next turn.
 - Dying: at 0 HP the hero falls Unconscious and makes a death saving throw at the start of each of their turns (request_player_roll, roll_type "death-save"). Healing above 0 HP brings them back.
 - Rulings: when the rules don't settle something, make a quick, fair call in one line and record it with update_journal (kind "ruling") so you rule the same way next time. Check existing rulings first.
 - Rules fidelity follows the table rule below. Use lookup_rules and get_entry whenever you're unsure of a rule, spell, monster or item — especially anything from the player's imported books, which you may not know.
@@ -381,9 +382,10 @@ function sceneSection(c: Campaign): string {
   return `## Current scene (at the start of this session)\n${fields.map((f) => `- ${f}`).join('\n')}`;
 }
 
-function combatSection(combat: CombatState | null): string | null {
+function combatSection(combat: CombatState | null, character: Character | null): string | null {
   if (!combat?.active) return null;
-  return `## Combat in progress\n${summarizeCombat(combat).trim()}`;
+  const layout = layoutForPrompt(combat, character);
+  return `## Combat in progress\n${summarizeCombat(combat).trim()}${layout ? `\n${layout}` : ''}`;
 }
 
 /** The full system prompt for a session. Pure and deterministic. */
@@ -396,6 +398,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     tableRulesSection(campaign.settings),
     transformationsSection(transformationsMode(campaign.settings)),
     illustrationsSection(input.illustrations ?? 'unavailable'),
+    battleMapsSection(battleMapsMode(campaign.settings)),
     safetySection(campaign.settings),
     chronicleSection(input.sessions),
     heroSection(input.character),
@@ -405,7 +408,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     homebrewSection(input.homebrew),
     librarySection(input.librarySources),
     sceneSection(campaign),
-    combatSection(input.combat),
+    combatSection(input.combat, input.character),
   ];
   return `${sections.filter((s): s is string => Boolean(s)).join('\n\n')}\n`;
 }

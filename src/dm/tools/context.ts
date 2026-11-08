@@ -6,6 +6,7 @@ import type { DmPhase, GameStore } from '@/state/gameStore';
 import type {
   Campaign,
   Character,
+  CombatState,
   D20TestResult,
   GameEvent,
   NewLogEntry,
@@ -77,6 +78,29 @@ export async function mutateCharacter<T extends CharacterChange>(
     return result.character;
   });
   if (!result) throw new Error('The character update did not run.');
+  return result;
+}
+
+/** Precondition texts about the game state (returned with fail(), spec §4.2). */
+export const NO_COMBAT = 'No combat is active. Use start_combat first.';
+export const NO_MAP = 'This fight has no battle map: describe positions in words, or add one with update_map create.';
+export const MAPS_OFF = "Battle maps are Off in this campaign's table rules: keep this fight in the theater of the mind.";
+
+/**
+ * Apply a pure engine change to the store's latest combat (store.updateCombat) and return the engine's full result.
+ * Every combat handler does its awaiting first (rules index, rolls, the player's answers), then writes once through
+ * this against the latest state, so nothing written meanwhile (a move the player committed) is lost. When `fn`
+ * returns the same state, nothing is written. Throwing inside `fn` aborts the write.
+ */
+export async function mutateCombat<T extends { state: CombatState }>(ctx: ToolContext, fn: (c: CombatState) => T): Promise<T> {
+  const store = ctx.deps.store();
+  if (!store.combat) throw new ToolInputError(NO_COMBAT);
+  let result: T | undefined;
+  await store.updateCombat((c) => {
+    result = fn(c);
+    return result.state;
+  });
+  if (!result) throw new Error('The combat update did not run.');
   return result;
 }
 

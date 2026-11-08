@@ -10,9 +10,11 @@ import {
   sampleClocks,
   sampleCombat,
   sampleJournal,
+  sampleMappedCombat,
   sampleQuests,
   sampleSession,
 } from '@/test/fixtures';
+import type { BattleMapsMode, MapEffect } from '@/types';
 import type { HomebrewEntry, Quest, TransformationsMode } from '@/types';
 import type { IllustrationMode } from './modes';
 import { buildSystemPrompt, DM_INSTRUCTIONS, type PromptInput } from './prompts';
@@ -350,5 +352,59 @@ describe('the new sections stay deterministic', () => {
     const order = ['## Table rules', '## Transformations: Off', '## Illustrations: On request', '## Safety'].map((h) => text.indexOf(h, campaignPart));
     expect(order.every((at, i) => at > campaignPart && (i === 0 || at > order[i - 1]))).toBe(true);
     expect(DM_INSTRUCTIONS).not.toMatch(/## (Transformations|Illustrations):/);
+  });
+});
+
+function withBattleMaps(battleMaps: BattleMapsMode | undefined): string {
+  const base = sampleCampaign();
+  return buildSystemPrompt(input({ campaign: { ...base, settings: { ...base.settings, battleMaps } } }));
+}
+
+describe('the battle map in the prompt (spec §5.1–§5.3)', () => {
+  it('names the battle map among the books the app keeps, and the map steps of combat flow and Reactions', () => {
+    expect(DM_INSTRUCTIONS).toContain('The character sheet, dice, initiative, the battle map, quests, journal, clocks and scene live in the app');
+    expect(DM_INSTRUCTIONS).toContain(
+      "on a battle map move it first (move_tokens), then roll attacks and damage, apply them, then update_combat next_turn; creatures that share an initiative roll still take separate turns — until it is the hero's turn",
+    );
+    expect(DM_INSTRUCTIONS).toContain("Calls that don't depend on each other can go in the same response (damage, then next_turn).");
+    expect(DM_INSTRUCTIONS).toContain(
+      "a foe leaving their reach (an Opportunity Attack — on a battle map, move_tokens asks the player itself and gives you the answer, so don't ask again)",
+    );
+    expect(DM_INSTRUCTIONS).not.toMatch(/## Battle maps/);
+  });
+
+  it("renders the campaign's battle-maps rule after the illustrations section (missing = When it helps)", () => {
+    const text = withBattleMaps(undefined);
+    const campaignPart = text.indexOf('# This campaign');
+    const at = (h: string) => text.indexOf(h, campaignPart);
+    expect(at('## Illustrations:')).toBeLessThan(at('## Battle maps: When it helps'));
+    expect(at('## Battle maps: When it helps')).toBeLessThan(at('## Safety'));
+    expect(withBattleMaps('auto')).toBe(text);
+    expect(section(withBattleMaps('off'), '## Battle maps')).toContain('## Battle maps: Off\n');
+    expect(section(withBattleMaps('always'), '## Battle maps')).toContain('## Battle maps: Every fight\n');
+  });
+
+  it('freezes the map layout into "Combat in progress" for a session that starts mid-fight, without ids', () => {
+    const combat = sampleMappedCombat();
+    const web: MapEffect = {
+      id: 'e20',
+      label: 'Web',
+      spec: { shape: 'squares', rects: [{ x0: 6, y0: 6, x1: 9, y1: 9 }] },
+      rects: [{ x0: 6, y0: 6, x1: 9, y1: 9 }],
+      terrain: ['difficult', 'obscured'],
+      duration: 'lasting',
+      round: 2,
+      turnOfId: 'c-1',
+    };
+    const text = buildSystemPrompt(input({ combat: { ...combat, map: { ...(combat.map as NonNullable<typeof combat.map>), effects: [web] } } }));
+    const fight = section(text, '## Combat in progress');
+    expect(fight).toContain('Battle map at the start of this session (<game_state> has the current positions): Dockside warehouse, 16×12 squares (A1 top-left)');
+    expect(fight).toContain(
+      'Terrain: wall (office wall) L5:P5 · door (office door, closed) N5 · wall (pillar) I4 · half cover (crates) E5:F6 · difficult (spilled grain) H8:J9 · deep water (flooded dock) N10:P12 · hazard (brazier) G11',
+    );
+    expect(fight).toContain('Places: the loading door A5:B7 · the office L1:P4');
+    expect(fight).toContain('Effects: Web G7:J10 (difficult, obscured)');
+    expect(fight).not.toMatch(/\bc-\d|map-\d|\b[tpe]\d+\b/);
+    expect(buildSystemPrompt(input({ combat: sampleCombat() }))).not.toContain('Battle map at the start');
   });
 });

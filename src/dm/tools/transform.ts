@@ -25,6 +25,7 @@ import { nameKey } from '@/lib/id';
 import type { Character, Transformation, TransformationsMode } from '@/types';
 import { transformationsMode } from '../modes';
 import type { ToolInput } from './definitions';
+import { refitHeroAfterSheetChange } from './map';
 import {
   changesOf,
   defined,
@@ -224,5 +225,7 @@ export async function transformCharacterTool(input: Input, ctx: ToolContext): Pr
 
   const summary = headline(input, before, t);
   await logTool(ctx, 'transform_character', 'transform', summary, { detail: logDetail(input, t, result), refId: t.id });
-  return ok(`${summary}.\n${reply(input, t, result, result.character)}`);
+  // A size change during a mapped fight re-fits the hero's space (D39).
+  const mapLine = await refitHeroAfterSheetChange(ctx, hero, result.character);
+  return ok(`${summary}.\n${reply(input, t, result, result.character)}${mapLine ? `\n${mapLine}` : ''}`);
 }

@@ -16,15 +16,22 @@ import {
   CONTENT_KINDS,
   SKILLS,
   type AdvantageState,
+  type AreaShape,
+  type AreaTerrain,
   type CombatSide,
+  type CompassDirection,
   type CreatureSize,
+  type DoorState,
   type FeatureSource,
   type ImageSubject,
   type ItemCategory,
   type JournalKind,
+  type MoveKind,
+  type MoveMode,
   type PlayerRollType,
   type QuestStatus,
   type RechargeOn,
+  type TerrainKind,
 } from '@/types';
 
 // ---------------------------------------------------------------------------
@@ -79,6 +86,46 @@ export const JOURNAL_KINDS = [
 ] as const satisfies readonly JournalKind[];
 const QUEST_STATUSES = ['rumor', 'active', 'completed', 'failed', 'abandoned'] as const satisfies readonly QuestStatus[];
 const SIZES = ['Tiny', 'Small', 'Medium', 'Large', 'Huge', 'Gargantuan'] as const satisfies readonly CreatureSize[];
+// Battle map vocabularies, kept as tuples (z.enum needs one); a test asserts each equals its @/types list.
+const TERRAIN_KINDS = [
+  'wall',
+  'door',
+  'difficult',
+  'shallow-water',
+  'deep-water',
+  'pit',
+  'hazard',
+  'half-cover',
+  'three-quarters-cover',
+  'obscured',
+] as const satisfies readonly TerrainKind[];
+const DOOR_STATES = ['open', 'closed', 'locked'] as const satisfies readonly DoorState[];
+const AREA_SHAPES = ['sphere', 'cylinder', 'cone', 'line', 'cube', 'emanation', 'squares'] as const satisfies readonly AreaShape[];
+const AREA_TERRAIN = ['difficult', 'obscured', 'hazard'] as const satisfies readonly AreaTerrain[];
+const MOVE_KINDS = ['move', 'off-turn', 'forced', 'teleport', 'place'] as const satisfies readonly MoveKind[];
+const MOVE_MODES = ['walk', 'fly'] as const satisfies readonly MoveMode[];
+const DIRECTIONS = [
+  'north',
+  'north-east',
+  'east',
+  'south-east',
+  'south',
+  'south-west',
+  'west',
+  'north-west',
+] as const satisfies readonly CompassDirection[];
+
+/** The schema tuples that mirror shared type lists (tests check they stay equal). */
+export const SCHEMA_VOCABULARIES = {
+  sizes: SIZES,
+  terrainKinds: TERRAIN_KINDS,
+  doorStates: DOOR_STATES,
+  areaShapes: AREA_SHAPES,
+  areaTerrain: AREA_TERRAIN,
+  moveKinds: MOVE_KINDS,
+  moveModes: MOVE_MODES,
+  directions: DIRECTIONS,
+} as const;
 const IMAGE_SUBJECTS = ['scene', 'character', 'npc', 'creature', 'item', 'battle'] as const satisfies readonly ImageSubject[];
 const IMAGE_ASPECTS = ['landscape', 'portrait', 'square'] as const satisfies readonly ImageAspect[];
 export const LIKELIHOODS = [
@@ -104,6 +151,46 @@ const conditionInput = z.strictObject({
   duration: str(120).optional().describe('Free text: "1 minute", "until the end of your next turn", "until cured".'),
 });
 
+// --- battle map building blocks ---
+
+const squaresText = (max: number) =>
+  str(max).describe(
+    'Squares and rectangles, comma-separated: "F5", "A1:P1" (every square between two corners), "A1:P1, A2:A12". A1 is the top-left square; letters run left to right, numbers top to bottom.',
+  );
+
+const terrainSpec = z.strictObject({
+  kind: z
+    .enum(TERRAIN_KINDS)
+    .describe(
+      'wall: blocks movement and sight (Total Cover). door: a wall while closed or locked; it replaces any wall on its squares. difficult: rubble, furniture, steep stairs (double cost). shallow-water: shin- to waist-deep (double cost). deep-water: swimming (double cost without a Swim Speed). pit: no walking in or across; fliers cross. hazard: fire, acid, spikes (passable; the app reports who enters). half-cover: crates, a low wall (Half Cover; double cost to cross). three-quarters-cover: an arrow slit, a portcullis (Three-Quarters Cover; impassable). obscured: darkness, thick fog (blocks sight only).',
+    ),
+  squares: squaresText(300),
+  label: str(40).optional().describe('What it is, shown on the map: "crates", "bar counter", "chasm".'),
+  door: z.enum(DOOR_STATES).optional().describe('kind "door" only: open, closed (default) or locked.'),
+});
+
+const placeSpec = z.strictObject({
+  name: str(40).describe('A place you will narrate: "the balcony", "the altar".'),
+  squares: squaresText(200),
+});
+
+const mapSpec = z.strictObject({
+  name: str(60).optional().describe('What the battlefield is, e.g. "Smugglers\' cellar".'),
+  width: int(4, 40).describe('Columns of 5-ft squares, lettered A, B, C… from the left. Most rooms: 10–20.'),
+  height: int(4, 40).describe('Rows of 5-ft squares, numbered 1, 2, 3… from the top.'),
+  terrain: z.array(terrainSpec).max(40).optional().describe("Everything that isn't open floor. Map only what the hero can perceive."),
+  places: z.array(placeSpec).max(12).optional().describe('Named places you will narrate; positions can name them.'),
+});
+
+const speedsSpec = z.strictObject({
+  walk: int(0, 200).optional(),
+  fly: int(0, 300).optional(),
+  swim: int(0, 200).optional(),
+  climb: int(0, 200).optional(),
+  burrow: int(0, 200).optional(),
+  hover: z.boolean().optional().describe('It can hover (stays aloft while Prone or Incapacitated).'),
+});
+
 const combatantSpec = z.strictObject({
   name: str(80).describe('Display name, e.g. "Goblin" (numbered automatically when count > 1) or "Captain Vell".'),
   side: z.enum(NPC_SIDES),
@@ -115,6 +202,85 @@ const combatantSpec = z.strictObject({
   hide_hp: z.boolean().optional().describe('Hide exact HP from the player (default: true for enemies).'),
   surprised: z.boolean().optional().describe('Surprised creatures roll initiative with Disadvantage.'),
   notes: str(400).optional(),
+  position: str(120)
+    .optional()
+    .describe(
+      'Battle map: where it starts — a square ("E5"; for Large and bigger, the top-left square of its space), a place ("the balcony"), or one square per creature ("E5, F5, G5"). Omit to let the app place it.',
+    ),
+  elevation_ft: int(0, 500).optional().describe('Battle map: feet above the ground (a flier, a creature on a ledge). Default 0.'),
+  size: z.enum(SIZES).optional().describe('Battle map size. Default: from the SRD stat block, else Medium.'),
+  speeds: speedsSpec.optional().describe('Speeds in feet. Default: from the SRD stat block, else walk 30.'),
+  reach_ft: int(5, 60).optional().describe('Longest melee reach in feet. Default: from the SRD stat block, else 5.'),
+  hidden: z
+    .boolean()
+    .optional()
+    .describe("The hero hasn't noticed it (an ambusher, an invisible foe): kept off the player's tracker, map and log until update_combat reveal."),
+});
+
+const areaFields = {
+  shape: z.enum(AREA_SHAPES),
+  size_ft: int(5, 500)
+    .optional()
+    .describe('Sphere and Cylinder: the radius. Cone and Line: the length. Cube: the side. Emanation: how far it extends. Not for "squares".'),
+  width_ft: int(5, 60).optional().describe('Line width (default 5).'),
+  height_ft: int(5, 500).optional().describe('Cylinder height (default 40).'),
+  at: str(80)
+    .optional()
+    .describe(
+      'Sphere, Cylinder or a placed Cube: its centre — a square ("G4", its centre), a grid corner written as two diagonal squares ("G4/H5"), or a creature. Cone or Line from no creature: the square it starts in.',
+    ),
+  from: str(80)
+    .optional()
+    .describe(
+      "Who makes it. Cones, Lines, Emanations and a Cube \"originating from you\" come out of this creature's space; for the other shapes the result gives the distance and line of sight from it.",
+    ),
+  toward: str(80).optional().describe('Cone, Line, or a Cube from a creature: the square or creature it aims at, or a direction ("north-east").'),
+  squares: str(300).optional().describe('shape "squares": exactly these squares — "N-foot square" ground effects (Entangle, Grease) or odd shapes: "G7:J10".'),
+  include_origin: z.boolean().optional().describe('Include the creature it comes from (Cone, Line, Cube, Emanation; excluded by default).'),
+};
+
+const moveSpec = z.strictObject({
+  who: str(80).describe('The creature: a name ("Goblin 2"), or "hero".'),
+  to: str(80)
+    .optional()
+    .describe(
+      'Where it ends: a square ("E5"; for Large and bigger, the top-left square of its space), a creature (it ends within its reach of that creature by the cheapest route), or a place ("the balcony"). Not needed for a push.',
+    ),
+  kind: z
+    .enum(MOVE_KINDS)
+    .optional()
+    .describe(
+      'move (default): its own movement on its own turn. off-turn: its own movement outside its turn (a readied move, a legendary action). forced: pushed, pulled or shoved — no movement spent, no Opportunity Attacks, stops at walls and creatures. teleport: no path, no Opportunity Attacks; an occupied square shifts it to the nearest open one. place: no rules (arrivals, a climb or jump you ruled on, corrections).',
+    ),
+  via: str(120).optional().describe('Squares to pass through on the way, in order: "D5, D3". Otherwise the route that provokes the fewest Opportunity Attacks, then the shortest.'),
+  partial: z.boolean().optional().describe("If it can't get all the way this turn, move it as far as it can toward `to`."),
+  prefer: z.enum(['safest', 'shortest']).optional().describe('safest (default): fewest Opportunity Attacks, then shortest. shortest: ignore them (a mindless rush).'),
+  dash: z.boolean().optional().describe('It takes the Dash action now: extra movement equal to its Speed this turn.'),
+  dash_again: z.boolean().optional().describe('A second Dash this turn (Cunning Action, a second action).'),
+  disengage: z.boolean().optional().describe('It takes the Disengage action: no Opportunity Attacks against its movement for the rest of its turn.'),
+  stay_prone: z.boolean().optional().describe('A Prone creature crawls (double cost) instead of standing up first for half its Speed.'),
+  mode: z
+    .enum(MOVE_MODES)
+    .optional()
+    .describe('fly: use its Fly Speed (ignores ground terrain and pits; needed to change height). Default walk (swimming is automatic in deep water).'),
+  elevation_ft: int(0, 500).optional().describe('Feet above the ground where it ends (mode fly, teleport or place). Walking keeps its height.'),
+  push: z
+    .strictObject({
+      distance_ft: int(5, 120),
+      away_from: str(80).optional().describe('A creature or square it is pushed straight away from.'),
+      toward: str(80).optional().describe('A creature or square it is pulled straight toward.'),
+      direction: z.enum(DIRECTIONS).optional(),
+    })
+    .optional()
+    .describe('kind "forced": a straight push or pull (Shove, Thunderwave, the Push mastery). Give one of away_from, toward or direction.'),
+  max_ft: int(5, 1000).optional().describe('kind "teleport": its range (Misty Step 30).'),
+  budget_ft: int(5, 400).optional().describe('kind "off-turn": how far it may move (default its Speed).'),
+  spend_ft: int(0, 400).optional().describe('kind "place": movement it spends this turn (a climb or jump you ruled on).'),
+  declined: z
+    .array(str(80))
+    .max(8)
+    .optional()
+    .describe('Repeating a move that stopped for Opportunity Attacks: the creatures there that let it go. The others count as having used their Reaction.'),
 });
 
 const damageTypes = z.array(str(30)).max(13);
@@ -170,6 +336,10 @@ export const TOOL_SCHEMAS = {
     advantage: z.enum(ADVANTAGE).optional().describe('Advantage or Disadvantage on a single-d20 test.'),
     critical: z.boolean().optional().describe('Double the damage dice (Critical Hit damage).'),
     secret: z.boolean().optional().describe('Keep the result behind the DM screen (hidden from the player unless they reveal DM rolls).'),
+    attacker: str(80)
+      .optional()
+      .describe('With is_attack, on a battle map: who attacks. The result adds the distance to `target`, reach, line of sight and cover.'),
+    target: str(80).optional().describe('With is_attack, on a battle map: who is attacked (a name, or "hero").'),
   }),
 
   request_player_roll: z.strictObject({
@@ -360,21 +530,117 @@ export const TOOL_SCHEMAS = {
     encounter_name: str(80).optional(),
     combatants: z.array(combatantSpec).min(1).max(12).describe('Everyone except the hero, who is added automatically.'),
     player_surprised: z.boolean().optional().describe('The hero is surprised: Disadvantage on their Initiative roll.'),
+    map: mapSpec
+      .optional()
+      .describe('Play this fight on a battle map (see the battle-maps table rule). Omit it to run the fight in the theater of the mind.'),
+    hero_position: str(40).optional().describe('Battle map: where the hero starts — a square or a place. Default: placed by the app.'),
   }),
 
   update_combat: z.strictObject({
-    action: z.enum(['next_turn', 'damage', 'heal', 'add', 'remove', 'conditions', 'defeat', 'note']),
+    action: z.enum(['next_turn', 'damage', 'heal', 'add', 'remove', 'conditions', 'defeat', 'note', 'reveal', 'hide']),
     target: str(80).optional().describe('Combatant name ("Goblin 2") or id. Required for every action except next_turn and add.'),
     amount: int(0, 9999).optional().describe('Damage or healing (from a roll).'),
     conditions_add: z.array(conditionInput).max(6).optional(),
     conditions_remove: z.array(str(60)).max(6).optional(),
-    combatant: combatantSpec.optional().describe('For action "add": the newcomers.'),
+    combatant: combatantSpec.optional().describe('For action "add": the newcomers (with `position` on a battle map).'),
     note: str(400).optional().describe('For action "note": a private note for yourself (never shown to the player).'),
   }),
 
   end_combat: z.strictObject({
     summary: str(300).describe('How the fight ended, in a sentence.'),
     xp_award: int(0, 1_000_000).optional().describe('Total XP for the encounter (XP campaigns only).'),
+  }),
+
+  move_tokens: z.strictObject({
+    moves: z
+      .array(moveSpec)
+      .min(1)
+      .max(12)
+      .optional()
+      .describe(
+        'Usually one: the creature whose turn it is. Several for one push that moves many creatures, or for placing tokens. Applied in order; a move that stops for an Opportunity Attack ends the batch.',
+      ),
+    reactions_used: z
+      .array(str(80))
+      .max(12)
+      .optional()
+      .describe(
+        'Creatures that just used their Reaction on something else (Shield, Counterspell, a readied action): no Opportunity Attacks from them until their next turn starts.',
+      ),
+  }),
+
+  update_map: z.strictObject({
+    create: mapSpec
+      .optional()
+      .describe('Put the running fight on a battle map. With replace: true, swap the current map for a new one (a new room).'),
+    replace: z.boolean().optional(),
+    positions: z
+      .array(z.strictObject({ who: str(80), at: str(60).describe('A square or a place.') }))
+      .max(24)
+      .optional()
+      .describe('With create: where creatures stand. Everyone else is placed automatically.'),
+    remove: z.boolean().optional().describe('Take the map away: the fight goes on in the theater of the mind.'),
+    terrain_add: z.array(terrainSpec).max(20).optional(),
+    terrain_clear: z
+      .array(str(300))
+      .max(10)
+      .optional()
+      .describe('Squares or ranges to clear of all terrain ("F5", "A1:C3"), or a terrain label ("crates").'),
+    doors: z
+      .array(z.strictObject({ at: str(60).describe("The door's square or label."), state: z.enum(DOOR_STATES) }))
+      .max(8)
+      .optional()
+      .describe('Open, close or lock doors.'),
+    places_add: z.array(placeSpec).max(8).optional(),
+    places_remove: z.array(str(40)).max(8).optional(),
+    creatures: z
+      .array(
+        z.strictObject({
+          who: str(80).describe('A name, or "hero".'),
+          size: z.enum(SIZES).optional(),
+          speeds: speedsSpec
+            .optional()
+            .describe('New speeds (NPCs), or speeds granted to the hero for now (the Fly spell: {"fly": 60, "hover": true}).'),
+          reach_ft: int(5, 60).optional(),
+          speed_change_ft: int(-120, 120)
+            .optional()
+            .describe('An ongoing change to all its speeds: Haste +30 on a 30-ft Speed, Slow -15, Ray of Frost -10; 0 clears it.'),
+        }),
+      )
+      .max(12)
+      .optional()
+      .describe("Change a creature's size, speeds or reach (Enlarge, a new form, Ray of Frost, Haste)."),
+    effects_end: z.array(str(60)).max(8).optional().describe('Lasting areas that ended, by label ("Web").'),
+  }),
+
+  resolve_area: z.strictObject({
+    label: str(40).describe('What it is, shown on the map and in the log: "Fireball", "Fire Breath".'),
+    ...areaFields,
+    range_ft: int(5, 1000).optional().describe("The effect's range: refused when its centre is farther than this from `from`."),
+    lasting: z
+      .boolean()
+      .optional()
+      .describe('It stays on the map until update_map effects_end (Web, Fog Cloud, Spirit Guardians). Otherwise it is shown until this turn ends.'),
+    terrain: z
+      .array(z.enum(AREA_TERRAIN))
+      .max(3)
+      .optional()
+      .describe('lasting only: what it does to its squares (Web: difficult + obscured; Spike Growth: difficult + hazard; Fog Cloud: obscured).'),
+    elevation_ft: int(0, 500).optional().describe('Height of its centre or base above the ground (default: the height of `from`, else 0).'),
+  }),
+
+  check_map: z.strictObject({
+    from: str(80)
+      .optional()
+      .describe('A creature or square to measure from. Alone: distances, line of sight and cover to everyone, and the cover it can reach this turn.'),
+    to: z.array(str(80)).min(1).max(8).optional().describe('Creatures or squares to measure to: distance, line of sight, cover and reach, both ways.'),
+    path_to: str(80)
+      .optional()
+      .describe(
+        'With `from` a creature: can it get to this square, creature or place this turn? Route, cost, Opportunity Attacks it would provoke, and the closest it can get.',
+      ),
+    area: z.strictObject(areaFields).optional().describe('Preview an area of effect: who it would catch, without showing it to the player.'),
+    show: z.boolean().optional().describe('Draw the whole map as text: terrain, places, effects and every creature.'),
   }),
 
   lookup_rules: z.strictObject({
@@ -513,7 +779,7 @@ export type ToolInput<N extends ToolName> = z.infer<(typeof TOOL_SCHEMAS)[N]>;
 
 export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   roll_dice:
-    "Roll dice for the DM's side of the table: NPC and monster attacks, damage, saving throws and checks; random tables; secret checks. The app rolls with real randomness and logs the result (secret rolls go behind the DM screen). For a d20 test give the full expression with its modifier (\"1d20+4\") plus `dc` (the DC, or the target's AC) and `advantage` if any; the result says whether it meets the target. Do NOT use it for the hero's own checks, saves, attacks, damage or initiative — use request_player_roll so the player rolls. Never narrate a result before this returns.",
+    "Roll dice for the DM's side of the table: NPC and monster attacks, damage, saving throws and checks; random tables; secret checks. The app rolls with real randomness and logs the result (secret rolls go behind the DM screen). For a d20 test give the full expression with its modifier (\"1d20+4\") plus `dc` (the DC, or the target's AC) and `advantage` if any; the result says whether it meets the target. Do NOT use it for the hero's own checks, saves, attacks, damage or initiative — use request_player_roll so the player rolls. Never narrate a result before this returns. On a battle map, give `attacker` and `target` with an attack: the result adds the distance, reach, line of sight and cover the map shows, and warns when a melee attacker isn't in reach.",
   request_player_roll:
     "Ask the player to roll for their hero: ability checks, skill checks, saving throws, attack rolls, damage, death saving throws (and initiative outside start_combat). The app applies the sheet's modifiers and the hero's own conditions, armor and traits (e.g. Disadvantage while Poisoned, an automatic failure for a Paralyzed hero's Dexterity save, Halfling Luck, a Champion's wider critical range — the result says what it applied), rolls per the player's roll mode — instantly, after they tap Roll, or from their physical dice — and returns the total and, with `dc`, success or failure. Call it only when the outcome is uncertain and failure matters; decide the DC and the stakes first and put the stakes in `reason`. For attacks set `dc` to the target's AC (a natural 20 is a Critical Hit, a natural 1 always misses); `attack_name` can be a sheet attack, a spell the hero knows, or another weapon with `ability`. Don't use it for NPC or monster rolls (roll_dice), and don't roll initiative when a fight starts — start_combat does that.",
   update_character:
@@ -525,11 +791,19 @@ export const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
   transform_character:
     "Begin, advance or end a transformation — a lasting, story-driven change to who the hero is (vampirism, lycanthropy, a fey mark, a celestial blessing). One call applies the whole change atomically: transformation features, damage resistances, immunities and vulnerabilities, condition immunities, Darkvision and other speeds, walking speed, size and ability scores, recorded on the sheet with its stage and how it could end. `begin` with origin \"accepted\" only after the player has explicitly chosen it in the fiction (player_chose_it: true); origin \"imposed\" only when the campaign's transformations rule is Consequences, after clear warnings, and always with how_it_ends. Give it real costs as well as powers, balanced like homebrew against SRD comparables. `advance` moves it to a new stage and adds traits (features_remove takes its own away); in Offered campaigns only when the player chose it. `end` (a cure, a reversal, a bargain fulfilled) removes everything it granted. Refused when the transformations rule doesn't allow the change. Not for temporary effects (spells, conditions: update_character), ordinary boons or magic items (create_homebrew, update_character), or leveling (level_up).",
   start_combat:
-    'Start an encounter when a fight actually begins. Adds the hero automatically, adds each group of combatants ("Goblin" with count 3 becomes Goblin 1–3), rolls NPC initiative, has the player roll the hero\'s initiative, and returns the turn order. Use real values (AC, HP, initiative bonus) from the stat block — get_entry it if unsure. Don\'t use it for a single blow that settles a scene without a fight. Only one combat can be active.',
+    'Start an encounter when a fight actually begins. Adds the hero automatically, adds each group of combatants ("Goblin" with count 3 becomes Goblin 1–3), rolls NPC initiative, has the player roll the hero\'s initiative, and returns the turn order. Use real values (AC, HP, initiative bonus) from the stat block — get_entry it if unsure. With `map` the fight is played on a battle map: its size in 5-ft squares (A1 is the top-left; letters run left to right, numbers top to bottom), walls, doors and terrain as squares and ranges ("A1:P1"), named places, and where the hero and each group start (`hero_position`, `position`: a square or a place). Anything you leave out is placed automatically, and an SRD stat block supplies size, speed and reach. Map input is checked before anyone rolls. Mark creatures the hero hasn\'t noticed with `hidden`. Don\'t use it for a single blow that settles a scene without a fight. Only one combat can be active.',
   update_combat:
-    'Change the active combat. `next_turn` when the current turn ends; `damage` / `heal` an NPC or monster by `amount` (from a roll); `conditions` to add or remove conditions on an NPC; `defeat` when a combatant falls, flees or surrenders; `remove` to take one out of the order; `add` reinforcements via `combatant`; `note` to record a private DM note about a combatant (never shown to the player). Targets are names ("Goblin 2") or ids. The hero\'s HP and conditions are NOT changed here — use update_character.',
+    'Change the active combat. `next_turn` when the current turn ends (on a battle map the result says where the next creature stands and how far it can move); `damage` / `heal` an NPC or monster by `amount` (from a roll); `conditions` to add or remove conditions on an NPC; `defeat` when a combatant falls, flees or surrenders; `remove` to take one out of the order (and off the map); `add` reinforcements via `combatant` (with `position` on a battle map); `reveal` a hidden creature once the hero notices it (it attacks, is found, steps into view) and `hide` one that slips out of sight — hidden creatures stay off the player\'s tracker, map and log, with or without a map; `note` to record a private DM note about a combatant (never shown to the player). Targets are names ("Goblin 2") or ids. The hero\'s HP and conditions are NOT changed here — use update_character.',
   end_combat:
     'End the active combat as soon as the fighting stops (foes defeated, fled or surrendered, or the hero escaped), with a one-line summary. In XP campaigns pass `xp_award` (total XP for the defeated foes); it is ignored in milestone campaigns.',
+  move_tokens:
+    'Move creatures on the battle map by the rules. The app finds the route (fewest Opportunity Attacks, then shortest; or yours via `via`), charges the movement — Difficult Terrain, other creatures\' spaces and crawling cost double, deep water costs double without a Swim Speed — and refuses an illegal move with the reason, the closest square it can reach, and whether Dash would get there. `to` can be a square, a creature (it ends within reach of it) or a place. Each creature moves on its own turn (kind "move", refused for anyone else: call update_combat next_turn first); readied moves and legendary actions use kind "off-turn", shoves and pushes "forced", teleports "teleport", arrivals and corrections "place". A Prone creature stands first unless stay_prone. A move stops on the square where leaving a creature\'s reach provokes an Opportunity Attack: if the hero can take it, the app asks the player there and then and tells you the answer — don\'t ask again; for a monster or NPC, roll its attack, then repeat the same call to finish the move (add `declined` for any that let it go). Moves run in order and a stop ends the batch. Move the hero only as the player declared, or by forced movement — the player usually moves the hero on the map. Returns where each creature ended, what it cost, what is left, and who is now within reach.',
+  update_map:
+    'Set up or change the battle map of the active combat. `create` puts the running fight on a map (`replace: true` swaps it for a new room): its size in 5-ft squares, walls, doors and terrain as squares and ranges ("A1:P1"; A1 is the top-left), named places, and `positions` (anyone left out is placed automatically). `terrain_add` / `terrain_clear` and `doors` change the map as the fiction changes it (a door opens, a wall collapses — moves never open doors); `places_add` / `places_remove` name the places you narrate; `creatures` changes a creature\'s size, speeds, reach or an ongoing speed change (Enlarge, the Fly spell, Haste, Ray of Frost); `effects_end` removes lasting areas; `remove` takes the map away. Each call is all-or-nothing. Map only what the hero can perceive and add the rest when it is found. `create` is refused when the campaign\'s battle maps are Off. Use move_tokens for movement and resolve_area for areas of effect.',
+  resolve_area:
+    'Resolve an area of effect on the battle map — a spell, breath weapon, explosion or aura — and show it to the player. Give the shape and size from the effect\'s text and either `from` (the creature it comes from; aim cones, lines and cubes with `toward`) or `at` (the centre: a square "G4", a corner "G4/H5", or a creature). Returns exactly who is inside, each one\'s cover against it (Half: +2, Three-Quarters: +5 to Dexterity saves), who Total Cover shields, the distance from `from`, and a warning when the hero or an ally is caught. The app\'s rules: a square counts when its centre is inside; spheres and cylinders are round; cones and lines are measured like movement; an Emanation surrounds its creature (and moves with it if lasting). With `lasting` the area stays on the map (Web, Fog Cloud, Spirit Guardians) until update_map effects_end, and `terrain` makes its squares difficult, obscured or hazardous. Then roll the saves for exactly the creatures it lists (the hero\'s with request_player_roll). A player\'s [Area: …] note names the parameters to use. Never decide who is in an area by eye.',
+  check_map:
+    'Ask the battle map a question without changing anything: the distance between creatures or squares, with line of sight, cover and reach both ways; whether a creature can get to a square, creature or place this turn (route, cost, Opportunity Attacks it would provoke, the closest it can get); who an area would catch, without showing it to the player; what cover a creature can reach this turn; or a text drawing of the whole map. <game_state> already lists positions, distances from the hero and who is within reach — use this for anything else. Never estimate distances, reach or cover yourself.',
   lookup_rules:
     "Search the rules: SRD 5.2.1, the player's imported books (every one switched on in their Library), and this campaign's homebrew. Returns matching rules sections, spells, monsters, items and more, with excerpts. Use it whenever you're unsure of a rule, spell, monster or item — especially imported content you may not know. Don't use it for story facts (search_memory) or the hero's own abilities (get_character_sheet).",
   get_entry:
@@ -567,6 +841,10 @@ export const TOOL_ORDER: readonly ToolName[] = [
   'start_combat',
   'update_combat',
   'end_combat',
+  'move_tokens',
+  'update_map',
+  'resolve_area',
+  'check_map',
   'lookup_rules',
   'get_entry',
   'get_character_sheet',
@@ -587,6 +865,7 @@ export const READ_ONLY_TOOLS: ReadonlySet<string> = new Set<ToolName>([
   'get_entry',
   'get_character_sheet',
   'search_memory',
+  'check_map',
 ]);
 
 export function isToolName(name: string): name is ToolName {
@@ -625,8 +904,11 @@ export function toolActivity(name: string, input?: unknown): string {
   switch (name) {
     case 'roll_dice': {
       if (input === undefined) return 'Rolling dice…';
+      const secret = (input as { secret?: boolean }).secret === true;
+      // An attack on a battle map may come from a hidden creature: never name anyone.
+      if (field(input, 'attacker')) return secret ? 'Rolling dice behind the screen…' : 'Rolling an attack…';
       const purpose = field(input, 'purpose');
-      return purpose && (input as { secret?: boolean }).secret !== true ? `Rolling: ${purpose}…` : 'Rolling dice behind the screen…';
+      return purpose && !secret ? `Rolling: ${purpose}…` : 'Rolling dice behind the screen…';
     }
     case 'request_player_roll':
       return 'Calling for a roll…';
@@ -644,6 +926,14 @@ export function toolActivity(name: string, input?: unknown): string {
       return 'Running the fight…';
     case 'end_combat':
       return 'The dust settles…';
+    case 'move_tokens':
+      return 'Moving on the battle map…';
+    case 'update_map':
+      return 'Laying out the battlefield…';
+    case 'resolve_area':
+      return 'Measuring the blast…';
+    case 'check_map':
+      return 'Studying the battle map…';
     case 'lookup_rules':
       return 'Consulting the rules…';
     case 'get_entry':

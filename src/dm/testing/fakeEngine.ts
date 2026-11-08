@@ -39,6 +39,7 @@ export {
   transformationGrants,
 } from '@/engine/transform';
 // The battle-map modules run the real engine too (pure; they use the real ./combat and ./conditions inside).
+import * as realCombat from '@/engine/combat';
 export * from '@/engine/grid';
 export * from '@/engine/mapCells';
 export * from '@/engine/movement';
@@ -511,38 +512,22 @@ export const createBlankCharacter: typeof Engine.createBlankCharacter = () => {
 // Combat
 // ---------------------------------------------------------------------------
 
-export const sortCombatants: typeof Engine.sortCombatants = (list) =>
-  [...list].sort((a, b) => b.initiative - a.initiative || b.initiativeBonus - a.initiativeBonus || Number(b.isPlayer) - Number(a.isPlayer) || a.name.localeCompare(b.name));
+// The initiative tracker delegates to the real one, so ids, names, turn order and the Reaction reset (srd:rule:reaction)
+// agree with the real map modules (spec §9.5). createCombat keeps a fixed start time for deterministic tests.
+export const sortCombatants: typeof Engine.sortCombatants = realCombat.sortCombatants;
 export const createCombat: typeof Engine.createCombat = (combatants, encounterName) => ({
-  active: true,
-  round: 1,
-  turnIndex: 0,
-  combatants: sortCombatants(combatants),
-  ...(encounterName ? { encounterName } : {}),
+  ...realCombat.createCombat(combatants, encounterName),
   startedAt: 0,
 });
-export const currentCombatant: typeof Engine.currentCombatant = (s) => s.combatants[s.turnIndex] ?? null;
-export const nextTurn: typeof Engine.nextTurn = (s) => {
-  let index = s.turnIndex;
-  let round = s.round;
-  for (let i = 0; i < s.combatants.length; i++) {
-    index += 1;
-    if (index >= s.combatants.length) {
-      index = 0;
-      round += 1;
-    }
-    if (!s.combatants[index].defeated) break;
-  }
-  return { ...s, turnIndex: index, round };
-};
-export const addCombatant: typeof Engine.addCombatant = (s, c) => ({ ...s, combatants: sortCombatants([...s.combatants, c]) });
-export const removeCombatant: typeof Engine.removeCombatant = (s, id) => ({ ...s, combatants: s.combatants.filter((c) => c.id !== id) });
+export const currentCombatant: typeof Engine.currentCombatant = realCombat.currentCombatant;
+export const nextTurn: typeof Engine.nextTurn = realCombat.nextTurn;
+export const addCombatant: typeof Engine.addCombatant = realCombat.addCombatant;
+export const removeCombatant: typeof Engine.removeCombatant = realCombat.removeCombatant;
 export const updateCombatant: typeof Engine.updateCombatant = (s, id, patch) => ({
   ...s,
   combatants: s.combatants.map((c) => (c.id === id ? { ...c, ...patch } : c)),
 });
-export const findCombatant: typeof Engine.findCombatant = (s, idOrName) =>
-  s.combatants.find((c) => c.id === idOrName || c.name.toLowerCase() === idOrName.toLowerCase());
+export const findCombatant: typeof Engine.findCombatant = realCombat.findCombatant;
 function changeHp(s: CombatState, id: string, delta: number): { state: CombatState; events: GameEvent[] } {
   const target = s.combatants.find((c) => c.id === id);
   if (!target?.hp) return { state: s, events: [ev('warning', 'No such combatant')] };
@@ -554,12 +539,15 @@ export const damageCombatant: typeof Engine.damageCombatant = (s, id, amount) =>
 export const healCombatant: typeof Engine.healCombatant = (s, id, amount) => changeHp(s, id, amount);
 export const healthDescriptor: typeof Engine.healthDescriptor = (hp: HitPoints) =>
   hp.current <= 0 ? 'down' : hp.current <= hp.max / 4 ? 'critical' : hp.current <= hp.max / 2 ? 'bloodied' : hp.current < hp.max ? 'scratched' : 'unhurt';
+/** A simplified format; like the real one, the player's view leaves hidden creatures out and the DM's tags them. */
 export const summarizeCombat: typeof Engine.summarizeCombat = (s, opts) =>
   [
     `Round ${s.round}`,
-    ...s.combatants.map((c, i) => {
+    ...s.combatants.flatMap((c, i) => {
+      if (opts?.forPlayer && c.hidden) return [];
       const hp = c.hp ? (opts?.forPlayer && c.hideHp ? healthDescriptor(c.hp) : `HP ${c.hp.current}/${c.hp.max}`) : '';
-      return `${i === s.turnIndex ? '▶' : ' '} ${c.initiative} ${c.name}${hp ? ` · ${hp}` : ''}${c.defeated ? ' (down)' : ''}`;
+      const hidden = !opts?.forPlayer && c.hidden ? ' [hidden]' : '';
+      return [`${i === s.turnIndex ? '▶' : ' '} ${c.initiative} ${c.name}${hidden}${hp ? ` · ${hp}` : ''}${c.defeated ? ' (down)' : ''}`];
     }),
   ].join('\n');
 

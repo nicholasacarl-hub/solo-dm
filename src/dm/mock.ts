@@ -225,13 +225,38 @@ function skillCheck(ctx: MockContext): Reply {
       );
 }
 
+/**
+ * The demo fight's battle map (spec §8): the common room of the Crooked Lantern, 10×8. The cutpurse starts right
+ * beside the hero (the narration says so), so the ambush strike is legal under the turn guard whoever wins
+ * initiative, and on its own turn it only circles to E3 — still next to the hero, so nothing provokes.
+ */
+const DEMO_MAP = {
+  name: 'The Crooked Lantern',
+  width: 10,
+  height: 8,
+  terrain: [
+    { kind: 'half-cover', squares: 'B2:E2', label: 'the bar' },
+    { kind: 'difficult', squares: 'G4:H5', label: 'tables' },
+    { kind: 'hazard', squares: 'J6:J7', label: 'hearth fire' },
+    { kind: 'door', squares: 'J3', label: 'kitchen door', door: 'open' },
+  ],
+  places: [
+    { name: 'the bar', squares: 'B2:E3' },
+    { name: 'the hearth', squares: 'I6:J8' },
+  ],
+};
+
 function combatStart(ctx: MockContext): Reply {
   const prev = lastTool(ctx);
   const combat = ctx.store.combat;
   const heroAc = ctx.store.character?.armorClass ?? 12;
   const advanceOrEnd = (): Reply => {
-    const current = combat?.combatants[combat.turnIndex];
-    if (combat?.active && current && !current.isPlayer) return call(ctx, null, { name: 'update_combat', input: { action: 'next_turn' } });
+    const current = combat ? combat.combatants[combat.turnIndex] : undefined;
+    if (combat?.active && current && !current.isPlayer) {
+      // The cutpurse "circles": E3 is still next to the hero (D3, or D4 after a step), so it provokes nothing.
+      if (combat.map && prev?.name !== 'move_tokens') return call(ctx, null, { name: 'move_tokens', input: { moves: [{ who: ENEMY, to: 'E3' }] } });
+      return call(ctx, null, { name: 'update_combat', input: { action: 'next_turn' } });
+    }
     return say('The cutpurse circles, breathing hard, knife low. Your move.', ['Attack the cutpurse', 'Try to disarm them', 'Shout for the watch']);
   };
   if (!prev) {
@@ -239,7 +264,9 @@ function combatStart(ctx: MockContext): Reply {
       name: 'start_combat',
       input: {
         encounter_name: 'Knife in the common room',
-        combatants: [{ name: ENEMY, side: 'enemy', ac: 12, hp_max: 9, initiative_bonus: 2, stat_block: 'Bandit' }],
+        map: DEMO_MAP,
+        hero_position: 'D3',
+        combatants: [{ name: ENEMY, side: 'enemy', ac: 12, hp_max: 9, initiative_bonus: 2, stat_block: 'Bandit', position: 'E4' }],
       },
     });
   }
@@ -265,6 +292,8 @@ function combatStart(ctx: MockContext): Reply {
     }
     case 'update_character':
       return advanceOrEnd();
+    case 'move_tokens':
+      return call(ctx, null, { name: 'update_combat', input: { action: 'next_turn' } });
     default:
       return say('The cutpurse circles, breathing hard, knife low. Your move.', ['Attack the cutpurse', 'Try to disarm them', 'Shout for the watch']);
   }

@@ -4,6 +4,7 @@ vi.mock('@/engine', () => import('../testing/fakeEngine'));
 vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
+import { sampleMappedCombat } from '@/test/fixtures';
 import type { LogEntry, ToolLogEntry, TransformationsMode } from '@/types';
 import { deps, resetDmDeps } from '../deps';
 import { setupHarness, type Harness } from '../testing/harness';
@@ -193,5 +194,20 @@ describe('transform_character: advance and end', () => {
     expect(unknown.content).toContain('no active transformation named "Lycanthropy" (active: Vampirism)');
     expect((await h.run({ action: 'advance', name: 'Vampirism', reason: 'x', player_chose_it: true })).content).toContain('advance needs the new stage');
     expect((await h.run({ ...ADVANCE, origin: 'imposed', player_chose_it: true })).content).toContain('The origin is set when a transformation begins.');
+  });
+});
+
+describe('transform_character during a mapped fight (D39)', () => {
+  it("re-fits the hero's space when the size changes and says so", async () => {
+    const h = setupHarness({ withSession: true, campaignSettings: { playerRollMode: 'auto' }, state: { combat: sampleMappedCombat({ heroTurn: true }) } });
+    const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+    const out = await runTool('transform_character', { ...BEGIN, name: 'Giant Blood', size: 'Large' }, ctx);
+    expect(out.isError).toBeUndefined();
+    expect(h.s().character?.size).toBe('Large');
+    expect(out.content.split('\n').at(-1)).toBe('Map: Mira Voss is now Large (B6:C7).');
+    // Nothing else moved; a change that keeps the size says nothing about the map.
+    expect(h.s().combat?.combatants.find((c) => c.isPlayer)?.position).toEqual({ x: 1, y: 5 });
+    const again = await runTool('transform_character', { action: 'advance', name: 'Giant Blood', stage: 'Stage 2', player_chose_it: true, darkvision: 60, reason: 'The blood wakes' }, ctx);
+    expect(again.content).not.toContain('Map:');
   });
 });

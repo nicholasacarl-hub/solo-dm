@@ -5,13 +5,16 @@
  *
  * Query options: roll=prompt|physical|damage (open a roll prompt), dm=streaming|thinking|error,
  * tab=story|sheet|combat|journal|rules (mobile), combat=0 (no combat), empty=1 (no log yet),
- * ended=1 (between sessions), mock=1 (Demo badge), transformed=1 (the hero has a transformation).
+ * ended=1 (between sessions), mock=1 (Demo badge), transformed=1 (the hero has a transformation),
+ * map=1 (the warehouse battle map, the hero's turn) | map=npc (Bandit 1's turn) | map=hidden (the hidden Cutthroat's
+ * turn) | map=stop (a pending Opportunity Attack stop), spoilers=1 ("Show DM secrets").
  */
 import { useEffect } from 'react';
 import { MemoryRouter, useInRouterContext } from 'react-router';
 import { useGame, type GameStoreState } from '@/state/gameStore';
 import { useSettings } from '@/state/settingsStore';
-import type { Character, Clock, InteractionRequest, LogEntry, PlayerRollMode, Quest } from '@/types';
+import { sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
+import type { Character, Clock, CombatState, InteractionRequest, LogEntry, PlayerRollMode, Quest } from '@/types';
 import { Toaster } from '@/ui/components/toast';
 import { PlayTable } from '../PlayTable';
 import { usePlayView, type MobileTab } from '../playView';
@@ -201,6 +204,29 @@ function withExtraEntries(log: LogEntry[]): LogEntry[] {
   return [first, recap, narration, ...rest, ...extra].filter((e): e is LogEntry => Boolean(e));
 }
 
+/** The battle-map fixtures (§9.6) for map=1|npc|hidden|stop, with the log line that put the fight on the map. */
+function mappedCombat(kind: string): CombatState {
+  if (kind === 'stop') return sampleStopCombat();
+  if (kind === 'npc') return sampleMappedCombat();
+  if (kind === 'hidden') return { ...sampleMappedCombat(), turnIndex: 2 };
+  return sampleMappedCombat({ heroTurn: true });
+}
+
+function mapLogLine(): LogEntry {
+  return {
+    id: 'preview-map',
+    campaignId: 'camp-1',
+    sessionId: 'sess-1',
+    seq: 950,
+    createdAt: Date.now(),
+    kind: 'tool',
+    tool: 'update_map',
+    icon: 'map',
+    summary: 'Battle map: Dockside warehouse (16×12)',
+    detail: 'The loading door is to the west; the office in the north-east is walled off.',
+  };
+}
+
 function seed(params: URLSearchParams): void {
   const state: Partial<GameStoreState> = fixtureState();
   if (params.get('extra') !== '0') {
@@ -233,6 +259,11 @@ function seed(params: URLSearchParams): void {
     };
   }
   if (params.get('combat') === '0') state.combat = null;
+  const map = params.get('map');
+  if (map && map !== '0') {
+    state.combat = mappedCombat(map);
+    state.log = [...(state.log ?? []), mapLogLine()];
+  }
   if (params.get('empty') === '1') state.log = [];
   if (params.get('ended') === '1') {
     state.activeSession = null;

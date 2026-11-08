@@ -34,6 +34,19 @@
   --info-soft: #d6e5f3;
   --ring: #974d1866;
   --shadow: 0 1px 2px #2a24190f, 0 4px 16px #2a24190d;
+  /* Battle map (contrast against --map-floor in the spec, §7.6). */
+  --map-floor: #fbf8f1;
+  --map-grid: #d6c8ae;
+  --map-wall: #5f5444;
+  --map-door: #835e07;
+  --map-difficult: #8a6a3a;
+  --map-cover: #6b604f;
+  --map-pit: #3b342a;
+  --map-water: #d6e5f3;
+  --map-water-ink: #2c679a;
+  --map-hazard: #b4232c;
+  --map-obscured: #6b7280;
+  --token-ink: #fffaf2;
   color-scheme: light;
 }
 
@@ -62,6 +75,18 @@
   --info-soft: #14283d;
   --ring: #e8a33d66;
   --shadow: 0 1px 2px #0006, 0 8px 24px #0005;
+  --map-floor: #1d222b;
+  --map-grid: #2c333f;
+  --map-wall: #9aa1ad;
+  --map-door: #e3b341;
+  --map-difficult: #b08a52;
+  --map-cover: #a49e91;
+  --map-pit: #05070a;
+  --map-water: #14283d;
+  --map-water-ink: #63a4e8;
+  --map-hazard: #ef5b5b;
+  --map-obscured: #9ca3af;
+  --token-ink: #0f1115;
   color-scheme: dark;
 }
 
@@ -209,5 +234,113 @@
   *::after {
     animation-duration: 0.01ms !important;
     transition-duration: 0.01ms !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+ * Battle map (spec §7.1, §7.5, §7.6). Unlayered, so it wins over the utility classes it adjusts.
+ * ------------------------------------------------------------------------- */
+
+/* The map's surface owns every gesture on it; the rest of the panel still scrolls. */
+.map-surface {
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* The keyboard cursor is drawn only while the keyboard drives the map. */
+.map-surface:not([data-keyboard]) [data-map-layer='cursor'] {
+  display: none;
+}
+
+/* One pulse of the current-turn ring when a turn starts. */
+@keyframes map-pulse {
+  0% {
+    opacity: 0.2;
+  }
+  40% {
+    opacity: 1;
+  }
+  70% {
+    opacity: 0.45;
+  }
+  100% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: no-preference) {
+  .map-pulse {
+    animation: map-pulse 1s ease-out 1;
+  }
+}
+
+/* The phone Combat tab: stacked in portrait… */
+.combat-tab {
+  display: flex;
+  flex-direction: column;
+}
+.combat-tab > * {
+  flex-shrink: 0;
+}
+
+/* …and two columns in phone landscape (D58): the map on the left; the action bar and the tracker on the right. */
+@media (orientation: landscape) and (max-height: 500px) {
+  .combat-tab {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 18rem;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      'head activity'
+      'view bar'
+      'view side';
+    overflow: hidden;
+  }
+  .combat-tab [data-map-part='panel'] {
+    display: contents;
+  }
+  .combat-tab [data-map-part='head'] {
+    grid-area: head;
+  }
+  .combat-tab [data-map-part='activity'] {
+    grid-area: activity;
+    border-left: 1px solid var(--border);
+    padding-bottom: 0.25rem;
+  }
+  .combat-tab [data-map-part='viewport'] {
+    grid-area: view;
+    height: auto;
+    min-height: 0;
+  }
+  .combat-tab [data-map-part='bar'] {
+    grid-area: bar;
+    border-left: 1px solid var(--border);
+  }
+  .combat-tab [data-map-part='side'] {
+    grid-area: side;
+    min-height: 0;
+    overflow-y: auto;
+    border-left: 1px solid var(--border);
+  }
+}
+
+/* Windows High Contrast and other forced-colour modes: system colours for everything the map strokes or fills. */
+@media (forced-colors: active) {
+  .map-surface [data-map-stroke] {
+    stroke: CanvasText;
+  }
+  .map-surface [data-map-fill] {
+    fill: CanvasText;
+  }
+  .map-surface [data-map-path],
+  .map-surface [data-map-cursor] {
+    stroke: Highlight;
+  }
+  .map-surface [data-token-fill] {
+    fill: ButtonFace;
+    stroke: ButtonText;
+  }
+  .map-surface [data-token-ring] {
+    stroke: ButtonText;
   }
 }

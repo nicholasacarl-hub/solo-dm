@@ -11,8 +11,12 @@ import type {
   BetaToolResultBlockParam,
   MessageCreateParamsBase,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages';
-import type { DmLogEntry } from '@/types';
-import { NOTES } from './agent';
+import { APIConnectionError } from '@anthropic-ai/sdk';
+import { isToldAndAnswered } from '@/engine';
+import { isSeqAnswered } from '@/lib/answered';
+import { sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
+import type { BattleMap, CombatState, DmLogEntry, PlayerLogEntry, TurnMove } from '@/types';
+import { MAX_ITERATIONS, MAX_MAPPED_ITERATIONS, NOTES } from './agent';
 import { resetDmDeps } from './deps';
 import { DM_INSTRUCTIONS } from './prompts';
 import { makeMessage, textBlock, thinkingBlock, toolUseBlock } from './scripted';
@@ -532,3 +536,150 @@ describe('setting changes reach the DM mid-session as one-line notes', () => {
   });
 });
 
+
+// ---------------------------------------------------------------------------
+// The battle map: what the DM was told of the player's moves (D48), the bubble's note (D51), the request cap (D52)
+// ---------------------------------------------------------------------------
+
+/** The hero's turn after the player moved B6 → C7 (5 ft), not yet reported to the DM. */
+function heroMovedToC7(): CombatState {
+  const base = sampleMappedCombat({ heroTurn: true });
+  const move: TurnMove = { by: 'player', kind: 'move', from: { x: 1, y: 5 }, to: { x: 2, y: 6 }, path: [{ x: 2, y: 6 }], costFt: 5, provoked: [], entered: [] };
+  return {
+    ...base,
+    combatants: base.combatants.map((c) => (c.isPlayer ? { ...c, position: { x: 2, y: 6 } } : c)),
+    map: { ...(base.map as BattleMap), turn: { combatantId: 'c-1', round: 2, movedFt: 5, dashFt: 0, dashes: 0, disengaged: false, stoodUp: false, moves: [move] } },
+  };
+}
+
+const gameStateOf = (param: BetaMessageParam) => textOfUser(param, 0);
+const lastUserState = (request: MessageCreateParamsBase) => {
+  const users = request.messages.filter((m) => m.role === 'user' && blocksOf(m)[0]?.type === 'text');
+  return gameStateOf(users.at(-1) as BetaMessageParam);
+};
+
+describe("the player's map moves reach the DM once, with the next message (D48, D51)", () => {
+  it('reports unseen moves in <game_state>, stamps them with that message, and puts a note on the bubble', async () => {
+    const h = setupHarness({ withSession: true, state: { combat: heroMovedToC7() }, steps: [end('You duck behind the crates.'), end('The bandits hesitate.')] });
+    await h.controller.sendPlayerMessage('I take cover.');
+    const first = h.s().transcript[0];
+    expect(gameStateOf(first.param)).toContain('New since your last reply: the player moved Mira Voss B6 → C7 (5 ft).');
+    expect(h.s().combat?.map?.turn?.moves[0].toldSeq).toBe(first.seq);
+    const bubble = h.s().log.find((e): e is PlayerLogEntry => e.kind === 'player');
+    expect(bubble).toMatchObject({ text: 'I take cover.', mapNote: 'Moved B6 → C7 · 5 ft' });
+
+    // Seen now that the DM answered: the next turn shows it in the totals only, and the bubble has no note.
+    await h.controller.sendPlayerMessage('I wait.');
+    const second = lastUserState(h.client.requests[1]);
+    expect(second).not.toContain('New since your last reply');
+    expect(second).toContain('Turn: Mira Voss — moved 5 of 30 ft (B6 C7), 25 ft left.');
+    expect(h.s().log.filter((e): e is PlayerLogEntry => e.kind === 'player')[1]).not.toHaveProperty('mapNote');
+    expect(h.s().combat?.map?.turn?.moves[0].toldSeq).toBe(first.seq);
+  });
+
+  it('reports a stop again after a failed request, and it counts as seen once the DM answers', async () => {
+    const h = setupHarness({
+      withSession: true,
+      state: { combat: sampleStopCombat() },
+      steps: [{ error: new APIConnectionError({ message: 'offline' }) }, end('The ogre swings as you go.')],
+    });
+    await h.controller.sendPlayerMessage('I keep moving to A7.');
+    expect(h.s().dm.phase).toBe('error');
+    const stamped = h.s().combat?.map?.stop?.toldSeq;
+    expect(stamped).toBe(h.s().transcript[0].seq);
+
+    await h.controller.sendPlayerMessage('I keep moving to A7.');
+    const resent = lastUserState(h.client.requests[1]);
+    expect(resent).toContain("the move stopped at B6 — leaving Dock Ogre's reach there provokes its Opportunity Attack");
+    const stop = h.s().combat?.map?.stop;
+    expect(stop?.toldSeq).toBe(h.s().transcript[0].seq);
+    expect(isToldAndAnswered(stop ?? {}, (seq) => isSeqAnswered(h.s().transcript, seq))).toBe(true);
+  });
+
+  it('a regenerate re-runs on the same message, which still carries the moves', async () => {
+    const h = setupHarness({ withSession: true, state: { combat: heroMovedToC7() }, steps: [end('First draft.'), end('Second draft.')] });
+    await h.controller.sendPlayerMessage('I take cover.');
+    await h.controller.regenerate();
+    expect(h.client.requests[1].messages).toEqual(h.client.requests[0].messages);
+    expect(lastUserState(h.client.requests[1])).toContain('New since your last reply: the player moved Mira Voss B6 → C7 (5 ft).');
+    expect((h.s().log.at(-1) as DmLogEntry).text).toBe('Second draft.');
+  });
+});
+
+describe('the request cap (D52)', () => {
+  const reading = (n: number) => Array.from({ length: n }, (_, i) => makeMessage([toolUseBlock(`toolu_r${i}`, 'get_character_sheet', {})], 'tool_use'));
+
+  it('allows 40 requests a turn while the fight is on a battle map', async () => {
+    const h = setupHarness({ withSession: true, state: { combat: sampleMappedCombat({ heroTurn: true }) }, steps: reading(MAX_MAPPED_ITERATIONS) });
+    await h.controller.sendPlayerMessage('I wait and watch.');
+    expect(MAX_MAPPED_ITERATIONS).toBe(40);
+    expect(h.client.requests).toHaveLength(40);
+    expect(h.s().log.at(-1)).toMatchObject({ kind: 'system', text: NOTES.iterationLimit });
+  });
+
+  it('keeps 24 without a map', async () => {
+    const h = setupHarness({ withSession: true, steps: reading(MAX_MAPPED_ITERATIONS) });
+    await h.controller.sendPlayerMessage('I wait and watch.');
+    expect(h.client.requests).toHaveLength(MAX_ITERATIONS);
+    expect(MAX_ITERATIONS).toBe(24);
+  });
+});
+
+describe('a mapped fight keeps the transcript append-only', () => {
+  it('holds system, tools and every earlier message fixed across setup, a player move and the enemy turn', async () => {
+    // Mira 20+2 beats the bandit's 1+1.
+    fakeDice.queue(20, 1);
+    const START = {
+      encounter_name: 'Ambush in the warehouse',
+      map: {
+        name: 'Dockside warehouse',
+        width: 16,
+        height: 12,
+        terrain: [{ kind: 'half-cover', squares: 'E5:F6', label: 'crates' }],
+        places: [{ name: 'the loading door', squares: 'A5:B7' }],
+      },
+      hero_position: 'B6',
+      combatants: [{ name: 'Bandit', side: 'enemy', ac: 12, hp_max: 11, initiative_bonus: 1, stat_block: 'Bandit', position: 'F4' }],
+    };
+    const h = setupHarness({
+      withSession: true,
+      campaignSettings: { playerRollMode: 'auto' },
+      steps: [
+        makeMessage([toolUseBlock('toolu_start', 'start_combat', START)], 'tool_use'),
+        makeMessage([toolUseBlock('toolu_look', 'check_map', { show: true })], 'tool_use'),
+        end('A bandit vaults the crates. Your move.'),
+        makeMessage([toolUseBlock('toolu_next', 'update_combat', { action: 'next_turn' })], 'tool_use'),
+        makeMessage([toolUseBlock('toolu_move', 'move_tokens', { moves: [{ who: 'Bandit', to: 'hero' }] })], 'tool_use'),
+        makeMessage([toolUseBlock('toolu_hit', 'roll_dice', { expression: '1d20+3', purpose: 'Bandit attacks', dc: 12, is_attack: true, attacker: 'Bandit', target: 'hero' })], 'tool_use'),
+        end('Steel rings off the crates.'),
+      ],
+    });
+    await h.controller.sendPlayerMessage('I draw my dagger.');
+    expect(h.s().combat?.map?.name).toBe('Dockside warehouse');
+    const moved = await h.s().commitHeroMove({ to: { x: 2, y: 6 }, prefer: 'safest', dash: false, disengage: false, standUp: false });
+    expect(moved.ok).toBe(true);
+    await h.controller.sendPlayerMessage('I take cover.');
+
+    expect(h.client.requests).toHaveLength(7);
+    expectAppendOnly(h.client.requests);
+    expect(lastUserState(h.client.requests[3])).toContain('New since your last reply: the player moved Mira Voss B6 → C7 (5 ft).');
+    const results = toolResults(h.s().transcript.at(-2)?.param as BetaMessageParam);
+    expect(String(results[0].content)).toContain('Map: in reach (5 ft)');
+    expect(h.s().log.some((e) => e.kind === 'player' && e.mapNote === 'Moved B6 → C7 · 5 ft')).toBe(true);
+  });
+});
+
+describe('the battle-maps table rule mid-session', () => {
+  it('tells the DM once when the rule changes, with the prompt frozen', async () => {
+    const h = setupHarness({ steps: [end('The docks.'), end('Fog rolls in.'), end('Gulls cry.')] });
+    await h.controller.beginOrResume();
+    expect(h.s().activeSession?.systemPrompt).toContain('## Battle maps: When it helps');
+    await h.s().updateCampaign((c) => ({ ...c, settings: { ...c.settings, battleMaps: 'off' } }));
+    await h.controller.sendPlayerMessage('I look around.');
+    await h.controller.sendPlayerMessage('I wait for the tide.');
+    const notes = h.s().transcript.filter((m) => m.param.role === 'system').map((m) => JSON.stringify(m.param));
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toContain('Setting update — Battle maps: Off.');
+    expectAppendOnly(h.client.requests);
+  });
+});

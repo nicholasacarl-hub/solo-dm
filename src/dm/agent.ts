@@ -37,6 +37,8 @@ import {
 } from './transcript';
 
 export const MAX_ITERATIONS = 24;
+/** The cap while the active fight is on a battle map: a mapped round moves every creature first (D52). */
+export const MAX_MAPPED_ITERATIONS = 40;
 export const MAX_JSON_RETRIES = 2;
 
 export const SOFT_LIMIT_PREFIX = 'This session is getting long';
@@ -71,7 +73,8 @@ export interface LoopOptions {
   mode: 'play' | 'ending';
   /** Status text while waiting for the first response. */
   waitingText?: string;
-  maxIterations?: number;
+  /** Requests per turn (default MAX_ITERATIONS); a function is read before each request, so the cap can follow the game. */
+  maxIterations?: number | (() => number);
 }
 
 export interface LoopResult {
@@ -381,9 +384,10 @@ export async function runAgentLoop(d: DmDeps, opts: LoopOptions): Promise<LoopRe
   if (!owesReply(d.store().transcript)) return { outcome: 'done', finalText: '' };
   await answerUnfinishedToolCalls(d);
   const turn = new TurnLog();
-  const max = opts.maxIterations ?? MAX_ITERATIONS;
+  const cap = opts.maxIterations ?? MAX_ITERATIONS;
+  const max = typeof cap === 'function' ? cap : () => cap;
   try {
-    for (let i = 0; i < max; i++) {
+    for (let i = 0; i < max(); i++) {
       if (opts.signal.aborted) return { outcome: 'cancelled', finalText: '' };
       d.store().setDmStatus({
         phase: phaseFor(opts, 'thinking'),

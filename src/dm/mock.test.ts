@@ -35,6 +35,33 @@ const lastDm = (log: LogEntry[]) => log.filter((e): e is DmLogEntry => e.kind ==
 const toolNames = (log: LogEntry[]) => log.flatMap((e) => (e.kind === 'tool' ? [e.tool] : []));
 
 describe('the offline demo DM', () => {
+  it('fights on a battle map; when the cutpurse wins initiative it circles to E3, legal under the turn guard (D66)', async () => {
+    const h = setupHarness({ settings: { mockMode: true }, campaignSettings: { playerRollMode: 'prompt' } });
+    // The hero rolls a 2: the cutpurse (10 + 2) acts first.
+    answerRolls(h.store, 2);
+    await h.controller.beginOrResume();
+    await h.controller.sendPlayerMessage('I scan the room.');
+    await h.controller.sendPlayerMessage('I confront the hooded figure.');
+    let s = h.s();
+    expect(s.combat?.map).toMatchObject({ name: 'The Crooked Lantern', width: 10, height: 8 });
+    expect(s.combat?.combatants.find((c) => c.isPlayer)?.position).toEqual({ x: 3, y: 2 });
+    expect(s.combat?.combatants.find((c) => c.name === 'Cutpurse')?.position).toEqual({ x: 4, y: 2 });
+    expect(s.log.some((e) => e.kind === 'tool' && e.tool === 'move_tokens' && e.summary === 'Cutpurse moves to E3')).toBe(true);
+    // The turn passed back to the hero: the move was the cutpurse's own, on its own turn.
+    expect(s.combat?.combatants[s.combat.turnIndex]?.isPlayer).toBe(true);
+    const moveResult = JSON.stringify(s.transcript);
+    expect(moveResult).not.toContain('Not moved');
+    expectValidTranscript(s.transcript);
+
+    // Turn 3 still goes through the attack script, and ending the fight takes the map with it.
+    await h.controller.sendPlayerMessage('I stab with my dagger.');
+    s = h.s();
+    expect(s.combat).toBeNull();
+    expect(toolNames(s.log)).toContain('end_combat');
+    expectValidTranscript(s.transcript);
+    expect(s.dm.phase).toBe('idle');
+  });
+
   it('plays a whole session through the real handlers without any API call', async () => {
     const h = setupHarness({ settings: { mockMode: true }, campaignSettings: { playerRollMode: 'prompt' } });
     answerRolls(h.store, 15);
@@ -62,6 +89,11 @@ describe('the offline demo DM', () => {
     expect(toolNames(s.log)).toEqual(expect.arrayContaining(['start_combat', 'update_character']));
     expect(s.character?.hp.current).toBe(8);
     expect(s.log.some((e) => e.kind === 'roll' && e.actor === 'dm' && e.purpose.startsWith('Cutpurse attacks'))).toBe(true);
+    // The fight is on the demo's battle map: the hero won initiative, so the cutpurse is still beside the hero at E4.
+    expect(s.combat?.map).toMatchObject({ name: 'The Crooked Lantern', width: 10, height: 8 });
+    expect(s.combat?.combatants.find((c) => c.isPlayer)?.position).toEqual({ x: 3, y: 2 });
+    expect(s.combat?.combatants.find((c) => c.name === 'Cutpurse')?.position).toEqual({ x: 4, y: 3 });
+    expect(toolNames(s.log)).not.toContain('move_tokens');
 
     // Turn 3: the hero strikes back; the fight ends and a quest appears.
     await h.controller.sendPlayerMessage('I stab with my dagger.');

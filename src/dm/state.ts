@@ -1,10 +1,11 @@
 /**
- * The <game_state> block that opens every turn: the hero's status, the scene, combat, open
- * clocks, and short cards for journal entries mentioned in the player's words or the DM's last
- * narration (cheap retrieval that keeps the DM from contradicting itself).
+ * The <game_state> block that opens every turn: the hero's status, the scene, combat (with the battle map's
+ * positions when the fight has one), open clocks, and short cards for journal entries mentioned in the player's
+ * words or the DM's last narration (cheap retrieval that keeps the DM from contradicting itself).
  */
 import { characterStatusLine, summarizeCombat } from '@/engine';
 import type { Campaign, Character, Clock, CombatState, JournalEntry } from '@/types';
+import { mapStateLines } from './mapText';
 import { truncate } from './narration';
 import { GAME_STATE_OPEN } from './transcript';
 import { formatScene, JOURNAL_KIND_LABELS } from './tools/world';
@@ -22,6 +23,11 @@ export interface GameStateInput {
   playerText: string;
   /** The DM's most recent narration. */
   previousNarration: string;
+  /**
+   * True when the transcript holds the user message `seq` and an assistant message after it (isSeqAnswered): the
+   * player's map moves stamped with that seq count as seen by the DM (D48). Default: nothing has been seen.
+   */
+  answered?: (seq: number) => boolean;
 }
 
 function escapeRegExp(text: string): string {
@@ -92,7 +98,11 @@ export function buildGameState(input: GameStateInput): string {
   const lines: string[] = [GAME_STATE_OPEN];
   lines.push(`Hero: ${input.character ? characterStatusLine(input.character) : '(no character sheet yet)'}`);
   lines.push(`Scene: ${formatScene(input.campaign.scene)} · Tension ${input.campaign.tension}/9`);
-  if (input.combat?.active) lines.push(`Combat:\n${summarizeCombat(input.combat).trim()}`);
+  if (input.combat?.active) {
+    lines.push(`Combat:\n${summarizeCombat(input.combat).trim()}`);
+    // The battle map: positions, reach, the current turn and the player's unseen moves (spec §5.4).
+    if (input.combat.map) lines.push(...mapStateLines(input.combat, input.character, input.answered ?? (() => false)));
+  }
   const clocks = clocksLine(input.clocks);
   if (clocks) lines.push(clocks);
   const cards = findMentionedEntries(input.journal, input.playerText, input.previousNarration);

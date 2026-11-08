@@ -44,14 +44,17 @@ export function useStickToBottom(changeKey: unknown): StickToBottom {
     if (pinnedRef.current) scrollToBottom();
   }, [changeKey, scrollToBottom]);
 
-  // Growing entries (streaming narration, expanded details, images).
+  // Growing entries (streaming narration, expanded details, images), and a shrinking container (the battle map's
+  // dock opening or growing above the log): stay pinned to the latest.
   useEffect(() => {
     const content = contentRef.current;
-    if (!content || typeof ResizeObserver === 'undefined') return;
+    const el = scrollRef.current;
+    if ((!content && !el) || typeof ResizeObserver === 'undefined') return;
     const observer = new ResizeObserver(() => {
       if (pinnedRef.current) scrollToBottom();
     });
-    observer.observe(content);
+    if (content) observer.observe(content);
+    if (el) observer.observe(el);
     return () => observer.disconnect();
   }, [scrollToBottom]);
 

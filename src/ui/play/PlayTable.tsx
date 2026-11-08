@@ -13,6 +13,7 @@ import { PlayHeader } from './header/PlayHeader';
 import { InteractionHost } from './InteractionHost';
 import { JournalPanel } from './JournalPanel';
 import { NarrativeLog } from './log/NarrativeLog';
+import { BattleChip, CombatTabPanel, MapDock, useMappedFight } from './map';
 import { MobileTabBar } from './MobileTabBar';
 import { PanelBoundary } from './PanelBoundary';
 import { usePlayView } from './playView';
@@ -52,6 +53,8 @@ function DesktopTable() {
         </PanelBoundary>
       </aside>
       <main className="flex min-h-0 min-w-0 flex-col">
+        {/* The battle map's dock sits above the story; the composer always stays in view (D59). */}
+        <MapDock />
         <StoryColumn />
       </main>
       <aside
@@ -72,6 +75,7 @@ function DesktopTable() {
 function MobileTable() {
   const tab = usePlayView((s) => s.mobileTab);
   const combatActive = useGame((s) => s.combat?.active ?? false);
+  const mapped = useMappedFight();
   const panel = (id: string, children: ReactNode) => (
     <section
       id={`play-panel-${id}`}
@@ -94,10 +98,13 @@ function MobileTable() {
           hidden={tab !== 'story'}
           className="flex h-full flex-col"
         >
-          <StoryColumn />
+          <StoryColumn chip />
         </section>
         {tab === 'sheet' && panel('sheet', <SheetPanel />)}
+        {/* A fight on a battle map: the map, its action bar and the tracker (D58). */}
+        {tab === 'combat' && mapped && <CombatTabPanel />}
         {tab === 'combat' &&
+          !mapped &&
           panel(
             'combat',
             combatActive ? (
@@ -145,12 +152,13 @@ function SheetPanel() {
   );
 }
 
-/** The narrative log with the composer (or "start the next session") underneath. */
-function StoryColumn() {
+/** The narrative log with the composer (or "start the next session") underneath; on phones, the battle-map chip. */
+function StoryColumn({ chip = false }: { chip?: boolean }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <NarrativeLog />
       <div className="mx-auto flex w-full max-w-[42rem] shrink-0 flex-col gap-2 px-3 pt-1 pb-3 sm:px-6 lg:pb-4">
+        {chip && <BattleChip />}
         <StoryFooter />
       </div>
     </div>

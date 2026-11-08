@@ -69,6 +69,7 @@ import {
 } from './context';
 import { DmCancelledError } from '../errors';
 import { truncate } from '../narration';
+import { refitHeroAfterSheetChange } from './map';
 
 // ---------------------------------------------------------------------------
 // update_character
@@ -373,6 +374,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   if (sections.length === 0) throw new ToolInputError('Nothing to change: include at least one section (hp, conditions_add, inventory_add, …).');
   let results: SectionResult[] = [];
   const checkAc = mayChangeArmorClass(input);
+  const before = requireCharacter(ctx.deps.store());
   const change = await mutateCharacter(ctx, (start) => {
     results = [];
     let current = start;
@@ -395,6 +397,9 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   if (input.xp_gain !== undefined && campaign && !campaign.settings.milestoneLeveling && xpToNextLevel(change.character) === 0) {
     lines.push('The hero has enough XP to level up: call level_up at a fitting moment.');
   }
+  // A size change during a mapped fight re-fits the hero's space (D39).
+  const mapLine = await refitHeroAfterSheetChange(ctx, before, change.character);
+  if (mapLine) lines.push(mapLine);
   lines.push(`Status: ${characterStatusLine(change.character)}`);
   return ok(lines.join('\n'));
 }

@@ -10,12 +10,15 @@
  */
 import type { BetaMessageParam, BetaTextBlockParam } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import type { DmStatus } from '@/state/gameStore';
+import { stampMapTold } from '@/engine';
+import { isSeqAnswered } from '@/lib/answered';
 import type { Campaign, Session, UsageTotals } from '@/types';
-import { AgentFailure, answerUnfinishedToolCalls, NOTES, runAgentLoop, type LoopResult } from './agent';
+import { AgentFailure, answerUnfinishedToolCalls, MAX_ITERATIONS, MAX_MAPPED_ITERATIONS, NOTES, runAgentLoop, type LoopResult } from './agent';
 import { deps as currentDeps, type DmDeps } from './deps';
 import { describeError, isAbortError } from './errors';
+import { mapNote } from './mapText';
 import { createMockClient } from './mock';
-import { illustrationMode, isModeNotice, modeNotices, modesTold, transformationsMode, type TableModes } from './modes';
+import { battleMapsMode, illustrationMode, isModeNotice, modeNotices, modesTold, transformationsMode, type TableModes } from './modes';
 import { parseWrapUp, playerTextForModel } from './narration';
 import { buildSystemPrompt } from './prompts';
 import { buildGameState } from './state';
@@ -246,7 +249,12 @@ export class DmSessionController {
   private loop(signal: AbortSignal, mode: 'play' | 'ending' = 'play', waitingText?: string): Promise<LoopResult> {
     const d = this.d;
     const client = d.settings().mockMode ? createMockClient(d) : d.client();
-    return runAgentLoop(d, { client, signal, mode, waitingText });
+    // A mapped round moves every creature before it acts: more requests while the fight is on a battle map (D52).
+    const maxIterations = () => {
+      const combat = d.store().combat;
+      return combat?.active && combat.map ? MAX_MAPPED_ITERATIONS : MAX_ITERATIONS;
+    };
+    return runAgentLoop(d, { client, signal, mode, waitingText, maxIterations });
   }
 
   // -- transcript upkeep -------------------------------------------------------
@@ -299,12 +307,34 @@ export class DmSessionController {
     return this.logSinceLastTurn().some((e) => e.kind === 'system' && e.text === NOTES.stopped);
   }
 
-  /** The transformations rule and illustrations setting as they stand now. */
+  /** The transformations and battle-maps rules and the illustrations setting as they stand now. */
   private currentModes(campaign: Campaign): TableModes {
     return {
       transformations: transformationsMode(campaign.settings),
       illustrations: illustrationMode(this.d.settings(), this.d.images.available),
+      battleMaps: battleMapsMode(campaign.settings),
     };
+  }
+
+  /** Has the DM answered the user message `seq` (it exists and an assistant message follows it)? */
+  private answered(seq: number): boolean {
+    return isSeqAnswered(this.d.store().transcript, seq);
+  }
+
+  /**
+   * Mark the player's map moves (and a pending stop) that `<game_state>` just reported with the seq of the message
+   * that carried them (D48, D68). They count as seen once the DM replies to it; a turn that fails and is set aside
+   * leaves the stamp pointing at a message that no longer exists, so they are reported and stamped again.
+   */
+  private async stampMapMoves(seq: number): Promise<void> {
+    const store = this.d.store();
+    if (!store.combat?.map) return;
+    try {
+      await store.updateCombat((c) => stampMapTold(c, seq, (s) => this.answered(s)));
+    } catch (err) {
+      // Best effort: an unstamped move is simply reported again with the next turn.
+      console.warn("[dm] Couldn't mark the map moves as reported:", err);
+    }
   }
 
   /** Notes for the modes that changed since the DM was last told (by the frozen prompt or a note). */
@@ -340,6 +370,7 @@ export class DmSessionController {
       journal: store.journal,
       playerText: [...carried, playerText].filter(Boolean).join('\n'),
       previousNarration: lastDmNarration(store.transcript),
+      answered: (seq) => this.answered(seq),
     });
     const content: BetaTextBlockParam[] = [{ type: 'text', text: gameState }];
     if (carried.length > 0) content.push({ type: 'text', text: unansweredBlock(carried) });
@@ -348,7 +379,8 @@ export class DmSessionController {
     const pending = withNotices ? store.takeDmNotices().filter((n) => !isModeNotice(n)) : [];
     const notices = [...pending, ...(opts.extraNotices ?? []), ...this.modeChangeNotices(campaign)];
     if (notices.length > 0) messages.push({ role: 'system', content: formatNotices(notices, { sessionStart: opts.sessionStart }) });
-    await store.appendTranscript(messages);
+    const appended = await store.appendTranscript(messages);
+    if (appended[0]) await this.stampMapMoves(appended[0].seq);
   }
 
   // -- sessions ----------------------------------------------------------------
@@ -425,7 +457,10 @@ export class DmSessionController {
         }
         const carried = await this.prepareForNewTurn();
         const stopped = this.stoppedSinceLastTurn();
-        await this.d.store().appendLog({ kind: 'player', text: words });
+        // The hero's map moves this turn ride on the player's bubble (D51), from the same unseen items as <game_state>.
+        const store = this.d.store();
+        const note = mapNote(store.combat, store.character, (seq) => this.answered(seq));
+        await store.appendLog({ kind: 'player', text: words, ...(note ? { mapNote: note } : {}) });
         await this.appendTurn(playerTextForModel(words), words, true, {
           carried,
           extraNotices: stopped ? [NOTES.stoppedNotice] : [],
