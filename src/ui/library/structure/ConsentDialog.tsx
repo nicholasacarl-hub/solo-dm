@@ -18,7 +18,7 @@ import { toast } from '@/ui/components/toast';
 import { Button, Dialog, Input, Select } from '@/ui/components/ui';
 import { errorMessage } from '@/ui/shell/format';
 import { defaultBudget, isBeingRead } from './bookData';
-import { KIND_LABELS, PRIVACY_PROMISES, modelName } from './labels';
+import { KIND_LABELS, PRIVACY_PROMISES, modelName, readButIncomplete } from './labels';
 import type { Availability } from './RecordDetail';
 import { TOUCH, TOUCH_FORM } from './touch';
 
@@ -55,13 +55,21 @@ const BLURB: Readonly<Record<string, string>> = {
 };
 
 /**
- * Records the offline reader couldn't read (what "the rest" means; the job planner's "misses"). Callers
+ * Records the offline reader couldn't read and Claude hasn't read either (what "the rest" means). Callers
  * pass reviewable() records, so a gear table whose rows were read is already left out; an unread table
- * still needs Claude.
+ * still needs Claude. A Claude reading that came back without data needs a fix, not a second paid read.
  */
-export const needsClaude = (r: StructuredRecord): boolean => r.data === null && r.status !== 'rejected' && !isBeingRead(r);
+export const needsClaude = (r: StructuredRecord): boolean => r.data === null && !readButIncomplete(r) && r.status !== 'rejected' && !isBeingRead(r);
 /** Records read on this device that "Also re-read" would send. */
 export const readHere = (r: StructuredRecord): boolean => r.data !== null && r.origin === 'parser' && r.status !== 'rejected' && !isBeingRead(r);
+
+/** What the dialog sends and prices: always the exact records it names. */
+type SelectionChoices = Omit<JobChoices, 'model' | 'claudeFor' | 'recordIds'> & { claudeFor: 'selection'; recordIds: string[] };
+
+/** The job a new one waits behind (one runs at a time): one being read, else one already waiting, of any book. */
+export function waitingBehind(jobs: readonly ExtractionJob[]): ExtractionJob | null {
+  return jobs.find((j) => j.status === 'running' || j.status === 'pausing') ?? jobs.find((j) => j.status === 'queued') ?? null;
+}
 
 function KindChoice({
   counts,
@@ -267,24 +275,28 @@ function ConsentBody({
   const [spent, setSpent] = useState<number | null>(null);
   const [starting, setStarting] = useState(false);
 
-  const choices = useMemo((): Omit<JobChoices, 'model'> => {
+  // Exactly the records the dialog names, by id: the ticked kinds' misses, and with "Also re-read" every
+  // entry read on this device (whatever its kind). The estimate, the label and the job agree.
+  const readChoices = useMemo((): SelectionChoices => {
     if (scope.kind === 'ids') return { claudeFor: 'selection', recordIds: scope.ids, concurrency };
-    return { claudeFor: alsoReread ? 'all' : 'misses', kinds, concurrency };
-  }, [scope, alsoReread, kinds, concurrency]);
+    return { claudeFor: 'selection', recordIds: misses.filter((r) => kinds.includes(r.kind)).map((r) => r.id), concurrency };
+  }, [scope, misses, kinds, concurrency]);
+  const rereadChoices = useMemo(
+    (): SelectionChoices | null =>
+      scope.kind === 'all' && here.length > 0 ? { ...readChoices, recordIds: [...readChoices.recordIds, ...here.map((r) => r.id)] } : null,
+    [scope.kind, here, readChoices],
+  );
+  const choices = alsoReread && rereadChoices ? rereadChoices : readChoices;
 
   // Estimates recompute as the kinds, the model list or "also re-read" change (pure on E2's side).
   useEffect(() => {
     let alive = true;
     const timer = setTimeout(() => {
-      const base = scope.kind === 'ids' ? choices : { ...choices, claudeFor: 'misses' as const };
-      Promise.all([
-        estimateModels(source.id, base),
-        scope.kind === 'all' && here.length > 0 ? estimateModels(source.id, { ...base, claudeFor: 'all' }) : Promise.resolve(null),
-      ]).then(
-        ([misses, all]) => {
+      Promise.all([estimateModels(source.id, readChoices), rereadChoices ? estimateModels(source.id, rereadChoices) : Promise.resolve(null)]).then(
+        ([reads, withRereads]) => {
           if (!alive) return;
-          setEstimates(misses);
-          setAllEstimates(all);
+          setEstimates(reads);
+          setAllEstimates(withRereads);
           setEstimateError(null);
         },
         (error: unknown) => {
@@ -296,7 +308,7 @@ function ConsentBody({
       alive = false;
       clearTimeout(timer);
     };
-  }, [source.id, scope, choices, here.length]);
+  }, [source.id, readChoices, rereadChoices]);
 
   useEffect(() => {
     let alive = true;
@@ -316,20 +328,28 @@ function ConsentBody({
   const extraUsd = extra && missesFor(extra.model) ? Math.max(0, extra.usd - (missesFor(extra.model)?.usd ?? 0)) : null;
   const suggested = defaultBudget(chosen?.usdHigh ?? 0);
   const limit = budget === 'default' ? suggested : budget;
-  const elsewhere = jobs.find((j) => j.sourceId !== source.id && (j.status === 'running' || j.status === 'pausing' || j.status === 'queued'));
-  const elsewhereTitle = elsewhere ? (sources.find((s) => s.id === elsewhere.sourceId)?.title ?? 'another book') : null;
-  const nothing = scope.kind === 'all' && kinds.length === 0 && !alsoReread;
+  // One job runs at a time: a new one waits behind any job being read or waiting, this book's included.
+  const ahead = waitingBehind(jobs);
+  const sameBook = ahead?.sourceId === source.id;
+  const aheadTitle = ahead ? (sources.find((s) => s.id === ahead.sourceId)?.title ?? 'another book') : null;
 
   const start = async () => {
     if (!chosen) return;
     setStarting(true);
     try {
       if (scope.kind === 'ids' && scope.retryJobId) {
-        await retryRecords(scope.retryJobId, 'both', chosen.model);
+        // Exactly the listed reads, under the limit shown here (a paused job's other records stay paused).
+        await retryRecords(scope.retryJobId, 'both', chosen.model, { ids: scope.ids, budgetUsd: limit });
       } else {
         await startJob(source.id, { ...choices, model: chosen.model, budgetUsd: limit });
       }
-      toast.success(elsewhereTitle ? `Queued: it starts when “${elsewhereTitle}” finishes.` : 'Claude is reading. Review entries as they finish.');
+      toast.success(
+        !ahead
+          ? 'Claude is reading. Review entries as they finish.'
+          : sameBook
+            ? 'Queued: it starts when the reading already under way finishes.'
+            : `Queued: it starts when “${aheadTitle}” finishes.`,
+      );
       onClose();
     } catch (error) {
       toast.error(errorMessage(error, 'Structuring couldn’t start.'));
@@ -338,7 +358,7 @@ function ConsentBody({
     }
   };
 
-  const total = scope.kind === 'ids' ? scope.ids.length : misses.filter((r) => kinds.includes(r.kind)).length + (alsoReread ? here.length : 0);
+  const total = choices.recordIds.length;
 
   return (
     <div className={cn('flex flex-col gap-5', TOUCH_FORM)}>
@@ -378,9 +398,7 @@ function ConsentBody({
           </span>
         </label>
       )}
-      {!(scope.kind === 'ids' && scope.retryJobId) && (
-        <BudgetField value={limit} suggested={suggested} onChange={(v) => setBudget(v)} />
-      )}
+      <BudgetField value={limit} suggested={suggested} onChange={(v) => setBudget(v)} />
       <details className="text-sm">
         <summary className="cursor-pointer font-medium text-muted max-sm:py-3 pointer-coarse:py-3">Advanced</summary>
         <div className="mt-2 flex items-center gap-2">
@@ -415,9 +433,11 @@ function ConsentBody({
         Estimates are rough; your Anthropic console has the real bill.
         {spent !== null && ` You've spent ${usd(spent)} on structuring so far.`}
       </Note>
-      {elsewhereTitle && (
+      {ahead && (
         <p className="text-sm text-muted">
-          Structuring “{elsewhereTitle}” is still running. This one starts when it finishes.
+          {sameBook
+            ? 'Claude is still reading other entries of this book. This one starts when that finishes.'
+            : `Structuring “${aheadTitle}” is still running. This one starts when it finishes.`}
         </p>
       )}
       {/* The dialog body scrolls with 1rem of padding: -bottom-4 keeps this footer flush with its bottom edge. */}
@@ -430,11 +450,11 @@ function ConsentBody({
             <Button
               variant="primary"
               loading={starting}
-              disabled={!chosen || nothing || total === 0}
+              disabled={!chosen || total === 0}
               icon={<Sparkles className="size-4" aria-hidden />}
               onClick={() => void start()}
             >
-              {elsewhereTitle ? 'Queue it' : `Start · ${chosen ? aboutUsd(chosen.usd) : '…'}`}
+              {ahead ? 'Queue it' : `Start · ${chosen ? aboutUsd(chosen.usd) : '…'}`}
             </Button>
           </>
         ) : (

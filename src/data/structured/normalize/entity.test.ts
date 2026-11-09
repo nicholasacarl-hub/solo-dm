@@ -131,6 +131,50 @@ describe('monster normalizer', () => {
     expect(n.warnings).toContainEqual(expect.objectContaining({ code: 'model-note', severity: 'info' }));
     expect(n.confidence).toBe('high');
   });
+
+  // An invented older-layout stat block printing Damage Immunities and Condition Immunities apart.
+  const husk = [
+    '_Medium Undead, Neutral Evil_',
+    '**Armor Class** 12',
+    '**Hit Points** 22 (4d8 + 4)',
+    '**Speed** 30 ft.',
+    ['| STR | DEX | CON | INT | WIS | CHA |', '|---|---|---|---|---|---|', '| 13 (+1) | 14 (+2) | 12 (+1) | 5 (−3) | 9 (−1) | 6 (−2) |'].join('\n'),
+    '**Damage Immunities** poison',
+    '**Condition Immunities** exhaustion, poisoned',
+    '**Senses** darkvision 60 ft., passive Perception 9',
+    '**Languages** —',
+    '**Challenge** 1/2 (100 XP)',
+    '### Actions',
+    '***Ember Claw.*** *Melee Weapon Attack:* +3 to hit, reach 5 ft., one target. *Hit:* 4 (1d6 + 1) slashing damage.',
+  ].join('\n\n');
+  const huskEntries = [{ id: 'lib:h:1', sourceId: 'h', sourceName: 'Husk Notes', kind: 'monster' as const, name: 'Lantern Husk', text: husk, path: ['Bestiary', 'Lantern Husk'] }];
+  const huskCandidate = segment(huskEntries, SEG).candidates[0];
+  const huskCtx = (origin: NormalizeContext['origin']): NormalizeContext => ({ blocks: huskCandidate.blocks, entriesById: new Map(huskEntries.map((e) => [e.id, e])), origin, spellLists: [] });
+
+  it('X5: grounds an older stat block’s two immunity lines part by part, offline and from Claude', () => {
+    const { wire, missing } = parseOffline(huskCandidate);
+    expect((wire as Wire<'monster'>).immunitiesText).toBe('poison; exhaustion, poisoned');
+    const offline = normalize('monster', wire as Wire<'monster'>, { ...huskCtx('parser'), missing });
+    expect(offline.data).toMatchObject({ immunities: 'poison; exhaustion, poisoned' });
+    expect(offline.warnings.filter((w) => w.code === 'ungrounded')).toEqual([]);
+    expect(offline.confidence).toBe('high');
+    // Each part is its own excerpt, so review can highlight both.
+    expect(offline.excerpts.filter((e) => e.field === 'immunitiesText')).toEqual([
+      { field: 'immunitiesText', text: 'poison', grounded: true },
+      { field: 'immunitiesText', text: 'exhaustion, poisoned', grounded: true },
+    ]);
+    const claude = normalize('monster', { ...(wire as Wire<'monster'>), immunitiesText: 'poison; poisoned' }, huskCtx('claude'));
+    expect(claude.warnings.filter((w) => w.code === 'ungrounded')).toEqual([]);
+    expect(claude.confidence).toBe('high');
+  });
+
+  it('X5: still flags a joined excerpt with a part the text doesn’t have, once', () => {
+    const { wire } = parseOffline(huskCandidate);
+    const n = normalize('monster', { ...(wire as Wire<'monster'>), immunitiesText: 'poison; charmed' }, huskCtx('claude'));
+    expect(n.warnings.filter((w) => w.code === 'ungrounded').map((w) => w.field)).toEqual(['immunities']);
+    expect(n.excerpts.filter((e) => e.field === 'immunitiesText')).toEqual([{ field: 'immunitiesText', text: 'poison; charmed', grounded: false }]);
+    expect(n.confidence).toBe('medium');
+  });
 });
 
 describe('spell normalizer', () => {
@@ -163,6 +207,19 @@ describe('spell normalizer', () => {
     expect(run('spell', 'Ashen Choir', { ...choir, levelText: '', school: 'unknown' }).data).toBeNull();
     expect(run('spell', 'Ashen Choir', { ...choir, durationText: '' }).data).toBeNull();
   });
+
+  it('X6: a level the level line doesn’t give is missing, not a cantrip (0 is also the wire’s "not stated")', () => {
+    for (const levelText of ['', 'Evocation']) {
+      const n = run('spell', 'Ashen Choir', { ...choir, levelText, level: 0 });
+      expect(n.data, levelText).toBeNull();
+      expect(n.warnings).toContainEqual(expect.objectContaining({ code: 'missing', severity: 'block', field: 'level' }));
+      expect(n.confidence).toBe('low');
+    }
+    // A cantrip says so; a level stated as a number other than 0 stands without a parsed line.
+    expect(run('spell', 'Ashen Choir', { ...choir, levelText: 'Evocation Cantrip (Wickwright)', level: 0 }).data?.level).toBe(0);
+    expect(run('spell', 'Ashen Choir', { ...choir, levelText: 'Cantrip', level: 0 }).data?.level).toBe(0);
+    expect(run('spell', 'Ashen Choir', { ...choir, levelText: 'Evocation', level: 2 }).data?.level).toBe(2);
+  });
 });
 
 describe('magic item normalizer', () => {
@@ -181,6 +238,38 @@ describe('magic item normalizer', () => {
   it('blocks a bonus above +5', () => {
     const n = run('magic-item', 'Mothsilk Cloak', { ...cloak, acBonus: 7, bonusText: '+7 bonus to Armor Class' });
     expect(n.warnings).toContainEqual(expect.objectContaining({ code: 'out-of-range', severity: 'block' }));
+  });
+
+  it('X7: keeps a bonus only when its "+N" names what it applies to; a misfiled one is left out with a warning', () => {
+    const mail = wireOf<'magic-item'>("Warden's Mail");
+    const n = run('magic-item', "Warden's Mail", { ...mail, saveBonus: 1 });
+    expect(n.data?.bonuses).toEqual({ ac: 1 });
+    expect(n.warnings).toContainEqual(expect.objectContaining({ code: 'ungrounded', field: 'bonuses', message: expect.stringContaining('saving throws') }));
+    expect(n.confidence).toBe('medium');
+    // Attack and damage in one phrase, and two phrases of different sizes joined with "; ".
+    const blade = run('magic-item', 'Mothsilk Cloak', { ...cloak, acBonus: 0, saveBonus: 0, attackBonus: 1, damageBonus: 1, bonusText: '+1 bonus to attack and damage rolls made with this weapon' });
+    expect(blade.data?.bonuses).toEqual({ attack: 1, damage: 1 });
+    const two = run('magic-item', 'Mothsilk Cloak', { ...cloak, acBonus: 1, saveBonus: 2, bonusText: '+1 bonus to AC; +2 bonus to saving throws' });
+    expect(two.data?.bonuses).toEqual({ ac: 1, savingThrows: 2 });
+    // A +1 never borrows the target of a later +2 in the same sentence.
+    const borrowed = run('magic-item', 'Mothsilk Cloak', { ...cloak, acBonus: 0, saveBonus: 1, bonusText: '+1 bonus to AC and a +2 bonus to saving throws' });
+    expect(borrowed.data).not.toHaveProperty('bonuses');
+  });
+
+  it('X7: the offline parser keeps every bonus sentence, grounded part by part', () => {
+    const text = [
+      '_Armor (Plate Armor), Rare (Requires Attunement)_',
+      'While wearing this armor, you have a +1 bonus to Armor Class.',
+      'You also have a +2 bonus to saving throws while you wear it.',
+    ].join('\n\n');
+    const entries = [{ id: 'lib:t:1', sourceId: 't', sourceName: 'Test Book', kind: 'magic-item' as const, name: 'Thornwarden Plate', text, path: ['Magic Items', 'Thornwarden Plate'] }];
+    const c = segment(entries, SEG).candidates[0];
+    const { wire, missing } = parseOffline(c);
+    expect((wire as Wire<'magic-item'>).bonusText).toBe('+1 bonus to Armor Class; +2 bonus to saving throws');
+    const n = normalize('magic-item', wire as Wire<'magic-item'>, { blocks: c.blocks, entriesById: new Map(entries.map((e) => [e.id, e])), origin: 'parser', spellLists: [], missing });
+    expect(n.data?.bonuses).toEqual({ ac: 1, savingThrows: 2 });
+    expect(n.warnings.filter((w) => w.code === 'ungrounded')).toEqual([]);
+    expect(n.confidence).toBe('high');
   });
 });
 

@@ -61,7 +61,10 @@ export interface BuilderDraft {
   classId: string | null;
   /** Classes that choose their subclass at level 1 (some imported, older-format classes): the SubclassOption id. */
   subclassId: string | null;
-  /** Fighting Style feat name (e.g. Fighter level 1), or one of the class feature's own options. */
+  /**
+   * The Fighting Style (e.g. Fighter level 1): the feat's id, or "inline:<name key>" for one of the class
+   * feature's own options. Drafts saved before ids hold the name, which still resolves (the first of that name).
+   */
   fightingStyle: string | null;
   /** Chosen option per level-1 "choose one of the following" class feature, e.g. { "Divine Order": "Protector" }. */
   classOptions: Record<string, string>;

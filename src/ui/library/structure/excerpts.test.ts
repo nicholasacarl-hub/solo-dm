@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Excerpt } from '@/types';
-import { findExcerpt, highlightsIn, plainParagraph, slicesOf, unplacedExcerpts } from './excerpts';
+import { findExcerpt, highlightsIn, placeExcerpts, plainParagraph, slicesOf } from './excerpts';
 
 const excerpt = (field: string, text: string, grounded = true): Excerpt => ({ field, text, grounded });
 
@@ -58,8 +58,30 @@ describe('highlights and slices', () => {
     expect(marks[0].fields).toEqual(['acText', 'notes']);
   });
 
-  it('lists excerpts no paragraph contains', () => {
+  it('counts where each excerpt is found: 0 for a misread the text does not contain', () => {
     const misread = excerpt('hpText', '58 (8d10 + 8)', false);
-    expect(unplacedExcerpts(['HP 52 (8d10 + 8)'], [excerpt('hpText', '52 (8d10 + 8)'), misread])).toEqual([misread]);
+    const read = excerpt('hpText', '52 (8d10 + 8)');
+    const { places, lines } = placeExcerpts(['HP 52 (8d10 + 8)'], [read, misread]);
+    expect(places.get(misread)).toBe(0);
+    expect(places.get(read)).toBe(1);
+    expect(lines[0].map((h) => h.fields)).toEqual([['hpText']]);
+  });
+});
+
+describe('placing excerpts in reading order', () => {
+  it('U13: marks an excerpt once, where it first appears, the block title included', () => {
+    const parent = excerpt('parentClassText', 'Fighter');
+    const lines = ['Fighter Subclass: Ember Warden', 'Ember Ward', 'Your ward lasts a number of rounds equal to your Fighter level.'];
+    const { lines: marks, places } = placeExcerpts(lines, [parent]);
+    expect(marks[0]).toEqual([{ start: 0, end: 7, fields: ['parentClassText'] }]);
+    expect(marks[2]).toEqual([]);
+    expect(places.get(parent)).toBe(2);
+  });
+
+  it('U13: an excerpt only in a heading is found, not listed as missing', () => {
+    const tagline = excerpt('taglineText', 'Keepers of the Ember');
+    const { lines: marks, places } = placeExcerpts(['Keepers of the Ember', 'Body text.'], [tagline]);
+    expect(places.get(tagline)).toBe(1);
+    expect(marks[0]).toHaveLength(1);
   });
 });

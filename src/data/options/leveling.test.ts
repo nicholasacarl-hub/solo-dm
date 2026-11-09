@@ -16,6 +16,7 @@ import {
   applyFeatChoice,
   caughtUpFeatures,
   dropChoiceReminder,
+  featChoiceComplete,
   featChoiceNotice,
   featChoices,
   featChoiceTrigger,
@@ -225,14 +226,42 @@ describe('the Feat choice panel', () => {
   });
 
   it('applies +2 to one ability, capped at 20, and names the choice on the sheet (Ability Score Improvement feat)', () => {
-    const c = { ...fighter4(), abilityScores: { str: 19, dex: 14, con: 13, int: 10, wis: 12, cha: 8 } };
-    const { character, warnings, leveled } = levelWith(c, FIGHTER, { kind: 'plus-two', ability: 'str' });
-    expect(character.abilityScores.str).toBe(20);
-    expect(warnings).toEqual(['Strength is capped at 20.']);
+    const c = fighter4(); // STR 16
+    const { character, warnings, leveled, increases } = levelWith(c, FIGHTER, { kind: 'plus-two', ability: 'str' });
+    expect(character.abilityScores.str).toBe(18);
+    expect(warnings).toEqual([]);
+    expect(increases).toEqual([{ ability: 'str', amount: 2 }]);
     const asi = character.features.filter((f) => nameKey(f.name).startsWith('ability-score-improvement'));
     expect(asi).toHaveLength(1);
     expect(asi[0]).toMatchObject({ name: 'Ability Score Improvement (+2 Strength)', source: 'feat', sourceName: 'Fighter 4' });
     expect(character.hp.max).toBe(leveled.character.hp.max);
+  });
+
+  it('B3: names an Ability Score Improvement for what took effect under the cap of 20 (SRD 5.2.1 Ability Score Improvement)', () => {
+    const scores = (str: number, dex: number) => ({ str, dex, con: 13, int: 10, wis: 12, cha: 8 });
+    // +2 on a 19: only +1 fits, and the sheet, the notice and the summary say +1.
+    const nineteen = levelWith({ ...fighter4(), abilityScores: scores(19, 14) }, FIGHTER, { kind: 'plus-two', ability: 'str' });
+    expect(nineteen.character.abilityScores.str).toBe(20);
+    expect(nineteen.warnings).toEqual(['Strength is capped at 20.']);
+    expect(nineteen.increases).toEqual([{ ability: 'str', amount: 1 }]);
+    expect(nineteen.character.features.find((f) => f.source === 'feat')?.name).toBe('Ability Score Improvement (+1 Strength)');
+    expect(featChoiceNotice({ kind: 'plus-two', ability: 'str' }, nineteen.increases)).toBe('chose: +1 Strength');
+
+    const reminder = 'Fighter 4: Ability Score Improvement — raise one score by 2 or two scores by 1 (max 20), or take another feat you qualify for.';
+    // A score already at 20 can't be chosen: nothing is applied, the gained feature and the reminder stay.
+    for (const choice of [{ kind: 'plus-two', ability: 'str' }, { kind: 'plus-one-one', abilities: ['str', 'dex'] }] as FeatChoice[]) {
+      const at20 = { ...fighter4(), abilityScores: scores(20, 19) };
+      expect(featChoiceComplete(choice, at20.abilityScores), choice.kind).toBe(false);
+      const out = levelWith(at20, FIGHTER, choice);
+      expect(out.character, choice.kind).toBe(out.leveled.character);
+      expect(out.increases).toEqual([]);
+      expect(out.character.features.map((f) => [f.name, f.source])).toEqual([['Ability Score Improvement', 'class']]);
+      expect(out.leveled.reminders).toContain(reminder);
+      expect(dropChoiceReminder(out.leveled.reminders, 'asi', choice, out.increases)).toContain(reminder);
+      expect(featChoiceNotice(choice, out.increases)).toBeNull();
+    }
+    // Two abilities with room still work, and a different pair below 20 is complete.
+    expect(featChoiceComplete({ kind: 'plus-one-one', abilities: ['dex', 'con'] }, scores(20, 19))).toBe(true);
   });
 
   it('applies +1 to two abilities; a Constitution increase raises HP for every level', () => {

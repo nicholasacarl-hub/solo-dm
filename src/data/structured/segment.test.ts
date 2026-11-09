@@ -102,10 +102,10 @@ describe('segment: the Gloamwood Almanac', () => {
     expect(new Set(a.map((c) => c.textHash)).size).toBe(a.length);
   });
 
-  it('keeps the book title out of block paths', () => {
+  it('keeps the document’s headings in block paths (requests leave its top level out: src/dm/extract/blocks.ts)', () => {
     for (const c of segment(md, CTX).candidates) for (const b of c.blocks) expect(b.path, b.title).not.toContain(GLOAMWOOD_TITLE);
     const lore = segment([entry(1, 'Owlbear Den', '**Armor Class** 13\n\n**Hit Points** 59 (7d10 + 21)\n\n**Challenge** 3 (700 XP)', ['Test Book', 'Owlbear Den'])], CTX);
-    expect(lore.candidates[0].blocks[0].path).toEqual(['Owlbear Den']);
+    expect(lore.candidates[0].blocks[0].path).toEqual(['Test Book', 'Owlbear Den']);
   });
 });
 

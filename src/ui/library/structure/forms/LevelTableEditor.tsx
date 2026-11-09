@@ -5,11 +5,13 @@
  */
 import { useState } from 'react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { cn } from '@/lib/cn';
 import { useMediaQuery } from '@/ui/play/useMediaQuery';
 import { IconButton, Input, Select } from '@/ui/components/ui';
 import { useRecordForm } from './context';
 import { FieldShell } from './controls';
 import { getPath } from './paths';
+import { TOUCH } from '../touch';
 
 type Row = Record<string, string | number>;
 
@@ -199,7 +201,7 @@ export function LevelTableEditor({ path, label }: { path: string; label: string 
         </div>
       </div>
       <details className="mt-2 rounded-xl border border-border bg-surface px-3 py-2 text-sm">
-        <summary className="cursor-pointer font-medium">Columns</summary>
+        <summary className={cn('flex cursor-pointer items-center font-medium', TOUCH)}>Columns</summary>
         <ul className="mt-2 flex flex-col gap-2">
           {columns.map((c) => (
             <li key={c} className="flex items-center gap-2">

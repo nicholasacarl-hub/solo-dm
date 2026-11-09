@@ -18,10 +18,10 @@ import { errorMessage } from '@/ui/shell/format';
 import { filterRecords, isConfident, kindCounts, matchesFilter, reviewCounts, type ReviewCounts } from './bookData';
 import { KIND_LABELS, REVIEW_FILTERS, RECORD_STATES, fieldsToCheck, kindCount, recordState, recordStateLabel, type ReviewFilter } from './labels';
 import { RecordDetail, type Availability, type DetailLayout } from './RecordDetail';
-import { acceptConfident, acceptRecords, rereadHere, setRecordsStatus, setSpellClasses } from './reviewActions';
+import { acceptRecords, rereadHere, setRecordsStatus, setSpellClasses } from './reviewActions';
 import { TOUCH, TOUCH_BUTTONS, TOUCH_FOOTER, TOUCH_FORM } from './touch';
 import { showUndo } from './UndoToast';
-import { bookPageSearch, type BookPageControls } from './useBookPageState';
+import { FROM_LIST, bookPageSearch, cameFromList, type BookPageControls } from './useBookPageState';
 
 const PAGE = 150;
 /** A pane on wide and mid screens: sticks below the top bar and scrolls on its own (like Browse's detail pane). */
@@ -113,7 +113,8 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
 
   const back = () => {
     if (state.recordId) focusAfterClose.current = { to: 'row', id: state.recordId };
-    if (location.key !== 'default') navigate(-1);
+    // Back only when a list of this page pushed the record; else the entry before is another page.
+    if (cameFromList(location.state)) navigate(-1);
     else openRecord(null);
   };
 
@@ -183,7 +184,7 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
           sticky={layout === 'phone'}
         />
       )}
-      {selection === null && layout === 'phone' && <AcceptConfidentButton records={list} sourceId={source.id} kind={state.kind} returnFocus={filterChip} sticky />}
+      {selection === null && layout === 'phone' && <AcceptConfidentButton records={list} returnFocus={filterChip} sticky />}
     </div>
   );
 
@@ -245,7 +246,7 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
         {listPane}
         {selection === null && (
           <div className="sticky bottom-0 -mx-3 border-t border-border bg-surface px-3 py-3">
-            <AcceptConfidentButton records={list} sourceId={source.id} kind={state.kind} returnFocus={filterChip} />
+            <AcceptConfidentButton records={list} returnFocus={filterChip} />
           </div>
         )}
       </div>
@@ -475,6 +476,7 @@ export function RecordRow({
       )}
       <Link
         to={{ search: bookPageSearch(params, { recordId: record.id }) }}
+        state={FROM_LIST}
         data-record-id={record.id}
         aria-current={selected ? 'true' : undefined}
         className={cn(
@@ -694,16 +696,13 @@ function SetClassesDialog({ open, ids, onClose, records }: { open: boolean; ids:
   );
 }
 
+/** "Accept N confident" for the records the list shows (chip, kind and name search): exactly the N its sheet names. */
 export function AcceptConfidentButton({
   records,
-  sourceId,
-  kind,
   returnFocus,
   sticky,
 }: {
   records: readonly StructuredRecord[];
-  sourceId: string;
-  kind: StructuredKind | null;
   /** Where focus goes after Undo when this button is disabled by then (nothing confident left). */
   returnFocus?: () => HTMLElement | null;
   sticky?: boolean;
@@ -717,7 +716,8 @@ export function AcceptConfidentButton({
   const accept = async () => {
     setBusy(true);
     try {
-      const result = await acceptConfident(sourceId, kind ? { kind } : {});
+      // The ids the sheet counted, not a fresh query: what the player confirmed is what gets accepted.
+      const result = await acceptRecords(confident.map((r) => r.id));
       setOpen(false);
       if (result.accepted > 0) showUndo(`Accepted ${result.accepted}. ${IN_USE_TAIL}`, result.undo, { focus: true, returnFocus });
       else toast.info('Nothing was accepted: those entries changed since.');

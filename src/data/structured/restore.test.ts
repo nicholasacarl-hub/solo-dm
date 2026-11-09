@@ -1,16 +1,20 @@
 import { describe, expect, it } from 'vitest';
 import { nameKey } from '@/lib/id';
-import { importedPlaceholder } from '@/lib/importedContent';
+import { bookFingerprint, importedPlaceholder, textFingerprint } from '@/lib/importedContent';
 import { sampleCharacter } from '@/test/fixtures';
 import {
+  EXPECTED_DATA,
   EXPECTED_MERGED,
   GLOAMWOOD_SRD_SUBSET,
   GLOAMWOOD_TITLE,
   gloamwoodEntries,
   gloamwoodSource,
+  structuredRecord,
 } from '@/test/structuredFixtures';
-import type { BuilderData, Character, CompendiumEntry, Feature, LibrarySource, SpeciesTrait } from '@/types';
-import { restoreImportedText, type LibraryLookup } from './restore';
+import type { BuilderData, Character, ClassData, ClassFeatureDef, CompendiumEntry, Feature, ImportedRef, LibrarySource, SpeciesTrait } from '@/types';
+import { inlineFightingStyles } from '../options/classFeatures';
+import { importedOptions, mergeBuilderData } from './merge';
+import { featureNeedsRestore, restoreImportedText, type LibraryLookup } from './restore';
 
 const placeholder = importedPlaceholder(GLOAMWOOD_TITLE);
 
@@ -136,5 +140,132 @@ describe('restoreImportedText (spec §7.4)', () => {
     // An empty description with copied text comes back too.
     const empty = { ...base, features: [{ ...copied[1], description: '' }] };
     expect(restoreImportedText(empty, lookupOf(EXPECTED_MERGED)).character.features[0].description).toBe(duskSight.description);
+  });
+
+  it('P3: a ruling the DM wrote over a pulled placeholder needs nothing, though its ref still says redacted', () => {
+    const base = sampleCharacter();
+    const ruling: Feature = { ...copied[0], description: 'DM ruling: once per turn, add 1d4 fire damage.', ref: { ...emberWard.ref!, redacted: true } };
+    expect(featureNeedsRestore(ruling)).toBe(false);
+    expect(featureNeedsRestore({ ...ruling, description: placeholder })).toBe(true);
+    const c = { ...base, features: [...base.features, ruling] };
+    const { character, report } = restoreImportedText(c, lookupOf(EXPECTED_MERGED, [gloamwoodSource()], gloamwoodEntries()));
+    expect(character).toBe(c);
+    expect(report).toEqual({ restored: 0, differs: 0, missing: [] });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1: a fighting style the class feature prints itself (spec §5.6 fighting-style-inline). The builder and
+// level-up copy only the chosen style, as a feature named for it, under the Fighting Style feature's ref
+// (part "Fighting Style", the whole feature's span) with the style's own text hash. Invented book.
+// ---------------------------------------------------------------------------
+
+const LAMP_TITLE = 'The Lampwarden Codex';
+const HOOKED_PULL = 'When you hit a creature with a reach weapon, you can pull it up to 5 feet closer to you.';
+const LANTERN_GUARD = 'While you hold a lit lantern, you gain a +1 bonus to Armor Class.';
+const STYLES = [`_**Hooked Pull.**_ ${HOOKED_PULL}`, `_**Lantern Guard.**_ ${LANTERN_GUARD}`];
+
+/** A device with the Lampwarden structured (accepted) from its copy of the book: its merged data and Library. */
+function lampwarden(sourceId: string, opts: { styles?: readonly string[]; fingerprint?: string; title?: string } = {}) {
+  const styles = opts.styles ?? STYLES;
+  const title = opts.title ?? LAMP_TITLE;
+  const entries: CompendiumEntry[] = [
+    { id: `lib:${sourceId}:1`, sourceId, sourceName: title, kind: 'other', name: 'Lampwarden', text: '# Lampwarden\n\nLampwardens keep the lanterns lit along the old roads.' },
+    {
+      id: `lib:${sourceId}:2`,
+      sourceId,
+      sourceName: title,
+      kind: 'rule',
+      name: 'Level 1: Fighting Style',
+      text: ['### Level 1: Fighting Style', 'Lampwardens learn one way of fighting by lantern light. Choose one of the options below.', ...styles].join('\n\n'),
+    },
+  ];
+  const fingerprint = opts.fingerprint ?? bookFingerprint(entries.map((e) => e.text));
+  const source: LibrarySource = { id: sourceId, title, kind: 'import', format: 'markdown', enabled: true, entryCount: entries.length, createdAt: 1, updatedAt: 1, fingerprint };
+  const { spellcastingAbility: _ability, spellNames: _spells, ...wickwright } = EXPECTED_DATA.Wickwright as ClassData;
+  const data: ClassData = { ...wickwright, casterType: 'none', features: [{ level: 1, name: 'Fighting Style', text: { entryIds: [`lib:${sourceId}:2`], from: 1, to: 2 + styles.length } }] };
+  const record = structuredRecord('class', 'Lampwarden', { entryIds: entries.map((e) => e.id), span: 'section', status: 'accepted', data }, sourceId);
+  const entriesById = new Map(entries.map((e) => [e.id, e]));
+  const merged = mergeBuilderData(GLOAMWOOD_SRD_SUBSET, importedOptions({ version: 1, sources: [source], entriesById, accepted: [record] }));
+  const def = merged.data.classes.find((c) => c.name === 'Lampwarden')?.features.find((f) => f.name === 'Fighting Style');
+  if (merged.problems.length || !def?.ref) throw new Error('lampwarden fixture: the class did not merge');
+  return { def: def as ClassFeatureDef & { ref: ImportedRef }, source, entries, lookup: lookupOf(merged.data, [source], entries) };
+}
+
+/** The hero's Fighting Style and chosen Hooked Pull as copied on the first device, as another device pulls them. */
+function pulledLampwarden(refFor?: (def: ClassFeatureDef & { ref: ImportedRef }) => ImportedRef): Character {
+  const { def } = lampwarden('lw');
+  const pull = inlineFightingStyles(def).find((s) => s.name === 'Hooked Pull');
+  if (pull?.description !== HOOKED_PULL) throw new Error('lampwarden fixture: no Hooked Pull');
+  const pullRef = refFor ? refFor(def) : { ...def.ref, textHash: textFingerprint(HOOKED_PULL), textCopied: true };
+  const left = (ref: ImportedRef) => ({ description: importedPlaceholder(LAMP_TITLE), ref: { ...ref, redacted: true as const } });
+  const base = sampleCharacter();
+  return {
+    ...base,
+    features: [
+      ...base.features,
+      { id: 'f-style', name: 'Fighting Style', source: 'class', sourceName: 'Lampwarden 1', ...left(def.ref) },
+      { id: 'f-pull', name: 'Hooked Pull', source: 'class', sourceName: 'Fighting Style (Lampwarden 1)', ...left(pullRef) },
+    ],
+  };
+}
+const textOf = (c: Character, id: string) => c.features.find((f) => f.id === id)?.description;
+
+describe('P1: an inline fighting style restores only its own text, never the whole Fighting Style feature', () => {
+  it('P1: by option id (step 1) the style gets its own words and the class feature its whole text', () => {
+    const device = lampwarden('lw');
+    const { character, report } = restoreImportedText(pulledLampwarden(), device.lookup);
+    expect(report).toEqual({ restored: 2, differs: 0, missing: [] });
+    expect(textOf(character, 'f-pull')).toBe(HOOKED_PULL);
+    expect(textOf(character, 'f-style')).toBe(device.def.description);
+    expect(textOf(character, 'f-style')).toContain(LANTERN_GUARD);
+    for (const id of ['f-pull', 'f-style']) expect(character.features.find((f) => f.id === id)?.ref?.redacted).toBeUndefined();
+  });
+
+  it('P1: from the book imported but never structured (step 2: its fingerprint and location)', () => {
+    const copy = lampwarden('copy');
+    const { character, report } = restoreImportedText(pulledLampwarden(), lookupOf(GLOAMWOOD_SRD_SUBSET, [copy.source], copy.entries));
+    expect(report).toEqual({ restored: 2, differs: 0, missing: [] });
+    expect(textOf(character, 'f-pull')).toBe(HOOKED_PULL);
+  });
+
+  it('P1: from another copy by title (step 3) or the same words anywhere (step 4); a copy that reads differently gives only that style', () => {
+    const other = lampwarden('other', { fingerprint: 'another-printing' });
+    expect(textOf(restoreImportedText(pulledLampwarden(), other.lookup).character, 'f-pull')).toBe(HOOKED_PULL);
+    const renamedBook = lampwarden('renamed', { fingerprint: 'another-printing', title: 'Lampwarden Codex (old copy)' });
+    expect(textOf(restoreImportedText(pulledLampwarden(), renamedBook.lookup).character, 'f-pull')).toBe(HOOKED_PULL);
+    const reprint = `When you hit a creature with a reach weapon, you can pull it up to 10 feet closer to you.`;
+    const second = lampwarden('second', { fingerprint: 'another-printing', styles: [`_**Hooked Pull.**_ ${reprint}`, STYLES[1]] });
+    const { character, report } = restoreImportedText(pulledLampwarden(), second.lookup);
+    expect(textOf(character, 'f-pull')).toBe(reprint);
+    expect(report).toEqual({ restored: 2, differs: 2, missing: [] });
+  });
+
+  it('P1: stays missing when the copy no longer prints that style (a renamed one with the same words still comes back)', () => {
+    const without = lampwarden('lw', { styles: ['_**Hook and Drag.**_ When you hit, you drag the target along with you.', STYLES[1]] });
+    const { character, report } = restoreImportedText(pulledLampwarden(), without.lookup);
+    expect(textOf(character, 'f-pull')).toBe(importedPlaceholder(LAMP_TITLE));
+    expect(report.missing).toEqual([{ book: LAMP_TITLE, entryName: 'Lampwarden', part: 'Fighting Style' }]);
+    const renamed = lampwarden('lw', { styles: [`_**Hook and Pull.**_ ${HOOKED_PULL}`, STYLES[1]] });
+    expect(textOf(restoreImportedText(pulledLampwarden(), renamed.lookup).character, 'f-pull')).toBe(HOOKED_PULL);
+  });
+
+  it('P1: a ref that names the style itself as its part, at the style’s own paragraph, restores at every step', () => {
+    const ownPart = (def: ClassFeatureDef & { ref: ImportedRef }): ImportedRef => ({
+      ...def.ref,
+      part: 'Hooked Pull',
+      at: { ordinals: def.ref.at?.ordinals ?? [], from: 3, to: 3 },
+      textHash: textFingerprint(HOOKED_PULL),
+      textCopied: true,
+    });
+    // Step 1 alone (this device's merged data, no Library to fall back on): the style is a part of the class.
+    const builderOnly = lookupOf(lampwarden('lw').lookup.builder);
+    const byId = restoreImportedText(pulledLampwarden(ownPart), builderOnly);
+    expect(textOf(byId.character, 'f-pull')).toBe(HOOKED_PULL);
+    expect(byId.report).toEqual({ restored: 2, differs: 0, missing: [] });
+    const copy = lampwarden('copy');
+    const unstructured = restoreImportedText(pulledLampwarden(ownPart), lookupOf(GLOAMWOOD_SRD_SUBSET, [copy.source], copy.entries));
+    expect(textOf(unstructured.character, 'f-pull')).toBe(HOOKED_PULL);
+    expect(unstructured.report).toEqual({ restored: 2, differs: 0, missing: [] });
   });
 });

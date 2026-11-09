@@ -79,7 +79,9 @@ export function normalizeSpell(wire: Wire<'spell'>, ctx: NormalizeContext): Norm
   const base = beginNormalize('a spell', wire, ctx, SPELL_FIELDS);
   const w: RecordWarning[] = [];
   const printed = levelLineValues(wire.levelText);
-  const level = printed.level ?? wire.level;
+  // 0 is a cantrip, and also the wire's number for "not stated": a 0 counts only when the level line says Cantrip.
+  const stated = printed.level !== undefined || wire.level !== 0 || /\bcantrip\b/i.test(wire.levelText);
+  const level = printed.level ?? (stated ? wire.level : undefined);
   if (printed.level !== undefined && printed.level !== wire.level) {
     w.push(warning('cross-check', 'warn', `The level line says level ${printed.level}, but level ${wire.level} was read.`, 'level'));
   }
@@ -88,14 +90,14 @@ export function normalizeSpell(wire: Wire<'spell'>, ctx: NormalizeContext): Norm
     w.push(warning('cross-check', 'warn', `The level line says ${printed.school}, but ${wire.school} was read.`, 'school'));
   }
   if (!school) w.push(missing('school', 'The school of magic'));
-  if (!wire.levelText && !Number.isInteger(wire.level)) w.push(missing('level', 'The spell level'));
+  if (level === undefined || !Number.isInteger(level)) w.push(missing('level', 'The spell level'));
   const castingTime = wire.castingTimeText.replace(/[*_]/g, '').replace(/\s*,?\s*or\s+Ritual\s*$/i, '').trim();
   if (!castingTime) w.push(missing('castingTime', 'The casting time'));
   const range = wire.rangeText.replace(/[*_]/g, '').trim();
   if (!range) w.push(missing('range', 'The range'));
   const duration = wire.durationText.replace(/[*_]/g, '').trim();
   if (!duration) w.push(missing('duration', 'The duration'));
-  if (!school || !castingTime || !range || !duration || !Number.isInteger(level)) {
+  if (!school || !castingTime || !range || !duration || level === undefined || !Number.isInteger(level)) {
     return finishNormalize('spell', base, null, [], { matchesKind: wire.matchesKind, keyFields: KEY_FIELDS, ctx, extra: w });
   }
 

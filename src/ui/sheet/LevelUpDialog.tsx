@@ -11,6 +11,7 @@ import { useId, useState, type ReactNode } from 'react';
 import { ArrowBigUpDash, Check, TriangleAlert } from 'lucide-react';
 import { XP_THRESHOLDS, abilityModifier, characterLevel, levelUp, type LevelUpOptions, type LevelUpResult } from '@/engine';
 import { useBuilderData, useRulesIndex } from '@/data';
+import { withAdaptationNotes } from '@/data/options/adaptationNotes';
 import { featureUseChanges, gainedFeatures, refreshFeatureUses } from '@/data/options/leveling';
 import {
   addSubclassSpells,
@@ -27,6 +28,7 @@ import {
   type FeatChoice,
   type FeatChoiceTrigger,
   type FeatPick,
+  type ScoreIncrease,
   type SubclassSpells,
 } from '@/data/options/levelUpChoices';
 import { classOptionFor, primaryRuleOf, subclassOptionFor } from '@/data/options/resolve';
@@ -208,19 +210,18 @@ function multiclassLabel(o: ClassOption): string {
   return o.source ? `${o.name} · ${o.source.title} (d${o.hitDie})` : `${o.name} (d${o.hitDie})`;
 }
 
-/** The player's choice in the summary: "You raised Strength by 2.", "You took Lantern Bearer (+1 Wisdom)." */
-function choiceSummary(choice: FeatChoice): string | null {
+/** The player's choice in the summary, from the increases that took effect: "You raised Strength by 2.", "You took Lantern Bearer (+1 Wisdom)." */
+function choiceSummary(choice: FeatChoice, increases: readonly ScoreIncrease[]): string | null {
+  const raised = increases.map((p) => `${ABILITY_NAMES[p.ability]} by ${p.amount}`).join(' and ');
   switch (choice.kind) {
     case 'dm':
       return null;
     case 'plus-two':
-      return `You raised ${ABILITY_NAMES[choice.ability]} by 2.`;
     case 'plus-one-one':
-      return `You raised ${ABILITY_NAMES[choice.abilities[0]]} and ${ABILITY_NAMES[choice.abilities[1]]} by 1.`;
+      return raised ? `You raised ${raised}.` : null;
     case 'feat': {
-      const inc = choice.pick.increase;
-      const ability = inc && (inc.abilities.length === 1 ? inc.abilities[0] : choice.ability);
-      return `You took ${choice.pick.name}${inc && ability ? ` (+${inc.amount} ${ABILITY_NAMES[ability]})` : ''}.`;
+      const inc = increases[0];
+      return `You took ${choice.pick.name}${inc ? ` (+${inc.amount} ${ABILITY_NAMES[inc.ability]})` : ''}.`;
     }
   }
 }
@@ -500,7 +501,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
     Boolean(className) &&
     (!multiclassing || prereqMet || allowAnyway) &&
     (!plan.needsSubclass || Boolean(plan.sub)) &&
-    (!plan.trigger || featChoiceReady(featChoice, featAllowed)) &&
+    (!plan.trigger || featChoiceReady(featChoice, featAllowed, character.abilityScores)) &&
     !(hpMethod === 'roll' && physical && !faceValid) &&
     !busy;
 
@@ -518,22 +519,27 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
       const addedIds = new Set(r.character.features.filter((f) => !before.has(f.id)).map((f) => f.id));
       let next = addSubclassSpells(r.character, plan.spells.spells);
       const warnings: string[] = [];
+      let increases: ScoreIncrease[] = [];
       if (plan.trigger) {
         const applied = applyFeatChoice(next, plan.trigger, featChoice, { className, classLevel, addedIds, equipment: builder.data?.equipment });
         next = applied.character;
+        increases = applied.increases;
         warnings.push(...applied.warnings);
       }
+      // The older-edition notes of what this level brings (a 2014 subclass chosen now, a book's class or feat) join the sheet's (B6).
+      next = withAdaptationNotes(next, [option, plan.sub, featChoice.kind === 'feat' ? featChoice.pick.feat : undefined]);
       // Existing features grow too: Rage, Second Wind, Lay on Hands, Breath Weapon, Draconic Flight at 5…
       const refreshed = refreshFeatureUses(next, builder.data);
       const uses = featureUseChanges(c, refreshed);
-      const chose = featChoiceNotice(featChoice);
-      const reminders = plan.trigger ? dropChoiceReminder(r.reminders, plan.trigger.kind, featChoice) : r.reminders;
+      // Named for what took effect (a score at 20 can't rise), and a choice that changed nothing keeps its reminder.
+      const chose = featChoiceNotice(featChoice, increases);
+      const reminders = plan.trigger ? dropChoiceReminder(r.reminders, plan.trigger.kind, featChoice, increases) : r.reminders;
       const added = featChoice.kind === 'dm' ? plan.features.map((f) => f.name) : refreshed.features.filter((f) => !before.has(f.id)).map((f) => f.name);
       const spells = plan.spells.spells.map((s) => s.name);
       const hpGained = refreshed.hp.max - c.hp.max;
       outcome.result = { ...r, character: refreshed, hpGained, reminders };
       outcome.uses = uses;
-      outcome.choice = choiceSummary(featChoice);
+      outcome.choice = choiceSummary(featChoice, increases);
       return {
         character: refreshed,
         notice: levelUpNotice({

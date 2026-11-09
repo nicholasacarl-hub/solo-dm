@@ -29,7 +29,7 @@ import { kindCount } from '@/ui/library/structure/labels';
 import type { Availability } from '@/ui/library/structure/RecordDetail';
 import { rereadHere } from '@/ui/library/structure/reviewActions';
 import { ReviewWorkspace } from '@/ui/library/structure/ReviewWorkspace';
-import { StructureStatusCard } from '@/ui/library/structure/StructureStatusCard';
+import { StructureAnnouncer, StructureStatusCard } from '@/ui/library/structure/StructureStatusCard';
 import { TOUCH, TOUCH_BUTTONS } from '@/ui/library/structure/touch';
 import { UndoToast } from '@/ui/library/structure/UndoToast';
 import { useBookPageState } from '@/ui/library/structure/useBookPageState';
@@ -305,6 +305,8 @@ export function LibrarySourceScreen() {
       <BookDataDialog open={bookData} source={source} onClose={() => setBookData(false)} />
       <DeleteBookDialog source={deleting ? source : null} onClose={() => setDeleting(false)} onDeleted={() => navigate('/library?tab=mine', { replace: true })} />
       {switchDialog}
+      {/* Outside the header and its cards: on phones they are off screen while a record is open. */}
+      <StructureAnnouncer sourceId={source.id} jobs={jobs ?? []} />
       <UndoToast />
     </Page>
   );

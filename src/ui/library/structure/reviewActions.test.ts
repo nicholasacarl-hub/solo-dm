@@ -157,6 +157,38 @@ describe('edits', () => {
     expect(storage.putRecords).toHaveBeenCalledWith([saved]);
   });
 
+  it('S2: measures an edit against the stored record, even when the record passed in already holds the new fields', async () => {
+    const drake = {
+      ...byName('Glimmerwing Drake'),
+      data: { ...(EXPECTED_DATA['Glimmerwing Drake'] as MonsterData), hp: 58 },
+      warnings: [
+        { code: 'cross-check' as const, severity: 'warn' as const, field: 'hp', message: "HP 58 isn't near the average of 8d10 + 8 (52)." },
+        { code: 'ungrounded' as const, severity: 'warn' as const, field: 'acText', message: 'AC excerpt not found' },
+      ],
+    };
+    stored = stored.map((r) => (r.id === drake.id ? drake : r));
+    const fixed = { ...drake.data, hp: 52 };
+    // What the review form saves: recordFromDraft(), whose data is already the draft's.
+    const saved = await actions.saveRecordEdit({ ...drake, data: fixed, edited: true }, fixed);
+    expect(saved.warnings.map((w) => w.field)).toEqual(['acText']);
+  });
+
+  it('S2: a record filled in from nothing loses the reading\'s field problems; Claude\'s note stays', async () => {
+    const goblin = {
+      ...byName('Goblin Warrior'),
+      origin: 'claude' as const,
+      warnings: [
+        { code: 'model-note' as const, severity: 'info' as const, message: 'Claude left a note about this entry.' },
+        { code: 'missing' as const, severity: 'block' as const, field: 'abilities', message: "The ability scores weren't found." },
+      ],
+    };
+    stored = stored.map((r) => (r.id === goblin.id ? goblin : r));
+    const filled = { ...(EXPECTED_DATA['Glimmerwing Drake'] as MonsterData), type: 'Fey' };
+    const saved = await actions.saveRecordEdit({ ...goblin, data: filled, origin: 'manual' }, filled);
+    expect(saved.warnings.map((w) => w.code)).toEqual(['model-note']);
+    expect(saved.origin).toBe('manual');
+  });
+
   it('a record the player filled in after a failed read is no longer "couldn\'t read"', async () => {
     const failed = { ...byName('Goblin Warrior'), runState: 'failed' as const, runError: { code: 'invalid-output' as const, message: 'x', retryable: true } };
     const saved = await actions.saveRecordEdit(failed, { ...(EXPECTED_DATA['Glimmerwing Drake'] as MonsterData), type: 'Fey' });

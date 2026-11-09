@@ -34,7 +34,7 @@ describe('the paid entry points', () => {
       throw new Error('the client factory must not be called');
     });
     setExtractionDeps({ settings: () => s, client });
-    for (const call of [() => startJob('gloam', { model: 'claude-opus-5-5', claudeFor: 'misses' }), () => resumeJob('job:1'), () => retryRecords('job:1', 'both')]) {
+    for (const call of [() => startJob('gloam', { model: 'claude-opus-5-5', claudeFor: 'misses' }), () => resumeJob('job:1'), () => retryRecords('job:1', 'both', 'claude-opus-5-5')]) {
       const err = await call().catch((e: unknown) => e);
       expect(err).toBeInstanceOf(ExtractionUnavailableError);
       expect((err as ExtractionUnavailableError).reason).toBe(reason);

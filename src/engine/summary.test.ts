@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Character, Feature } from '@/types';
-import { importedPlaceholder, redactImported } from '@/lib/importedContent';
+import { importedPlaceholder, redactImported, wrapImported } from '@/lib/importedContent';
 import { sampleCharacter } from '@/test/fixtures';
 import { GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, importedRef, TEXT } from '@/test/structuredFixtures';
 import { applyDamage } from './character';
@@ -129,7 +129,15 @@ describe('book text copied onto the sheet (structured imports, spec §7.2)', () 
     const left = { ...emberWard, description: importedPlaceholder(GLOAMWOOD_TITLE) };
     const line = `- **Ember Ward** (Ember Warden 3): (text from the player's book “${GLOAMWOOD_TITLE}” isn't on this device — call get_character_sheet after they import it, or rule from the name)`;
     expect(characterSheetText(mira({ features: [left] }))).toContain(line);
-    expect(characterSheetText(mira({ features: [{ ...emberWard, ref: { ...importedRef(), redacted: true } }] }))).toContain(line);
+    expect(characterSheetText(mira({ features: [{ ...left, ref: { ...importedRef(), redacted: true } }] }))).toContain(line);
+  });
+
+  it('P3: shows a ruling the DM wrote over a pulled placeholder, though the ref still says redacted', () => {
+    const ruling = 'DM ruling: once per turn, add 1d4 fire damage.';
+    const rewritten = { ...emberWard, description: ruling, ref: { ...importedRef(), redacted: true as const } };
+    const sheet = characterSheetText(mira({ features: [rewritten] }));
+    expect(sheet).toContain(`- **Ember Ward** (Ember Warden 3): ${wrapImported(GLOAMWOOD_TITLE, ruling)}`);
+    expect(sheet).not.toContain("isn't on this device");
   });
 
   it("doesn't wrap a ref'd feature whose description is the app's own", () => {

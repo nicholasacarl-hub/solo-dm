@@ -37,6 +37,14 @@ export function mergeWarnings<K extends StructuredKind>(
   return out;
 }
 
+/**
+ * A subclass's parent problems ("The class this subclass belongs to isn't named: choose it.") are
+ * resolved once the player has chosen the class it attaches to (D26).
+ */
+export function withoutParentProblems(warnings: readonly RecordWarning[]): RecordWarning[] {
+  return warnings.filter((w) => !(w.code === 'unresolved-ref' && (!w.field || w.field.startsWith('parentClass'))));
+}
+
 /** Severity order for display: problems first. */
 export function bySeverity(a: RecordWarning, b: RecordWarning): number {
   const rank = { block: 0, warn: 1, info: 2 } as const;

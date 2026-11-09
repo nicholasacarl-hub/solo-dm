@@ -105,6 +105,31 @@ describe('restoreImportedText (spec §7.4)', () => {
     expect(storage.putCharacter).not.toHaveBeenCalled();
   });
 
+  it('P3: a ruling written over a pulled placeholder drops the stale `redacted`; a write that keeps the placeholder keeps it', async () => {
+    // A book this device can't restore from, so the placeholder stays after the load.
+    const unknown = { ...pulledFeature, ref: { ...pulledFeature.ref, entryId: 'lib:elsewhere:subclass:x', entryName: 'Unknown Order', part: 'Unknown Gift', textHash: 'ffff' } };
+    const graph = await loadSeeded('a', { character: { features: [unknown] } });
+    const stored = async () => (await db.characters.get(graph.character?.id as string))?.features.find((f) => f.id === 'f-ember');
+    await game().updateCharacter((c) => ({ ...c, heroicInspiration: !c.heroicInspiration }));
+    await whenPersisted();
+    expect(await stored()).toMatchObject({ description: placeholder, ref: { redacted: true } });
+    const ruling = 'DM ruling: once per turn, add 1d4 fire damage.';
+    await game().updateCharacter((c) => ({ ...c, features: c.features.map((f) => (f.id === 'f-ember' ? { ...f, description: ruling } : f)) }));
+    await whenPersisted();
+    const after = await stored();
+    expect(after).toMatchObject({ description: ruling, ref: { textCopied: true, entryId: 'lib:elsewhere:subclass:x' } });
+    expect(after?.ref?.redacted).toBeUndefined();
+  });
+
+  it('P3: leaves a ruling the DM wrote over a pulled placeholder alone (its stale `redacted` asks for nothing)', async () => {
+    const ruling = { ...pulledFeature, description: 'DM ruling: once per turn, add 1d4 fire damage.' };
+    const before = libraryLookup.calls;
+    await loadSeeded('a', { character: { features: [ruling] } });
+    expect(await game().restoreImportedText()).toBeNull();
+    expect(libraryLookup.calls).toBe(before);
+    expect(game().character?.features.find((f) => f.id === 'f-ember')?.description).toBe(ruling.description);
+  });
+
   it('is a no-op (null, the library untouched) without a ref needing it', async () => {
     await loadSeeded('a');
     const before = libraryLookup.calls;

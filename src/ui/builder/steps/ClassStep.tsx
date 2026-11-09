@@ -5,7 +5,7 @@ import { Badge, Card } from '@/ui/components/ui';
 import { OlderEditionNotes, OptionSourceBadges, PendingReviewHint, SourceFilter } from '../BookBadges';
 import { Detail, Issues, proseSummary, RadioCards, StepHeader, SubHeading } from '../BuilderParts';
 import { classChoiceFeatures, featuresAtLevel, needsFightingStyle } from '../classFeatures';
-import { choosesSubclassAtLevel1, clashingNames, fightingStyleChoices, filtered, optionBooks, picks, selectClass, validateStep } from '../logic';
+import { chosenFightingStyle, choosesSubclassAtLevel1, clashingNames, fightingStyleChoices, filtered, optionBooks, picks, selectClass, validateStep } from '../logic';
 import type { StepProps } from './stepTypes';
 
 const CASTER_LABEL: Record<ClassOption['casterType'], string | null> = {
@@ -65,6 +65,8 @@ export function ClassStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
   const classes = filtered(data.classes, draft.sourceFilter, draft.classId);
   const clashes = clashingNames(data.classes);
   const styles = fightingStyleChoices(cls, data, draft.sourceFilter, draft.fightingStyle);
+  // By id: same-named styles of different books are separate cards (an older draft's name picks the first).
+  const chosenStyle = chosenFightingStyle(styles, draft.fightingStyle)?.id ?? null;
   const styleClashes = clashingNames(styles.map((s) => ({ name: s.name, source: s.feat?.source })));
   const stale = validateStep('class', draft, ctx).filter((e) => e.includes("switched off or removed"));
   return (
@@ -122,10 +124,10 @@ export function ClassStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
               <SubHeading>Fighting Style</SubHeading>
               <RadioCards
                 label="Fighting Style"
-                value={draft.fightingStyle}
-                onChange={(name) => setDraft((d) => ({ ...d, fightingStyle: name }))}
+                value={chosenStyle}
+                onChange={(id) => setDraft((d) => ({ ...d, fightingStyle: id }))}
                 options={styles.map((f) => ({
-                  value: f.name,
+                  value: f.id,
                   title: f.name,
                   meta: f.feat ? <OptionSourceBadges option={f.feat} clashes={styleClashes} /> : <Badge>{cls.name} feature</Badge>,
                   description: f.description,

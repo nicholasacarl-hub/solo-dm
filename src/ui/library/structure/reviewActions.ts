@@ -22,7 +22,7 @@ import type {
 import { refreshRulesIndex } from '../kinds';
 import { acceptBlocker, blocksFor, isConfident } from './bookData';
 import { KIND_LABELS, kindCount } from './labels';
-import { mergeWarnings } from './warnings';
+import { mergeWarnings, withoutParentProblems } from './warnings';
 
 // ---------------------------------------------------------------------------
 // After every write: refresh once per batch, restore, notices
@@ -220,15 +220,21 @@ export function confidenceOf(kind: StructuredKind, warnings: readonly RecordWarn
   return 'high';
 }
 
-/** Validate an edit with DATA_SCHEMAS (throws a readable error), re-check it, and save it (edited). */
+/**
+ * Validate an edit with DATA_SCHEMAS (throws a readable error), re-check it, and save it (edited).
+ * What changed is measured against the stored record, not `record`: a saved draft arrives with its new
+ * fields already in it, and the warnings about the fields the player changed must be re-checked.
+ */
 export async function saveRecordEdit(record: StructuredRecord, data: unknown): Promise<StructuredRecord> {
   const parsed = DATA_SCHEMAS[record.kind].safeParse(data);
   if (!parsed.success) throw new Error('Some fields need fixing before this can be saved.');
-  const entries = await getSourceEntries(record.sourceId);
+  const [[stored], entries] = await Promise.all([getRecords([record.id]), getSourceEntries(record.sourceId)]);
+  const before = stored ?? record;
   const entriesById = new Map(entries.map((e) => [e.id, e]));
   const blocks = blocksFor(record.entryIds, entriesById);
   const checked = validateData(record.kind, parsed.data, { blocks, entriesById, origin: record.origin, spellLists: [] });
-  const warnings = mergeWarnings(record.kind, record.data, parsed.data, record.warnings, checked.warnings);
+  const merged = mergeWarnings(record.kind, before.data, parsed.data, before.warnings, checked.warnings);
+  const warnings = record.kind === 'subclass' && record.parentClassId ? withoutParentProblems(merged) : merged;
   const filledIn = record.runState === 'failed' || record.runState === 'refused';
   const { runState: _runState, runError: _runError, ...rest } = record;
   const next: StructuredRecord = {
@@ -236,7 +242,8 @@ export async function saveRecordEdit(record: StructuredRecord, data: unknown): P
     data: parsed.data,
     warnings,
     adaptations: checked.adaptations,
-    confidence: checked.confidence,
+    // From what is stored: the kept notices about untouched fields count too.
+    confidence: confidenceOf(record.kind, warnings),
     edited: true,
     origin: record.origin,
     updatedAt: Date.now(),
@@ -280,7 +287,7 @@ export async function keepFields(recordId: string): Promise<void> {
 export async function setParentClass(recordId: string, classId: string): Promise<void> {
   const [record] = await getRecords([recordId]);
   if (!record || record.kind !== 'subclass') return;
-  const warnings = record.warnings.filter((w) => !(w.code === 'unresolved-ref' && (!w.field || w.field.startsWith('parentClass'))));
+  const warnings = withoutParentProblems(record.warnings);
   const next: StructuredRecord = { ...record, parentClassId: classId, warnings, confidence: confidenceOf(record.kind, warnings), updatedAt: Date.now() };
   await putRecords([next]);
   if (record.status === 'accepted') scheduleRefresh();

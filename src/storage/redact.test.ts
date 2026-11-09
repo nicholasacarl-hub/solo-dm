@@ -159,3 +159,80 @@ describe('exports leave copied book text out (backup.ts)', () => {
     for (const marker of GLOAMWOOD_MARKERS) expect(text).not.toContain(marker);
   });
 });
+
+describe('P2: the DM’s inventory_update words about a book item leave exports', () => {
+  // Invented text standing in for what the DM restates after reading the entry with get_entry.
+  const RESTATED = 'While it burns, the lantern shows hidden things to everyone within 30 feet.';
+  const ADDED = 'An old brass lantern with a hollow flame.';
+  const linkedLantern = (over: Partial<InventoryItem> = {}): InventoryItem => ({
+    ...lantern,
+    description: RESTATED,
+    ref: importedRef({ entryId: 'lib:gloam:43', kind: 'magic-item', entryName: 'Lantern of Hollow Light', part: undefined, level: undefined, textCopied: false, textHash: '' }),
+    ...over,
+  });
+  const withItems = (inventory: InventoryItem[], transcript: TranscriptMessage[]): CampaignData => {
+    const g = campaignGraph('a');
+    const character = g.character as NonNullable<CampaignData['character']>;
+    return { ...g, character: { ...character, inventory: [...character.inventory, ...inventory] }, transcript: [...g.transcript, ...transcript] };
+  };
+  const inputOf = (data: CampaignData, id: string) => (data.transcript.find((m) => m.id === id)?.param.content as { type: string; input?: Record<string, unknown> }[])[1].input;
+  const placeholder = importedPlaceholder(GLOAMWOOD_TITLE);
+
+  it('P2: linked without a description, then described with inventory_update: the sheet and the tool input both leave the copy', () => {
+    const original = withItems(
+      [linkedLantern()],
+      [
+        toolUse('add', 'update_character', { inventory_add: [{ name: 'Lantern of Hollow Light', quantity: 1 }] }),
+        toolUse('upd', 'update_character', { inventory_update: [{ name: 'Lantern of Hollow Light', attuned: true, description: RESTATED }] }),
+      ],
+    );
+    const before = JSON.stringify(original);
+    const { data, report } = redactCopiedImports(original);
+    expect(JSON.stringify(original)).toBe(before);
+    expect(JSON.stringify(data)).not.toContain(RESTATED);
+    expect(data.character?.inventory.find((i) => i.id === 'i-lantern')).toMatchObject({ description: placeholder, ref: { textCopied: true, redacted: true } });
+    expect(inputOf(data, 'upd')).toEqual({ inventory_update: [{ name: 'Lantern of Hollow Light', attuned: true, description: placeholder }] });
+    expect(inputOf(data, 'add')).toEqual({ inventory_add: [{ name: 'Lantern of Hollow Light', quantity: 1 }] });
+    expect(report).toEqual({ books: [GLOAMWOOD_TITLE], passages: 2 });
+  });
+
+  it('P2: an item whose copied text already left the sheet loses its later inventory_update input too', () => {
+    const copied = linkedLantern({ ref: importedRef({ entryId: 'lib:gloam:43', kind: 'magic-item', entryName: 'Lantern of Hollow Light', part: undefined, level: undefined }) });
+    const { data, report } = redactCopiedImports(
+      withItems(
+        [copied],
+        [
+          toolUse('add', 'update_character', { inventory_add: [{ name: 'Lantern of Hollow Light', quantity: 1, description: ADDED }] }),
+          toolUse('upd', 'update_character', { inventory_update: [{ name: 'Lantern of Hollow Light', description: RESTATED }] }),
+        ],
+      ),
+    );
+    const text = JSON.stringify(data);
+    expect(text).not.toContain(RESTATED);
+    expect(text).not.toContain(ADDED);
+    expect(report).toEqual({ books: [GLOAMWOOD_TITLE], passages: 3 });
+  });
+
+  it('P2: an entry finds its item as the engine does ("Lantern"); a stacked add’s words go too, and plain items keep theirs', () => {
+    const { data, report } = redactCopiedImports(
+      withItems(
+        [linkedLantern(), hookstaff],
+        [
+          toolUse('upd', 'update_character', {
+            inventory_update: [
+              { name: 'Lantern', description: RESTATED },
+              { name: 'Robe', description: 'Patched at both elbows.' },
+            ],
+          }),
+          // A second Hookstaff stacks onto the first (the sheet keeps the app's line), but the DM's words were in the call.
+          toolUse('stack', 'update_character', { inventory_add: [{ name: 'Hookstaff', quantity: 1, description: 'A hooked staff, as the book tells it.' }] }),
+        ],
+      ),
+    );
+    expect(inputOf(data, 'upd')).toEqual({ inventory_update: [{ name: 'Lantern', description: placeholder }, { name: 'Robe', description: 'Patched at both elbows.' }] });
+    expect(inputOf(data, 'stack')).toEqual({ inventory_add: [{ name: 'Hookstaff', quantity: 1, description: placeholder }] });
+    expect(data.character?.inventory.find((i) => i.id === 'i-lantern')?.description).toBe(placeholder);
+    expect(data.character?.inventory.find((i) => i.id === 'i-hook')).toEqual(hookstaff);
+    expect(report.passages).toBe(3);
+  });
+});

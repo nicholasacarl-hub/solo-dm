@@ -17,7 +17,8 @@
  * it next. Pause and cancel from a tab that doesn't run the job reach the one that does over a
  * BroadcastChannel. A tab that newly takes the lock pauses ('reload') what a closed page left behind.
  * Nothing paid is resumed without the player, except a job paused offline, on the `online` event in
- * the same tab (D12).
+ * the same tab (D12); that tab holds the job's offline lock meanwhile, so another page's startup
+ * recovery leaves the job to it.
  *
  * Owner: E2.
  */
@@ -53,7 +54,7 @@ import { MissingApiKeyError } from '../client';
 import { isAbortError } from '../errors';
 import { EXTRACT_MAX_TOKENS, EXTRACT_MAX_TOKENS_CAP } from '../libraryRequests';
 import { extractionAvailability } from './availability';
-import { requestBlocks } from './blocks';
+import { requestBlocks, withCutWarning, withDroppedBlocks, type RequestBlocks } from './blocks';
 import { IdleTimeoutError, runExtraction, type ExtractionClient, type ExtractionOutcome } from './call';
 import { extractionDeps } from './deps';
 import { describeExtractionError, isQuotaError } from './errors';
@@ -83,6 +84,8 @@ export const IDLE_RUNNER: RunnerSnapshot = Object.freeze({
 export const RUNNER_LOCK = 'solo-dm:extract-runner';
 /** Pause and cancel requests for the tab that holds the runner lock. */
 export const CONTROL_CHANNEL = 'solo-dm:extract-control';
+/** Held (per job) by the tab waiting for `online` to resume a job paused offline: another page's startup recovery leaves that job to it. */
+export const OFFLINE_LOCK_PREFIX = 'solo-dm:extract-offline:';
 /** A kind's cache lane goes cold this long after its last request started (the 5-minute cache, with margin). */
 export const LANE_COLD_MS = 270_000;
 /** How often a held dispatch (DM busy, page hidden) looks again. */
@@ -198,7 +201,8 @@ let kicking: Promise<void> | null = null;
 let generation = 0;
 let snapshot: RunnerSnapshot = IDLE_RUNNER;
 const listeners = new Set<() => void>();
-const offlineWaiters = new Map<string, () => void>();
+/** Jobs paused offline here, waiting for the `online` event: the listener, and the release of the job's offline lock. */
+const offlineWaiters = new Map<string, { listener: () => void; release: () => void }>();
 /** Jobs this page started or resumed: never mistaken for ones a closed page left behind. */
 const ownJobs = new Set<string>();
 
@@ -250,6 +254,9 @@ export const runnerSnapshot = (): RunnerSnapshot => snapshot;
 
 /** The job running in this tab, if any. */
 export const activeJobId = (): string | null => current?.job.id ?? null;
+
+/** A job is running in this tab, or one is starting (startup recovery waits for neither). */
+export const runnerBusy = (): boolean => current !== null || kicking !== null;
 
 /** jobs.ts: a job this page started or resumed (startup and lock recovery leave it alone). */
 export function claimJob(id: string): void {
@@ -392,19 +399,37 @@ async function cancelStored(job: ExtractionJob): Promise<void> {
   });
 }
 
+/** Whether a page still waits for `online` to resume this job: this one, or another holding its offline lock (none can tell without Web Locks). */
+async function waitsForOnline(jobId: string): Promise<boolean> {
+  if (offlineWaiters.has(jobId)) return true;
+  const locks = extractionDeps().locks;
+  if (!locks) return false;
+  try {
+    return await locks.request(OFFLINE_LOCK_PREFIX + jobId, { ifAvailable: true }, (lock) => lock === null);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * With the runner lock newly taken and nothing running here, pause ('reload', never resumed by itself)
  * what a closed page left behind: a job left running or pausing (its in-flight records are queued again
- * and counted as interrupted), or queued behind one. At startup also jobs paused offline (that page's
- * `online` listener is gone) or held up by another tab (that tab is gone too). Jobs this page started
- * or resumed are left alone.
+ * and counted as interrupted), or queued behind one. This tab holds the lock and isn't reading it, so no
+ * tab is: that holds for a job this page started too, which another tab took over and then closed.
+ * At startup also jobs held up by another tab (that tab is gone too) and jobs paused offline whose page
+ * no longer waits for the connection (no page holds the job's offline lock). Jobs this page started or
+ * resumed that are only waiting (queued, held up, or paused here) are left alone.
  */
 export async function recoverOrphans(opts: { atStartup: boolean }): Promise<void> {
   for (const job of await listJobs({ status: ['running', 'pausing', 'queued', 'paused'] })) {
-    if (ownJobs.has(job.id) || job.id === current?.job.id) continue;
-    const left = job.status === 'running' || job.status === 'pausing' || job.status === 'queued';
-    const stale = opts.atStartup && job.status === 'paused' && (job.pauseReason === 'offline' || job.pauseReason === 'other-tab');
-    if (left || stale) await pauseStored(job, 'reload', PAUSE_TEXT.reload);
+    if (job.id === current?.job.id) continue;
+    const reading = job.status === 'running' || job.status === 'pausing';
+    if (!reading && ownJobs.has(job.id)) continue;
+    const stale =
+      opts.atStartup &&
+      job.status === 'paused' &&
+      (job.pauseReason === 'other-tab' || (job.pauseReason === 'offline' && !(await waitsForOnline(job.id))));
+    if (reading || job.status === 'queued' || stale) await pauseStored(job, 'reload', PAUSE_TEXT.reload);
   }
 }
 
@@ -569,19 +594,36 @@ async function endRun(run: Run, patch: Partial<ExtractionJob>): Promise<void> {
   }
 }
 
-/** A job paused offline resumes on the `online` event in this tab (the one exception to "never auto-resumed"). */
+/** Hold a Web Lock until the returned release is called (nothing to hold without Web Locks). */
+function holdLock(name: string): () => void {
+  const locks = extractionDeps().locks;
+  let release: () => void = () => undefined;
+  if (!locks) return release;
+  const held = new Promise<void>((r) => (release = r));
+  void locks.request(name, { mode: 'exclusive' }, () => held).catch(() => undefined);
+  return () => release();
+}
+
+/**
+ * A job paused offline resumes on the `online` event in this tab (the one exception to "never
+ * auto-resumed"). While it waits, this tab holds the job's offline lock, so a page opened meanwhile
+ * doesn't take the job for one a closed page left (recoverOrphans); the lock goes once it resumed.
+ */
 function waitForOnline(jobId: string): void {
   if (typeof globalThis.addEventListener !== 'function' || offlineWaiters.has(jobId)) return;
-  const onOnline = () => {
-    globalThis.removeEventListener('online', onOnline);
+  const release = holdLock(OFFLINE_LOCK_PREFIX + jobId);
+  const listener = () => {
+    globalThis.removeEventListener('online', listener);
     offlineWaiters.delete(jobId);
     void (async () => {
       const job = await getJob(jobId);
       if (job?.status === 'paused' && job.pauseReason === 'offline') await requeueJob(job);
-    })().catch((err: unknown) => console.warn('Structuring could not resume after going online.', err));
+    })()
+      .catch((err: unknown) => console.warn('Structuring could not resume after going online.', err))
+      .finally(release);
   };
-  offlineWaiters.set(jobId, onOnline);
-  globalThis.addEventListener('online', onOnline);
+  offlineWaiters.set(jobId, { listener, release });
+  globalThis.addEventListener('online', listener);
 }
 
 /** A paused (or finished) job becomes queued again and starts when nothing else runs (the player asked, or it went offline here). */
@@ -621,6 +663,9 @@ function pickNext(run: Run, now: number): { id: string; warmup: boolean } | { wa
   }
   return soonest !== null ? { waitMs: soonest - now } : null;
 }
+
+/** "$5", or "$4.21" for a limit a retry set on top of what its job had spent. */
+const dollars = (usd: number): string => (Number.isInteger(usd) ? `$${usd}` : `$${usd.toFixed(2)}`);
 
 function overBudget(run: Run, kind: StructuredKind): boolean {
   if (run.job.budgetUsd === null) return false;
@@ -685,7 +730,7 @@ async function drive(run: Run): Promise<void> {
       }
       const record = run.records.get(next.id) as StructuredRecord;
       if (overBudget(run, record.kind)) {
-        run.stop = { reason: 'budget', message: `Paused at your $${run.job.budgetUsd} limit.` };
+        run.stop = { reason: 'budget', message: `Paused at your ${dollars(run.job.budgetUsd ?? 0)} limit.` };
         continue;
       }
       dispatch(run, next.id, next.warmup);
@@ -733,6 +778,8 @@ function dispatch(run: Run, id: string, warmup: boolean): void {
 
 async function request(run: Run, queued: StructuredRecord, flight: Flight): Promise<void> {
   const deps = extractionDeps();
+  // What a stream that fails mid-way had reported (message_start onwards): the ledger and the limit count it.
+  const streamed: { usage: UsageTotals | null } = { usage: null };
   try {
     const [stored] = await getRecords([queued.id]);
     if (!stored) {
@@ -749,10 +796,10 @@ async function request(run: Run, queued: StructuredRecord, flight: Flight): Prom
       await finish(run, record, flight, { runState: 'failed', attempt: true, error: { code: 'other', message: "This entry's text is no longer in the library.", retryable: false } });
       return;
     }
-    const { blocks } = requestBlocks({ ...candidate, key: record.candidateKey });
+    const plan = requestBlocks({ ...candidate, key: record.candidateKey });
     const outcome = await runExtraction(
       run.client,
-      { kind: record.kind, model: run.job.model, useFallbacks: run.job.useFallbacks, blocks, ...(record.runMaxTokens ? { maxTokens: record.runMaxTokens } : {}) },
+      { kind: record.kind, model: run.job.model, useFallbacks: run.job.useFallbacks, blocks: plan.blocks, ...(record.runMaxTokens ? { maxTokens: record.runMaxTokens } : {}) },
       {
         signal: flight.controller.signal,
         onFirstEvent: () => {
@@ -761,10 +808,14 @@ async function request(run: Run, queued: StructuredRecord, flight: Flight): Prom
             run.notifier.wake();
           }
         },
+        onPartialUsage: (usage) => {
+          streamed.usage = usage;
+        },
       },
     );
-    await handleOutcome(run, record, candidate, flight, outcome);
+    await handleOutcome(run, record, candidate, flight, outcome, plan);
   } catch (err) {
+    if (streamed.usage) run.job.usage = addUsage(run.job.usage, streamed.usage);
     await handleError(run, queued, flight, err);
   }
 }
@@ -848,7 +899,7 @@ function noteUsage(run: Run, flight: Flight, usage: UsageTotals): void {
   }
 }
 
-async function handleOutcome(run: Run, record: StructuredRecord, candidate: Candidate, flight: Flight, outcome: ExtractionOutcome): Promise<void> {
+async function handleOutcome(run: Run, record: StructuredRecord, candidate: Candidate, flight: Flight, outcome: ExtractionOutcome, plan: RequestBlocks): Promise<void> {
   const deps = extractionDeps();
   const now = deps.now();
   noteUsage(run, flight, outcome.usage);
@@ -862,7 +913,11 @@ async function handleOutcome(run: Run, record: StructuredRecord, candidate: Cand
   };
   switch (outcome.type) {
     case 'ok': {
-      const readings = readCandidate({ ...candidate, key: record.candidateKey }, outcome.wire, { origin: 'claude', ctx: run.reading });
+      const read = { ...candidate, key: record.candidateKey };
+      // A request cut to fit (§2.7): a section's blocks left out keep their features from the offline scan, and the reading says so.
+      const wire = withDroppedBlocks(read, outcome.wire, plan.dropped);
+      const fresh = readCandidate(read, wire, { origin: 'claude', ctx: run.reading });
+      const readings = plan.cut ? withCutWarning(fresh, record.kind) : fresh;
       const isTable = record.span === 'table';
       const existing = isTable ? await listRecords(record.sourceId, { kind: 'item' }) : (await getRecords([record.id])).filter((r): r is StructuredRecord => Boolean(r));
       const merged = mergeReadings(record.sourceId, existing, readings, {
@@ -1132,7 +1187,10 @@ export function resetRunner(): void {
   channel?.close();
   channel = null;
   ownJobs.clear();
-  for (const [, listener] of offlineWaiters) globalThis.removeEventListener?.('online', listener);
+  for (const [, waiter] of offlineWaiters) {
+    globalThis.removeEventListener?.('online', waiter.listener);
+    waiter.release();
+  }
   offlineWaiters.clear();
   guardUnload(false);
   publish();

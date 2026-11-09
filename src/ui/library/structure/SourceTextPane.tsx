@@ -10,7 +10,7 @@ import type { CandidateBlock } from '@/data';
 import { cn } from '@/lib/cn';
 import type { CompendiumEntry, Excerpt, StructuredKind } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
-import { highlightsIn, plainParagraph, slicesOf, unplacedExcerpts } from './excerpts';
+import { placeExcerpts, plainParagraph, slicesOf, type Highlight } from './excerpts';
 import { dataPathsFor, wireFieldsFor } from './forms/fieldMap';
 import { labelForPath } from './forms/formSpecs';
 import { ViewToggle } from './ViewToggle';
@@ -20,6 +20,30 @@ type Mode = 'excerpts' | 'formatted';
 function fieldLabel(kind: StructuredKind, field: string): string {
   const path = dataPathsFor(kind, field)[0] ?? field;
   return labelForPath(kind, path);
+}
+
+/** A line of source text with the excerpts placed on it marked (plain-text slices, never raw HTML). */
+function MarkedText({ text, highlights, kind, active }: { text: string; highlights: readonly Highlight[]; kind: StructuredKind; active: ReadonlySet<string> }) {
+  return (
+    <>
+      {slicesOf(text, highlights).map((s, k) => {
+        if (!s.highlight) return <span key={k}>{s.text}</span>;
+        const isActive = s.highlight.fields.some((f) => active.has(f));
+        const names = [...new Set(s.highlight.fields.map((f) => fieldLabel(kind, f)))].join(', ');
+        return (
+          <mark
+            key={k}
+            data-active={isActive ? 'true' : undefined}
+            title={`Used by: ${names}`}
+            className={cn('rounded-sm px-0.5 text-text', isActive ? 'bg-accent-soft ring-2 ring-accent' : 'bg-gold-soft')}
+          >
+            {s.text}
+            <span className="sr-only"> (used by {names})</span>
+          </mark>
+        );
+      })}
+    </>
+  );
 }
 
 export function SourceTextPane({
@@ -39,8 +63,17 @@ export function SourceTextPane({
   const [mode, setMode] = useState<Mode>('excerpts');
   const rootRef = useRef<HTMLDivElement>(null);
   const active = useMemo(() => new Set(activeField ? wireFieldsFor(kind, activeField) : []), [kind, activeField]);
-  const paragraphs = useMemo(() => blocks.flatMap((b) => b.paragraphs.map(plainParagraph)), [blocks]);
-  const missing = useMemo(() => unplacedExcerpts(paragraphs, excerpts), [paragraphs, excerpts]);
+  // Reading order: each block's title, then its paragraphs. Each excerpt is marked once, where it first appears.
+  const lines = useMemo(() => blocks.flatMap((b) => [b.title, ...b.paragraphs.map(plainParagraph)]), [blocks]);
+  const placement = useMemo(() => placeExcerpts(lines, excerpts), [lines, excerpts]);
+  const firstLine = useMemo(() => {
+    let at = 0;
+    return blocks.map((b) => {
+      const start = at;
+      at += 1 + b.paragraphs.length;
+      return start;
+    });
+  }, [blocks]);
   const used = excerpts.filter((e) => e.text.trim());
 
   useEffect(() => {
@@ -66,51 +99,39 @@ export function SourceTextPane({
         />
       </div>
       {blocks.length === 0 && <p className="text-sm text-muted">This entry's text isn't in the Library on this device.</p>}
-      {blocks.map((block) => (
+      {blocks.map((block, b) => (
         <section key={block.entryIds.join(' ')} aria-label={block.title} className="min-w-0">
-          {blocks.length > 1 && <h4 className="mb-1.5 font-serif text-base font-semibold">{block.title}</h4>}
           {mode === 'formatted' ? (
-            block.entryIds.map((id) => {
-              const entry = entriesById.get(id);
-              return entry ? <Markdown key={id}>{entry.text}</Markdown> : null;
-            })
-          ) : block.paragraphs.length === 0 ? (
-            <p className="text-sm text-muted">This entry's paragraphs couldn't be read.</p>
-          ) : (
-            <ol className="flex flex-col gap-2 font-serif text-[0.95rem] leading-relaxed">
-              {block.paragraphs.map((p, i) => {
-                const text = plainParagraph(p);
-                const slices = slicesOf(text, highlightsIn(text, excerpts));
-                return (
-                  <li key={i} className="flex gap-2">
-                    <span className="mt-0.5 shrink-0 font-sans text-[11px] text-faint tabular-nums select-none" aria-hidden>
-                      ¶{i + 1}
-                    </span>
-                    <p className="min-w-0 [overflow-wrap:anywhere]">
-                      {slices.map((s, k) => {
-                        if (!s.highlight) return <span key={k}>{s.text}</span>;
-                        const isActive = s.highlight.fields.some((f) => active.has(f));
-                        const names = [...new Set(s.highlight.fields.map((f) => fieldLabel(kind, f)))].join(', ');
-                        return (
-                          <mark
-                            key={k}
-                            data-active={isActive ? 'true' : undefined}
-                            title={`Used by: ${names}`}
-                            className={cn(
-                              'rounded-sm px-0.5 text-text',
-                              isActive ? 'bg-accent-soft ring-2 ring-accent' : 'bg-gold-soft',
-                            )}
-                          >
-                            {s.text}
-                            <span className="sr-only"> (used by {names})</span>
-                          </mark>
-                        );
-                      })}
-                    </p>
-                  </li>
-                );
+            <>
+              {blocks.length > 1 && <h4 className="mb-1.5 font-serif text-base font-semibold">{block.title}</h4>}
+              {block.entryIds.map((id) => {
+                const entry = entriesById.get(id);
+                return entry ? <Markdown key={id}>{entry.text}</Markdown> : null;
               })}
-            </ol>
+            </>
+          ) : (
+            <>
+              {/* The title is text too: a subclass's class, say, is often read from its heading. */}
+              <h4 className="mb-1.5 font-serif text-base font-semibold [overflow-wrap:anywhere]">
+                <MarkedText text={block.title} highlights={placement.lines[firstLine[b]] ?? []} kind={kind} active={active} />
+              </h4>
+              {block.paragraphs.length === 0 ? (
+                <p className="text-sm text-muted">This entry's paragraphs couldn't be read.</p>
+              ) : (
+                <ol className="flex flex-col gap-2 font-serif text-[0.95rem] leading-relaxed">
+                  {block.paragraphs.map((p, i) => (
+                    <li key={i} className="flex gap-2">
+                      <span className="mt-0.5 shrink-0 font-sans text-[11px] text-faint tabular-nums select-none" aria-hidden>
+                        ¶{i + 1}
+                      </span>
+                      <p className="min-w-0 [overflow-wrap:anywhere]">
+                        <MarkedText text={plainParagraph(p)} highlights={placement.lines[firstLine[b] + 1 + i] ?? []} kind={kind} active={active} />
+                      </p>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </>
           )}
         </section>
       ))}
@@ -119,7 +140,8 @@ export function SourceTextPane({
           <h4 className="mb-1.5 font-medium text-muted">What the fields used</h4>
           <ul className="flex flex-col gap-1">
             {used.map((e, i) => {
-              const notFound = missing.includes(e) || !e.grounded;
+              const places = placement.places.get(e) ?? 0;
+              const notFound = places === 0 || !e.grounded;
               return (
                 <li key={`${e.field}-${i}`} className={cn('flex items-start gap-1.5', active.has(e.field) && 'font-medium')}>
                   {notFound ? (
@@ -128,7 +150,7 @@ export function SourceTextPane({
                     <CircleCheck className="mt-px size-3.5 shrink-0 text-success" aria-hidden />
                   )}
                   <span className="min-w-0 [overflow-wrap:anywhere]">
-                    Used by: {fieldLabel(kind, e.field)} — “{e.text}”{notFound ? ' (not found in the text)' : ''}
+                    Used by: {fieldLabel(kind, e.field)} — “{e.text}”{notFound ? ' (not found in the text)' : places > 1 ? ` (found in ${places} places; the first is marked)` : ''}
                   </span>
                 </li>
               );

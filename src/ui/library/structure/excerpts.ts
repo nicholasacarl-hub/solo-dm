@@ -130,7 +130,32 @@ export function slicesOf(text: string, highlights: readonly Highlight[]): Slice[
   return out;
 }
 
-/** Excerpts no paragraph contains: listed under the text, so a misread is still visible. */
-export function unplacedExcerpts(paragraphs: readonly string[], excerpts: readonly Excerpt[]): Excerpt[] {
-  return excerpts.filter((e) => e.text.trim() && !paragraphs.some((p) => findExcerpt(p, e.text)));
+export interface Placement {
+  /** Per line, the highlights of the excerpts placed on it. */
+  lines: Highlight[][];
+  /** How many lines contain each excerpt: 0 means it isn't in the text; more than 1 is said under the text. */
+  places: Map<Excerpt, number>;
+}
+
+/**
+ * Where each excerpt is marked (pure): at its first occurrence in reading order only, the lines being each
+ * block's title followed by its paragraphs. A value read from a heading ("Fighter Subclass: Ember Warden")
+ * is marked there, not at a later "your Fighter level"; focusing its field scrolls to that one mark.
+ */
+export function placeExcerpts(lines: readonly string[], excerpts: readonly Excerpt[]): Placement {
+  const placed: Excerpt[][] = lines.map(() => []);
+  const places = new Map<Excerpt, number>();
+  for (const e of excerpts) {
+    if (!e.text.trim()) continue;
+    let first = -1;
+    let count = 0;
+    lines.forEach((line, i) => {
+      if (!findExcerpt(line, e.text)) return;
+      count += 1;
+      if (first < 0) first = i;
+    });
+    places.set(e, count);
+    if (first >= 0) placed[first].push(e);
+  }
+  return { lines: lines.map((line, i) => highlightsIn(line, placed[i])), places };
 }

@@ -8,7 +8,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { levelUp } from '@/engine';
 import { useGame } from '@/state/gameStore';
 import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
-import { EXPECTED_MERGED, GLOAMWOOD_TITLE, TEXT } from '@/test/structuredFixtures';
+import { DUSK_DOMAIN_MERGE_ADAPTATIONS, EXPECTED_MERGED, GLOAMWOOD_TITLE, TEXT } from '@/test/structuredFixtures';
 import type { BuilderData, Character, ClassLevel, ClassOption, CompendiumEntry } from '@/types';
 import { installDialogPolyfill, resetFakeGame } from '@/ui/builder/testing/fakeGameStore';
 import { autoCleanup } from '@/ui/shell/testUtils';
@@ -132,6 +132,26 @@ describe('LevelUpDialog with imported options', () => {
     expect(notices()[0]).toContain('always prepared: Faerie Fire, Sleep, Ashen Choir');
   });
 
+  it("B6: an older subclass chosen at level 3 adds its older-edition notes to the character, once, and a feat's notes too", async () => {
+    const user = userEvent.setup();
+    const cleric = hero({ classId: CLERIC.id, name: 'Cleric', level: 2, hitDie: 8, casterType: 'full', spellcastingAbility: 'wis' }, { adaptationNotes: ['An earlier note.'] });
+    resetFakeGame({ campaign: sampleCampaign(), character: cleric });
+    const { unmount } = render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Subclass' })).getByRole('radio', { name: /Dusk Domain/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().adaptationNotes).toEqual(['An earlier note.', ...DUSK_DOMAIN_MERGE_ADAPTATIONS.map((a) => a.note)]);
+    unmount();
+
+    // Cleric 4 takes an older book's feat (no category printed): its note joins, nothing is added twice.
+    const vigil = EXPECTED_MERGED.feats.find((f) => f.name === 'Watchlight Vigil')!;
+    const general = { code: 'feat-general' as const, note: 'No feat category is printed, so Watchlight Vigil is treated as a General feat.' };
+    mocks.data = { ...EXPECTED_MERGED, feats: EXPECTED_MERGED.feats.map((f) => (f === vigil ? { ...f, minLevel: undefined, prerequisite: undefined, source: { ...f.source!, adaptations: [general] } } : f)) };
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('radio', { name: 'Watchlight Vigil' }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().adaptationNotes).toEqual(['An earlier note.', ...DUSK_DOMAIN_MERGE_ADAPTATIONS.map((a) => a.note), general.note]);
+  });
+
   it('preselects "Decide with my DM" and leaves the level-up and its notice exactly as before', async () => {
     const user = userEvent.setup();
     const start = fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' });
@@ -179,6 +199,32 @@ describe('LevelUpDialog with imported options', () => {
     expect(sheet().abilityScores.str).toBe(18);
     expect(sheet().features.map((f) => f.name)).toEqual(['Ability Score Improvement (+2 Strength)']);
     expect(notices()[0]).toContain('chose: +2 Strength');
+  });
+
+  it('B3: never offers a score already at 20 for an Ability Score Improvement, and flags a 19 for +2', async () => {
+    const user = userEvent.setup();
+    const start = fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' });
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...start, abilityScores: { str: 20, dex: 19, con: 13, int: 10, wis: 12, cha: 8 } } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    const plusTwo = screen.getByLabelText('Ability to raise by 2') as HTMLSelectElement;
+    // The defaults can rise; Strength (20) can't be picked, Dexterity (19) gains only 1.
+    expect(plusTwo.value).toBe('con');
+    expect(within(plusTwo).getByRole('option', { name: 'Strength (20, the most)' })).toBeDisabled();
+    expect(within(plusTwo).getByRole('option', { name: 'Dexterity (19, +1 only)' })).toBeEnabled();
+    const first = screen.getByLabelText('First ability to raise by 1') as HTMLSelectElement;
+    const second = screen.getByLabelText('Second ability to raise by 1') as HTMLSelectElement;
+    expect([first.value, second.value]).toEqual(['dex', 'con']);
+    expect(within(first).getByRole('option', { name: 'Strength (20, the most)' })).toBeDisabled();
+
+    // +2 on the 19: the sheet, the summary and the DM notice say what took effect.
+    await user.click(screen.getByRole('radio', { name: '+2 to one ability' }));
+    await user.selectOptions(plusTwo, 'dex');
+    expect(screen.getByText('Dexterity is 19: it can rise by 1 only.')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().abilityScores.dex).toBe(20);
+    expect(sheet().features.map((f) => f.name)).toEqual(['Ability Score Improvement (+1 Dexterity)']);
+    expect(notices()[0]).toContain('chose: +1 Dexterity');
+    expect(await screen.findByText('You raised Dexterity by 1.')).toBeInTheDocument();
   });
 
   it('flags a feat whose level is too low and asks for the DM’s say-so', async () => {

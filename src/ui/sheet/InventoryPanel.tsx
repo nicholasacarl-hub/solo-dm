@@ -26,6 +26,7 @@ import {
   itemQuantityChange,
   removeItemChange,
 } from './sheetChanges';
+import { FromBookLine } from './FromBook';
 import { SheetSection } from './SheetParts';
 import type { SheetChange } from './useSheetActions';
 
@@ -87,13 +88,14 @@ function ItemDetails({ item }: { item: InventoryItem }) {
   const index = useRulesIndex();
   const entry = itemEntry(item, index);
   const own = item.description && !isImportedPlaceholder(item.description) && !item.ref?.redacted ? item.description : '';
-  const missing = item.ref && !entry && index ? `From “${item.ref.sourceTitle}”, which isn't on this device.` : null;
+  // A book's item whose entry the index doesn't have: say where its text is (switched off, or not on this device).
+  const bookRef = item.ref && !entry && index ? item.ref : null;
   const lines = [attunementLine(item), ...bonusLines(item)].filter((l): l is string => Boolean(l));
-  if (!own && !entry && !missing && !lines.length) return null;
+  if (!own && !entry && !bookRef && !lines.length) return null;
   return (
     <div className="flex flex-col gap-1 text-xs text-muted">
       {lines.length > 0 && <p>{lines.join(' · ')}</p>}
-      {missing && <p>{missing}</p>}
+      {bookRef && <FromBookLine bookRef={bookRef} />}
       {(own || entry) && (
         <details>
           <summary className="cursor-pointer text-faint hover:text-text">Details</summary>
@@ -223,9 +225,11 @@ function AddItemForm({ onEdit, catalog }: { onEdit: Edit; catalog: EquipmentOpti
     if (!valid) return;
     const findEntry = (n: string) => index?.findByName(n, { kind: 'magic-item', campaignId }) ?? index?.findByName(n, { kind: 'item', campaignId });
     const linked = linkInventoryItem(name.trim(), qty, catalog ?? [], index ? findEntry : undefined);
+    const chosen = { category, ...(category === 'magic-item' ? { magic: true } : {}) };
+    // A link that knows no category (an index-only item, or the catalog still loading) keeps the player's (B9).
     const item: InventoryItem = linked
-      ? { id: newId(), ...linked }
-      : { id: newId(), name: name.trim(), quantity: qty, category, ...(category === 'magic-item' ? { magic: true } : {}) };
+      ? { id: newId(), ...linked, ...(linked.category ? {} : chosen) }
+      : { id: newId(), name: name.trim(), quantity: qty, ...chosen };
     onEdit((c) => addItemChange(c, item));
     setName('');
     setQuantity('1');

@@ -11,7 +11,7 @@ vi.mock('@/storage', async () => (await import('@/ui/library/structure/testing/m
 
 const dm = await import('@/dm');
 const { useSettings } = await import('@/state/settingsStore');
-const { ConsentDialog } = await import('./ConsentDialog');
+const { ConsentDialog, needsClaude, readHere } = await import('./ConsentDialog');
 const { reviewable } = await import('./bookData');
 
 autoCleanup();
@@ -23,6 +23,10 @@ const records: StructuredRecord[] = reviewable(
     NEED_CLAUDE.has(r.name) ? { ...r, data: null, warnings: [{ code: 'needs-claude', severity: 'block', message: 'Not read yet' }] } : r,
   ),
 );
+const idsOf = (rs: readonly StructuredRecord[]) => rs.map((r) => r.id);
+/** The misses in review order: Wickwright (class), Mothkin (species), Glimmerwing Drake and Goblin Warrior (monsters). */
+const misses = records.filter((r) => needsClaude(r));
+const here = records.filter((r) => readHere(r));
 const source = gloamwoodSource();
 const otherBook: LibrarySource = { ...gloamwoodSource('book-a'), id: 'book-a', title: 'Book A' };
 const ok: Availability = { ok: true };
@@ -75,13 +79,13 @@ describe('the consent', () => {
     expect(screen.getByText(/each entry's text, one at a time, to Anthropic with your API key/)).toBeInTheDocument();
   });
 
-  it('re-estimates when the kinds change', async () => {
+  it('re-estimates when the kinds change (the ticked kinds\' entries, by id)', async () => {
     const user = userEvent.setup();
     renderConsent();
     await screen.findByRole('radio', { name: /Claude Opus 5\.5/ });
     await user.click(screen.getByRole('checkbox', { name: 'Monsters 2' }));
     await waitFor(() =>
-      expect(dm.estimateModels).toHaveBeenCalledWith('gloam', expect.objectContaining({ claudeFor: 'misses', kinds: ['class', 'species'] })),
+      expect(dm.estimateModels).toHaveBeenCalledWith('gloam', { claudeFor: 'selection', recordIds: idsOf(misses.filter((r) => r.kind !== 'monster')), concurrency: 3 }),
     );
   });
 
@@ -92,8 +96,8 @@ describe('the consent', () => {
     await user.click(screen.getByRole('button', { name: /Start · about \$1\.60/ }));
     await waitFor(() => expect(dm.startJob).toHaveBeenCalledTimes(1));
     expect(dm.startJob).toHaveBeenCalledWith('gloam', {
-      claudeFor: 'misses',
-      kinds: ['class', 'species', 'monster'],
+      claudeFor: 'selection',
+      recordIds: idsOf(misses),
       concurrency: 3,
       model: 'claude-sonnet-5-5',
       budgetUsd: 3,
@@ -108,7 +112,43 @@ describe('the consent', () => {
     await user.click(screen.getByRole('checkbox', { name: /Also have Claude re-read the \d+ entries read on this device/ }));
     await user.click(screen.getByRole('checkbox', { name: 'No limit' }));
     await user.click(screen.getByRole('button', { name: /^Start/ }));
-    await waitFor(() => expect(dm.startJob).toHaveBeenCalledWith('gloam', expect.objectContaining({ claudeFor: 'all', budgetUsd: null })));
+    await waitFor(() =>
+      expect(dm.startJob).toHaveBeenCalledWith('gloam', expect.objectContaining({ claudeFor: 'selection', recordIds: [...idsOf(misses), ...idsOf(here)], budgetUsd: null })),
+    );
+  });
+
+  it('U4: "Also re-read" covers every entry read on this device, of any kind, and prices exactly those', async () => {
+    const user = userEvent.setup();
+    renderConsent();
+    await screen.findByRole('radio', { name: /Claude Opus 5\.5/ });
+    const box = screen.getByRole('checkbox', { name: new RegExp(`Also have Claude re-read the ${here.length} entries read on this device`) });
+    // Offline readings of kinds with nothing unread (spells, feats, backgrounds…) are counted and sent too.
+    expect(here.some((r) => r.kind === 'spell')).toBe(true);
+    await waitFor(() =>
+      expect(dm.estimateModels).toHaveBeenCalledWith('gloam', { claudeFor: 'selection', recordIds: [...idsOf(misses), ...idsOf(here)], concurrency: 3 }),
+    );
+    // Every kind unticked: only the re-reads are left, by id; no empty kinds list reaches the job API.
+    for (const name of ['Classes 1', 'Species 1', 'Monsters 2']) await user.click(screen.getByRole('checkbox', { name }));
+    expect(screen.getByRole('button', { name: /^Start/ })).toBeDisabled();
+    await user.click(box);
+    await user.click(screen.getByRole('button', { name: /^Start/ }));
+    await waitFor(() => expect(dm.startJob).toHaveBeenCalledTimes(1));
+    const [, choices] = vi.mocked(dm.startJob).mock.calls[0];
+    expect(choices).toMatchObject({ claudeFor: 'selection', recordIds: idsOf(here) });
+    expect(choices).not.toHaveProperty('kinds');
+  });
+
+  it('U5: queues behind a reading of this same book that is under way', async () => {
+    renderConsent({ jobs: [extractionJob({ id: 'job:a', sourceId: 'gloam', status: 'running' })] });
+    await screen.findByRole('radio', { name: /Claude Opus 5\.5/ });
+    expect(screen.getByText('Claude is still reading other entries of this book. This one starts when that finishes.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Queue it' })).toBeInTheDocument();
+  });
+
+  it('S3: "the rest" leaves out an entry Claude read without data (it needs a fix, not another paid reading)', async () => {
+    const goblin = records.find((r) => r.name === 'Goblin Warrior')!;
+    expect(needsClaude(goblin)).toBe(true);
+    expect(needsClaude({ ...goblin, origin: 'claude', runState: 'done' })).toBe(false);
   });
 
   it('queues behind another book that is being structured', async () => {
@@ -142,12 +182,17 @@ describe('the consent', () => {
     );
   });
 
-  it('retries failed reads in their job', async () => {
+  it('U1: retries exactly the listed reads, under the spending limit it shows', async () => {
     const user = userEvent.setup();
+    vi.mocked(dm.retryRecords).mockClear();
     renderConsent({ scope: { kind: 'ids', ids: ['rec:a', 'rec:b'], title: '2 monsters', retryJobId: 'job:fixture' } });
     await screen.findByRole('radio', { name: /Claude Opus 5\.5/ });
+    expect(dm.estimateModels).toHaveBeenCalledWith('gloam', { claudeFor: 'selection', recordIds: ['rec:a', 'rec:b'], concurrency: 3 });
+    const limit = screen.getByLabelText('Spending limit');
+    expect(limit).toHaveValue('6');
+    await user.clear(limit);
+    await user.type(limit, '2');
     await user.click(screen.getByRole('button', { name: /^Start/ }));
-    await waitFor(() => expect(dm.retryRecords).toHaveBeenCalledWith('job:fixture', 'both', 'claude-opus-5-5'));
-    expect(screen.queryByLabelText('Spending limit')).not.toBeInTheDocument();
+    await waitFor(() => expect(dm.retryRecords).toHaveBeenCalledWith('job:fixture', 'both', 'claude-opus-5-5', { ids: ['rec:a', 'rec:b'], budgetUsd: 2 }));
   });
 });

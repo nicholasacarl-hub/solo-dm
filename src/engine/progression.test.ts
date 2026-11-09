@@ -333,6 +333,22 @@ describe('levelUp: feature uses that grow with level', () => {
     expect(usesOf(levelUp(tableBarbarian, { className: 'Barbarian', hpMethod: 'average' }).character, 'Rage')?.max).toBe(3);
   });
 
+  it("B8: a book's class named like an SRD class keeps its own uses, never the SRD Fighter Features table (SRD 5.2.1 Fighter: Second Wind)", () => {
+    // The book's Second Wind: once per rest by its text, with no table column (inferFeatureUses gave max 1, no scale).
+    const bookWind: Feature = { ...legacy('Second Wind', 'Fighter 1', 1), uses: { max: 1, used: 0, recharge: 'short' } };
+    const bookFighter = mira({ classes: [asClass('Fighter', 1, { classId: 'lib:gloam:class:fighter' })], spellcasting: undefined, features: [bookWind] });
+    const r = levelUp(bookFighter, { className: 'Fighter', classId: 'lib:gloam:class:fighter', hpMethod: 'average' });
+    expect(usesOf(r.character, 'Second Wind')?.max).toBe(1);
+    expect(r.events.map((e) => e.message).join(' ')).not.toContain('Second Wind 1');
+    // A book feature (it carries a ref) on an SRD-named class entry without an id is left alone too.
+    const ref = { sourceId: 'gloam', sourceTitle: 'The Gloamwood Almanac', entryId: 'lib:gloam:class:fighter', kind: 'class' as const, entryName: 'Fighter', part: 'Second Wind', level: 1, textHash: 'h', textCopied: true };
+    const legacyEntry = mira({ classes: [asClass('Fighter', 1, { classId: '' })], spellcasting: undefined, features: [{ ...bookWind, ref }] });
+    expect(usesOf(levelUp(legacyEntry, { className: 'Fighter', hpMethod: 'average' }).character, 'Second Wind')?.max).toBe(1);
+    // The SRD Fighter's older sheets still grow by its table (Second Wind 3 at Fighter 4).
+    const srd = mira({ classes: [asClass('Fighter', 3)], spellcasting: undefined, features: [legacy('Second Wind', 'Fighter 1', 2)] });
+    expect(usesOf(levelUp(srd, { className: 'Fighter', hpMethod: 'average' }).character, 'Second Wind')?.max).toBe(3);
+  });
+
   it("only the leveled class's level counts, and homebrew features are left alone", () => {
     const multi = mira({
       classes: [asClass('Barbarian', 2), asClass('Fighter', 3)],
@@ -447,6 +463,23 @@ describe('levelUp: imported classes and subclasses (SRD 5.2.1 Multiclassing; Mul
       hpMethod: 'average',
     });
     expect(multi.character.classes[1]).toMatchObject({ classId: classRef.entryId, name: 'Wickwright', ref: classRef, casterType: 'half' });
+  });
+
+  it("B2: naming the entry's own subclass again keeps its id and ref; another subclass replaces or drops them (SRD 5.2.1 Fighter: Champion, Improved Critical)", () => {
+    const subclassRef = { sourceId: 'gloam', sourceTitle: 'The Gloamwood Almanac', entryId: 'lib:gloam:subclass:champion', kind: 'subclass' as const, entryName: 'Champion', textHash: '', textCopied: false };
+    const bookChampion = fighter(6, { subclass: 'Champion', subclassId: subclassRef.entryId, subclassRef });
+    const c = mira({ classes: [bookChampion], spellcasting: undefined });
+    const again = levelUp(c, { className: 'Fighter', subclass: 'Champion', hpMethod: 'average' }).character.classes[0];
+    expect(again).toMatchObject({ level: 7, subclass: 'Champion', subclassId: subclassRef.entryId, subclassRef });
+    // The SRD Champion by id: the book's ref goes with the book's id.
+    const srd = levelUp(c, { className: 'Fighter', subclass: 'Champion', subclassId: 'srd:subclass:champion', hpMethod: 'average' }).character.classes[0];
+    expect(srd).toMatchObject({ subclass: 'Champion', subclassId: 'srd:subclass:champion' });
+    expect(srd.subclassRef).toBeUndefined();
+    // A plain new name (unknown to the data): neither the old id nor the old ref describes it.
+    const plain = levelUp(c, { className: 'Fighter', subclass: 'Battle Master', hpMethod: 'average' }).character.classes[0];
+    expect(plain.subclass).toBe('Battle Master');
+    expect(plain.subclassId).toBeUndefined();
+    expect(plain.subclassRef).toBeUndefined();
   });
 
   it("makes a third-caster subclass's class count as a third caster for spell slots", () => {

@@ -4,12 +4,22 @@
  * iterations at their own rates), the first-event signal, and the idle watchdog.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { APIUserAbortError, RateLimitError } from '@anthropic-ai/sdk';
+import {
+  AnthropicError,
+  APIConnectionError,
+  APIError,
+  APIUserAbortError,
+  AuthenticationError,
+  InternalServerError,
+  OverloadedError,
+  RateLimitError,
+} from '@anthropic-ai/sdk';
 import type { BetaContentBlock, BetaUsage } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { SCRIPTED_WIRE } from '@/test/structuredFixtures';
+import type { UsageTotals } from '@/types';
 import { FakeExtractionClient } from '../testing/fakeExtractionClient';
 import type { ExtractionBlock, ExtractionRequestInput } from '../libraryRequests';
-import { IDLE_TIMEOUT_MS, IdleTimeoutError, answerCandidates, readWire, runExtraction } from './call';
+import { IDLE_TIMEOUT_MS, IdleTimeoutError, answerCandidates, readWire, runExtraction, typedStreamError } from './call';
 
 const block = (title: string): ExtractionBlock => ({ id: 'B1', title, path: [title], paragraphs: ['Some text.'], abbreviated: false });
 const input = (title: string, kind: ExtractionRequestInput['kind'] = 'monster'): ExtractionRequestInput & { kind: typeof kind } => ({
@@ -105,6 +115,43 @@ describe('runExtraction', () => {
     await expect(pending).rejects.toBeInstanceOf(APIUserAbortError);
     const limited = new FakeExtractionClient().failNext({ type: 'error', status: 429, retryAfter: 30 });
     await expect(runExtraction(limited, input('Glimmerwing Drake'), {})).rejects.toBeInstanceOf(RateLimitError);
+  });
+
+  it('X2: throws an error event sent after a 200 as the SDK class its type has over HTTP, and reports the usage streamed so far', async () => {
+    const client = new FakeExtractionClient().failNext({ type: 'error', status: 529, atEvent: 1 }, { type: 'network', atEvent: 2 }, { type: 'error', status: 529 });
+    const partial: UsageTotals[] = [];
+    const onPartialUsage = (u: UsageTotals) => partial.push(u);
+    const overloaded = await runExtraction(client, input('Glimmerwing Drake'), { onPartialUsage }).catch((e: unknown) => e);
+    expect(overloaded).toBeInstanceOf(OverloadedError);
+    expect(overloaded).toMatchObject({ status: 529, type: 'overloaded_error' });
+    expect(partial).toHaveLength(1);
+    expect(partial[0]).toMatchObject({ requests: 1, outputTokens: 0 });
+    expect(partial[0].inputTokens).toBeGreaterThan(500);
+    expect(partial[0].estimatedCostUsd).toBeGreaterThan(0);
+    // A connection that drops mid-stream is a connection error; one refused before any event reports no usage.
+    await expect(runExtraction(client, input('Glimmerwing Drake'), { onPartialUsage })).rejects.toBeInstanceOf(APIConnectionError);
+    await expect(runExtraction(client, input('Glimmerwing Drake'), { onPartialUsage })).rejects.toBeInstanceOf(OverloadedError);
+    expect(partial).toHaveLength(2);
+  });
+});
+
+describe('typedStreamError', () => {
+  // The SDK's own shapes (core/streaming.ts, lib/BetaMessageStream.ts), built as it builds them.
+  const event = (type: string) => new APIError(undefined, { type: 'error', error: { type, message: 'x' } }, undefined, new Headers());
+  it('X2: gives mid-stream error events the class of their HTTP status, and a dropped connection APIConnectionError', () => {
+    expect(typedStreamError(event('overloaded_error'))).toBeInstanceOf(OverloadedError);
+    expect(typedStreamError(event('api_error'))).toBeInstanceOf(InternalServerError);
+    expect(typedStreamError(event('rate_limit_error'))).toBeInstanceOf(RateLimitError);
+    expect(typedStreamError(event('authentication_error'))).toBeInstanceOf(AuthenticationError);
+    expect(typedStreamError(new AnthropicError('network error', { cause: new TypeError('network error') }))).toBeInstanceOf(APIConnectionError);
+  });
+
+  it('leaves typed errors, aborts, unknown types and other failures as they are', () => {
+    const typed = new RateLimitError(429, undefined, 'slow down', new Headers());
+    const abort = new APIUserAbortError();
+    const unknown = event('something_new');
+    const parse = new AnthropicError('bad JSON', { cause: new SyntaxError('x') });
+    for (const err of [typed, abort, unknown, parse]) expect(typedStreamError(err)).toBe(err);
   });
 });
 

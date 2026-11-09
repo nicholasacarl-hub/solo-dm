@@ -3,7 +3,7 @@
  * Keep them compact and deterministic (stable ordering) — they feed the prompt cache.
  */
 import { ABILITIES, SKILLS, SKILL_NAMES, type Character, type Feature, type InventoryItem, type KnownSpell, type SpellSlotLevel } from '@/types';
-import { isImportedPlaceholder, wrapImported } from '@/lib/importedContent';
+import { copiedTextMissing, wrapImported } from '@/lib/importedContent';
 import { formatCurrency, totalGp } from './character';
 import { conditionName } from './conditions';
 import { xpSummary } from './progression';
@@ -221,14 +221,15 @@ const RECHARGE_TEXT: Record<string, string> = { short: 'short rest', long: 'long
 /**
  * A feature's description for the DM. Text copied from an imported book (ref.textCopied) is wrapped AFTER
  * truncating, so the closing marker survives the 200-character cut and exports can remove the whole passage
- * (spec §7.2); a placeholder (text left out of a save) says how to get it back. SRD and homebrew features read
+ * (spec §7.2); a placeholder (text left out of a save) says how to get it back. A ruling the DM wrote over a
+ * pulled placeholder shows as written, though its ref still says `redacted`. SRD and homebrew features read
  * exactly as before.
  */
 function featureDescription(f: Feature): string {
   const d = f.description?.trim();
   if (!d) return '';
   if (!f.ref?.textCopied) return `: ${truncate(d, 200)}`;
-  if (f.ref.redacted || isImportedPlaceholder(d)) {
+  if (copiedTextMissing(f)) {
     return `: (text from the player's book “${f.ref.sourceTitle}” isn't on this device — call get_character_sheet after they import it, or rule from the name)`;
   }
   return `: ${wrapImported(f.ref.sourceTitle, truncate(d, 200))}`;

@@ -4,18 +4,29 @@
  * build exactly as before.
  */
 import { describe, expect, it } from 'vitest';
+import { characterSheetText } from '@/engine';
+import { importedPlaceholder, redactImported, textFingerprint } from '@/lib/importedContent';
+import { featChoices } from '@/data/options/levelUpChoices';
+import { importedOptions, mergeBuilderData } from '@/data/structured/merge';
+import { restoreImportedText, type LibraryLookup } from '@/data/structured/restore';
+import { redactCopiedImports } from '@/storage/redact';
+import { sampleCampaign } from '@/test/fixtures';
 import {
   EXPECTED_MERGED,
   GLOAMWOOD_MARKERS,
+  GLOAMWOOD_SOURCE_ID,
   GLOAMWOOD_SRD_SUBSET,
   GLOAMWOOD_TITLE,
   gloamwoodEntryId,
+  gloamwoodSnapshot,
   gloamwoodSource,
+  importedRef,
 } from '@/test/structuredFixtures';
-import type { BuilderData, ClassOption, CompendiumEntry, Feature } from '@/types';
+import type { BuilderData, Character, ClassData, ClassOption, CompendiumEntry, FeatOption, Feature, SpeciesOption, StructuredRecord } from '@/types';
 import {
   backgroundBonuses,
   buildCharacter,
+  chosenFightingStyle,
   classChoiceFeatures,
   draftAdaptationNotes,
   draftImports,
@@ -92,6 +103,75 @@ function fighterDraft(patch: Partial<BuilderDraft> = {}): BuilderDraft {
 }
 
 const importedFeature = (f: Feature) => f.ref !== undefined;
+
+/** The character as a download or GitHub save carries it (spec §7.3). */
+function exportedCopy(c: Character): Character {
+  const { data: copy } = redactCopiedImports({ campaign: sampleCampaign(), character: c, sessions: [], transcript: [], log: [], combat: null, journal: [], quests: [], clocks: [], homebrew: [] });
+  return copy.character as Character;
+}
+
+/** A book's own "Great Weapon Fighting" (invented rules), sharing the SRD feat's name. */
+const BOOK_GWF: FeatOption = {
+  id: 'lib:gloam:feat:great-weapon-fighting',
+  name: 'Great Weapon Fighting',
+  category: 'fighting-style',
+  description: 'Invented: once per turn, when you miss with a Heavy weapon, you can reroll the attack roll.',
+  source: { sourceId: GLOAMWOOD_SOURCE_ID, title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:feat:great-weapon-fighting', format: '2014', adaptations: [] },
+  ref: importedRef({ entryId: 'lib:gloam:feat:great-weapon-fighting', kind: 'feat', entryName: 'Great Weapon Fighting', textCopied: true }),
+};
+
+/** An invented Fighting Style feature that prints two styles of its own, in an entry of its own (ordinal 900). */
+const STYLE_ENTRY: CompendiumEntry = {
+  id: 'lib:gloam:900',
+  sourceId: GLOAMWOOD_SOURCE_ID,
+  sourceName: GLOAMWOOD_TITLE,
+  kind: 'rule',
+  name: 'Wickwright Fighting Styles',
+  text: [
+    '### Wickwright Fighting Styles',
+    'Wickwrights drill with whatever the lamplit roads hand them. Choose one of the following options.',
+    '_**Lantern Guard.**_ While you hold a lit lantern, you gain a +1 bonus to AC.',
+    '_**Wick Lash.**_ You can add your Intelligence modifier to the damage of a whip.',
+  ].join('\n\n'),
+};
+
+/** The merged data with the Wickwright's record given that Fighting Style feature at level 1 (paragraphs 2–4 of the entry). */
+function withInlineStyles() {
+  const snap = gloamwoodSnapshot();
+  const entriesById = new Map([...snap.entriesById, [STYLE_ENTRY.id, STYLE_ENTRY]]);
+  const style = { level: 1, name: 'Fighting Style', text: { entryIds: [STYLE_ENTRY.id], from: 2, to: 4 } };
+  const accepted = snap.accepted.map((r) =>
+    r.kind === 'class' && r.name === 'Wickwright' ? ({ ...r, data: { ...(r.data as ClassData), features: [...(r.data as ClassData).features, style] } } as StructuredRecord) : r,
+  );
+  const { data: merged } = mergeBuilderData(GLOAMWOOD_SRD_SUBSET, importedOptions({ ...snap, entriesById, accepted }));
+  return { merged, entriesById, source: snap.sources[0] };
+}
+
+/** An invented sentence of the invented "Cinderkin" species, which must never leave the device. */
+const CINDER_SECRET = 'The ember answers only to a patient hand of ash.';
+
+/**
+ * An invented book species whose record lists no lineages, with a trait offering a choice made in play
+ * ("each time you finish a Long Rest"), as an accepted record merges it: every trait with its ref.
+ */
+function cinderkin(patch: Partial<SpeciesOption> = {}): SpeciesOption {
+  const sight = 'You have Darkvision with a range of 60 feet.';
+  const gift = `Choose one of the following gifts each time you finish a Long Rest.\n\n**Ember.** ${CINDER_SECRET}\n\n**Ash.** Smoke clings to you, and you have Advantage on Dexterity (Stealth) checks in smoke.`;
+  const id = 'lib:gloam:species:cinderkin';
+  const ref = (part: string, text: string) => importedRef({ entryId: id, kind: 'species', entryName: 'Cinderkin', part, textHash: textFingerprint(text), textCopied: true });
+  return {
+    ...mothkin,
+    id,
+    name: 'Cinderkin',
+    traits: [
+      { name: 'Dusk Sight', description: sight, ref: ref('Dusk Sight', sight) },
+      { name: 'Kindled Gift', description: gift, ref: ref('Kindled Gift', gift) },
+    ],
+    lineages: undefined,
+    lineageTrait: undefined,
+    ...patch,
+  };
+}
 
 describe('imported options in the builder', () => {
   it("offers Mothkin's lineages from its named lineage trait (Lamp-Drawn), not the name rule", () => {
@@ -212,6 +292,96 @@ describe('imported options in the builder', () => {
     expect(validateStep('class', draft, ctx)).toEqual([`The class you picked ${switchedOff}`]);
     expect(validateStep('background', draft, ctx)).toEqual([`The background you picked ${switchedOff}`]);
     expect(validateStep('species', draft, ctx)).toEqual([`The species you picked ${switchedOff}`]);
+  });
+
+  it("B1: a book species' choice trait without lineages in its record stays one trait with its ref, and leaves exports", () => {
+    for (const species of [cinderkin(), cinderkin({ lineageTrait: 'Kindled Gift' })]) {
+      const withSpecies: BuilderData = { ...data, species: [...data.species, species] };
+      const bctx: BuilderContext = { ...ctx, data: withSpecies };
+      // No lineage is read out of the trait's text, so none is required…
+      expect(speciesChoices(species)).toMatchObject({ lineages: [], lineageTrait: null });
+      const draft = fighterDraft({ speciesId: species.id, lineage: 'Ember', lineageAbility: null });
+      expect(validateStep('species', draft, bctx)).toEqual([]);
+      // …and the trait arrives as printed, with the trait's own ref.
+      const c = buildCharacter(draft, bctx, { campaignId: 'camp-1' });
+      const speciesFeatures = c.features.filter((f) => f.source === 'species');
+      expect(speciesFeatures.map((f) => f.name)).toEqual(['Dusk Sight', 'Kindled Gift']);
+      const gift = speciesFeatures[1];
+      expect(gift.description).toBe(species.traits[1].description);
+      expect(gift.ref).toEqual(species.traits[1].ref);
+      expect(c.species).toBe('Cinderkin');
+      // The DM's sheet text wraps it (so saved system prompts drop it), and the exported copy leaves it out.
+      expect(characterSheetText(c)).toContain(CINDER_SECRET);
+      expect(redactImported(characterSheetText(c))).not.toContain(CINDER_SECRET);
+      const out = exportedCopy(c);
+      expect(JSON.stringify(out)).not.toContain(CINDER_SECRET);
+      expect(out.features.find((f) => f.name === 'Kindled Gift')?.description).toBe(importedPlaceholder(GLOAMWOOD_TITLE));
+    }
+  });
+
+  it('B1: a book lineage is copied part by part, each with its ref, never as preamble plus option text', () => {
+    const c = buildCharacter(fighterDraft(), ctx, { campaignId: 'camp-1' });
+    for (const f of c.features.filter((x) => x.source === 'species')) {
+      expect(f.ref, f.name).toMatchObject({ textCopied: true });
+      expect(f.ref?.textHash, f.name).toBe(textFingerprint(f.description));
+    }
+    expect(c.features.filter((x) => x.source === 'species').map((f) => f.name)).toEqual(['Dusk Sight', 'Powdered Wings', 'Lamp-Drawn (Ashwing)', 'Ashwing']);
+    expect(JSON.stringify(exportedCopy(c).features)).not.toContain(GLOAMWOOD_MARKERS[3]);
+  });
+
+  it("B4: a book's Fighting Style feat that shares an SRD feat's name is its own choice, chosen and built by id", () => {
+    const withBook: BuilderData = { ...data, feats: [...data.feats, BOOK_GWF] };
+    const bctx: BuilderContext = { ...ctx, data: withBook };
+    const srdGwf = withBook.feats.find((f) => f.id === 'srd:feat:great-weapon-fighting') as FeatOption;
+    const named = fightingStyleChoices(fighter, withBook).filter((c) => c.name === 'Great Weapon Fighting');
+    expect(named.map((c) => c.id)).toEqual([srdGwf.id, BOOK_GWF.id]);
+    // The book filter shows the chosen book style alone: its SRD namesake isn't kept along with it.
+    const bookOnly = fightingStyleChoices(fighter, withBook, GLOAMWOOD_SOURCE_ID, BOOK_GWF.id).map((c) => c.id);
+    expect(bookOnly).toContain(BOOK_GWF.id);
+    expect(bookOnly).not.toContain(srdGwf.id);
+    const draft = fighterDraft({ fightingStyle: BOOK_GWF.id, sourceFilter: GLOAMWOOD_SOURCE_ID });
+    expect(chosenFightingStyle(named, draft.fightingStyle)?.feat).toBe(BOOK_GWF);
+    expect(validateStep('class', draft, bctx)).toEqual([]);
+    const style = buildCharacter(draft, bctx, { campaignId: 'camp-1' }).features.find((f) => f.sourceName === 'Fighting Style (Fighter 1)');
+    expect(style).toMatchObject({ name: 'Great Weapon Fighting', source: 'feat', description: BOOK_GWF.description, ref: BOOK_GWF.ref });
+    expect(draftImports(draft, withBook)).toContainEqual({ name: 'Great Weapon Fighting', kind: 'feat', book: GLOAMWOOD_TITLE });
+    // The SRD card builds the SRD feat; a draft saved before ids (the name) still builds the first of that name.
+    for (const value of [srdGwf.id, 'Great Weapon Fighting']) {
+      const built = buildCharacter(fighterDraft({ fightingStyle: value }), bctx, { campaignId: 'camp-1' }).features.find((f) => f.sourceName === 'Fighting Style (Fighter 1)');
+      expect(built, value).toMatchObject({ name: 'Great Weapon Fighting', description: srdGwf.description });
+      expect(built?.ref, value).toBeUndefined();
+    }
+    // The book switched off: the step says so, and nothing is built from a stale id.
+    expect(validateStep('class', draft, ctx)).toEqual(["The Fighting Style you picked came from a book that's switched off or removed. Switch it on in the Library, or pick another."]);
+    expect(buildCharacter(draft, ctx, { campaignId: 'camp-1' }).features.some((f) => f.sourceName === 'Fighting Style (Fighter 1)')).toBe(false);
+  });
+
+  it('B5: an inline fighting style keeps a ref to its own option, so an export and restore bring back only its words', () => {
+    const { merged, entriesById, source } = withInlineStyles();
+    const wick = merged.classes.find((c) => c.id === wickwright.id) as ClassOption;
+    const def = wick.features.find((f) => f.name === 'Fighting Style');
+    expect(def?.ref?.at).toEqual({ ordinals: [900], from: 2, to: 4 });
+    expect(fightingStyleChoices(wick, merged).filter((c) => !c.feat).map((c) => c.id)).toEqual(['inline:lantern-guard', 'inline:wick-lash']);
+    const draft = fighterDraft({ classId: wick.id, fightingStyle: 'inline:lantern-guard', classSkills: ['arcana', 'history'] });
+    const c = buildCharacter(draft, { ...ctx, data: merged }, { campaignId: 'camp-1' });
+    const style = c.features.find((f) => f.name === 'Lantern Guard') as Feature;
+    const words = 'While you hold a lit lantern, you gain a +1 bonus to AC.';
+    expect(style).toMatchObject({ source: 'class', description: words });
+    expect(style.ref).toMatchObject({ entryId: wick.id, kind: 'class', part: 'Lantern Guard', level: 1, at: { ordinals: [900], from: 3, to: 3 }, textHash: textFingerprint(words), textCopied: true });
+    // The level-up panel offers the same style with the same ref.
+    expect(featChoices('fighting-style', merged.feats, { cls: wick, characterLevel: 2, have: [] }).find((p) => p.id === 'inline:lantern-guard')?.ref).toEqual(style.ref);
+
+    const out = exportedCopy(c);
+    expect(out.features.find((f) => f.name === 'Lantern Guard')?.description).toBe(importedPlaceholder(GLOAMWOOD_TITLE));
+    // A device with the same book (by fingerprint and place, the book structured or not)…
+    const book: LibraryLookup = { entriesById, sourcesByFingerprint: new Map([[source.fingerprint as string, source]]), sourcesByTitle: new Map(), builder: GLOAMWOOD_SRD_SUBSET };
+    // …or with the class structured: each brings back the style's own words, never the whole feature.
+    const structured: LibraryLookup = { entriesById: new Map(), sourcesByFingerprint: new Map(), sourcesByTitle: new Map(), builder: merged };
+    for (const lookup of [book, structured]) {
+      const { character, report } = restoreImportedText(out, lookup);
+      expect(character.features.find((f) => f.name === 'Lantern Guard')?.description).toBe(words);
+      expect(report.differs).toBe(0);
+    }
   });
 });
 

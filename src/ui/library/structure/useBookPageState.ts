@@ -4,8 +4,8 @@
  * Defaults are left out of the URL. Rows are links that push ?c=; everything else replaces by default,
  * so Back returns to the list in one step.
  */
-import { useCallback, useMemo } from 'react';
-import { useSearchParams } from 'react-router';
+import { useCallback, useMemo, useRef } from 'react';
+import { useLocation, useSearchParams } from 'react-router';
 import { STRUCTURED_KINDS, type StructuredKind } from '@/types';
 import { REVIEW_FILTERS, type ReviewFilter } from './labels';
 
@@ -52,12 +52,25 @@ export function bookPageSearch(current: URLSearchParams, patch: Partial<BookPage
   return s ? `?${s}` : '';
 }
 
+/**
+ * The history state of an entry a book-page list pushed (a row link): "← List" can go Back to that list.
+ * A record reached any other way (a shared link, Browse's "Edit it on the book's page", "Structure as…")
+ * has no such entry before it, so "← List" closes the record instead of leaving the page.
+ */
+export const FROM_LIST = { fromBookList: true } as const;
+export const cameFromList = (state: unknown): boolean =>
+  typeof state === 'object' && state !== null && (state as { fromBookList?: unknown }).fromBookList === true;
+
 export function useBookPageState(): BookPageControls {
   const [params, setParams] = useSearchParams();
+  const location = useLocation();
+  // Replacing the entry (next, previous, filters) keeps its history state, so "← List" still knows where it came from.
+  const historyState = useRef<unknown>(location.state);
+  historyState.current = location.state;
   const state = useMemo(() => readBookPageState(params), [params]);
   const set = useCallback(
     (patch: Partial<BookPageState>, mode: 'push' | 'replace' = 'replace') =>
-      setParams((prev) => new URLSearchParams(bookPageSearch(prev, patch)), { replace: mode === 'replace' }),
+      setParams((prev) => new URLSearchParams(bookPageSearch(prev, patch)), mode === 'replace' ? { replace: true, state: historyState.current } : {}),
     [setParams],
   );
   return useMemo(() => ({ ...state, set }), [state, set]);

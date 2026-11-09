@@ -37,7 +37,7 @@ function categoryOf(categoryText: string, mapped: string | undefined, baseItem: 
 
 interface Bonus { ac: number; save: number; attack: number; damage: number; text: string; condition: Wire<'magic-item'>['acCondition'] }
 
-/** Flat bonuses from "+N bonus to …" sentences (the first sentence that states each). */
+/** Flat bonuses from "+N bonus to …" sentences (the first sentence that states each); bonusText joins every phrase used with "; ". */
 function bonuses(prose: string): Bonus {
   const out: Bonus = { ac: 0, save: 0, attack: 0, damage: 0, text: '', condition: 'always' };
   const sentences = prose.split(/(?<=[.!?])\s+/);
@@ -69,7 +69,7 @@ function bonuses(prose: string): Bonus {
     }
     if (used) texts.push(m[0].trim());
   }
-  out.text = texts[0] ?? '';
+  out.text = texts.join('; ');
   return out;
 }
 

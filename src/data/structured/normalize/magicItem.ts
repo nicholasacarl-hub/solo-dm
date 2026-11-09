@@ -19,6 +19,19 @@ const KEY_FIELDS = ['typeLineText', 'category', 'rarity'];
 
 const CATEGORIES: readonly MagicItemData['category'][] = ['armor', 'shield', 'weapon', 'ammunition', 'potion', 'ring', 'rod', 'scroll', 'staff', 'wand', 'wondrous-item'];
 
+/** What each flat bonus applies to, as the text names it ("+1 bonus to attack and damage rolls"). */
+const BONUS_TARGETS = {
+  ac: { label: 'Armor Class', words: String.raw`\bAC\b|\bArmor Class\b` },
+  savingThrows: { label: 'saving throws', words: String.raw`\bsaving throws?\b` },
+  attack: { label: 'attack rolls', words: String.raw`\battack\b` },
+  damage: { label: 'damage rolls', words: String.raw`\bdamage\b` },
+} as const;
+
+/** Whether the excerpt states "+N" for this bonus: "+N (bonus) to …" naming its target before the next "+", ";" or sentence end. */
+export function bonusStated(bonusText: string, n: number, key: keyof typeof BONUS_TARGETS): boolean {
+  return new RegExp(String.raw`\+\s?${n}(?!\d)(?:\s+bonus)?\s+to\b[^.;+]*?(?:${BONUS_TARGETS[key].words})`, 'i').test(bonusText.replace(/[*_]/g, ''));
+}
+
 export function normalizeMagicItem(wire: Wire<'magic-item'>, ctx: NormalizeContext): Normalized<'magic-item'> {
   const base = beginNormalize('a magic item', wire, ctx, MAGIC_ITEM_FIELDS);
   const w: RecordWarning[] = [];
@@ -49,15 +62,13 @@ export function normalizeMagicItem(wire: Wire<'magic-item'>, ctx: NormalizeConte
   const baseItem = (wire.baseItemText.trim() || line?.baseItem?.trim() || '').replace(/[*_]/g, '');
 
   const bonuses: ItemBonuses = {};
-  const stated = (n: number) => n > 0 && wire.bonusText.includes(`+${n}`);
-  if (stated(wire.acBonus)) bonuses.ac = wire.acBonus;
-  if (stated(wire.saveBonus)) bonuses.savingThrows = wire.saveBonus;
-  if (stated(wire.attackBonus)) bonuses.attack = wire.attackBonus;
-  if (stated(wire.damageBonus)) bonuses.damage = wire.damageBonus;
-  if (bonuses.ac !== undefined && wire.acCondition !== 'always') bonuses.acOnlyWhen = wire.acCondition;
-  for (const n of [wire.acBonus, wire.saveBonus, wire.attackBonus, wire.damageBonus]) {
-    if (n > 0 && !stated(n)) w.push(warning('ungrounded', 'warn', `A +${n} bonus was read, but the text quoted doesn't state it: it was left out.`, 'bonuses'));
+  const read: [keyof typeof BONUS_TARGETS, number][] = [['ac', wire.acBonus], ['savingThrows', wire.saveBonus], ['attack', wire.attackBonus], ['damage', wire.damageBonus]];
+  for (const [key, n] of read) {
+    if (n <= 0) continue;
+    if (bonusStated(wire.bonusText, n, key)) bonuses[key] = n;
+    else w.push(warning('ungrounded', 'warn', `A +${n} bonus to ${BONUS_TARGETS[key].label} was read, but the text quoted doesn't state it: it was left out.`, 'bonuses'));
   }
+  if (bonuses.ac !== undefined && wire.acCondition !== 'always') bonuses.acOnlyWhen = wire.acCondition;
   const charges = /(\d+)\s+charges/i.exec(wire.chargesText)?.[1];
 
   const data: MagicItemData = {

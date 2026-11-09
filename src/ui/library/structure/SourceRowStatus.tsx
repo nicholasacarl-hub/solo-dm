@@ -13,22 +13,14 @@ import type { ExtractionJob, LibrarySource, PauseReason } from '@/types';
 import { toast } from '@/ui/components/toast';
 import { Button } from '@/ui/components/ui';
 import { errorMessage } from '@/ui/shell/format';
+import { ButtonLink } from '@/ui/components/ButtonLink';
 import { currentJob, jobProgress } from './bookData';
+import { PAUSE_REASONS } from './labels';
 import { refreshRulesIndex } from '../kinds';
 import { TOUCH_BUTTONS } from './touch';
 
-const PAUSED: Readonly<Record<PauseReason, string>> = {
-  player: 'you paused it',
-  reload: 'the page closed while reading',
-  budget: 'it reached your spending limit',
-  offline: 'you went offline',
-  'rate-limit': 'Claude asked us to slow down',
-  auth: 'Claude rejected your API key',
-  model: "your key can't use that model",
-  format: "Claude couldn't use the reading format",
-  storage: 'this browser is out of storage space',
-  'other-tab': "it's running in another tab",
-};
+/** Pauses that need a decision the row can't offer (raise the limit, pick another model, skip a kind): the book page has them. */
+const DECIDE_ON_BOOK_PAGE = new Set<PauseReason>(['budget', 'model', 'format']);
 
 /** "508 found · 41 to review · 149 not read yet" from the source row's counts. */
 export function structureLine(source: LibrarySource): string | null {
@@ -42,6 +34,8 @@ export function structureLine(source: LibrarySource): string | null {
     pending += c.pending;
   }
   const review = Math.max(0, pending - s.needsClaude);
+  // Detection ran and found nothing (an empty structure): say so, not "Not structured yet" or "0 found".
+  if (found === 0) return 'Nothing found to structure';
   return [`${found} found`, review ? `${review} to review` : null, s.needsClaude ? `${s.needsClaude} not read yet` : null].filter(Boolean).join(' · ');
 }
 
@@ -83,10 +77,16 @@ export function SourceRowStatus({ source, jobs }: { source: LibrarySource; jobs:
       </>
     );
   } else if (live?.status === 'paused') {
+    const reason = live.pauseReason ?? 'player';
     line = (
       <>
-        <span>Paused: {PAUSED[live.pauseReason ?? 'player']}</span>
-        {live.pauseReason !== 'other-tab' && live.pauseReason !== 'offline' && (
+        <span>Paused: {PAUSE_REASONS[reason]}</span>
+        {DECIDE_ON_BOOK_PAGE.has(reason) ? (
+          // Resuming as it is would pause again at once (the limit) or resend the same failing request.
+          <ButtonLink to={book} size="sm" variant="ghost" icon={<Play className="size-3.5" aria-hidden />}>
+            Resume on the book page
+          </ButtonLink>
+        ) : reason !== 'other-tab' && reason !== 'offline' && (
           <Button
             size="sm"
             variant="ghost"

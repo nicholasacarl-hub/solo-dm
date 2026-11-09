@@ -112,8 +112,21 @@ export function limitText(text: string, max: number, field: string, warnings: Re
 // ---------------------------------------------------------------------------
 
 /**
+ * One excerpt, or the printed values it joins. Values printed apart are joined with "; " (an older stat
+ * block's Damage Immunities and Condition Immunities in immunitiesText, as the prompt and the offline
+ * parser do; a magic item's bonus sentences in bonusText): such an excerpt is grounded when each part is,
+ * and each part is its own excerpt, so review can highlight it.
+ */
+function excerptParts(field: string, text: string, fullText: string): Excerpt[] {
+  if (grounded(text, fullText)) return [{ field, text, grounded: true }];
+  const parts = text.split(/\s*;\s+/).map((p) => p.trim()).filter(Boolean);
+  if (parts.length > 1 && parts.every((p) => grounded(p, fullText))) return parts.map((p) => ({ field, text: p, grounded: true }));
+  return [{ field, text, grounded: false }];
+}
+
+/**
  * Every non-empty "…Text" string of a wire object (nested lists included, as "items[0].costText"),
- * with whether it is grounded in the full text.
+ * with whether it is grounded in the full text ("; "-joined values part by part).
  */
 export function excerptsOf(wire: unknown, fullText: string): Excerpt[] {
   const out: Excerpt[] = [];
@@ -123,7 +136,7 @@ export function excerptsOf(wire: unknown, fullText: string): Excerpt[] {
       for (const [key, v] of Object.entries(value as Record<string, unknown>)) {
         const p = path ? `${path}.${key}` : key;
         if (typeof v === 'string') {
-          if (key.endsWith('Text') && v.trim()) out.push({ field: p, text: v.trim(), grounded: grounded(v, fullText) });
+          if (key.endsWith('Text') && v.trim()) out.push(...excerptParts(p, v.trim(), fullText));
         } else visit(v, p);
       }
     }

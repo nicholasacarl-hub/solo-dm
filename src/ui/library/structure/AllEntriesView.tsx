@@ -15,7 +15,7 @@ import { kindInfo } from '../kinds';
 import { KIND_LABELS } from './labels';
 import { structureAs } from './reviewActions';
 import { TOUCH } from './touch';
-import { bookPageSearch } from './useBookPageState';
+import { FROM_LIST, bookPageSearch } from './useBookPageState';
 
 const PAGE = 100;
 const SECTION_KINDS = new Set<StructuredKind>(['class', 'subclass', 'species', 'background']);
@@ -101,7 +101,7 @@ export function AllEntriesView({
                     recs.map((r, i) => (
                       <span key={r.id}>
                         {i > 0 && ', '}
-                        <Link to={{ search: bookPageSearch(params, { view: 'review', recordId: r.id, filter: 'all' }) }} className="text-accent underline-offset-2 hover:underline">
+                        <Link to={{ search: bookPageSearch(params, { view: 'review', recordId: r.id, filter: 'all' }) }} state={FROM_LIST} className="text-accent underline-offset-2 hover:underline">
                           {KIND_LABELS[r.kind].title}: {r.name}
                         </Link>
                       </span>

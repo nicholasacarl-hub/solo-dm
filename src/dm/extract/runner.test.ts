@@ -5,6 +5,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { APIUserAbortError } from '@anthropic-ai/sdk';
+import { detectStructure } from '@/data';
+import { chunkDocument } from '@/data/chunk';
 import { getJob, getRecords, listRecords, putJob, putRecords, saveLibrarySource } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
 import { EXPECTED_DATA, SCRIPTED_WIRE, extractionJob, gloamwoodEntries, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
@@ -13,7 +15,7 @@ import { FakeExtractionClient, type ExtractionStep } from '../testing/fakeExtrac
 import { resetExtractionDeps, setExtractionDeps } from './deps';
 import { ExtractionUnavailableError } from './errors';
 import { cancelJob, estimateModels, pauseJob, recoverJobsOnStartup, resumeJob, retryRecords, startJob, type JobChoices } from './jobs';
-import { CONTROL_CHANNEL, LANE_COLD_MS, RUNNER_LOCK, emptyCounts, resetRunner, runnerSnapshot } from './runner';
+import { CONTROL_CHANNEL, LANE_COLD_MS, OFFLINE_LOCK_PREFIX, RUNNER_LOCK, emptyCounts, resetRunner, runnerIdle, runnerSnapshot } from './runner';
 
 vi.mock('@/data/rulesIndexStore', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/data/rulesIndexStore')>();
@@ -60,12 +62,21 @@ class Clock {
   }
 }
 
-/** navigator.locks for the runner's one lock: exclusive, a FIFO queue, ifAvailable, AbortSignal. holdElsewhere() plays another tab. */
+/**
+ * navigator.locks, one exclusive lock per name: a FIFO queue, ifAvailable, AbortSignal. holdElsewhere() plays
+ * another tab holding the runner lock; `held` and `grants` are the runner lock's.
+ */
 class Locks {
-  held = false;
+  private readonly names = new Map<string, { held: boolean; queue: (() => void)[] }>();
   grants = 0;
-  private queue: (() => void)[] = [];
   private releaseOther: (() => void) | null = null;
+  get held(): boolean {
+    return this.lock(RUNNER_LOCK).held;
+  }
+  /** Whether some page holds this lock now. */
+  isHeld(name: string): boolean {
+    return this.lock(name).held;
+  }
   /** Another tab takes the lock (now, or once it comes free) and keeps it until releaseElsewhere(). */
   holdElsewhere(): void {
     void this.request(RUNNER_LOCK, {}, () => new Promise<void>((r) => (this.releaseOther = r)));
@@ -75,26 +86,32 @@ class Locks {
     this.releaseOther?.();
     this.releaseOther = null;
   }
+  private lock(name: string) {
+    let state = this.names.get(name);
+    if (!state) this.names.set(name, (state = { held: false, queue: [] }));
+    return state;
+  }
   async request(name: string, opts: { ifAvailable?: boolean; signal?: AbortSignal }, cb: (lock: { name: string } | null) => unknown): Promise<unknown> {
     if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-    if (this.held || this.queue.length) {
+    const state = this.lock(name);
+    if (state.held || state.queue.length) {
       if (opts.ifAvailable) return cb(null);
       await new Promise<void>((resolve, reject) => {
         const grant = () => resolve();
-        this.queue.push(grant);
+        state.queue.push(grant);
         opts.signal?.addEventListener('abort', () => {
-          this.queue = this.queue.filter((g) => g !== grant);
+          state.queue = state.queue.filter((g) => g !== grant);
           reject(new DOMException('Aborted', 'AbortError'));
         }, { once: true });
       });
-    } else this.held = true;
-    this.grants += 1;
+    } else state.held = true;
+    if (name === RUNNER_LOCK) this.grants += 1;
     try {
       return await cb({ name });
     } finally {
-      const next = this.queue.shift();
+      const next = state.queue.shift();
       if (next) next();
-      else this.held = false;
+      else state.held = false;
     }
   }
 }
@@ -286,6 +303,68 @@ describe('errors and retries', () => {
     await until('done', finished(started.id), { advance: 1000 });
     expect(fake.requestsFor('Bramble Hound')).toHaveLength(3);
     expect(await byName('Bramble Hound')).toMatchObject({ runState: 'failed', runAttempts: 3, runError: { code: 'network', retryable: true } });
+  });
+
+  it('X2: retries an overloaded error sent mid-stream like a 529, and counts the usage that stream reported', async () => {
+    await seed(['Bramble Hound', 'Glimmerwing Drake']);
+    // The SDK's real shapes after a 200: an `event: error` (plain APIError, no status), then a dropped connection.
+    fake.script('Bramble Hound', { type: 'error', status: 529, atEvent: 1 }, { type: 'network', atEvent: 2 });
+    const started = await startJob(SOURCE, choices({ concurrency: 1 }));
+    await until('done', finished(started.id), { advance: 1000 });
+    const hound = fake.requestsFor('Bramble Hound');
+    expect(hound).toHaveLength(3);
+    // 2 s, then 8 s, after each failure (the transient waits).
+    expect(hound[1].at - (hound[0].endedAt ?? 0)).toBeGreaterThanOrEqual(2000);
+    expect(hound[2].at - (hound[1].endedAt ?? 0)).toBeGreaterThanOrEqual(8000);
+    expect(await byName('Bramble Hound')).toMatchObject({ runState: 'done', runAttempts: 3 });
+    const done = await job(started.id);
+    expect(done).toMatchObject({ status: 'done', counts: { done: 2, failed: 0 } });
+    // The two failed streams' input tokens are in the ledger beside the answers' (4 requests, 2 answers).
+    const answers = (await Promise.all(['Bramble Hound', 'Glimmerwing Drake'].map((n) => byName(n)))).map((r) => r.extraction!.usage);
+    expect(done.usage.requests).toBe(4);
+    expect(done.usage.inputTokens).toBeGreaterThan(answers[0].inputTokens + answers[1].inputTokens);
+    expect(done.usage.estimatedCostUsd).toBeGreaterThan(answers[0].estimatedCostUsd + answers[1].estimatedCostUsd);
+  });
+
+  it('X8: a section too long for one request keeps the left-out features from the offline scan, with a warning', async () => {
+    // An invented subclass whose kept-whole feature blocks (they mention spells) pass the 60,000-character cap.
+    const levels = [3, 3, 7, 10, 15, 18];
+    const rite = `Each night the knight trims the lamp and studies the spells of the road. ${'The rite is long in the telling. '.repeat(400)}`;
+    const book = ['# Options', '## Fighter Subclass: Lamp Knight', 'Knights of the lamp keep watch where old spells linger.', ...levels.flatMap((lvl, i) => [`### Level ${lvl}: Rite ${i + 1}`, rite])].join('\n\n');
+    await saveLibrarySource({ ...gloamwoodSource('lamp'), title: 'Lamp Book' }, chunkDocument(book, { sourceId: 'lamp', sourceName: 'Lamp Book' }));
+    await detectStructure('lamp');
+    const knight = (await listRecords('lamp')).find((r) => r.kind === 'subclass')!;
+    expect(knight.data).not.toBeNull();
+    // Claude reads what it was sent: the first feature block (B2) is surely among them.
+    fake.script('Fighter Subclass: Lamp Knight', {
+      type: 'answer',
+      wire: {
+        matchesKind: true, name: 'Lamp Knight', format: '2024', parentClassText: 'Fighter', taglineText: '',
+        features: [{ level: 3, name: 'Rite 1', text: { block: 'B2', from: 1, to: 1 } }],
+        casterType: 'none', spellcastingAbility: 'none', alwaysPreparedSpells: [], notes: '',
+      },
+    });
+    const started = await startJob('lamp', choices({ claudeFor: 'selection', recordIds: [knight.id] }));
+    await until('done', finished(started.id));
+    const sent = fake.requestsFor('Fighter Subclass: Lamp Knight')[0];
+    expect(JSON.stringify(sent.params.messages)).toContain('Rite 1');
+    expect(JSON.stringify(sent.params.messages)).not.toContain('Rite 6');
+    const read = (await getRecords([knight.id]))[0]!;
+    expect(read).toMatchObject({ origin: 'claude', runState: 'done' });
+    const features = (read.data as { features: { level: number; name: string }[] }).features;
+    expect(features[0]).toMatchObject({ level: 3, name: 'Rite 1' });
+    expect(features.at(-1)).toMatchObject({ level: 18, name: 'Rite 6' }); // never sent: from the offline heading scan
+    expect(read.warnings).toContainEqual(expect.objectContaining({ code: 'missing', severity: 'warn', message: expect.stringMatching(/too long to send to Claude whole/) }));
+  });
+
+  it('X2: pauses offline when the connection drops mid-stream while the browser is offline', async () => {
+    await seed(['Bramble Hound']);
+    flags.online = false;
+    fake.failNext({ type: 'network', atEvent: 2 });
+    const started = await startJob(SOURCE, choices());
+    await until('paused', finished(started.id));
+    expect(await job(started.id)).toMatchObject({ status: 'paused', pauseReason: 'offline' });
+    expect((await byName('Bramble Hound')).runState).toBe('queued');
   });
 
   it('pauses on a rejected key, and on a first-of-kind 400 (format); a later 400 fails the record', async () => {
@@ -554,6 +633,73 @@ describe('holds, one job at a time, tabs and reloads', () => {
     await until('done', async () => (await job(started.id)).status === 'done');
   });
 
+  it('X10: a page opened while offline leaves a job paused offline to the tab waiting for the connection', async () => {
+    await seed(['Bramble Hound']);
+    flags.online = false;
+    fake.failNext({ type: 'network' });
+    const started = await startJob(SOURCE, choices());
+    await until('paused', finished(started.id));
+    await runnerIdle();
+    await settle();
+    const offlineLock = `${OFFLINE_LOCK_PREFIX}${started.id}`;
+    expect(locks.isHeld(offlineLock)).toBe(true);
+    expect(locks.held).toBe(false); // the runner lock is free: the other page's startup recovery gets to run
+    // Another page: fresh copies of the modules, sharing the database and the locks. It finds the runner lock free.
+    vi.resetModules();
+    const otherDeps = await import('./deps');
+    const otherJobs = await import('./jobs');
+    const otherRunner = await import('./runner');
+    try {
+      otherDeps.setExtractionDeps({ client: () => fake, settings: () => currentSettings, now: clock.now, sleep: clock.sleep, online: () => flags.online, locks: locks as unknown as LockManager, keepSaves: () => undefined });
+      await otherJobs.recoverJobsOnStartup();
+      expect(await job(started.id)).toMatchObject({ status: 'paused', pauseReason: 'offline' });
+      flags.online = true;
+      window.dispatchEvent(new Event('online'));
+      await until('done', async () => (await job(started.id)).status === 'done');
+      await settle();
+      expect(locks.isHeld(offlineLock)).toBe(false);
+    } finally {
+      otherRunner.resetRunner();
+    }
+  });
+
+  it('X10: startup recovery pauses an offline job as reload once no page waits for its connection', async () => {
+    await seed(['Bramble Hound']);
+    flags.online = false;
+    fake.failNext({ type: 'network' });
+    const started = await startJob(SOURCE, choices());
+    await until('paused', finished(started.id));
+    resetRunner(); // the page that paused it closes: its online listener and offline lock go with it
+    await settle();
+    expect(locks.isHeld(`${OFFLINE_LOCK_PREFIX}${started.id}`)).toBe(false);
+    expect(locks.held).toBe(false);
+    await recoverJobsOnStartup();
+    expect(await job(started.id)).toMatchObject({ status: 'paused', pauseReason: 'reload' });
+  });
+
+  it('X9: when the tab that took over a job started here closes, the job is paused (reload), not left running', async () => {
+    await seed(['Bramble Hound', 'Glimmerwing Drake']);
+    locks.holdElsewhere(); // tab A runs structuring
+    const started = await startJob(SOURCE, choices());
+    expect(await job(started.id)).toMatchObject({ status: 'paused', pauseReason: 'other-tab' });
+    // Tab A finishes its own job and takes this one over: what its startRun and dispatch write.
+    const held = await job(started.id);
+    await putJob({ ...held, status: 'running', pauseReason: undefined, pauseMessage: undefined, startedAt: clock.now() });
+    await putRecords([{ ...(await byName('Bramble Hound')), runState: 'running' }]);
+    locks.releaseElsewhere(); // tab A is closed mid-job; this tab is granted the lock
+    await until('recovered', async () => (await job(started.id)).status !== 'running', { advance: 1000 });
+    await runnerIdle();
+    expect(await job(started.id)).toMatchObject({ status: 'paused', pauseReason: 'reload', interrupted: 1, counts: { queued: 2, running: 0 } });
+    expect((await byName('Bramble Hound')).runState).toBe('queued');
+    expect(fake.requests).toHaveLength(0);
+    expect(locks.held).toBe(false);
+    // A job started here now runs at once (nothing is left marked as running).
+    await seed(['Ashen Choir'], 'other');
+    const next = await startJob('other', choices());
+    await until('next done', finished(next.id));
+    expect(fake.requests.map((r) => r.title)).toEqual(['Ashen Choir']);
+  });
+
   it('asks before the page closes while a request is in flight, and not otherwise', async () => {
     await seed(['Bramble Hound']);
     fake.script('Bramble Hound', { type: 'answer', delayMs: 1000 });
@@ -607,7 +753,7 @@ describe('re-runs and the job API', () => {
     const first = await startJob(SOURCE, choices());
     await until('done', finished(first.id));
     expect((await byName('Bramble Hound')).runState).toBe('refused');
-    const sameJob = await retryRecords(first.id, 'refused');
+    const sameJob = await retryRecords(first.id, 'refused', 'claude-opus-5-5');
     expect(sameJob).toBe(first.id);
     await until('done again', async () => (await job(first.id)).status === 'done' && (await byName('Bramble Hound')).runState === 'done');
     fake.script('Bramble Hound', { type: 'refusal' });
@@ -625,12 +771,65 @@ describe('re-runs and the job API', () => {
     const started = await startJob(SOURCE, choices({ concurrency: 1 }));
     await until('refused', async () => (await byName('Ashen Choir')).runState === 'refused');
     await until('hound in flight', () => runnerSnapshot().inFlight.length === 1);
-    const retry = await retryRecords(started.id, 'refused');
+    const retry = await retryRecords(started.id, 'refused', 'claude-opus-5-5');
     expect(retry).not.toBe(started.id);
     expect((await job(retry)).status).toBe('queued');
     await until('both done', async () => (await job(started.id)).status === 'done' && (await job(retry)).status === 'done', { advance: 500 });
     expect(fake.requestsFor('Ashen Choir')).toHaveLength(2);
     expect(await byName('Ashen Choir')).toMatchObject({ runState: 'done', jobId: retry });
+  });
+
+  it('X1: retrying a paused job’s failure reads only that record, in a new job under the consent’s limit; the rest stays paused', async () => {
+    await seed(['Ashen Choir', 'Cinder Mote', 'Mothsilk Cloak', 'Bramble Hound', 'Glimmerwing Drake']);
+    fake.script('Ashen Choir', { type: 'error', status: 413 });
+    for (const t of ['Cinder Mote', 'Mothsilk Cloak', 'Bramble Hound', 'Glimmerwing Drake']) fake.script(t, { type: 'answer', delayMs: 10_000 });
+    const started = await startJob(SOURCE, choices({ concurrency: 1 }));
+    await until('failed', async () => (await byName('Ashen Choir')).runState === 'failed', { advance: 100 });
+    await pauseJob(started.id);
+    await until('paused', finished(started.id), { advance: 1000 });
+    const paused = await job(started.id);
+    expect(paused).toMatchObject({ status: 'paused', pauseReason: 'player', counts: { failed: 1, queued: 3 } });
+    const before = fake.requests.length;
+    const ashen = await byName('Ashen Choir');
+
+    const retryId = await retryRecords(started.id, 'both', 'claude-opus-5-5', { ids: [ashen.id], budgetUsd: 1 });
+    expect(retryId).not.toBe(started.id);
+    expect(await job(retryId)).toMatchObject({ budgetUsd: 1, scope: { claudeFor: 'selection', recordIds: [ashen.id] }, estimate: { requests: 1 } });
+    await until('retry done', async () => (await job(retryId)).status === 'done', { advance: 1000 });
+    await clock.advance(60_000);
+    expect(fake.requests.slice(before).map((r) => r.title)).toEqual(['Ashen Choir']);
+    expect(await byName('Ashen Choir')).toMatchObject({ runState: 'done', jobId: retryId });
+    // The paused job's other records were never resumed.
+    expect(await job(started.id)).toMatchObject({ status: 'paused', pauseReason: 'player' });
+    for (const name of ['Mothsilk Cloak', 'Bramble Hound', 'Glimmerwing Drake']) expect(await byName(name), name).toMatchObject({ runState: 'queued', jobId: started.id });
+  });
+
+  it('X1: retrying part of a finished job’s failures reads them in a job of their own; the rest of them, in that job under the consent’s limit', async () => {
+    await seed(['Bramble Hound', 'Glimmerwing Drake', 'Goblin Warrior']);
+    for (const t of ['Bramble Hound', 'Glimmerwing Drake', 'Goblin Warrior']) fake.script(t, { type: 'refusal' });
+    const first = await startJob(SOURCE, choices({ budgetUsd: null }));
+    await until('done', finished(first.id));
+    const [hound, drake, goblin] = [await byName('Bramble Hound'), await byName('Glimmerwing Drake'), await byName('Goblin Warrior')];
+    // The Goblin Warrior was kept as text since: no retry reads it unless its id is given.
+    await putRecords([{ ...goblin, status: 'rejected' }]);
+    const before = fake.requests.length;
+
+    // The list was narrowed to the hound: exactly that record, in a job of its own at the consent's limit.
+    const own = await retryRecords(first.id, 'refused', 'claude-opus-5-5', { ids: [hound.id], budgetUsd: 1 });
+    expect(own).not.toBe(first.id);
+    expect(await job(own)).toMatchObject({ budgetUsd: 1, scope: { claudeFor: 'selection', recordIds: [hound.id] }, estimate: { requests: 1 } });
+    await until('own done', async () => (await job(own)).status === 'done');
+    expect(fake.requests.slice(before).map((r) => r.title)).toEqual(['Bramble Hound']);
+    expect((await byName('Glimmerwing Drake')).runState).toBe('refused');
+
+    // All that is left to retry (the drake; the goblin is kept as text): queued again in the finished job.
+    const spent = (await job(first.id)).usage.estimatedCostUsd;
+    const same = await retryRecords(first.id, 'refused', 'claude-opus-5-5', { ids: [drake.id], budgetUsd: 1 });
+    expect(same).toBe(first.id);
+    await until('done again', async () => (await job(first.id)).status === 'done' && (await byName('Glimmerwing Drake')).runState === 'done');
+    expect(fake.requests.slice(before).map((r) => r.title)).toEqual(['Bramble Hound', 'Glimmerwing Drake']);
+    expect((await job(first.id)).budgetUsd).toBe(Math.ceil((spent + 1) * 100) / 100);
+    expect((await byName('Goblin Warrior')).runState).toBe('refused');
   });
 
   it('resumes a paused job (player only), applying a new limit or skipping a kind', async () => {

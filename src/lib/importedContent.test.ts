@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bookFingerprint, importedPlaceholder, isImportedPlaceholder, redactImported, textFingerprint, wrapImported } from './importedContent';
+import { bookFingerprint, copiedTextMissing, importedPlaceholder, isImportedPlaceholder, redactImported, staleRedaction, textFingerprint, wrapImported } from './importedContent';
 
 describe('textFingerprint', () => {
   it('is FNV-1a 64 (standard test vectors), as 16 hex chars', () => {
@@ -42,5 +42,29 @@ describe('importedPlaceholder', () => {
     expect(isImportedPlaceholder(` ${importedPlaceholder('Any Book')}\n`)).toBe(true);
     expect(isImportedPlaceholder('You gain a bonus.')).toBe(false);
     expect(isImportedPlaceholder(undefined)).toBe(false);
+  });
+});
+
+describe('copiedTextMissing', () => {
+  const ref = { textCopied: true };
+  it('is copied text left out of this copy: empty or the placeholder', () => {
+    expect(copiedTextMissing({ description: importedPlaceholder('Any Book'), ref })).toBe(true);
+    expect(copiedTextMissing({ description: '  ', ref })).toBe(true);
+    expect(copiedTextMissing({ ref })).toBe(true);
+    expect(copiedTextMissing({ description: 'You gain a bonus.', ref })).toBe(false);
+    // Nothing was copied (an app-written line, an SRD feature): nothing can be missing.
+    expect(copiedTextMissing({ description: '', ref: { textCopied: false } })).toBe(false);
+    expect(copiedTextMissing({ description: importedPlaceholder('Any Book') })).toBe(false);
+  });
+
+  it('P3: a redacted ref over text the DM wrote since is not missing text, and the flag is stale', () => {
+    const ruling = { description: 'DM ruling: once per turn, add 1d4 fire damage.', ref: { textCopied: true, redacted: true as const } };
+    const left = { description: importedPlaceholder('Any Book'), ref: { textCopied: true, redacted: true as const } };
+    expect(copiedTextMissing(ruling)).toBe(false);
+    expect(copiedTextMissing(left)).toBe(true);
+    expect(staleRedaction(ruling)).toBe(true);
+    expect(staleRedaction(left)).toBe(false);
+    expect(staleRedaction({ description: '', ref: { redacted: true } })).toBe(false);
+    expect(staleRedaction({ description: 'Text', ref: {} })).toBe(false);
   });
 });

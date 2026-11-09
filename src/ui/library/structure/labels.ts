@@ -6,7 +6,7 @@
  * CONTRACT (Day 0). Owner: E3; E4's builder hints use it too.
  */
 import { BookMarked, Circle, CircleCheck, CircleX, Clock, Eye, FileText, History, LoaderCircle, ShieldAlert, TriangleAlert, type LucideIcon } from 'lucide-react';
-import { MODELS, type RecordWarning, type StructuredKind, type StructuredRecord } from '@/types';
+import { MODELS, type PauseReason, type RecordWarning, type StructuredKind, type StructuredRecord } from '@/types';
 import type { BadgeTone } from '@/ui/components/ui';
 
 // ---------------------------------------------------------------------------
@@ -14,7 +14,7 @@ import type { BadgeTone } from '@/ui/components/ui';
 // ---------------------------------------------------------------------------
 
 export type RecordState =
-  | 'not-read'      // data === null (needs-claude)
+  | 'not-read'      // data === null (needs-claude); a Claude reading without data is 'needs-fix'
   | 'waiting'       // runState queued
   | 'reading'       // runState running
   | 'clean'         // pending, high confidence
@@ -54,18 +54,27 @@ export const BOOK_BADGE = { tone: 'info' as BadgeTone, icon: BookMarked, maxChar
 
 const hasBlock = (warnings: readonly RecordWarning[]) => warnings.some((w) => w.severity === 'block');
 
+/** What recordState reads (`origin` is optional, so a record from before it was read still has a state). */
+export type StatefulRecord = Pick<StructuredRecord, 'status' | 'data' | 'warnings' | 'confidence' | 'runState'> & Partial<Pick<StructuredRecord, 'origin'>>;
+
+/**
+ * Claude read it, but its answer lacked fields the app needs, so it has no data (the Goblin Warrior
+ * whose stat block prints no ability scores). It needs the player's fix, not another paid reading.
+ */
+export const readButIncomplete = (record: Pick<StatefulRecord, 'data' | 'origin'>): boolean => record.data === null && record.origin === 'claude';
+
 /**
  * The one state a record shows, in this order: being read now, a decision the player made (text only,
  * accepted), a failed or declined read, not read at all, then what review needs.
  */
-export function recordState(record: Pick<StructuredRecord, 'status' | 'data' | 'warnings' | 'confidence' | 'runState'>, opts: { bookEnabled: boolean }): RecordState {
+export function recordState(record: StatefulRecord, opts: { bookEnabled: boolean }): RecordState {
   if (record.runState === 'running') return 'reading';
   if (record.runState === 'queued') return 'waiting';
   if (record.status === 'rejected') return 'text-only';
   if (record.status === 'accepted') return opts.bookEnabled ? 'in-use' : 'accepted-off';
   if (record.runState === 'failed') return 'failed';
   if (record.runState === 'refused') return 'refused';
-  if (record.data === null) return 'not-read';
+  if (record.data === null) return readButIncomplete(record) ? 'needs-fix' : 'not-read';
   if (hasBlock(record.warnings)) return 'needs-fix';
   return record.confidence === 'high' ? 'clean' : 'check';
 }
@@ -77,12 +86,26 @@ export function fieldsToCheck(warnings: readonly RecordWarning[]): number {
 }
 
 /** The state's words for a record: "To review · Check 2 fields", "Needs a fix", "In use"… */
-export function recordStateLabel(record: Pick<StructuredRecord, 'status' | 'data' | 'warnings' | 'confidence' | 'runState'>, opts: { bookEnabled: boolean }): string {
+export function recordStateLabel(record: StatefulRecord, opts: { bookEnabled: boolean }): string {
   const state = recordState(record, opts);
   if (state !== 'check') return RECORD_STATES[state].label;
   const n = fieldsToCheck(record.warnings);
   return n > 0 ? `To review · Check ${n} ${n === 1 ? 'field' : 'fields'}` : 'To review';
 }
+
+/** Why a job paused, as the end of "Paused: …" (the library row) and of the status announcement. */
+export const PAUSE_REASONS: Readonly<Record<PauseReason, string>> = {
+  player: 'you paused it',
+  reload: 'the page closed while reading',
+  budget: 'it reached your spending limit',
+  offline: 'you went offline',
+  'rate-limit': 'Claude asked us to slow down',
+  auth: 'Claude rejected your API key',
+  model: "your key can't use that model",
+  format: "Claude couldn't use the reading format",
+  storage: 'this browser is out of storage space',
+  'other-tab': "it's running in another tab",
+};
 
 // ---------------------------------------------------------------------------
 // Origin

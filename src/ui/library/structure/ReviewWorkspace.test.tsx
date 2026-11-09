@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { gloamwoodEntries, gloamwoodRecords } from '@/test/structuredFixtures';
+import { createMemoryRouter, RouterProvider } from 'react-router';
+import { gloamwoodEntries, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
 import type { RecordStatus, StructuredRecord } from '@/types';
 import { autoCleanup, installDialogPolyfill, renderRoute } from '@/ui/shell/testUtils';
 
@@ -50,6 +51,7 @@ beforeEach(() => {
   useUndoToast.setState({ item: null });
   stored = gloamwoodRecords();
   vi.mocked(storage.useRecords).mockReturnValue(stored);
+  vi.mocked(storage.useLibrarySources).mockReturnValue([gloamwoodSource()]);
   vi.mocked(storage.getSourceEntries).mockResolvedValue(gloamwoodEntries());
   vi.mocked(storage.getRecords).mockImplementation(async (ids: string[]) => ids.map((id) => stored.find((r) => r.id === id)));
   vi.mocked(storage.listRecords).mockImplementation(async () => stored);
@@ -111,6 +113,39 @@ describe('the review list', () => {
     expect(vi.mocked(storage.setRecordStatus).mock.calls[1]).toEqual([ids, 'pending']);
   });
 
+  it('U7: a book whose detection found nothing shows "Nothing here to structure" when opened again, not "Not structured yet"', async () => {
+    vi.mocked(storage.useLibrarySources).mockReturnValue([{ ...gloamwoodSource(), structure: { detectedAt: 1, parserVersion: 1, counts: {}, needsClaude: 0 } }]);
+    vi.mocked(storage.useRecords).mockReturnValue([]);
+    renderPage();
+    expect(await screen.findByText('Nothing here to structure')).toBeInTheDocument();
+    expect(screen.queryByText('Not structured yet')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'All entries' })).toBeInTheDocument();
+  });
+
+  it('U3: "Accept N confident" accepts exactly the entries its sheet lists (the name search and kind apply)', async () => {
+    const user = userEvent.setup();
+    renderPage('?q=ash');
+    await user.click(await screen.findByRole('button', { name: 'Accept 1 confident' }));
+    const sheet = screen.getByRole('dialog', { name: 'Accept 1 entry that was read cleanly?' });
+    expect(within(sheet).getByText('1 spell')).toBeInTheDocument();
+    await user.click(within(sheet).getByRole('button', { name: 'Accept 1' }));
+    await waitFor(() => expect(storage.setRecordStatus).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(storage.setRecordStatus).mock.calls[0]).toEqual([[byName('Ashen Choir').id], 'accepted']);
+    expect(await screen.findByText(/^Accepted 1\./)).toBeInTheDocument();
+  });
+
+  it('U3: a clean reading whose re-read by Claude failed is listed under "Couldn\'t read" and is not "confident"', async () => {
+    replace('Cinder Mote', {
+      jobId: 'job:fixture',
+      runState: 'failed',
+      runError: { code: 'overloaded', message: 'busy', retryable: true },
+      warnings: [{ code: 'failed', severity: 'info', message: 'Claude was too busy to read it.' }],
+    });
+    renderPage('?f=failed');
+    expect(await screen.findByRole('link', { name: /Cinder Mote/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Nothing confident to accept' })).toBeDisabled();
+  });
+
   it('select mode: checkboxes, "Select all", and a bulk accept that skips what needs a fix', async () => {
     const user = userEvent.setup();
     replace('Cinder Mote', { warnings: [{ code: 'out-of-range', severity: 'block', field: 'rangeText', message: 'Range' }] });
@@ -156,7 +191,25 @@ describe('reads that failed', () => {
     const consent = await screen.findByRole('dialog', { name: 'Read 2 entries with Claude' });
     await within(consent).findByRole('radio', { name: /Claude Opus 5\.5/ }); // the estimates are in
     await user.click(within(consent).getByRole('button', { name: /^Start/ }));
-    await waitFor(() => expect(dm.retryRecords).toHaveBeenCalledWith('job:fixture', 'both', 'claude-opus-5-5'));
+    await waitFor(() =>
+      expect(dm.retryRecords).toHaveBeenCalledWith('job:fixture', 'both', 'claude-opus-5-5', {
+        ids: [byName('Ashen Choir').id, byName('Cinder Mote').id],
+        budgetUsd: 6,
+      }),
+    );
+  });
+
+  it('U1: "Retry N" with the list narrowed to one kind retries only the reads it lists', async () => {
+    const user = userEvent.setup();
+    replace('Ashen Choir', { jobId: 'job:fixture', runState: 'failed', runError: { code: 'overloaded', message: 'busy', retryable: true } });
+    replace('Glimmerwing Drake', { jobId: 'job:fixture', runState: 'failed', runError: { code: 'overloaded', message: 'busy', retryable: true } });
+    renderPage('?f=failed&k=monster');
+    await user.click(await screen.findByRole('button', { name: 'Retry 1' }));
+    const consent = await screen.findByRole('dialog', { name: 'Read “Glimmerwing Drake” with Claude' });
+    await within(consent).findByRole('radio', { name: /Claude Opus 5\.5/ });
+    expect(within(consent).getByLabelText('Spending limit')).toBeInTheDocument();
+    await user.click(within(consent).getByRole('button', { name: /^Start/ }));
+    await waitFor(() => expect(dm.retryRecords).toHaveBeenCalledWith('job:fixture', 'both', 'claude-opus-5-5', { ids: [byName('Glimmerwing Drake').id], budgetUsd: 6 }));
   });
 });
 
@@ -322,6 +375,60 @@ describe('on a phone', () => {
     expect(screen.queryByRole('heading', { level: 2, name: 'Ashen Choir' })).not.toBeInTheDocument();
     // Focus comes back to the row it left from, not the page body.
     await waitFor(() => expect(screen.getByRole('link', { name: /Ashen Choir/ })).toHaveFocus());
+  });
+
+  it('U6: "List" after Browse\'s "Edit it on the book\'s page" (a pushed deep link) stays on the book page', async () => {
+    setViewport(390);
+    const router = createMemoryRouter(
+      [
+        { path: '/library/source/:sourceId', element: <LibrarySourceScreen /> },
+        { path: '*', element: <p>elsewhere</p> },
+      ],
+      { initialEntries: ['/library?tab=browse&entry=lib:gloam:51', `/library/source/gloam?c=${encodeURIComponent(byName('Glimmerwing Drake').id)}&f=all`], initialIndex: 1 },
+    );
+    render(<RouterProvider router={router} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('button', { name: 'List' }));
+    await waitFor(() => expect(router.state.location.search).toBe('?f=all'));
+    expect(router.state.location.pathname).toBe('/library/source/gloam');
+    expect(await screen.findByRole('group', { name: 'Show' })).toBeInTheDocument();
+  });
+
+  it('U6: "List" after All entries › Structure as… (which replaces the URL) stays on the book page', async () => {
+    setViewport(390);
+    const data = await import('@/data');
+    vi.mocked(data.structureEntryAs).mockResolvedValue(byName('Wickwright'));
+    const router = createMemoryRouter(
+      [
+        { path: '/library/source/:sourceId', element: <LibrarySourceScreen /> },
+        { path: '*', element: <p>elsewhere</p> },
+      ],
+      { initialEntries: ['/library?tab=mine', '/library/source/gloam?view=entries'], initialIndex: 1 },
+    );
+    render(<RouterProvider router={router} />);
+    const user = userEvent.setup();
+    await user.click((await screen.findAllByRole('button', { name: /Structure as…/ }))[0]);
+    await user.click(await screen.findByRole('menuitem', { name: 'Class' }));
+    await waitFor(() => expect(router.state.location.search).toContain('c='));
+    await user.click(await screen.findByRole('button', { name: 'List' }));
+    await waitFor(() => expect(router.state.location.search).not.toContain('c='));
+    expect(router.state.location.pathname).toBe('/library/source/gloam');
+  });
+
+  it('U6: a row opened from the list, then Next, still goes Back to that list in one step', async () => {
+    setViewport(390);
+    const router = createMemoryRouter([{ path: '/library/source/:sourceId', element: <LibrarySourceScreen /> }, { path: '*', element: <p>elsewhere</p> }], {
+      initialEntries: ['/library?tab=mine', '/library/source/gloam?k=spell'],
+      initialIndex: 1,
+    });
+    render(<RouterProvider router={router} />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole('link', { name: /Ashen Choir/ }));
+    await user.click(await screen.findByRole('button', { name: 'Next' }));
+    await waitFor(() => expect(router.state.location.search).toContain(encodeURIComponent(byName('Cinder Mote').id)));
+    await user.click(screen.getByRole('button', { name: 'List' }));
+    await waitFor(() => expect(router.state.location.search).toBe('?k=spell'));
+    expect(router.state.historyAction).toBe('POP');
   });
 
   it('switches between the fields and the source text', async () => {

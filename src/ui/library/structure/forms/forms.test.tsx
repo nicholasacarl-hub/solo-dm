@@ -248,6 +248,23 @@ describe('text spans', () => {
   });
 });
 
+describe('rows of features and traits', () => {
+  it('U15: each row\'s controls have names of their own (not "Name" and "Change…" over and over)', () => {
+    render(<Harness kind="class" name="Wickwright" />);
+    expect(screen.getByRole('textbox', { name: 'Name of feature 2 (level 1)' })).toHaveValue('Wick Sense');
+    expect(screen.getByRole('textbox', { name: 'Name of feature 4 (level 4)' })).toHaveValue('Ability Score Improvement');
+    expect(screen.getByRole('button', { name: 'Change the text of Wick Sense' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Change the text of Spellcasting' })).toBeInTheDocument();
+  });
+
+  it('U15: the phone level table\'s "Columns" toggle is a 44 px target', () => {
+    setViewport(390);
+    render(<Harness kind="class" name="Wickwright" />);
+    const summary = screen.getByText('Columns', { selector: 'summary' });
+    expect(summary).toHaveClass('max-sm:min-h-11', 'pointer-coarse:min-h-11');
+  });
+});
+
 describe('the level table', () => {
   it('labels every cell by level and column, and renames a column', async () => {
     const user = userEvent.setup();

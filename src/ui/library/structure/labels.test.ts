@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { gloamwoodRecords } from '@/test/structuredFixtures';
 import type { StructuredRecord } from '@/types';
-import { PRIVACY_PROMISES, kindCount, modelName, originLabel, recordState, recordStateLabel, reviewHint } from './labels';
+import { PRIVACY_PROMISES, kindCount, modelName, originLabel, readButIncomplete, recordState, recordStateLabel, reviewHint } from './labels';
 
 const drake = gloamwoodRecords().find((r) => r.name === 'Glimmerwing Drake') as StructuredRecord;
 const on = { bookEnabled: true };
@@ -20,6 +20,18 @@ describe('record states', () => {
     expect(recordStateLabel({ ...drake, runState: 'running' }, on)).toBe('Reading…');
     expect(recordStateLabel({ ...drake, runState: 'refused' }, on)).toBe('Claude declined');
     expect(recordStateLabel({ ...drake, runState: 'failed', data: null }, on)).toBe("Couldn't read");
+  });
+
+  it('S3: a Claude reading that came back without data needs a fix; it is not "Not read yet"', () => {
+    const incomplete = { ...drake, data: null, origin: 'claude' as const, runState: 'done' as const, warnings: [{ code: 'missing' as const, severity: 'block' as const, field: 'abilities', message: 'x' }] };
+    expect(recordState(incomplete, on)).toBe('needs-fix');
+    expect(recordStateLabel(incomplete, on)).toBe('Needs a fix');
+    expect(readButIncomplete(incomplete)).toBe(true);
+    // Still unread: nothing read it, or only this device tried (a block from the offline reader).
+    expect(recordState({ ...incomplete, origin: 'parser' }, on)).toBe('not-read');
+    expect(readButIncomplete({ data: null })).toBe(false);
+    // A failed or declined read keeps its own state.
+    expect(recordState({ ...incomplete, runState: 'failed' }, on)).toBe('failed');
   });
 
   it('put the player\'s decisions first', () => {

@@ -45,6 +45,21 @@ export function isImportedPlaceholder(text: string | undefined): boolean {
   return typeof text === 'string' && PLACEHOLDER.test(text.trim());
 }
 
+/**
+ * Book text a copy left out (an export or GitHub save) that this device hasn't filled back in: copied text
+ * (`ref.textCopied`) whose description is empty or the placeholder. A `ref.redacted` left on text written
+ * since (the DM's ruling over a pulled placeholder) doesn't count: that text is the DM's or the player's, it
+ * shows as written and is never overwritten (spec §7.4). The DM's sheet text and restore ask this.
+ */
+export function copiedTextMissing(x: { description?: string; ref?: { textCopied: boolean; redacted?: true } }): boolean {
+  return Boolean(x.ref?.textCopied) && (!x.description?.trim() || isImportedPlaceholder(x.description));
+}
+
+/** A `ref.redacted` over text written there since (the DM's ruling over a pulled placeholder): it no longer says anything true. */
+export function staleRedaction(x: { description?: string; ref?: { redacted?: true } }): boolean {
+  return Boolean(x.ref?.redacted && x.description?.trim() && !isImportedPlaceholder(x.description));
+}
+
 /** FNV-1a 64-bit over NFKC-normalized, whitespace-collapsed text (UTF-8 bytes); 16 hex chars. Sync; not a security hash. */
 export function textFingerprint(text: string): string {
   const bytes = new TextEncoder().encode(text.normalize('NFKC').replace(/\s+/g, ' ').trim());

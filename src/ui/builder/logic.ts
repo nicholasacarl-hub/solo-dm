@@ -43,7 +43,6 @@ import {
 } from '@/types';
 import { optionRef } from '@/data/options/refs';
 import { nameKey, newId } from '@/lib/id';
-import { textFingerprint } from '@/lib/importedContent';
 import { finalAbilityScores, validateAbilities } from './abilities';
 import {
   alwaysPreparedSpellNames,
@@ -52,6 +51,8 @@ import {
   featuresAtLevel,
   findFeatureDef,
   inlineFightingStyles,
+  inlineOptionRef,
+  inlineStyleId,
   martialArtsDie,
   masteryMeleeOnly,
   needsFightingStyle,
@@ -122,24 +123,46 @@ function staleImport(id: string | null, found: unknown, noun: string): string[] 
 // ---------------------------------------------------------------------------
 
 export interface FightingStyleChoice {
+  /** What the draft stores: the feat's id, or "inline:<name key>" for a style the class feature prints. */
+  id: string;
   name: string;
   description: string;
   /** The Fighting Style feat, or null for a style the class feature prints itself. */
   feat: FeatOption | null;
 }
 
-/**
- * The Fighting Style picker (§5.3): every Fighting Style feat (all books, or the source filter's) plus
- * the options the class's own Fighting Style feature prints, a feat winning over a same-named option.
- */
-export function fightingStyleChoices(cls: ClassOption | undefined, data: BuilderData, filter: string | null = null, keep?: string | null): FightingStyleChoice[] {
-  const feats = data.feats.filter((f) => f.category === 'fighting-style' && (inSourceFilter(f, filter) || f.name === keep));
-  const out: FightingStyleChoice[] = feats.map((feat) => ({ name: feat.name, description: feat.description, feat }));
+/** Every Fighting Style feat given, then the class feature's own options that no Fighting Style feat (of any book) shares a name with. */
+function styleChoices(cls: ClassOption | undefined, styleFeats: readonly FeatOption[], shown: readonly FeatOption[]): FightingStyleChoice[] {
+  const out: FightingStyleChoice[] = shown.map((feat) => ({ id: feat.id, name: feat.name, description: feat.description, feat }));
   const inline: FeatureOption[] = inlineFightingStyles(cls ? findFeatureDef(cls, 'Fighting Style') : undefined);
   for (const option of inline) {
-    if (!out.some((c) => nameKey(c.name) === nameKey(option.name))) out.push({ name: option.name, description: option.description, feat: null });
+    if (!styleFeats.some((f) => nameKey(f.name) === nameKey(option.name))) out.push({ id: inlineStyleId(option.name), name: option.name, description: option.description, feat: null });
   }
   return out;
+}
+
+/** The draft's Fighting Style among the choices: by id (B4: same-named feats coexist); an older draft's name picks the first of that name. */
+export function chosenFightingStyle(choices: readonly FightingStyleChoice[], value: string | null | undefined): FightingStyleChoice | undefined {
+  if (!value) return undefined;
+  return choices.find((c) => c.id === value) ?? choices.find((c) => c.name === value);
+}
+
+/** A draft value that names a style by id ("srd:feat:archery", "lib:…", "inline:…") rather than by an older draft's name. */
+const isStyleId = (value: string) => /^(?:srd|lib|inline):/.test(value);
+
+/**
+ * The Fighting Style picker (§5.3): every Fighting Style feat (all books, or the source filter's, plus the
+ * chosen one `keep`) and the options the class's own Fighting Style feature prints, a feat winning over a
+ * same-named option. Same-named feats of different books are separate choices, told apart by id.
+ */
+export function fightingStyleChoices(cls: ClassOption | undefined, data: BuilderData, filter: string | null = null, keep?: string | null): FightingStyleChoice[] {
+  const styleFeats = data.feats.filter((f) => f.category === 'fighting-style');
+  const keepId = keep ? chosenFightingStyle(styleChoices(cls, styleFeats, styleFeats), keep)?.id : undefined;
+  return styleChoices(
+    cls,
+    styleFeats,
+    styleFeats.filter((f) => inSourceFilter(f, filter) || f.id === keepId),
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -296,13 +319,14 @@ function feature(name: string, source: Feature['source'], sourceName: string, de
 function fightingStyleFeature(draft: BuilderDraft, data: BuilderData, cls: ClassOption): Feature | null {
   if (!needsFightingStyle(cls) || !draft.fightingStyle) return null;
   const sourceName = `Fighting Style (${cls.name} 1)`;
-  const choice = fightingStyleChoices(cls, data).find((c) => c.name === draft.fightingStyle);
+  const choice = chosenFightingStyle(fightingStyleChoices(cls, data), draft.fightingStyle);
   if (choice && !choice.feat) {
-    // Part of the class feature's text: its ref, with the hash of the part copied.
+    // Part of the class feature's text: a ref narrowed to the option (its part, paragraph and hash).
     const def = findFeatureDef(cls, 'Fighting Style');
-    const ref = def?.ref ? { ...def.ref, textHash: textFingerprint(choice.description), textCopied: true } : undefined;
-    return feature(choice.name, 'class', sourceName, choice.description, undefined, ref);
+    return feature(choice.name, 'class', sourceName, choice.description, undefined, def ? inlineOptionRef(def, choice) : undefined);
   }
+  // An id that no longer resolves (its book is off) builds nothing; validateClass says so.
+  if (!choice && isStyleId(draft.fightingStyle)) return null;
   const feat = choice?.feat ?? findFeat(data.feats, draft.fightingStyle, cls.source?.sourceId);
   return feature(feat?.name ?? draft.fightingStyle, 'feat', sourceName, feat?.description ?? '', undefined, feat?.ref);
 }
@@ -335,12 +359,13 @@ function buildFeatures(draft: BuilderDraft, data: BuilderData, p: Picks, usesCtx
       // Proficiency Bonus uses must not reach a Rock Gnome.
       const text = lineageFeatureText(trait, lineage);
       const uses = inferFeatureUses(trait.name, text, usesCtx);
-      const imported = species!.lineages?.find((l) => l.name === lineage.name)?.ref;
-      if (imported && trait.ref) {
-        // A book's lineage keeps the book's words exactly, part by part (so a device that has the book can
-        // fill each back in): the trait as printed, and the chosen lineage as its own feature.
+      if (species!.source) {
+        // A book's lineage keeps the book's words exactly, part by part, each with its ref (so exports leave
+        // each out and a device that has the book fills each back in): the trait as printed, and the chosen
+        // lineage (one of the record's lineages: speciesChoices reads no options out of a book's text) as its
+        // own feature. Never the preamble-plus-option text below, which no ref describes (B1).
         out.push(feature(`${trait.name} (${lineage.name})`, 'species', species!.name, trait.description, uses, trait.ref));
-        out.push(feature(lineage.name, 'species', species!.name, lineage.description, undefined, imported));
+        out.push(feature(lineage.name, 'species', species!.name, lineage.description, undefined, lineage.ref));
       } else {
         out.push(feature(`${trait.name} (${lineage.name})`, 'species', species!.name, text, uses));
       }
@@ -366,7 +391,7 @@ function buildFeatures(draft: BuilderDraft, data: BuilderData, p: Picks, usesCtx
 export function draftAdaptationNotes(draft: BuilderDraft, data: BuilderData): string[] {
   const p = picks(draft, data);
   const feats = originFeats(draft, data).map((f) => f.feat);
-  const style = p.cls && draft.fightingStyle ? fightingStyleChoices(p.cls, data).find((c) => c.name === draft.fightingStyle)?.feat : undefined;
+  const style = p.cls ? chosenFightingStyle(fightingStyleChoices(p.cls, data), draft.fightingStyle)?.feat : undefined;
   return adaptationNotes([p.cls, p.subclass, p.species, p.background, style ?? undefined, ...feats]);
 }
 
@@ -382,7 +407,7 @@ export function draftImports(draft: BuilderDraft, data: BuilderData): { name: st
   add(p.species, 'species');
   add(p.background, 'background');
   for (const f of originFeats(draft, data)) add(f.feat, 'feat');
-  if (p.cls && draft.fightingStyle) add(fightingStyleChoices(p.cls, data).find((c) => c.name === draft.fightingStyle)?.feat, 'feat');
+  if (p.cls) add(chosenFightingStyle(fightingStyleChoices(p.cls, data), draft.fightingStyle)?.feat, 'feat');
   return out;
 }
 
@@ -580,11 +605,19 @@ export function activeSteps(draft: BuilderDraft, data: BuilderData): BuilderStep
   return BUILDER_STEPS.filter((s) => s !== 'spells' || plan.casting || plan.magicInitiate.length > 0);
 }
 
+/** A Fighting Style is chosen, and an id the draft holds still names one (its book may be off, or the class changed). */
+function validateFightingStyle(draft: BuilderDraft, data: BuilderData, cls: ClassOption): string[] {
+  if (!draft.fightingStyle) return ['Choose a Fighting Style.'];
+  if (!isStyleId(draft.fightingStyle) || chosenFightingStyle(fightingStyleChoices(cls, data), draft.fightingStyle)) return [];
+  const stale = staleImport(draft.fightingStyle, null, 'Fighting Style');
+  return stale.length ? stale : ['Choose a Fighting Style.'];
+}
+
 function validateClass(draft: BuilderDraft, data: BuilderData): string[] {
   const { cls, subclass } = picks(draft, data);
   if (!cls) return staleImport(draft.classId, cls, 'class').concat(draft.classId?.startsWith('lib:') ? [] : ['Choose a class.']);
   const errors: string[] = [];
-  if (needsFightingStyle(cls) && !draft.fightingStyle) errors.push('Choose a Fighting Style.');
+  if (needsFightingStyle(cls)) errors.push(...validateFightingStyle(draft, data, cls));
   for (const { feature: def, options } of classChoiceFeatures(cls)) {
     if (!options.some((o) => o.name === draft.classOptions[def.name])) errors.push(`Choose your ${def.name}.`);
   }

@@ -9,7 +9,6 @@
  */
 import { addFeature, addSpell, changeAbilityScore, characterLevel, proficiencyBonus, syncArmorClass } from '@/engine';
 import { nameKey } from '@/lib/id';
-import { textFingerprint } from '@/lib/importedContent';
 import {
   ABILITY_NAMES,
   type Ability,
@@ -27,7 +26,7 @@ import {
 } from '@/types';
 import { abilityIncreaseOf, minLevelOf } from '../structured/normalize/feat';
 import { abilityIncreaseSentence } from '../structured/parse/feat';
-import { baseFeatureName, findFeatureDef, inlineFightingStyles } from './classFeatures';
+import { baseFeatureName, findFeatureDef, inlineFightingStyles, inlineOptionRef, inlineStyleId } from './classFeatures';
 import { inferFeatureUses } from './featureUses';
 import { optionRef } from './refs';
 import { optionSourceLabel } from './resolve';
@@ -245,18 +244,21 @@ function featPick(feat: FeatOption, ctx: FeatChoiceContext): FeatPick {
   };
 }
 
-/** Fighting styles the class feature prints itself, with the feature's ref (the hash of the part copied). */
+/** Fighting styles the class feature prints itself, each with the feature's ref narrowed to it (its part, paragraph and hash). */
 function inlineStylePicks(cls: ClassOption | undefined): FeatPick[] {
   const def = cls ? findFeatureDef(cls, 'Fighting Style', 20) : undefined;
-  return inlineFightingStyles(def).map((o) => ({
-    id: `inline:${nameKey(o.name)}`,
-    name: o.name,
-    description: o.description,
-    sourceLabel: cls ? optionSourceLabel(cls) : 'SRD 5.2.1',
-    meetsLevel: true,
-    taken: false,
-    ...(def?.ref ? { ref: { ...def.ref, textHash: textFingerprint(o.description), textCopied: true } } : {}),
-  }));
+  return inlineFightingStyles(def).map((o) => {
+    const ref = def ? inlineOptionRef(def, o) : undefined;
+    return {
+      id: inlineStyleId(o.name),
+      name: o.name,
+      description: o.description,
+      sourceLabel: cls ? optionSourceLabel(cls) : 'SRD 5.2.1',
+      meetsLevel: true,
+      taken: false,
+      ...(ref ? { ref } : {}),
+    };
+  });
 }
 
 /**
@@ -284,9 +286,35 @@ export type FeatChoice =
   | { kind: 'plus-one-one'; abilities: [Ability, Ability] }
   | { kind: 'feat'; pick: FeatPick; ability?: Ability };
 
-/** Whether a choice can be applied (two different abilities; an ability for a feat that raises one of several). */
-export function featChoiceComplete(choice: FeatChoice): boolean {
-  if (choice.kind === 'plus-one-one') return choice.abilities[0] !== choice.abilities[1];
+/** One ability score increase: "+2 Strength". */
+export interface ScoreIncrease {
+  ability: Ability;
+  amount: number;
+}
+
+/** The most an Ability Score Improvement raises a score to (SRD 5.2.1: "This feat can't increase an ability score above 20"). */
+export const ASI_SCORE_MAX = 20;
+
+type ScoreChoice = Extract<FeatChoice, { kind: 'plus-two' | 'plus-one-one' }>;
+
+/** The increases a +2 / +1 +1 choice asks for. */
+export function scoreChoiceParts(choice: ScoreChoice): ScoreIncrease[] {
+  return choice.kind === 'plus-two' ? [{ ability: choice.ability, amount: 2 }] : choice.abilities.map((ability) => ({ ability, amount: 1 }));
+}
+
+/** Room left under the cap for each part of a +2 / +1 +1 choice: "+2 Strength" on a 19 adds 1, on a 20 nothing. */
+export function cappedIncreases(choice: ScoreChoice, scores: Character['abilityScores']): ScoreIncrease[] {
+  return scoreChoiceParts(choice).map((p) => ({ ability: p.ability, amount: Math.max(0, Math.min(p.amount, ASI_SCORE_MAX - scores[p.ability])) }));
+}
+
+/**
+ * Whether a choice can be applied: two different abilities; an ability for a feat that raises one of
+ * several; and, given the scores, a +2 or +1 +1 whose every ability can still rise (one at 20 would use the
+ * improvement up for nothing, B3; +2 on a 19 adds the 1 it can).
+ */
+export function featChoiceComplete(choice: FeatChoice, scores?: Character['abilityScores']): boolean {
+  if (choice.kind === 'plus-one-one' && choice.abilities[0] === choice.abilities[1]) return false;
+  if ((choice.kind === 'plus-two' || choice.kind === 'plus-one-one') && scores) return cappedIncreases(choice, scores).every((p) => p.amount > 0);
   if (choice.kind === 'feat') {
     const abilities = choice.pick.increase?.abilities ?? [];
     return abilities.length <= 1 || (choice.ability !== undefined && abilities.includes(choice.ability));
@@ -295,19 +323,23 @@ export function featChoiceComplete(choice: FeatChoice): boolean {
 }
 
 /** "+2 Strength", "+1 Wisdom, +1 Charisma". */
-function increaseText(parts: readonly { ability: Ability; amount: number }[]): string {
+function increaseText(parts: readonly ScoreIncrease[]): string {
   return parts.map((p) => `+${p.amount} ${ABILITY_NAMES[p.ability]}`).join(', ');
 }
 
-/** "chose: +2 Strength" · "feat: Lantern Bearer (The Gloamwood Almanac)" — names only, for the DM notice. */
-export function featChoiceNotice(choice: FeatChoice): string | null {
+/**
+ * "chose: +2 Strength" · "feat: Lantern Bearer (The Gloamwood Almanac)" — names only, for the DM notice. With
+ * `increases` (what applyFeatChoice applied), a +2 / +1 +1 names what took effect, and nothing when none did.
+ */
+export function featChoiceNotice(choice: FeatChoice, increases?: readonly ScoreIncrease[]): string | null {
   switch (choice.kind) {
     case 'dm':
       return null;
     case 'plus-two':
-      return `chose: ${increaseText([{ ability: choice.ability, amount: 2 }])}`;
-    case 'plus-one-one':
-      return `chose: ${increaseText(choice.abilities.map((ability) => ({ ability, amount: 1 })))}`;
+    case 'plus-one-one': {
+      const parts = increases ?? scoreChoiceParts(choice);
+      return parts.length ? `chose: ${increaseText(parts)}` : null;
+    }
     case 'feat': {
       const { pick } = choice;
       if (!pick.feat) return `fighting style: ${pick.name}`;
@@ -322,9 +354,13 @@ const CHOICE_REMINDER: Readonly<Record<FeatChoiceKind, RegExp>> = {
   'fighting-style': /fighting style/i,
 };
 
-/** The level-up reminders minus the one the player's choice answers ("…: Ability Score Improvement — raise…"). */
-export function dropChoiceReminder(reminders: readonly string[], kind: FeatChoiceKind, choice: FeatChoice): string[] {
+/**
+ * The level-up reminders minus the one the player's choice answers ("…: Ability Score Improvement — raise…").
+ * A +2 / +1 +1 that applied nothing (`increases` empty) answers nothing: the reminder stays.
+ */
+export function dropChoiceReminder(reminders: readonly string[], kind: FeatChoiceKind, choice: FeatChoice, increases?: readonly ScoreIncrease[]): string[] {
   if (choice.kind === 'dm') return [...reminders];
+  if ((choice.kind === 'plus-two' || choice.kind === 'plus-one-one') && increases && !increases.length) return [...reminders];
   return reminders.filter((r) => !CHOICE_REMINDER[kind].test(r));
 }
 
@@ -342,9 +378,11 @@ export interface AppliedFeatChoice {
   character: Character;
   /** Engine warnings (a score already at its cap, …). */
   warnings: string[];
+  /** The ability increases that took effect (a +2 / +1 +1, or a feat's own), after the cap; [] when none did. */
+  increases: ScoreIncrease[];
 }
 
-function raise(c: Character, parts: readonly { ability: Ability; amount: number }[], max: number, warnings: string[]): Character {
+function raise(c: Character, parts: readonly ScoreIncrease[], max: number, warnings: string[]): Character {
   let next = c;
   for (const { ability, amount } of parts) {
     const r = changeAbilityScore(next, ability, amount, max);
@@ -352,6 +390,13 @@ function raise(c: Character, parts: readonly { ability: Ability; amount: number 
     next = r.character;
   }
   return next;
+}
+
+/** What raising these abilities changed: each score after minus before, increases only. */
+function raisedBy(before: Character, after: Character, abilities: readonly Ability[]): ScoreIncrease[] {
+  return [...new Set(abilities)]
+    .map((ability) => ({ ability, amount: after.abilityScores[ability] - before.abilityScores[ability] }))
+    .filter((p) => p.amount > 0);
 }
 
 /** The feature the level-up added for the trigger ("Ability Score Improvement", source class). */
@@ -368,13 +413,17 @@ function triggerFeature(c: Character, trigger: FeatChoiceTrigger, addedIds: Read
  */
 export function applyFeatChoice(c: Character, trigger: FeatChoiceTrigger, choice: FeatChoice, ctx: ApplyFeatChoiceContext): AppliedFeatChoice {
   const warnings: string[] = [];
-  if (choice.kind === 'dm' || !featChoiceComplete(choice)) return { character: c, warnings };
+  // Nothing to apply: "Decide with my DM", or a +2 / +1 +1 whose scores are at 20 (the gained feature stays as it is).
+  if (choice.kind === 'dm' || !featChoiceComplete(choice, c.abilityScores)) return { character: c, warnings, increases: [] };
   const placeholder = triggerFeature(c, trigger, ctx.addedIds);
   let next: Character;
+  let increases: ScoreIncrease[] = [];
   if (choice.kind === 'plus-two' || choice.kind === 'plus-one-one') {
-    const parts = choice.kind === 'plus-two' ? [{ ability: choice.ability, amount: 2 }] : choice.abilities.map((ability) => ({ ability, amount: 1 }));
-    next = raise(c, parts, 20, warnings);
-    const name = `${trigger.featureName} (${increaseText(parts)})`;
+    const parts = scoreChoiceParts(choice);
+    next = raise(c, parts, ASI_SCORE_MAX, warnings);
+    // Named for what took effect: "+2 Strength" on a 19 is "+1 Strength" (B3).
+    increases = raisedBy(c, next, parts.map((p) => p.ability));
+    const name = `${trigger.featureName} (${increaseText(increases)})`;
     next = placeholder
       ? { ...next, features: next.features.map((f) => (f.id === placeholder.id ? { ...f, name, source: 'feat' as const } : f)) }
       : addFeature(next, { name, source: 'feat', sourceName: `${ctx.className} ${ctx.classLevel}`, description: '' }).character;
@@ -398,10 +447,14 @@ export function applyFeatChoice(c: Character, trigger: FeatChoiceTrigger, choice
     const increase = pick.increase;
     if (increase) {
       const ability = increase.abilities.length === 1 ? increase.abilities[0] : choice.ability;
-      if (ability) next = raise(next, [{ ability, amount: increase.amount }], increase.max, warnings);
+      if (ability) {
+        const raised = raise(next, [{ ability, amount: increase.amount }], increase.max, warnings);
+        increases = raisedBy(next, raised, [ability]);
+        next = raised;
+      }
     }
   }
   const ac = syncArmorClass(c, next, ctx.equipment ?? []);
   warnings.push(...ac.events.filter((e) => e.type === 'warning').map((e) => e.message));
-  return { character: ac.character, warnings };
+  return { character: ac.character, warnings, increases };
 }

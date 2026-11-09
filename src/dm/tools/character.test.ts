@@ -13,10 +13,10 @@ vi.mock('@/engine', async (importOriginal) => {
 vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
-import { levelUp } from '@/engine';
+import { characterSheetText, levelUp, weaponCritRange } from '@/engine';
 import { sampleCharacter } from '@/test/fixtures';
-import { EXPECTED_MERGED, GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, gloamwoodEntryId, TEXT } from '@/test/structuredFixtures';
-import type { BuilderData, Character, ClassLevel, ClassOption, CompendiumEntry } from '@/types';
+import { EXPECTED_MERGED, GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef, TEXT } from '@/test/structuredFixtures';
+import type { BuilderData, Character, ClassLevel, ClassOption, CompendiumEntry, SubclassOption } from '@/types';
 import { deps, resetDmDeps } from '../deps';
 import { SAMPLE_RULES } from '../testing/fakeData';
 import { setupHarness, type HarnessOptions } from '../testing/harness';
@@ -135,6 +135,74 @@ describe('level_up from the merged builder data', () => {
     expect(out.content).toContain("Two classes are named Fighter (SRD 5.2.1, The Gloamwood Almanac); used the hero's own.");
     expect(h.sheet().classes).toHaveLength(1);
     expect(h.sheet().classes[0]).toMatchObject({ classId: FIGHTER.id, level: 4 });
+  });
+
+  describe('B2: a subclass the hero already has, named again', () => {
+    // A book reprinting an SRD subclass's name (invented features): it sits beside the SRD Champion.
+    const bookChampion: SubclassOption = {
+      ...EMBER,
+      id: 'lib:gloam:subclass:champion',
+      name: 'Champion',
+      features: [
+        ...EMBER.features.filter((f) => f.level === 3),
+        { level: 7, name: 'Lantern Stride', description: 'Invented: you stride through dim light.', ref: importedRef({ entryId: 'lib:gloam:subclass:champion', kind: 'subclass', entryName: 'Champion', part: 'Lantern Stride', level: 7, textHash: 'h', textCopied: true }) },
+      ],
+    };
+    const data: BuilderData = { ...EXPECTED_MERGED, classes: EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, subclasses: [...c.subclasses, bookChampion] } : c)) };
+    const subclassRef = importedRef({ entryId: bookChampion.id, kind: 'subclass', entryName: 'Champion' });
+
+    it("keeps the hero's book subclass, its later features and its rules (no SRD Improved Critical)", async () => {
+      const h = setup({ builderData: data, character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 6, hitDie: 10, subclass: 'Champion', subclassId: bookChampion.id, subclassRef }) });
+      expect(weaponCritRange(h.sheet())).toBe(20);
+      const out = await h.run('level_up', { class_name: 'Fighter', subclass: 'Champion' });
+      expect(out.isError).toBeUndefined();
+      const c = h.sheet();
+      expect(c.classes[0]).toMatchObject({ level: 7, subclass: 'Champion', subclassId: bookChampion.id, subclassRef });
+      expect(c.features.map((f) => f.name)).toEqual(['Lantern Stride']);
+      expect(weaponCritRange(c)).toBe(20);
+      expect(out.content).toContain('- Lantern Stride (The Gloamwood Almanac) — its text is on the sheet');
+    });
+
+    it('a new name two subclasses share takes the SRD one, says so, and keeps no book ref on it', async () => {
+      const h = setup({ builderData: data, character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 2, hitDie: 10 }) });
+      const out = await h.run('level_up', { class_name: 'Fighter', subclass: 'Champion' });
+      expect(h.sheet().classes[0]).toMatchObject({ level: 3, subclass: 'Champion', subclassId: 'srd:subclass:champion' });
+      expect(h.sheet().classes[0].subclassRef).toBeUndefined();
+      expect(out.content).toContain('Two subclasses of Fighter are named Champion (SRD 5.2.1, The Gloamwood Almanac); used the one from SRD 5.2.1.');
+    });
+  });
+
+  it('B6: a 2014 subclass chosen at level 3 brings its older-edition notes to the sheet text and the result, once', async () => {
+    const h = setup({ character: hero({ classId: 'srd:class:cleric', name: 'Cleric', level: 2, hitDie: 8, casterType: 'full', spellcastingAbility: 'wis' }) });
+    const out = await h.run('level_up', { class_name: 'Cleric', subclass: 'Dusk Domain' });
+    const notes = (DUSK.source?.adaptations ?? []).map((a) => a.note);
+    expect(notes.map((n) => n.slice(0, 26))).toEqual(['Older edition: you choose ', 'Written for the older rule']);
+    expect(h.sheet().adaptationNotes).toEqual(notes);
+    expect(characterSheetText(h.sheet())).toContain(['### Older-edition options (app notes)', ...notes.map((n) => `- ${n}`)].join('\n'));
+    expect(out.content).toContain(['Older-edition notes now on the sheet (app notes):', ...notes.map((n) => `- ${n}`)].join('\n'));
+    const next = await h.run('level_up', { class_name: 'Cleric' });
+    expect(h.sheet().adaptationNotes).toEqual(notes);
+    expect(next.content).not.toContain('Older-edition notes');
+  });
+
+  it("B8: a book's class named like an SRD class keeps its feature's own uses (no SRD Second Wind table)", async () => {
+    const SECOND_WIND = 'You have a limited well of stamina. As a Bonus Action, you can regain Hit Points equal to 1d10 plus your Fighter level. Once you use this feature, you must finish a Short or Long Rest before you can use it again.';
+    const ref = importedRef({ entryId: 'lib:gloam:class:fighter', kind: 'class', entryName: 'Fighter', part: 'Second Wind', level: 1, textCopied: true });
+    const bookFighter: ClassOption = {
+      ...FIGHTER,
+      id: 'lib:gloam:class:fighter',
+      source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2014', adaptations: [] },
+      features: [{ level: 1, name: 'Second Wind', description: SECOND_WIND, ref }],
+      levelTable: FIGHTER.levelTable.map(({ level, proficiencyBonus, features }) => ({ level, proficiencyBonus, features })),
+      subclasses: [],
+    };
+    const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookFighter] };
+    const wind = { id: 'wind', name: 'Second Wind', source: 'class' as const, sourceName: 'Fighter 1', description: SECOND_WIND, uses: { max: 1, used: 0, recharge: 'short' as const }, ref };
+    const h = setup({ builderData: data, character: hero({ classId: bookFighter.id, name: 'Fighter', level: 1, hitDie: 10 }, { features: [wind] }) });
+    const out = await h.run('level_up', { class_name: 'Fighter' });
+    expect(h.sheet().classes[0]).toMatchObject({ classId: bookFighter.id, level: 2 });
+    expect(h.sheet().features.find((f) => f.name === 'Second Wind')?.uses?.max).toBe(1);
+    expect(out.content).not.toContain('Second Wind: 1 → 2');
   });
 
   it('levels an SRD class exactly as without builder data (the DM supplies its features)', async () => {

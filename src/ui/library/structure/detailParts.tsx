@@ -55,8 +55,9 @@ export function DetailNotices({
   onGoToField(path: string): void;
   onShowExcerpt(path: string): void;
 }) {
-  // Run states (not read, failed, declined, stale, newer version) have their own notices with actions.
-  const shown = [...warnings].filter((w) => !RUN_CODES.has(w.code)).sort(bySeverity);
+  // Run states (not read, failed, declined, stale, newer version) have their own notices with actions;
+  // "Claude left a note" says no more than the note itself, shown below.
+  const shown = [...warnings].filter((w) => !RUN_CODES.has(w.code) && !(w.code === 'model-note' && modelNote)).sort(bySeverity);
   if (shown.length === 0 && !modelNote) return null;
   return (
     <section aria-label="Things to check" className="flex flex-col gap-2">

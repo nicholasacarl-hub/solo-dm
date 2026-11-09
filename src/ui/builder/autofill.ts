@@ -23,6 +23,7 @@ import { DM_BACKSTORY, defaultPortrait, pick, suggestAlignment, suggestName, sug
 import {
   activeSteps,
   classSpellOptions,
+  chosenFightingStyle,
   fightingStyleChoices,
   masteryPlan,
   selectClass,
@@ -126,10 +127,10 @@ function fillClass(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDra
   if (!cls) return draft;
   const next = selectClass(draft, cls.id);
   let fightingStyle = next.fightingStyle;
-  if (needsFightingStyle(cls) && !fightingStyle) {
+  if (needsFightingStyle(cls) && !chosenFightingStyle(fightingStyleChoices(cls, data), fightingStyle)) {
     const styles = fightingStyleChoices(cls, data, draft.sourceFilter);
     const recommended = recommendedPlain(findFeatureDef(cls, 'Fighting Style')?.description ?? '');
-    fightingStyle = (styles.find((f) => recommended && nameKey(f.name) === nameKey(recommended)) ?? styles[0])?.name ?? null;
+    fightingStyle = (styles.find((f) => recommended && nameKey(f.name) === nameKey(recommended)) ?? styles[0])?.id ?? null;
   }
   const classOptions = { ...next.classOptions };
   for (const { feature, options } of classChoiceFeatures(cls)) {

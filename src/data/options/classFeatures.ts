@@ -3,7 +3,9 @@
  * consistently ("Choose one of the following", "Expertise in two of your skill proficiencies"),
  * so light text matching keeps the builder working for imported classes too.
  */
-import { ABILITIES, ABILITY_NAMES, type ClassFeatureDef, type ClassOption, type Skill, type SkillBonus, type SubclassOption } from '@/types';
+import { nameKey } from '@/lib/id';
+import { textFingerprint } from '@/lib/importedContent';
+import { ABILITIES, ABILITY_NAMES, type ClassFeatureDef, type ClassOption, type ImportedRef, type Skill, type SkillBonus, type SubclassOption } from '@/types';
 import { runIn } from '../structured/parse/srdRulesOptions';
 import { skillFromName } from './species';
 
@@ -163,6 +165,35 @@ export function inlineFightingStyles(def: ClassFeatureDef | undefined): FeatureO
   });
   const offered = options.length >= 2 || (options.length === 1 && /\boptions? below\b/i.test(def.description));
   return offered ? options : [];
+}
+
+/** The id a style the class feature prints goes by (the builder draft and the level-up panel): "inline:<name key>". */
+export const inlineStyleId = (name: string): string => `inline:${nameKey(name)}`;
+
+/**
+ * The ref of one option a book's class feature prints (an inline fighting style), copied onto a character
+ * on its own: the feature's ref narrowed to the option — the option's name as its part, its own paragraph
+ * as `at`, the hash of its text — so an export leaves out just that text and restore fills in just that
+ * text, never the whole feature with every option (B5). Undefined for an SRD feature (no ref).
+ */
+export function inlineOptionRef(def: ClassFeatureDef, option: FeatureOption): ImportedRef | undefined {
+  if (!def.ref) return undefined;
+  const { at: _wholeFeature, ...ref } = def.ref;
+  const at = optionParagraph(def, option.name);
+  return { ...ref, part: option.name, ...(at ? { at } : {}), textHash: textFingerprint(option.description), textCopied: true };
+}
+
+/**
+ * Where an option's run-in paragraph sits in the book. The feature's description is its span's paragraphs
+ * (a leading heading dropped, so they line up from the end) joined by blank lines.
+ */
+function optionParagraph(def: ClassFeatureDef, name: string): ImportedRef['at'] {
+  const at = def.ref?.at;
+  if (!at) return undefined;
+  const paragraphs = def.description.split(/\n{2,}/);
+  const index = paragraphs.findIndex((p) => nameKey(runIn(p.split('\n')[0])?.label ?? '') === nameKey(name));
+  const paragraph = at.to - (paragraphs.length - 1 - index);
+  return index >= 0 && paragraph >= at.from ? { ordinals: [...at.ordinals], from: paragraph, to: paragraph } : undefined;
 }
 
 export interface OptionGrants {

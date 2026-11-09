@@ -42,6 +42,7 @@ export function TextSpanChip({
   fieldPath,
   describedBy,
   onFocus,
+  owner,
 }: {
   span: TextSpan;
   blocks: readonly CandidateBlock[];
@@ -53,6 +54,8 @@ export function TextSpanChip({
   fieldPath?: string;
   describedBy?: string;
   onFocus?(): void;
+  /** What the text belongs to ("Wick Sense"): names "Change…" for screen readers among many rows. */
+  owner?: string;
 }) {
   const [open, setOpen] = useState(false);
   const [picking, setPicking] = useState(false);
@@ -86,7 +89,7 @@ export function TextSpanChip({
             {spanRange(span)} of ‘{title}’
           </span>
         </button>
-        <Button size="sm" variant="ghost" disabled={disabled} onClick={() => setPicking(true)}>
+        <Button size="sm" variant="ghost" disabled={disabled} aria-label={owner ? `Change the text of ${owner}` : undefined} onClick={() => setPicking(true)}>
           Change…
         </Button>
       </div>

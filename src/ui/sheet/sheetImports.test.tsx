@@ -11,8 +11,9 @@ import { savingThrowModifier } from '@/engine';
 import { inventoryFromOption } from '@/data/options/resolve';
 import { importedPlaceholder } from '@/lib/importedContent';
 import { useGame } from '@/state/gameStore';
+import { deleteLibrarySource, saveLibrarySource } from '@/storage';
 import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
-import { EXPECTED_MERGED, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef, TEXT } from '@/test/structuredFixtures';
+import { EXPECTED_MERGED, GLOAMWOOD_TITLE, gloamwoodEntryId, gloamwoodSource, importedRef, TEXT } from '@/test/structuredFixtures';
 import type { Character, CompendiumEntry, EquipmentOption, Feature, InventoryItem } from '@/types';
 import { installDialogPolyfill, resetFakeGame } from '@/ui/builder/testing/fakeGameStore';
 import { autoCleanup } from '@/ui/shell/testUtils';
@@ -164,7 +165,8 @@ describe('items from the player’s books (SRD 5.2.1 Attunement)', () => {
     expect(within(row('Lantern of Hollow Light')).getByText('Requires attunement (by a Wizard)')).toBeInTheDocument();
     await user.click(within(row('Lantern of Hollow Light')).getByText('Details'));
     expect(within(row('Lantern of Hollow Light')).getByText('This lantern burns without oil.')).toBeInTheDocument();
-    expect(within(row('Gloam Lamp')).getByText(`From “${GLOAMWOOD_TITLE}”, which isn't on this device.`)).toBeInTheDocument();
+    // The library is read live: the line says the book is missing once it knows no copy is here.
+    expect(await within(row('Gloam Lamp')).findByText(`From “${GLOAMWOOD_TITLE}”, which isn't on this device.`)).toBeInTheDocument();
     // An item that says it doesn't need attunement has no Attune button.
     expect(within(row('Gloam Lamp')).queryByRole('button', { name: /Attune/ })).toBeNull();
     expect(within(row('Ember Blade')).getByText('+1 to attack and damage rolls — add it to your rolls')).toBeInTheDocument();
@@ -189,6 +191,58 @@ describe('items from the player’s books (SRD 5.2.1 Attunement)', () => {
     expect(lantern).toMatchObject({ name: 'Lantern of Hollow Light', magic: true, category: 'magic-item', requiresAttunement: true, attunementBy: 'a Wizard', compendiumId: LANTERN.id });
     expect(lantern.ref).toMatchObject({ entryId: LANTERN.id, textCopied: false });
     expect(rock).toEqual({ id: expect.any(String), name: 'Odd Rock', quantity: 1, category: 'gear' });
+  });
+
+  it('B9: keeps the category the player chose when the linked entry has none, so a weapon can be equipped', async () => {
+    const user = userEvent.setup();
+    // A book's item only the rules index knows (no catalog option), and the SRD's Ammunition (not in the catalog).
+    const thornwhip: CompendiumEntry = { id: 'lib:gloam:30', sourceId: 'gloam', sourceName: GLOAMWOOD_TITLE, kind: 'item', name: 'Thornwhip', text: 'An invented whip.' };
+    const ammunition: CompendiumEntry = { id: 'srd:item:ammunition', sourceId: 'srd-5.2.1', sourceName: 'SRD 5.2.1', kind: 'item', name: 'Ammunition', text: 'Arrows and bolts.' };
+    mocks.entries = [thornwhip, ammunition];
+    start({ inventory: [] });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Inventory/ }));
+    const add = async (name: string, category: string) => {
+      await user.type(screen.getByLabelText('Item name'), name);
+      await user.selectOptions(screen.getByLabelText('Category'), category);
+      await user.click(screen.getByRole('button', { name: 'Add' }));
+    };
+    await add('Thornwhip', 'weapon');
+    await add('Ammunition', 'consumable');
+    await add('Hookstaff', 'treasure');
+    const [whip, ammo, staff] = sheet().inventory;
+    expect(whip).toMatchObject({ name: 'Thornwhip', category: 'weapon', compendiumId: thornwhip.id, ref: { entryId: thornwhip.id, textCopied: false } });
+    expect(whip.magic).toBeUndefined();
+    expect(ammo).toMatchObject({ name: 'Ammunition', category: 'consumable', compendiumId: ammunition.id });
+    // A catalog option keeps its own category (the numbers and kind come with the link).
+    expect(staff).toMatchObject({ name: 'Hookstaff', category: 'weapon' });
+    expect(screen.getByRole('button', { name: 'Equip Thornwhip' })).toBeInTheDocument();
+  });
+
+  it('S4: says a switched-off book is switched off, and only a book that is gone "isn\'t on this device"', async () => {
+    const user = userEvent.setup();
+    const staff = { id: 'it-staff', ...inventoryFromOption(option('Hookstaff'), 1, EXPECTED_MERGED.equipment) };
+    // Another (invented) book, which this device has no copy of.
+    const otherBook = { sourceId: 'other', sourceTitle: 'The Lantern Ledger', bookFingerprint: '0123456789abcdef' };
+    const gone = item({ name: 'Gloam Lamp', magic: true, requiresAttunement: false, ref: { ...importedRef(), ...otherBook, entryId: 'lib:other:999', kind: 'magic-item', entryName: 'Gloam Lamp', textHash: '', textCopied: false } });
+    const base = sampleCharacter();
+    const spell = { id: 'lib:gloam:40', name: 'Ashen Choir', level: 2, prepared: true, source: 'Wizard', ref: { ...importedRef(), entryId: 'lib:gloam:40', kind: 'spell' as const, entryName: 'Ashen Choir', textHash: '', textCopied: false } };
+    // The book is on this device, switched off: the index has none of its entries.
+    await saveLibrarySource(gloamwoodSource('gloam', 'md', { enabled: false }), []);
+    try {
+      start({ inventory: [staff, gone], spellcasting: { ...base.spellcasting!, spells: [...base.spellcasting!.spells, spell] } });
+      render(<Harness />);
+      await user.click(screen.getByRole('tab', { name: /Inventory/ }));
+      const row = (name: string) => screen.getByText(name).closest('li') as HTMLElement;
+      expect(await within(row('Hookstaff')).findByText(`From “${GLOAMWOOD_TITLE}”, which is switched off in your Library.`)).toBeInTheDocument();
+      expect(row('Hookstaff').textContent).not.toMatch(/isn't on this device/);
+      expect(within(row('Gloam Lamp')).getByText('From “The Lantern Ledger”, which isn\'t on this device.')).toBeInTheDocument();
+      await user.click(screen.getByRole('tab', { name: /Spells/ }));
+      await user.click(screen.getByRole('button', { name: 'Ashen Choir' }));
+      expect(await screen.findByText(`From “${GLOAMWOOD_TITLE}”, which is switched off in your Library.`)).toBeInTheDocument();
+    } finally {
+      await deleteLibrarySource('gloam');
+    }
   });
 });
 

@@ -16,6 +16,7 @@ import { isConfident } from './bookData';
 import { kindCount } from './labels';
 import { acceptRecords } from './reviewActions';
 import { TOUCH, TOUCH_BUTTONS } from './touch';
+import { UndoToast, showUndo } from './UndoToast';
 
 /** "2 classes, 16 subclasses, 8 species, …" in STRUCTURED_KINDS order. */
 export function foundList(summary: Pick<DetectionSummary, 'byKind'>): string {
@@ -79,9 +80,22 @@ export function ImportDonePage({
       if (alsoElsewhere) for (const r of elsewhere) ids.add(r.id);
       const result = await acceptRecords([...ids]);
       setAccepted(result.accepted);
-      // The accept box goes: focus the next step.
-      openRef.current?.focus();
-      toast.success(`Accepted ${result.accepted}.${result.skipped.length ? ` ${result.skipped.length} need a look first.` : ''}`);
+      const skipped = result.skipped.length ? ` ${result.skipped.length} need a look first.` : '';
+      if (result.accepted === 0) {
+        // Nothing to undo: the accept box goes, focus the next step.
+        openRef.current?.focus();
+        toast.info(`Nothing was accepted.${skipped}`);
+        return;
+      }
+      // Every bulk action has a 10-second Undo (D22); focus moves to it, and comes back to the next step.
+      showUndo(
+        `Accepted ${result.accepted}.${skipped}`,
+        async () => {
+          await result.undo();
+          setAccepted(null);
+        },
+        { focus: true, returnFocus: () => openRef.current },
+      );
     } catch (error) {
       toast.error(errorMessage(error, 'Could not accept them.'));
     } finally {
@@ -157,6 +171,8 @@ export function ImportDonePage({
           <span>This looks like the same book as “{duplicate.title}”.</span>
         </p>
       )}
+      {/* Inside the dialog (a modal makes the page behind it inert); My library shows it once the dialog closes. */}
+      <UndoToast />
       <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-3">
         <Button variant="ghost" onClick={onDone}>
           Done

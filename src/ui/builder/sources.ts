@@ -4,7 +4,7 @@
  * and the older-edition notes and book refs a draft's choices carry. Pure.
  */
 import { nameKey } from '@/lib/id';
-import { SRD_SOURCE_ID, type Adaptation, type BuilderData, type OptionSource } from '@/types';
+import { SRD_SOURCE_ID, type BuilderData, type OptionSource } from '@/types';
 import type { SpellInfo } from './spells';
 
 export interface OptionBook {
@@ -62,14 +62,8 @@ export function shortTitle(title: string, max = 24): string {
   return title.length > max ? `${title.slice(0, max - 1).trimEnd()}…` : title;
 }
 
-/** Every adaptation note of the given options, once each (for adaptationNotes and the Review step). */
-export function adaptationNotes(options: readonly (Sourced | undefined)[]): string[] {
-  const notes: string[] = [];
-  for (const o of options) {
-    for (const a of o?.source?.adaptations ?? ([] as Adaptation[])) if (!notes.includes(a.note)) notes.push(a.note);
-  }
-  return notes;
-}
+/** Every adaptation note of the given options, once each (moved to src/data/options so a level-up adds them too). */
+export { adaptationNotes } from '@/data/options/adaptationNotes';
 
 /** The builder's one muted line about imported options it can't use (§5.1 rule 10). */
 export function builderProblemLine(problems: readonly { kind: string; message: string }[]): string | null {

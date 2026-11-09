@@ -6,10 +6,12 @@
  *
  * Owner: E2. The only extraction call site of the Messages API (src/dm/requestAudit.test.ts).
  */
+import { AnthropicError, APIConnectionError, APIError, APIUserAbortError } from '@anthropic-ai/sdk';
 import type {
   BetaContentBlock,
   BetaMessage,
   BetaRawMessageStreamEvent,
+  BetaUsage,
   MessageCreateParamsBase,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { WIRE, type Wire } from '@/data/structured/wire';
@@ -49,6 +51,58 @@ export class IdleTimeoutError extends Error {
   }
 }
 
+/** An API error `type` → the HTTP status the same error has when it comes back before the stream starts. */
+const STATUS_OF_TYPE: Readonly<Record<string, number>> = {
+  invalid_request_error: 400,
+  authentication_error: 401,
+  permission_error: 403,
+  not_found_error: 404,
+  request_too_large: 413,
+  rate_limit_error: 429,
+  api_error: 500,
+  timeout_error: 504,
+  overloaded_error: 529,
+};
+
+/**
+ * A stream failure as the SDK class it stands for, so the runner classifies it by class like any other:
+ * - An `event: error` after a 200 (the API sends overloaded_error that way under load) reaches us as a
+ *   plain APIError with no status and the error's `type` (SDK core/streaming.ts). It becomes the class the
+ *   same error has over HTTP: overloaded_error → OverloadedError, api_error → InternalServerError,
+ *   rate_limit_error → RateLimitError, and so on.
+ * - A connection that drops mid-stream reaches us as a plain AnthropicError wrapping the fetch TypeError
+ *   (SDK lib/BetaMessageStream.ts). It becomes an APIConnectionError.
+ * Anything else (typed classes, aborts, an unknown type) is returned as it is.
+ */
+export function typedStreamError(err: unknown): unknown {
+  if (err instanceof APIError) {
+    if (err.status !== undefined || err instanceof APIConnectionError || err instanceof APIUserAbortError) return err;
+    const status = err.type ? STATUS_OF_TYPE[err.type] : undefined;
+    return status ? APIError.generate(status, err.error, err.message, err.headers ?? new Headers()) : err;
+  }
+  if (err instanceof AnthropicError && err.cause instanceof TypeError) return new APIConnectionError({ message: 'Connection error.', cause: err.cause });
+  return err;
+}
+
+/** The usage a stream has reported so far: message_start's, then each message_delta's running totals (as the SDK accumulates them). */
+interface StreamedUsage { model: string; usage: BetaUsage | null }
+function noteStreamedUsage(seen: StreamedUsage, event: BetaRawMessageStreamEvent): void {
+  if (event.type === 'message_start') {
+    seen.model = event.message.model;
+    seen.usage = { ...event.message.usage };
+  } else if (event.type === 'message_delta' && seen.usage) {
+    const u = event.usage;
+    seen.usage = {
+      ...seen.usage,
+      output_tokens: u.output_tokens,
+      ...(u.input_tokens != null ? { input_tokens: u.input_tokens } : {}),
+      ...(u.cache_creation_input_tokens != null ? { cache_creation_input_tokens: u.cache_creation_input_tokens } : {}),
+      ...(u.cache_read_input_tokens != null ? { cache_read_input_tokens: u.cache_read_input_tokens } : {}),
+      ...(u.iterations != null ? { iterations: u.iterations } : {}),
+    };
+  }
+}
+
 /**
  * 1. params = buildExtractionRequest(input); a linked AbortController aborts on opts.signal or IDLE_TIMEOUT_MS without an event.
  * 2. stream = client.beta.messages.stream(params, { signal, maxRetries: 0 }); the first event calls onFirstEvent()
@@ -56,11 +110,14 @@ export class IdleTimeoutError extends Error {
  * 3. message = await stream.finalMessage(); usage = usageDelta(message.usage, message.model, '5m', input.model).
  * 4. stop_reason 'refusal' → refused (stop_details?.category); 'max_tokens' → truncated. Content is not read in either case.
  * 5. readWire(kind, message.content) → ok | invalid.
+ * A stream that fails after message_start reports the usage it had streamed through onPartialUsage (the
+ * job's ledger and spending limit count it), then throws: a mid-stream error as its SDK class
+ * (typedStreamError), the watchdog as IdleTimeoutError.
  */
 export async function runExtraction<K extends StructuredKind>(
   client: ExtractionClient,
   input: ExtractionRequestInput & { kind: K },
-  opts: { signal?: AbortSignal; onFirstEvent?: () => void },
+  opts: { signal?: AbortSignal; onFirstEvent?: () => void; onPartialUsage?: (usage: UsageTotals) => void },
 ): Promise<ExtractionOutcome<K>> {
   const params = buildExtractionRequest(input);
   const controller = new AbortController();
@@ -78,11 +135,12 @@ export async function runExtraction<K extends StructuredKind>(
   };
   arm();
   let stream: ExtractionStream | undefined;
+  const seen: StreamedUsage = { model: '', usage: null };
   try {
     stream = client.beta.messages.stream(params, { signal: controller.signal, maxRetries: 0 });
     let first = true;
     for await (const event of stream) {
-      void event;
+      noteStreamedUsage(seen, event);
       if (first) {
         first = false;
         opts.onFirstEvent?.();
@@ -98,11 +156,12 @@ export async function runExtraction<K extends StructuredKind>(
     if (!read.ok) return { type: 'invalid', issue: read.issue, model, usage };
     return { type: 'ok', wire: read.wire, model, usage, cacheRead: message.usage.cache_read_input_tokens ?? 0 };
   } catch (err) {
+    if (seen.usage) opts.onPartialUsage?.(usageDelta(seen.usage, seen.model || input.model, '5m', input.model));
     if (idle) {
       stream?.abort();
       throw new IdleTimeoutError();
     }
-    throw err;
+    throw typedStreamError(err);
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     opts.signal?.removeEventListener('abort', forward);

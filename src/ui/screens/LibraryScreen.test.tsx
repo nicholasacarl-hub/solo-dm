@@ -177,8 +177,37 @@ describe('My library rows', () => {
     expect(within(rowOf('Book c')).getByText('Claude is reading: 63 of 199')).toBeInTheDocument();
     expect(within(rowOf('Book c')).getByRole('button', { name: 'Pause' })).toBeInTheDocument();
     expect(within(rowOf('Book d')).getByText('Paused: it reached your spending limit')).toBeInTheDocument();
-    expect(within(rowOf('Book d')).getByRole('button', { name: 'Resume' })).toBeInTheDocument();
+    expect(within(rowOf('Book d')).getByRole('link', { name: 'Resume on the book page' })).toHaveAttribute('href', '/library/source/d');
     expect(within(rowOf('Book e')).getByText("Switched off: accepted entries aren't used")).toBeInTheDocument();
+  });
+
+  it('U7: a book whose detection found nothing says so, not "Not structured yet"', () => {
+    const empty = book('n', { structure: { detectedAt: 1, parserVersion: 1, counts: {}, needsClaude: 0 } });
+    vi.mocked(storage.useLibrarySources).mockReturnValue([empty]);
+    renderLibrary('/library?tab=mine');
+    expect(within(rowOf('Book n')).getByText('Nothing found to structure')).toBeInTheDocument();
+    expect(within(rowOf('Book n')).queryByText('Not structured yet')).not.toBeInTheDocument();
+    expect(within(rowOf('Book n')).queryByRole('button', { name: 'Structure this book' })).not.toBeInTheDocument();
+  });
+
+  it('U10: a pause the row can\'t resolve (limit, model, format) sends the player to the book page instead of resuming as it is', async () => {
+    const user = userEvent.setup();
+    vi.mocked(dm.resumeJob).mockClear();
+    vi.mocked(storage.useLibrarySources).mockReturnValue([book('b'), book('m'), book('f'), book('p')]);
+    vi.mocked(storage.useJobs).mockReturnValue([
+      extractionJob({ id: 'job:b', sourceId: 'b', status: 'paused', pauseReason: 'budget' }),
+      extractionJob({ id: 'job:m', sourceId: 'm', status: 'paused', pauseReason: 'model' }),
+      extractionJob({ id: 'job:f', sourceId: 'f', status: 'paused', pauseReason: 'format' }),
+      extractionJob({ id: 'job:p', sourceId: 'p', status: 'paused', pauseReason: 'player' }),
+    ]);
+    renderLibrary('/library?tab=mine');
+    for (const id of ['b', 'm', 'f']) {
+      expect(within(rowOf(`Book ${id}`)).getByRole('link', { name: 'Resume on the book page' })).toHaveAttribute('href', `/library/source/${id}`);
+      expect(within(rowOf(`Book ${id}`)).queryByRole('button', { name: 'Resume' })).not.toBeInTheDocument();
+    }
+    await user.click(within(rowOf('Book p')).getByRole('button', { name: 'Resume' }));
+    await waitFor(() => expect(dm.resumeJob).toHaveBeenCalledWith('job:p'));
+    expect(dm.resumeJob).toHaveBeenCalledTimes(1);
   });
 
   it('pause and resume from the row (resuming only on a tap)', async () => {
@@ -304,6 +333,25 @@ describe('the import dialog', () => {
     const [ids] = vi.mocked(storage.setRecordStatus).mock.calls[0];
     expect(ids).toContain(pack.find((r) => r.name === 'Wickwright')!.id);
     expect(ids).toHaveLength(18);
+  });
+
+  it('U14: accepting a pack\'s entries from the done page has a 10-second Undo, with focus on it', async () => {
+    const user = userEvent.setup();
+    const pack: StructuredRecord[] = gloamwoodRecords().map((r) => ({ ...r, origin: 'pack' }));
+    vi.mocked(storage.listRecords).mockResolvedValue(pack);
+    vi.mocked(storage.getRecords).mockImplementation(async (ids: string[]) => ids.map((id) => pack.find((r) => r.id === id)));
+    vi.mocked(storage.setRecordStatus).mockReset().mockImplementation(async (ids: string[]) => ids.map((id) => ({ id, status: 'pending' as const })));
+    await importPasted(user);
+    const done = await screen.findByRole('dialog', { name: 'Imported' });
+    await user.click(within(done).getByRole('button', { name: 'Accept the 17 confident' }));
+    const undo = await within(done).findByRole('button', { name: 'Undo' });
+    expect(within(done).getByText('Accepted 17.')).toBeInTheDocument();
+    await waitFor(() => expect(undo).toHaveFocus());
+    await user.click(undo);
+    await waitFor(() => expect(storage.setRecordStatus).toHaveBeenCalledTimes(2));
+    expect(vi.mocked(storage.setRecordStatus).mock.calls[1][1]).toBe('pending');
+    // Undone: the offer is back.
+    expect(await within(done).findByRole('button', { name: 'Accept the 17 confident' })).toBeInTheDocument();
   });
 
   it('refuses photos in demo mode', async () => {

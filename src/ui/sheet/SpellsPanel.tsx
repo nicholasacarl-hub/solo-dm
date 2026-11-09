@@ -12,6 +12,7 @@ import { ABILITY_NAMES, type Character, type CompendiumEntry, type KnownSpell, t
 import { Markdown } from '@/ui/components/Markdown';
 import { Badge, Dialog, EmptyState, Spinner } from '@/ui/components/ui';
 import { BookBadge } from '@/ui/builder/BookBadges';
+import { FromBookLine } from './FromBook';
 import { concentrationChange, preparedChange, slotChange } from './sheetChanges';
 import { Pips, SheetSection, StatTile } from './SheetParts';
 import type { SheetChange } from './useSheetActions';
@@ -22,7 +23,7 @@ type EntryState = { status: 'loading' } | { status: 'ready'; entry: CompendiumEn
 
 /**
  * Look a spell up in the rules index (by id, then by name) and show its text. Nothing is copied onto
- * the sheet: a spell from a book that isn't on this device says so.
+ * the sheet: a spell from a book that isn't on this device, or is switched off, says so.
  */
 export function RulesEntryDialog({ spell, onClose }: { spell: (Pick<KnownSpell, 'id' | 'name'> & Partial<Pick<KnownSpell, 'ref'>>) | null; onClose: () => void }) {
   const campaignId = useGame((s) => s.campaignId);
@@ -62,7 +63,7 @@ export function RulesEntryDialog({ spell, onClose }: { spell: (Pick<KnownSpell, 
         (state.entry ? (
           <Markdown>{state.entry.text}</Markdown>
         ) : spell?.ref ? (
-          <p className="text-sm text-muted">From “{spell.ref.sourceTitle}”, which isn't on this device.</p>
+          <FromBookLine bookRef={spell.ref} className="text-sm text-muted" />
         ) : (
           <p className="text-sm text-muted">No rules text found for {spell?.name}. Ask the DM, or add it from your Library.</p>
         ))}

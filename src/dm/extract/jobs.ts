@@ -10,7 +10,7 @@
 import { candidatesForRecords, detectionContext } from '@/data';
 import { newId } from '@/lib/id';
 import { getJob, getSourceEntries, listRecords, putJob, putRecords } from '@/storage';
-import { MODELS, type CostEstimate, type ExtractionJob, type ModelId, type StructuredKind, type StructuredRecord } from '@/types';
+import { MODELS, type CostEstimate, type ExtractionJob, type ModelId, type RunState, type StructuredKind, type StructuredRecord } from '@/types';
 import { extractionAvailability } from './availability';
 import { jobRecords, planRequest } from './blocks';
 import { extractionDeps } from './deps';
@@ -18,7 +18,6 @@ import { ExtractionUnavailableError } from './errors';
 import { defaultBudgetUsd, estimateExtraction } from './estimate';
 import {
   acquireRunnerLock,
-  activeJobId,
   cancelAnywhere,
   claimJob,
   emptyCounts,
@@ -26,6 +25,7 @@ import {
   pauseAnywhere,
   recoverOrphans,
   requeueJob,
+  runnerBusy,
   zeroUsage,
 } from './runner';
 
@@ -155,21 +155,49 @@ export async function cancelJob(jobId: string): Promise<void> {
   await cancelAnywhere(jobId);
 }
 
+/** What a retry may spend: the consent's limit on top of what the finished job had spent (null: no limit). */
+function retryLimit(job: ExtractionJob, budgetUsd: number | null): number | null {
+  return budgetUsd === null ? null : Math.ceil((job.usage.estimatedCostUsd + budgetUsd) * 100) / 100;
+}
+
 /**
- * Same model: requeued in this job. Another model: a new job scoped to those records (caches are per model).
- * A job being read right now (here or in another tab) can't take them back: they go into a new job of the
- * same model, which waits for it. Returns the job id that reads them.
+ * Read a job's failed or refused records again, with the model the player chose in the consent. With
+ * `ids` (the records the consent priced), exactly those and never more; without, every such record not
+ * kept as text. Returns the id of the job that reads them.
+ *
+ * - The job finished (done or cancelled), the model is the same and every such record not kept as text
+ *   is retried: they are queued again in it. Nothing else of a finished job is queued, so only they are
+ *   read; with `budgetUsd` the consent's limit caps what the retry spends, on top of what the job had spent.
+ * - Otherwise (a job paused, queued, or being read here or in another tab; a subset of its failures; or
+ *   another model, whose cache is separate): a new job scoped to exactly those records (claudeFor
+ *   'selection'), with `budgetUsd` as its limit (the default limit when it is undefined). It waits for any
+ *   job running. The old job keeps its other records as they are: a paid job is never resumed without
+ *   the player.
  */
-export async function retryRecords(jobId: string, which: 'failed' | 'refused' | 'both', model?: ModelId): Promise<string> {
+export async function retryRecords(
+  jobId: string,
+  which: 'failed' | 'refused' | 'both',
+  model: ModelId,
+  opts: { ids?: readonly string[]; budgetUsd?: number | null } = {},
+): Promise<string> {
   assertAvailable();
   const job = await getJob(jobId);
   if (!job) throw new Error('This structuring job no longer exists.');
-  const states = which === 'both' ? ['failed', 'refused'] : [which];
-  const records = (await listRecords(job.sourceId)).filter((r) => r.jobId === job.id && r.runState && states.includes(r.runState));
+  const states: readonly RunState[] = which === 'both' ? ['failed', 'refused'] : [which];
+  const only = opts.ids ? new Set(opts.ids) : null;
+  const failures = (await listRecords(job.sourceId)).filter((r) => r.jobId === job.id && r.runState !== undefined && states.includes(r.runState));
+  const records = failures.filter((r) => (only ? only.has(r.id) : r.status !== 'rejected'));
   if (!records.length) return job.id;
-  const busy = job.status === 'running' || job.status === 'pausing';
-  if ((model && model !== job.model) || busy) {
-    const next = await startJob(job.sourceId, { model: model ?? job.model, claudeFor: 'selection', recordIds: records.map((r) => r.id), concurrency: job.concurrency });
+  const finished = job.status === 'done' || job.status === 'cancelled';
+  const whole = failures.every((r) => r.status === 'rejected' || records.includes(r));
+  if (model !== job.model || !finished || !whole) {
+    const next = await startJob(job.sourceId, {
+      model,
+      claudeFor: 'selection',
+      recordIds: records.map((r) => r.id),
+      concurrency: job.concurrency,
+      ...(opts.budgetUsd !== undefined ? { budgetUsd: opts.budgetUsd } : {}),
+    });
     return next.id;
   }
   const now = extractionDeps().now();
@@ -181,19 +209,19 @@ export async function retryRecords(jobId: string, which: 'failed' | 'refused' | 
       return next;
     }),
   );
-  await requeueJob(job);
+  await requeueJob(job, opts.budgetUsd !== undefined ? { budgetUsd: retryLimit(job, opts.budgetUsd) } : {});
   return job.id;
 }
 
 /**
  * main.tsx, once, via a dynamic import('@/dm/extract') after the first render; needs the runner's Web Lock
- * (ifAvailable): while another tab holds it, this does nothing. Otherwise every job a closed page left
- * unfinished — running, pausing, queued, or waiting for a tab or a connection that is gone — is paused
- * 'reload' and never resumed by itself; records that were being read are queued again and counted as
- * interrupted (their cost is unknown).
+ * (ifAvailable): while another tab holds it, or a job is running or starting here, this does nothing.
+ * Otherwise every job a closed page left unfinished — running, pausing, queued, or waiting for a tab or
+ * a connection that is gone (no page holds its offline lock) — is paused 'reload' and never resumed by
+ * itself; records that were being read are queued again and counted as interrupted (their cost is unknown).
  */
 export async function recoverJobsOnStartup(): Promise<void> {
-  if (activeJobId()) return;
+  if (runnerBusy()) return;
   const lock = await acquireRunnerLock();
   if (!lock) return;
   try {

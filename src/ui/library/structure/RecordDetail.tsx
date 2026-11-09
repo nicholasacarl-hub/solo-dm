@@ -17,19 +17,19 @@ import { Badge, Button, Dialog, IconButton } from '@/ui/components/ui';
 import { Menu, type MenuItem } from '@/ui/play/components/Menu';
 import { toast } from '@/ui/components/toast';
 import { errorMessage } from '@/ui/shell/format';
-import { blocksFor, isBeingRead, isNewerVersion } from './bookData';
+import { INCOMPLETE_READING, blocksFor, isBeingRead, isNewerVersion } from './bookData';
 import { AdaptationNotes, DetailNotices, Notice, ProposalDiff, SpoilerGuard, StatsPreview, previewLine } from './detailParts';
 import { checkedPaths } from './forms/fieldMap';
 import { draftOf, emptyData, issuesOf, recordFromDraft, type RecordDraft } from './forms/draft';
 import { RecordForm } from './forms/RecordForm';
 import { parentChoices } from './forms/ParentClassSelect';
-import { KIND_LABELS, OLDER_EDITION, RECORD_STATES, modelName, originLabel, recordState, recordStateLabel } from './labels';
-import { changeKind, keepFields, rereadHere, resolveProposal, saveRecordEdit, setRecordsStatus, acceptRecords } from './reviewActions';
+import { KIND_LABELS, OLDER_EDITION, RECORD_STATES, modelName, originLabel, readButIncomplete, recordState, recordStateLabel } from './labels';
+import { changeKind, keepFields, rereadHere, resolveProposal, saveRecordEdit, setParentClass, setRecordsStatus, acceptRecords } from './reviewActions';
 import { SourceTextPane } from './SourceTextPane';
 import { TOUCH, TOUCH_FOOTER, TOUCH_SQUARE } from './touch';
 import { showUndo } from './UndoToast';
 import { ViewToggle } from './ViewToggle';
-import { mergeWarnings } from './warnings';
+import { mergeWarnings, withoutParentProblems } from './warnings';
 
 export type DetailLayout = 'wide' | 'mid' | 'phone';
 export type Availability = { ok: true } | { ok: false; reason: 'demo' | 'no-key'; message: string };
@@ -162,7 +162,12 @@ export function RecordDetail(props: RecordDetailProps) {
     return { issues, warnings: mergeWarnings(record.kind, record.data, settled.data, record.warnings, fresh.warnings), adaptations: fresh.adaptations };
   }, [settled, dirty, record, blocks, entriesById]);
 
-  const warnings = checkedDraft?.warnings ?? record.warnings;
+  const parentChosen = record.kind === 'subclass' && Boolean(draft?.parentClassId);
+  const warnings = useMemo(() => {
+    const all = checkedDraft?.warnings ?? record.warnings;
+    // Choosing "Attaches to" answers a subclass's parent problem ("isn't named: choose it").
+    return parentChosen ? withoutParentProblems(all) : all;
+  }, [checkedDraft, record.warnings, parentChosen]);
   const issues = checkedDraft?.issues ?? {};
   const adaptations = checkedDraft?.adaptations ?? record.adaptations;
   const check = useMemo(
@@ -175,7 +180,7 @@ export function RecordDetail(props: RecordDetailProps) {
   const blocked = (() => {
     if (isNewerVersion(record)) return 'Made by a newer version of Solo DM: read-only here.';
     if (isBeingRead(record)) return 'Claude is reading this one.';
-    if (!draft) return 'Not read yet: fill it in yourself or read it with Claude.';
+    if (!draft) return readButIncomplete(record) ? INCOMPLETE_READING : 'Not read yet: fill it in yourself or read it with Claude.';
     const problems = Object.keys(issues).filter((k) => k !== 'parentClassId').length + warnings.filter((w) => w.severity === 'block').length;
     if (problems > 0) return `Fix ${problems} ${problems === 1 ? 'problem' : 'problems'} to accept.`;
     if (record.kind === 'subclass' && !draft.parentClassId) return 'Choose the class it attaches to.';
@@ -209,6 +214,8 @@ export function RecordDetail(props: RecordDetailProps) {
     setConfirmAccept(false);
     void run('accept', async () => {
       if (dirty) await saveDraft();
+      // A subclass's suggested "Attaches to" is where the form starts, not an edit: accepting confirms it (D26).
+      else if (record.kind === 'subclass' && draft?.parentClassId && draft.parentClassId !== record.parentClassId) await setParentClass(record.id, draft.parentClassId);
       const result = await acceptRecords([record.id]);
       if (result.accepted === 0 && !accepted) {
         toast.error(result.skipped[0]?.reason ?? 'It couldn’t be accepted.');
@@ -722,6 +729,33 @@ function RunNotices({
         }
       >
         Claude declined to read this one{why}. You can fill it in yourself, try another model, or keep it as text — the DM can still read it.
+        {unavailable}
+      </Notice>,
+    );
+  } else if (readButIncomplete(record) && !hasDraft && !isBeingRead(record)) {
+    // Claude answered, but without fields the app needs: a fix, not "Not read yet" (no second paid read offered).
+    items.push(
+      <Notice
+        key="incomplete"
+        tone="block"
+        actions={
+          <>
+            <Button size="sm" onClick={onFillIn}>
+              Fill in yourself
+            </Button>
+            {availability.ok && (
+              <Button size="sm" variant="ghost" onClick={() => onRead()}>
+                Try another model
+              </Button>
+            )}
+            <Button size="sm" variant="ghost" onClick={onKeepAsText}>
+              Keep as text
+            </Button>
+          </>
+        }
+      >
+        <span className="font-medium">Needs a fix.</span> Claude read it, but its answer is missing fields the app needs. Fill them in yourself,
+        try another model, or keep it as text — the DM can still read it.
         {unavailable}
       </Notice>,
     );

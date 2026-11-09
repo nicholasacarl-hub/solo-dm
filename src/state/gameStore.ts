@@ -32,6 +32,7 @@ import type {
   Clock,
   CombatState,
   HomebrewEntry,
+  ImportedRef,
   InteractionRequest,
   InteractionResponse,
   JournalEntry,
@@ -47,7 +48,7 @@ import type { RestoreReport } from '@/data/structured/restore';
 import type { HeroMoveOutcome, HeroMoveRequest, MoveRefusal } from '@/engine/movement';
 import { normalizeCombatState } from '@/engine/mapNormalize';
 import { nameKey, newId } from '@/lib/id';
-import { isImportedPlaceholder } from '@/lib/importedContent';
+import { copiedTextMissing, staleRedaction } from '@/lib/importedContent';
 import * as storage from '@/storage';
 import type { CampaignRecords } from '@/storage';
 import { onCampaignChange } from '@/storage/events';
@@ -245,7 +246,23 @@ const noop = () => {};
 
 /** Book text a save left out of the sheet (empty or the placeholder) that a device with the book can restore. */
 function needsRestore(f: Character['features'][number]): boolean {
-  return Boolean(f.ref?.textCopied && (!f.description?.trim() || isImportedPlaceholder(f.description)));
+  return copiedTextMissing(f);
+}
+
+/**
+ * The character without a `ref.redacted` that text written since makes stale (the DM's ruling over a pulled
+ * placeholder): that text is the DM's or the player's, so no screen may keep calling it left out.
+ */
+function withoutStaleRedaction(c: Character): Character {
+  const clear = <T extends { description?: string; ref?: ImportedRef }>(x: T): T => {
+    if (!x.ref || !staleRedaction(x)) return x;
+    const { redacted: _left, ...ref } = x.ref;
+    return { ...x, ref };
+  };
+  const features = c.features.map(clear);
+  const inventory = c.inventory.map(clear);
+  const same = features.every((f, i) => f === c.features[i]) && inventory.every((x, i) => x === c.inventory[i]);
+  return same ? c : { ...c, features, inventory };
 }
 
 function enqueueWrite<T>(key: string, task: () => Promise<T>): Promise<T> {
@@ -711,7 +728,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     if (!character) throw new Error('This campaign has no character yet.');
     const now = Date.now();
     const next: Character = {
-      ...fn(character),
+      ...withoutStaleRedaction(fn(character)),
       id: character.id,
       campaignId: campaign.id,
       updatedAt: nextUpdatedAt(character.updatedAt, now),

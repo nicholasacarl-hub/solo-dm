@@ -250,13 +250,20 @@ function withSubclassCasting(entry: ClassLevel, opts: LevelUpOptions): ClassLeve
   return { ...entry, casterType: casting.casterType, ...(casting.spellcastingAbility ? { spellcastingAbility: casting.spellcastingAbility } : {}) };
 }
 
-/** The existing class entry one level up, with the subclass chosen now (name, id, ref) and its spellcasting. */
+/**
+ * The existing class entry one level up, with the subclass chosen now (name, id, ref) and its spellcasting.
+ * The id and ref always describe the same subclass as the name: naming the entry's own subclass again keeps
+ * them; a different subclass replaces them, or drops them when the call gives none (a plain name).
+ */
 function levelledEntry(existing: ClassLevel, opts: LevelUpOptions): ClassLevel {
   const gained: ClassLevel = { ...existing, level: existing.level + 1 };
   if (opts.subclass) {
+    const changed = nameKey(opts.subclass) !== nameKey(existing.subclass ?? '') || (opts.subclassId !== undefined && opts.subclassId !== existing.subclassId);
     gained.subclass = opts.subclass;
     if (opts.subclassId) gained.subclassId = opts.subclassId;
+    else if (changed) delete gained.subclassId;
     if (opts.subclassRef) gained.subclassRef = opts.subclassRef;
+    else if (changed) delete gained.subclassRef;
   }
   return withSubclassCasting(gained, opts);
 }
@@ -310,13 +317,20 @@ function baseName(name: string): string {
   return name.replace(/\s*\([^)]*\)\s*$/, '');
 }
 
-/** The feature's own scale, or for sheets saved before FeatureUses.scale, the SRD table for a well-known class feature. */
-function featureScale(f: Feature): FeatureScale | undefined {
+/**
+ * The feature's own scale, or for sheets saved before FeatureUses.scale, the SRD table for a well-known
+ * class feature of an SRD class. A book's feature (it has a ref) or a feature of a book's class (its entry
+ * has a library id) never gets the SRD's table: its uses came from its own text and table (B8).
+ */
+function featureScale(f: Feature, classes: readonly ClassLevel[]): FeatureScale | undefined {
   if (f.uses?.scale) return f.uses.scale;
-  if (f.source !== 'class') return undefined;
+  if (f.source !== 'class' || f.ref) return undefined;
   const key = nameKey(baseName(f.name));
   const owner = nameKey(f.sourceName ?? '');
-  return SRD_FEATURE_USE_SCALES.find((s) => nameKey(s.feature) === key && owner.startsWith(nameKey(s.className)))?.scale;
+  const scale = SRD_FEATURE_USE_SCALES.find((s) => nameKey(s.feature) === key && owner.startsWith(nameKey(s.className)));
+  if (!scale) return undefined;
+  const entry = classes.find((cl) => owner.startsWith(nameKey(cl.name)));
+  return entry && isLibraryId(entry.classId) ? undefined : scale.scale;
 }
 
 /**
@@ -329,7 +343,7 @@ export function refreshScaledFeatureUses(c: Character): { character: Character; 
   const features = c.features.map((f) => {
     const uses = f.uses;
     if (!uses) return f;
-    const max = scaledUsesMax(c, featureScale(f));
+    const max = scaledUsesMax(c, featureScale(f, c.classes));
     if (max === null || max === uses.max) return f;
     changes.push(`${f.name} ${uses.max} → ${max}`);
     return { ...f, uses: { ...uses, max, used: clamp(toInt(uses.used), 0, max) } };

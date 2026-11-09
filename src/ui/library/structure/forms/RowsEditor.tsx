@@ -19,7 +19,23 @@ function useFirstSpan(): TextSpan {
   return { entryIds: first.length ? [...first] : ['?'], from: 1, to: 1 };
 }
 
-function RowFields({ path, row, onChange, withLevel }: { path: string; row: Row; onChange(next: Row): void; withLevel: boolean }) {
+function RowFields({
+  path,
+  row,
+  onChange,
+  withLevel,
+  nameLabel,
+  noun,
+}: {
+  path: string;
+  row: Row;
+  onChange(next: Row): void;
+  withLevel: boolean;
+  /** The name input's accessible name ("Name of feature 3"): each row's own, not just "Name". */
+  nameLabel: string;
+  /** "feature", "trait"…: names the row in "Change the text of …" until it has a name. */
+  noun: string;
+}) {
   const form = useRecordForm();
   const nameIssue = issueAt(form.issues, `${path}.name`);
   const textIssue = issueAt(form.issues, `${path}.text`);
@@ -52,7 +68,8 @@ function RowFields({ path, row, onChange, withLevel }: { path: string; row: Row;
         )}
         <div className="min-w-0 flex-1">
           <label htmlFor={fieldId(`${path}.name`)} className="sr-only">
-            Name{checked ? ' (check)' : ''}
+            {nameLabel}
+            {checked ? ' (check)' : ''}
           </label>
           <Input
             id={fieldId(`${path}.name`)}
@@ -77,6 +94,7 @@ function RowFields({ path, row, onChange, withLevel }: { path: string; row: Row;
         describedBy={textIssue ? issueId(`${path}.text`) : undefined}
         onFocus={() => form.onFocusField(`${path}.text`)}
         onChange={(text) => onChange({ ...row, text })}
+        owner={row.name.trim() || `this ${noun}`}
       />
       {(levelIssue || nameIssue || textIssue) && (
         <div>
@@ -127,6 +145,8 @@ export function RowsEditor({
                 path={`${path}.${i}`}
                 row={row}
                 withLevel={withLevel}
+                nameLabel={`Name of ${noun} ${i + 1}${withLevel && Number.isFinite(row.level) ? ` (level ${row.level})` : ''}`}
+                noun={noun}
                 onChange={(next) => setRows(rows.map((r, j) => (j === i ? next : r)))}
               />
               <IconButton label={`Remove ${row.name || `this ${noun}`}`} size="sm" onClick={() => setRows(rows.filter((_, j) => j !== i))}>
@@ -170,7 +190,14 @@ export function LegacyFeatureEditor({ path, label }: { path: string; label: stri
   return (
     <FieldShell path={path} label={label} as="legend">
       <div className="flex items-start gap-2 rounded-xl border border-border bg-surface p-2.5">
-        <RowFields path={path} row={value} withLevel={false} onChange={(next) => form.set(path, { name: next.name, text: next.text })} />
+        <RowFields
+          path={path}
+          row={value}
+          withLevel={false}
+          nameLabel="Name of the background feature"
+          noun="background feature"
+          onChange={(next) => form.set(path, { name: next.name, text: next.text })}
+        />
         <IconButton label="Remove the background feature" size="sm" onClick={() => form.set(path, undefined)}>
           <Trash2 className="size-4" aria-hidden />
         </IconButton>

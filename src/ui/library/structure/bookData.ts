@@ -13,7 +13,7 @@ import {
   type StructuredKind,
   type StructuredRecord,
 } from '@/types';
-import { recordState, type RecordState, type ReviewFilter } from './labels';
+import { readButIncomplete, recordState, type RecordState, type ReviewFilter } from './labels';
 
 // ---------------------------------------------------------------------------
 // Order
@@ -190,7 +190,9 @@ export const isNewerVersion = (record: Pick<StructuredRecord, 'schemaVersion'>):
 
 /**
  * "Accept N confident" (spec §4.6, D22): pending, read cleanly (high), nothing to check (no warn or block,
- * no name clash the player should see first), no newer reading waiting, never a class or a subclass.
+ * no name clash the player should see first), no newer reading waiting, never a class or a subclass. A
+ * clean offline reading whose re-read by Claude failed or was declined shows "Couldn't read": it gets a
+ * look first too.
  */
 export function isConfident(record: StructuredRecord): boolean {
   return (
@@ -199,6 +201,8 @@ export function isConfident(record: StructuredRecord): boolean {
     record.data !== null &&
     record.kind !== 'class' &&
     record.kind !== 'subclass' &&
+    record.runState !== 'failed' &&
+    record.runState !== 'refused' &&
     !hasProposal(record) &&
     !isBeingRead(record) &&
     !isNewerVersion(record) &&
@@ -206,11 +210,14 @@ export function isConfident(record: StructuredRecord): boolean {
   );
 }
 
+/** Why a Claude reading without data can't be accepted (spec §4.3 "Needs a fix"). */
+export const INCOMPLETE_READING = "Claude's reading left out fields the app needs: fill it in yourself first.";
+
 /** Why a record can't be accepted as it is stored, or null. */
 export function acceptBlocker(record: StructuredRecord): string | null {
   if (isNewerVersion(record)) return 'Made by a newer version of Solo DM: read-only here.';
   if (isBeingRead(record)) return 'Claude is reading this one.';
-  if (record.data === null) return 'Not read yet: fill it in or read it with Claude first.';
+  if (record.data === null) return readButIncomplete(record) ? INCOMPLETE_READING : 'Not read yet: fill it in or read it with Claude first.';
   const blocks = record.warnings.filter((w) => w.severity === 'block').length;
   if (blocks > 0) return `Fix ${blocks} ${blocks === 1 ? 'problem' : 'problems'} to accept.`;
   if (record.kind === 'subclass' && !record.parentClassId) return 'Choose the class it attaches to.';
@@ -221,13 +228,20 @@ export function acceptBlocker(record: StructuredRecord): string | null {
 // Jobs
 // ---------------------------------------------------------------------------
 
-const LIVE: readonly JobStatus[] = ['running', 'pausing', 'queued', 'paused'];
+/** Unfinished jobs, the one spending money first: being read, then waiting, then paused. */
+const LIVE_RANK: Readonly<Partial<Record<JobStatus, number>>> = { running: 0, pausing: 0, queued: 1, paused: 2 };
 
-/** The book's current job (running, pausing, queued or paused; newest first), else its latest finished one. */
+/** The book's unfinished jobs in that order (newest first within each), so a waiting job never hides the one being read. */
+export function liveJobs(jobs: readonly ExtractionJob[] | undefined, sourceId: string): ExtractionJob[] {
+  return (jobs ?? [])
+    .filter((j) => j.sourceId === sourceId && LIVE_RANK[j.status] !== undefined)
+    .sort((a, b) => (LIVE_RANK[a.status] ?? 9) - (LIVE_RANK[b.status] ?? 9) || b.createdAt - a.createdAt);
+}
+
+/** The book's current job (the first of liveJobs), else its latest finished one. */
 export function currentJob(jobs: readonly ExtractionJob[] | undefined, sourceId: string): { live: ExtractionJob | null; last: ExtractionJob | null } {
-  const mine = (jobs ?? []).filter((j) => j.sourceId === sourceId).sort((a, b) => b.createdAt - a.createdAt);
-  const live = mine.find((j) => LIVE.includes(j.status)) ?? null;
-  const last = live ? null : (mine[0] ?? null);
+  const live = liveJobs(jobs, sourceId)[0] ?? null;
+  const last = live ? null : ((jobs ?? []).filter((j) => j.sourceId === sourceId).sort((a, b) => b.createdAt - a.createdAt)[0] ?? null);
   return { live, last };
 }
 

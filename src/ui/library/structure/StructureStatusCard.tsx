@@ -4,19 +4,19 @@
  * done line. A visually hidden status region announces progress at most every 15 s or 25 records.
  * Resuming spends money, so it only ever happens on the player's tap.
  */
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router';
 import { CircleCheck, Hourglass, Pause, Play, Sparkles, Square, X } from 'lucide-react';
-import { cancelJob, pauseJob, resumeJob, type RunnerSnapshot } from '@/dm';
+import { cancelJob, estimateJob, pauseJob, resumeJob, type RunnerSnapshot } from '@/dm';
 import { cn } from '@/lib/cn';
-import { MODELS, type ExtractionJob, type LibrarySource, type ModelId, type StructuredKind, type StructuredRecord } from '@/types';
+import { MODELS, type CostEstimate, type ExtractionJob, type LibrarySource, type ModelId, type StructuredKind, type StructuredRecord } from '@/types';
 import { ProgressBar } from '@/ui/components/ProgressBar';
 import { toast } from '@/ui/components/toast';
 import { Button, Dialog, Select } from '@/ui/components/ui';
 import { errorMessage } from '@/ui/shell/format';
-import { currentJob, jobProgress, raisedBudget, remainingUsd, reviewCounts } from './bookData';
+import { currentJob, filterOf, jobProgress, liveJobs, raisedBudget, remainingUsd, reviewCounts } from './bookData';
 import { aboutUsd, usd } from './ConsentDialog';
-import { KIND_LABELS, modelName } from './labels';
+import { KIND_LABELS, PAUSE_REASONS, modelName } from './labels';
 import type { Availability } from './RecordDetail';
 import { TOUCH, TOUCH_BUTTONS, TOUCH_FOOTER, TOUCH_SQUARE } from './touch';
 
@@ -47,12 +47,14 @@ async function act(work: () => Promise<void>, fallback: string): Promise<void> {
   }
 }
 
-/** The kind a "format" pause names ("…the reading format for spells: …"). */
+/**
+ * The kind a "format" pause names. Only the app-written start is read ("…the reading format for spells:
+ * ‹API message›"): the API's own words can name a field such as classesText.
+ */
 export function pausedKind(message: string | undefined): StructuredKind | null {
-  if (!message) return null;
-  const lower = message.toLowerCase();
-  const kinds = (Object.keys(KIND_LABELS) as StructuredKind[]).sort((a, b) => KIND_LABELS[b].many.length - KIND_LABELS[a].many.length);
-  return kinds.find((k) => lower.includes(KIND_LABELS[k].many)) ?? null;
+  const named = message ? /reading format for ([^:]+?)\s*(?::|$)/i.exec(message)?.[1].trim().toLowerCase() : undefined;
+  if (!named) return null;
+  return (Object.keys(KIND_LABELS) as StructuredKind[]).find((k) => KIND_LABELS[k].many === named) ?? null;
 }
 
 /** Announce progress politely, at most every 15 s or every 25 records. */
@@ -146,6 +148,33 @@ export function JobProgress({
   );
 }
 
+/** "Resume with…" starts at the next cheaper model, never a pricier one by default; else the cheapest other one. */
+export function nextCheaperModel(current: ModelId): ModelId {
+  const priceOf = (id: ModelId) => MODELS.find((m) => m.id === id)?.pricing.output ?? MODELS[0].pricing.output;
+  const others = MODELS.filter((m) => m.id !== current);
+  const cheaper = others.filter((m) => m.pricing.output < priceOf(current)).sort((a, b) => b.pricing.output - a.pricing.output);
+  return (cheaper[0] ?? [...others].sort((a, b) => a.pricing.output - b.pricing.output)[0] ?? MODELS[0]).id;
+}
+
+/** About what the records still waiting would cost at a model (the consent's estimator); null until known. */
+function useCostAt(job: ExtractionJob, recordIds: readonly string[], model: ModelId, active: boolean): CostEstimate | null {
+  const [estimate, setEstimate] = useState<{ key: string; value: CostEstimate } | null>(null);
+  const idsKey = recordIds.join('\u0000');
+  const key = `${model}\u0000${idsKey}`;
+  useEffect(() => {
+    if (!active || !idsKey) return;
+    let alive = true;
+    estimateJob(job.sourceId, { claudeFor: 'selection', recordIds: idsKey.split('\u0000'), model, concurrency: job.concurrency }).then(
+      (value) => alive && setEstimate({ key: `${model}\u0000${idsKey}`, value }),
+      (error: unknown) => console.warn('[library] Could not estimate the rest at another model:', error),
+    );
+    return () => {
+      alive = false;
+    };
+  }, [active, job.sourceId, job.concurrency, model, idsKey]);
+  return active && estimate?.key === key ? estimate.value : null;
+}
+
 function ModelPicker({ value, onChange, exclude }: { value: ModelId; onChange(m: ModelId): void; exclude?: ModelId }) {
   return (
     <Select aria-label="Model" value={value} className={cn('h-8 w-auto text-sm', TOUCH)} onChange={(e) => onChange(e.target.value)}>
@@ -161,11 +190,14 @@ function ModelPicker({ value, onChange, exclude }: { value: ModelId; onChange(m:
 export function PausedCard({
   job,
   availability,
+  queuedIds = [],
   onResume,
   onCancel,
 }: {
   job: ExtractionJob;
   availability: Availability;
+  /** The job's records still waiting to be read (priced at the model picked for "Resume with this model"). */
+  queuedIds?: readonly string[];
   onResume(patch?: { budgetUsd?: number | null; model?: ModelId; skipKinds?: StructuredKind[] }): void;
   onCancel(): void;
 }) {
@@ -174,8 +206,15 @@ export function PausedCard({
   const more = remainingUsd(job);
   const left = `${p.left} ${p.left === 1 ? 'entry' : 'entries'} left, ${aboutUsd(more)} more`;
   const others = MODELS.filter((m) => m.id !== job.model);
-  const [model, setModel] = useState<ModelId>(others[0]?.id ?? job.model);
+  const [model, setModel] = useState<ModelId>(() => nextCheaperModel(job.model));
   const can = availability.ok;
+  const switching = job.pauseReason === 'rate-limit' || job.pauseReason === 'model';
+  const atModel = useCostAt(job, queuedIds, model, switching && can);
+  const priceAtModel = atModel ? (
+    <span className="text-xs text-muted tabular-nums">
+      {aboutUsd(atModel.usd)} for the {p.left} left
+    </span>
+  ) : null;
   const resume = (patch?: Parameters<typeof onResume>[0], label = 'Resume') => (
     <Button size="sm" variant="primary" disabled={!can} icon={<Play className="size-4" aria-hidden />} onClick={() => onResume(patch)}>
       {label}
@@ -228,11 +267,12 @@ export function PausedCard({
         <>
           {resume()}
           {can && others.length > 0 && (
-            <span className="inline-flex items-center gap-1.5">
+            <span className="inline-flex flex-wrap items-center gap-1.5">
               <ModelPicker value={model} onChange={setModel} exclude={job.model} />
               <Button size="sm" onClick={() => onResume({ model })}>
                 Resume with this model
               </Button>
+              {priceAtModel}
             </span>
           )}
           {stop}
@@ -258,11 +298,12 @@ export function PausedCard({
       );
       actions = (
         <>
-          <span className="inline-flex items-center gap-1.5">
+          <span className="inline-flex flex-wrap items-center gap-1.5">
             <ModelPicker value={model} onChange={setModel} exclude={job.model} />
             <Button size="sm" variant="primary" disabled={!can} onClick={() => onResume({ model })}>
               Resume with this model
             </Button>
+            {priceAtModel}
           </span>
           {stop}
         </>
@@ -315,12 +356,13 @@ export function QueuedCard({ job, jobs, sources, onCancel }: { job: ExtractionJo
   const running = jobs.find((j) => j.id !== job.id && (j.status === 'running' || j.status === 'pausing'));
   const title = running ? (sources.find((s) => s.id === running.sourceId)?.title ?? 'another book') : null;
   const p = running ? jobProgress(running) : null;
+  const text = !running || !p ? 'Waiting to start.' : running.sourceId === job.sourceId ? `Waiting for this book's current reading to finish (${p.finished}/${p.total}).` : `Waiting for “${title}” to finish (${p.finished}/${p.total}).`;
   return (
     <Card>
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
         <p className="inline-flex items-center gap-2 text-sm font-medium">
           <Hourglass className="size-4 text-muted" aria-hidden />
-          {title && p ? `Waiting for “${title}” to finish (${p.finished}/${p.total}).` : 'Waiting to start.'}
+          {text}
         </p>
         <Button size="sm" variant="ghost" onClick={onCancel}>
           Cancel
@@ -356,7 +398,8 @@ export function DoneCard({
   if (hidden) return null;
   const p = jobProgress(job);
   const counts = reviewCounts(records, source.enabled);
-  const retry = records.filter((r) => r.jobId === job.id && (r.runState === 'failed' || r.runState === 'refused')).map((r) => r.id);
+  // The job's reads still listed under "Couldn't read": not those since kept as text or accepted as they are.
+  const retry = records.filter((r) => r.jobId === job.id && filterOf(r, source.enabled) === 'failed').map((r) => r.id);
   const options = records.some((r) => r.status === 'accepted' && (r.kind === 'class' || r.kind === 'subclass' || r.kind === 'species' || r.kind === 'background' || r.kind === 'feat'));
   const settled = counts.review === 0 && counts.fix === 0 && counts.failed === 0 && counts.unread === 0;
   const text =
@@ -403,6 +446,57 @@ export function DoneCard({
   );
 }
 
+/** What a job's latest state means, for screen readers (spec §4.9; WCAG 4.1.3 status messages). */
+export function jobStatusLine(job: ExtractionJob): string {
+  const p = jobProgress(job);
+  const missed = p.failed + p.refused;
+  switch (job.status) {
+    case 'paused':
+      return job.pauseReason === 'budget'
+        ? `Structuring paused at your ${usd(job.budgetUsd ?? 0).replace('.00', '')} limit.`
+        : `Structuring paused: ${PAUSE_REASONS[job.pauseReason ?? 'player']}.`;
+    case 'done':
+      return `Structuring finished: ${p.finished} read${missed ? `, ${missed} couldn't be read` : ''}.`;
+    case 'cancelled':
+      return `Structuring stopped: ${p.finished} read.`;
+    case 'queued':
+      return 'Structuring is waiting for another reading to finish.';
+    default:
+      return `Claude is reading: ${p.finished} of ${p.total} read.`;
+  }
+}
+
+/** The states whose card swaps in with nothing else said: a pause (often a decision), the end, a stop. */
+const ANNOUNCED: ReadonlySet<ExtractionJob['status']> = new Set(['paused', 'done', 'cancelled']);
+
+/**
+ * One persistent, visually hidden status line for the book's jobs. The cards swap (and on phones are
+ * off screen while a record is open), so this lives outside them and says when a job pauses, finishes
+ * or stops. Nothing is said on first render: only changes are news.
+ */
+export function StructureAnnouncer({ sourceId, jobs }: { sourceId: string; jobs: readonly ExtractionJob[] }) {
+  const [said, setSaid] = useState('');
+  const seen = useRef<Map<string, string> | null>(null);
+  const mine = useMemo(() => jobs.filter((j) => j.sourceId === sourceId), [jobs, sourceId]);
+  useEffect(() => {
+    const now = new Map(mine.map((j) => [j.id, `${j.status}\u0000${j.pauseReason ?? ''}`]));
+    const before = seen.current;
+    seen.current = now;
+    if (!before) return;
+    const news = mine.filter((j) => before.has(j.id) && before.get(j.id) !== now.get(j.id) && ANNOUNCED.has(j.status));
+    if (news.length === 0) return;
+    // Cleared first, so the same words twice in a row are still announced.
+    setSaid('');
+    const timer = window.setTimeout(() => setSaid(news.map(jobStatusLine).join(' ')), 30);
+    return () => window.clearTimeout(timer);
+  }, [mine]);
+  return (
+    <p role="status" aria-live="polite" className="sr-only">
+      {said}
+    </p>
+  );
+}
+
 export function StructureStatusCard({
   source,
   jobs,
@@ -422,29 +516,41 @@ export function StructureStatusCard({
   onRetry(jobId: string, ids: string[]): void;
   onReview(): void;
 }) {
-  const { live, last } = currentJob(jobs, source.id);
+  // Every unfinished job of the book gets its card, the one being read first: a newer job waiting
+  // behind it never hides the Pause and Cancel of the one spending money.
+  const live = liveJobs(jobs, source.id);
+  const { last } = currentJob(jobs, source.id);
   const [confirmCancel, setConfirmCancel] = useState<ExtractionJob | null>(null);
-  const job = live ?? last;
-  if (!job) return null;
-  const pause = () => void act(() => pauseJob(job.id), 'Could not pause.');
-  const resume = (patch?: { budgetUsd?: number | null; model?: ModelId; skipKinds?: StructuredKind[] }) =>
-    void act(() => resumeJob(job.id, patch), 'Could not resume.');
-  const cancel = () => void act(() => cancelJob(job.id), 'Could not stop it.');
-  const inFlight = jobProgress(job).inFlight;
+  const cancel = (job: ExtractionJob) => void act(() => cancelJob(job.id), 'Could not stop it.');
+  const inFlight = confirmCancel ? jobProgress(confirmCancel).inFlight : 0;
 
-  let card: ReactNode = null;
-  if (live?.status === 'running' || live?.status === 'pausing') {
-    card = <JobProgress job={live} runner={runner} records={records} onPause={pause} onCancel={() => setConfirmCancel(live)} />;
-  } else if (live?.status === 'paused') {
-    card = <PausedCard job={live} availability={availability} onResume={resume} onCancel={cancel} />;
-  } else if (live?.status === 'queued') {
-    card = <QueuedCard job={live} jobs={jobs} sources={sources} onCancel={cancel} />;
-  } else if (last && (last.status === 'done' || last.status === 'cancelled')) {
-    card = <DoneCard source={source} job={last} records={records} onRetry={(ids) => onRetry(last.id, ids)} onReview={onReview} />;
-  }
+  const cardFor = (job: ExtractionJob): ReactNode => {
+    const resume = (patch?: { budgetUsd?: number | null; model?: ModelId; skipKinds?: StructuredKind[] }) =>
+      void act(() => resumeJob(job.id, patch), 'Could not resume.');
+    switch (job.status) {
+      case 'running':
+      case 'pausing':
+        return <JobProgress key={job.id} job={job} runner={runner} records={records} onPause={() => void act(() => pauseJob(job.id), 'Could not pause.')} onCancel={() => setConfirmCancel(job)} />;
+      case 'paused': {
+        const queuedIds = records.filter((r) => r.jobId === job.id && r.runState === 'queued').map((r) => r.id);
+        return <PausedCard key={job.id} job={job} availability={availability} queuedIds={queuedIds} onResume={resume} onCancel={() => cancel(job)} />;
+      }
+      case 'queued':
+        return <QueuedCard key={job.id} job={job} jobs={jobs} sources={sources} onCancel={() => cancel(job)} />;
+      default:
+        return null;
+    }
+  };
+
+  const cards: ReactNode =
+    live.length > 0
+      ? live.map(cardFor)
+      : last && (last.status === 'done' || last.status === 'cancelled')
+        ? <DoneCard key={last.id} source={source} job={last} records={records} onRetry={(ids) => onRetry(last.id, ids)} onReview={onReview} />
+        : null;
   return (
     <>
-      {card}
+      {cards}
       <Dialog
         open={confirmCancel !== null}
         onClose={() => setConfirmCancel(null)}
@@ -458,8 +564,8 @@ export function StructureStatusCard({
             <Button
               variant="danger"
               onClick={() => {
+                if (confirmCancel) cancel(confirmCancel);
                 setConfirmCancel(null);
-                cancel();
               }}
             >
               Stop

@@ -10,7 +10,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { sampleCampaign } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE } from '@/test/structuredFixtures';
-import type { BuilderData, ClassOption, StructuredKind } from '@/types';
+import type { BuilderData, ClassOption, FeatOption, StructuredKind } from '@/types';
 import { resetFakeGame } from '@/ui/builder/testing/fakeGameStore';
 import { autoCleanup, renderRoute } from '@/ui/shell/testUtils';
 import { CharacterBuilder } from './CharacterBuilder';
@@ -118,6 +118,28 @@ describe('CharacterBuilder with imported options', () => {
     expect(screen.getByText('Lampwright chooses its subclass at level 1.')).toBeInTheDocument();
     await user.click(radio('Lampwright subclass', /Order of the Long Wick/));
     expect(radio('Lampwright subclass', /Order of the Long Wick/)).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it("B4: shows a book's Fighting Style that shares an SRD feat's name as its own card, and checks only the one chosen", async () => {
+    const user = userEvent.setup();
+    const srdGwf = EXPECTED_MERGED.feats.find((f) => f.id === 'srd:feat:great-weapon-fighting');
+    const bookGwf: FeatOption = {
+      id: 'lib:gloam:feat:great-weapon-fighting',
+      name: 'Great Weapon Fighting',
+      category: 'fighting-style',
+      description: 'Invented: once per turn, when you miss with a Heavy weapon, you can reroll the attack roll.',
+      source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:feat:great-weapon-fighting', format: '2014', adaptations: [] },
+    };
+    expect(srdGwf).toBeDefined();
+    renderBuilder({ classId: FIGHTER.id }, { ...EXPECTED_MERGED, feats: [...EXPECTED_MERGED.feats, bookGwf] });
+    const cards = () => within(screen.getByRole('radiogroup', { name: 'Fighting Style' })).getAllByRole('radio', { name: /Great Weapon Fighting/ });
+    expect(cards()).toHaveLength(2);
+    expect(within(cards()[0]).getByText('SRD')).toBeInTheDocument();
+    expect(within(cards()[1]).getByText(`From ${GLOAMWOOD_TITLE}`)).toBeInTheDocument();
+    await user.click(cards()[1]);
+    expect(cards().map((c) => c.getAttribute('aria-checked'))).toEqual(['false', 'true']);
+    await user.click(cards()[0]);
+    expect(cards().map((c) => c.getAttribute('aria-checked'))).toEqual(['true', 'false']);
   });
 
   it('says when a picked option came from a book that is switched off or removed', () => {

@@ -14,7 +14,7 @@
  * Usage is deterministic: input ≈ user-message chars / 3.2; the kind's system prompt is a cache write
  * on its first request through this client and a cache read afterwards.
  */
-import { APIConnectionError, APIError, APIUserAbortError } from '@anthropic-ai/sdk';
+import { AnthropicError, APIConnectionError, APIError, APIUserAbortError } from '@anthropic-ai/sdk';
 import type {
   BetaContentBlock,
   BetaMessage,
@@ -27,7 +27,7 @@ import { SCRIPTED_WIRE } from '@/test/structuredFixtures';
 import { STRUCTURED_KINDS, type StructuredKind } from '@/types';
 import type { ExtractionClient, ExtractionStream } from '../extract/call';
 import { EXTRACT_SYSTEM } from '../extract/prompts';
-import { makeMessage, scriptedStream, textBlock, thinkingBlock } from '../scripted';
+import { makeMessage, messageEvents, scriptedStream, textBlock, thinkingBlock } from '../scripted';
 
 export type ExtractionStep =
   /** A normal answer: `wire` (default: SCRIPTED_WIRE for the title) serialized as the text, or raw `text` (e.g. invalid JSON). */
@@ -42,9 +42,17 @@ export type ExtractionStep =
    * again (only the text after the block parses). message.model is `to`.
    */
   | { type: 'fallback'; mode: 'continue' | 'restart'; from?: string; to?: string; wire?: unknown; delayMs?: number }
-  /** An HTTP error, thrown when the stream is read (as the SDK does): 429 and 529 carry retry-after when given. */
+  /**
+   * An error, thrown when the stream is read (as the SDK does). Before the first event (atEvent 0, the
+   * default) it is the HTTP error, as its typed class (429 and 529 carry retry-after when given). Later
+   * (atEvent ≥ 1: after a 200 and message_start, which carries the input tokens) it is the SDK's real shape
+   * of an SSE `event: error`: a plain APIError with no status and the error's `type` (core/streaming.ts).
+   */
   | { type: 'error'; status: 400 | 401 | 403 | 404 | 413 | 429 | 500 | 529; retryAfter?: number; message?: string; atEvent?: number }
-  /** A connection failure (APIConnectionError). */
+  /**
+   * A connection failure: APIConnectionError before the first event; later, the SDK's real shape of a
+   * connection dropped mid-stream, a plain AnthropicError wrapping the fetch TypeError (lib/BetaMessageStream.ts).
+   */
   | { type: 'network'; atEvent?: number }
   /** No event ever arrives (until the request is aborted): for the idle watchdog. */
   | { type: 'stall' };
@@ -226,11 +234,17 @@ export class FakeExtractionClient implements ExtractionClient {
   }
 
   private error(step: Extract<ExtractionStep, { type: 'error' | 'network' }>): unknown {
-    if (step.type === 'network') return new APIConnectionError({ message: 'Connection error.' });
+    const midStream = (step.atEvent ?? 0) > 0;
+    if (step.type === 'network') {
+      if (!midStream) return new APIConnectionError({ message: 'Connection error.' });
+      return new AnthropicError('network error', { cause: new TypeError('network error') });
+    }
     const headers = new Headers(step.retryAfter !== undefined ? { 'retry-after': String(step.retryAfter) } : {});
     const message = step.message ?? `fake ${step.status}`;
-    const type = { 400: 'invalid_request_error', 401: 'authentication_error', 403: 'permission_error', 404: 'not_found_error', 413: 'request_too_large', 429: 'rate_limit_error', 500: 'api_error', 529: 'overloaded_error' }[step.status];
-    return APIError.generate(step.status, { type: 'error', error: { type, message } }, message, headers);
+    const type = ({ 400: 'invalid_request_error', 401: 'authentication_error', 403: 'permission_error', 404: 'not_found_error', 413: 'request_too_large', 429: 'rate_limit_error', 500: 'api_error', 529: 'overloaded_error' } as const)[step.status];
+    const body = { type: 'error', error: { type, message } };
+    // After a 200 the SDK throws `new APIError(undefined, body, undefined, headers, type)` for an error event (type read from the body).
+    return midStream ? new APIError(undefined, body, undefined, new Headers()) : APIError.generate(step.status, body, message, headers);
   }
 
   private stream(params: MessageCreateParamsBase, options?: { signal?: AbortSignal; maxRetries?: number }): ExtractionStream {
@@ -257,14 +271,17 @@ export class FakeExtractionClient implements ExtractionClient {
 
     const delayMs = 'delayMs' in step ? step.delayMs : undefined;
     const failing = step.type === 'error' || step.type === 'network';
-    const message = failing ? makeMessage([], 'end_turn') : this.message(step, params, title, kind);
+    // A request that fails mid-stream was accepted: its message_start carries the input tokens, as the API's does.
+    const accepted = { model: this.opts.model ?? params.model, usage: { input_tokens: Math.ceil(userText(params).length / CHARS_PER_TOKEN) + 500 } };
+    const message = failing ? makeMessage([], 'end_turn', (step.atEvent ?? 0) > 0 ? accepted : {}) : this.message(step, params, title, kind);
     const inner = scriptedStream(message, {
       signal,
       // Time to first token: the delay comes before the first event.
       beforeEvent: async (index) => {
         if (index === 0 && delayMs) await this.sleep(delayMs, signal);
       },
-      ...(failing ? { failAt: { atEvent: step.atEvent ?? 0, error: this.error(step) } } : {}),
+      // A failing step always fails: at its event, or at the last one (message_stop) when it names one past the end.
+      ...(failing ? { failAt: { atEvent: Math.min(step.atEvent ?? 0, messageEvents(message).length - 1), error: this.error(step) } } : {}),
     });
     return {
       [Symbol.asyncIterator]: () => {

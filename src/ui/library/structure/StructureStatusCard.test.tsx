@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, render, screen, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter } from 'react-router';
 import userEvent from '@testing-library/user-event';
 import { extractionJob, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
@@ -11,7 +11,8 @@ vi.mock('@/dm', async () => (await import('@/ui/library/structure/testing/mocks'
 
 const dm = await import('@/dm');
 const { IDLE_RUNNER_SNAPSHOT: IDLE_RUNNER } = await import('./testing/mocks');
-const { StructureStatusCard, pausedKind } = await import('./StructureStatusCard');
+const { StructureAnnouncer, StructureStatusCard, nextCheaperModel, pausedKind } = await import('./StructureStatusCard');
+const { currentJob } = await import('./bookData');
 
 autoCleanup();
 
@@ -178,10 +179,85 @@ describe('when paused', () => {
     expect(pausedKind(undefined)).toBeNull();
   });
 
+  it('U11: "Resume with this model" starts at a cheaper model and shows what the rest costs there', async () => {
+    const user = userEvent.setup();
+    vi.mocked(dm.estimateJob).mockClear();
+    const queued = records.filter((r) => r.name === 'Mothkin' || r.name === 'Wickwright').map((r) => ({ ...r, jobId: 'job:fixture', runState: 'queued' as const }));
+    const withQueued = records.map((r) => queued.find((q) => q.id === r.id) ?? r);
+    const job = paused('model', { model: 'claude-sonnet-5-5' });
+    render(
+      <MemoryRouter>
+        <StructureStatusCard source={source} jobs={[job]} runner={IDLE_RUNNER} records={withQueued} sources={[source]} availability={ok} onRetry={vi.fn()} onReview={vi.fn()} />
+      </MemoryRouter>,
+    );
+    expect(screen.getByRole('combobox', { name: 'Model' })).toHaveValue('claude-haiku-5-5');
+    expect(await screen.findByText('about $3.20 for the 136 left')).toBeInTheDocument();
+    expect(dm.estimateJob).toHaveBeenLastCalledWith('gloam', { claudeFor: 'selection', recordIds: queued.map((r) => r.id), model: 'claude-haiku-5-5', concurrency: 3 });
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Model' }), 'claude-opus-5-5');
+    await waitFor(() => expect(dm.estimateJob).toHaveBeenLastCalledWith('gloam', expect.objectContaining({ model: 'claude-opus-5-5' })));
+    expect(nextCheaperModel('claude-opus-5-5')).toBe('claude-sonnet-5-5');
+    expect(nextCheaperModel('claude-haiku-5-5')).toBe('claude-sonnet-5-5'); // nothing is cheaper: the cheapest other one
+    expect(nextCheaperModel('claude-opus-5')).toBe('claude-sonnet-5-5'); // a custom id is priced at Opus rates
+  });
+
+  it('U12: "Skip … and resume" reads the kind from the app\'s words, not from the API message', () => {
+    expect(pausedKind("Claude couldn't use the reading format for spells: output_config.format.schema: properties.classesText: unsupported keyword")).toBe('spell');
+    expect(pausedKind("Claude couldn't use the reading format for pieces of gear: x")).toBe('item');
+    expect(pausedKind('Something else about classes.')).toBeNull();
+  });
+
   it('in demo mode it can not resume', () => {
     renderCard(paused('player'), { availability: { ok: false, reason: 'demo', message: 'Demo mode makes no API calls.' } });
     expect(screen.getByRole('button', { name: 'Resume' })).toBeDisabled();
     expect(screen.getByText('Demo mode makes no API calls.')).toBeInTheDocument();
+  });
+});
+
+describe('several jobs of one book', () => {
+  it('U5: the job being read keeps its card, Pause and Cancel while a newer one of the same book waits', async () => {
+    const user = userEvent.setup();
+    const reading = extractionJob({ id: 'job:A', status: 'running', counts: { ...counts, queued: 6, running: 0, done: 4, failed: 0, refused: 0 }, createdAt: 1000 });
+    const waiting = extractionJob({ id: 'job:B', status: 'queued', createdAt: 2000 });
+    expect(currentJob([reading, waiting], 'gloam').live?.id).toBe('job:A');
+    expect(currentJob([waiting, extractionJob({ id: 'job:C', status: 'paused', createdAt: 3000 })], 'gloam').live?.id).toBe('job:B');
+    renderCard(reading, { jobs: [reading, waiting], runner: { activeJobId: 'job:A' } });
+    const [first, second] = screen.getAllByRole('region', { name: 'Structuring' });
+    expect(within(first).getByText(/^Reading with Claude Opus 5\.5 · 4 of 10/)).toBeInTheDocument();
+    await user.click(within(first).getByRole('button', { name: 'Pause' }));
+    expect(dm.pauseJob).toHaveBeenCalledWith('job:A');
+    // The waiting one is still listed, and can still be cancelled on its own.
+    expect(within(second).getByText("Waiting for this book's current reading to finish (4/10).")).toBeInTheDocument();
+    await user.click(within(first).getByRole('button', { name: 'Cancel' }));
+    const confirm = screen.getByRole('dialog', { name: 'Stop now?' });
+    await user.click(within(confirm).getByRole('button', { name: 'Stop' }));
+    expect(dm.cancelJob).toHaveBeenCalledWith('job:A');
+  });
+});
+
+describe('the status announcement', () => {
+  const announcer = (jobs: ExtractionJob[]) => <StructureAnnouncer sourceId="gloam" jobs={jobs} />;
+  const region = () => screen.getByRole('status');
+
+  it('U8: says when a job pauses, finishes or stops, and nothing on first render', async () => {
+    const running = extractionJob({ status: 'running', counts, usage: usage(1.05), estimate, budgetUsd: 6 });
+    const { rerender } = render(announcer([running]));
+    expect(region()).toHaveTextContent('');
+    rerender(announcer([{ ...running, counts: { ...counts, done: 61 } }]));
+    expect(region()).toHaveTextContent('');
+    rerender(announcer([{ ...running, status: 'paused', pauseReason: 'budget' }]));
+    await waitFor(() => expect(region()).toHaveTextContent('Structuring paused at your $6 limit.'));
+    rerender(announcer([{ ...running, status: 'running' }]));
+    rerender(announcer([{ ...running, status: 'done', counts: { ...counts, queued: 0, running: 0, done: 196 } }]));
+    await waitFor(() => expect(region()).toHaveTextContent("Structuring finished: 199 read, 3 couldn't be read."));
+    // Another book's jobs are not this page's news.
+    rerender(announcer([{ ...running, status: 'done', counts: { ...counts, queued: 0, running: 0, done: 196 } }, extractionJob({ id: 'job:x', sourceId: 'book-a', status: 'cancelled' })]));
+    expect(region()).toHaveTextContent("Structuring finished: 199 read, 3 couldn't be read.");
+  });
+
+  it('U8: works without the cards (a phone hides them while a record is open): a pause the player made', async () => {
+    const { rerender } = render(announcer([extractionJob({ status: 'running', counts })]));
+    rerender(announcer([extractionJob({ status: 'paused', pauseReason: 'player', counts })]));
+    await waitFor(() => expect(region()).toHaveTextContent('Structuring paused: you paused it.'));
   });
 });
 
@@ -210,5 +286,21 @@ describe('waiting and done', () => {
     expect(onRetry).toHaveBeenCalledWith('job:done', [failed.id]);
     await user.click(screen.getByRole('button', { name: 'Hide this' }));
     expect(screen.queryByText(/^Done:/)).not.toBeInTheDocument();
+  });
+
+  it('U1: "Retry N" counts only the reads still listed as couldn\'t be read (not those kept as text or accepted)', async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    const done = extractionJob({ id: 'job:done', status: 'done', counts: { ...counts, queued: 0, running: 0, done: 196 } });
+    const failedIn = (r: StructuredRecord, status: StructuredRecord['status'] = r.status) => ({ ...r, status, jobId: 'job:done', runState: 'failed' as const });
+    const withFailures = records.map((r) =>
+      r.name === 'Mothkin' ? failedIn(r) : r.name === 'Ashen Choir' ? failedIn(r, 'rejected') : r.name === 'Cinder Mote' ? failedIn(r, 'accepted') : r,
+    );
+    renderRoute(
+      <StructureStatusCard source={source} jobs={[done]} runner={IDLE_RUNNER} records={withFailures} sources={[source]} availability={ok} onRetry={onRetry} onReview={vi.fn()} />,
+    );
+    expect(screen.getByText(/1 couldn't be read\.$/)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Retry 1' }));
+    expect(onRetry).toHaveBeenCalledWith('job:done', ids('Mothkin'));
   });
 });

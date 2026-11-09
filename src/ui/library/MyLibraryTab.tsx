@@ -14,6 +14,7 @@ import { formatRelativeTime, plural } from '@/ui/shell/format';
 import { ImportDialog } from './ImportDialog';
 import { DeleteBookDialog, useBookSwitch } from './structure/bookControls';
 import { SourceRowStatus } from './structure/SourceRowStatus';
+import { UndoToast } from './structure/UndoToast';
 import { TOUCH, TOUCH_SQUARE, TOUCH_SWITCH } from './structure/touch';
 import { manifestEntryCount, useSrdManifest } from './useSrdManifest';
 
@@ -89,6 +90,8 @@ export function MyLibraryTab() {
       )}
 
       <ImportDialog key={importKey} open={importOpen} onClose={() => setImportOpen(false)} />
+      {/* The import done page's Undo, for what is left of its 10 s once the dialog closes (the dialog has its own). */}
+      {!importOpen && <UndoToast />}
       <DeleteBookDialog source={toDelete} onClose={() => setToDelete(null)} />
       {switchDialog}
     </div>

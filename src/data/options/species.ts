@@ -3,11 +3,13 @@
  * (Human Skillful, Elf Keen Senses) and an extra Origin feat (Human Versatile), read from the
  * species' traits so imported species with the same phrasing work too.
  */
-import { SKILLS, SKILL_NAMES, type CreatureSize, type Skill, type SpeciesOption, type SpeciesTrait } from '@/types';
+import { SKILLS, SKILL_NAMES, type CreatureSize, type ImportedRef, type Skill, type SpeciesOption, type SpeciesTrait } from '@/types';
 
 export interface LineageOption {
   name: string;
   description: string;
+  /** A book's lineage (from its record's `lineages`): where its words come from. */
+  ref?: ImportedRef;
 }
 
 export interface SpeciesChoices {
@@ -77,7 +79,10 @@ export function speciesChoices(species: SpeciesOption | undefined): SpeciesChoic
     return { sizes: [], lineages: [], lineageTrait: null, lineageNoun: 'lineage', lineageNeedsAbility: false, skill: null, originFeat: null };
   }
   const lineageTrait = findLineageTrait(species);
-  const lineages = species.lineages?.length ? species.lineages : lineageTrait ? parseTraitOptions(lineageTrait.description) : [];
+  // A book's species offers the lineages its record lists, never options read out of a trait's text: its
+  // "Choose one of the following gifts each time you finish a Long Rest" is a choice made in play, and the
+  // trait stays whole, with its ref, like any other trait.
+  const lineages = species.lineages?.length ? species.lineages : lineageTrait && !species.source ? parseTraitOptions(lineageTrait.description) : [];
   const allText = species.traits.map((t) => t.description).join('\n');
   let skill: SpeciesChoices['skill'] = null;
   let originFeat: SpeciesChoices['originFeat'] = null;
@@ -173,6 +178,35 @@ export function damageTypesIn(text: string): string[] {
     .map((x) => x.t);
 }
 
+/** SRD 5.2.1 states a species' Resistance at a sentence start: "You have Resistance to Poison damage." */
+const SRD_RESISTANCE = /(?:^|[.!?]\s+|\n\s*|\*\*_?\s*)You have Resistance to ([^.;\n]+)/g;
+
+/** Words that make a resistance last only a while or hold only sometimes: "For 1 minute, …", "While you are Bloodied, …". */
+const CONDITION =
+  /\b(?:while|when(?:ever)?|if|unless|until|after|during|as long as|for the duration|for (?:\d+|one|a|an|the next)\b[^,.]*?\b(?:minute|hour|round|turn)s?|as an? (?:[\w-]+ )?(?:action|reaction))\b/i;
+
+/** "…fire damage while you are in sunlight", "…cold damage until the end of your next turn". */
+const TRAILING_CONDITION = new RegExp(
+  String.raw`\b(?:${DAMAGE_TYPES.join('|')})(?:\s+damage)?\s*,?\s+(?:while|when(?:ever)?|if|unless|until|during|as long as|for the duration|for (?:\d+|one|a|an|the next)\b)`,
+  'i',
+);
+
+/**
+ * What an imported trait's "you have resistance to …" clauses resist, as written (older books also put it
+ * mid-sentence and in lower case: "…, and you have resistance to poison damage"). A clause with a
+ * condition before it in its sentence, or right after its damage type, is left to the DM: the app records
+ * only resistances the hero always has (B7).
+ */
+function lastingResistanceClauses(text: string): string[] {
+  const out: string[] = [];
+  for (const sentence of text.split(/(?<=[.!?])\s+|\n+/)) {
+    for (const m of sentence.matchAll(/\byou have resistance to ([^.;\n]+)/gi)) {
+      if (!CONDITION.test(sentence.slice(0, m.index ?? 0)) && !TRAILING_CONDITION.test(m[1])) out.push(m[1]);
+    }
+  }
+  return out;
+}
+
 /**
  * Damage Resistances a species gives (SRD 5.2.1 Dwarven Resilience, Dragonborn Damage Resistance,
  * Tiefling legacies): sentences starting "You have Resistance to …" in its traits and the chosen
@@ -184,15 +218,11 @@ export function speciesResistances(species: SpeciesOption | undefined, lineage: 
   const texts = species.traits.map((t) => (t === lineageTrait ? traitPreamble(t.description) : t.description));
   if (lineage) texts.push(lineage.description);
   const out: string[] = [];
-  // SRD 5.2.1 states it at a sentence start; older imported books mid-sentence and in lower case
-  // ("…, and you have resistance to poison damage").
-  const pattern = species.source
-    ? /\byou have resistance to ([^.;\n]+)/gi
-    : /(?:^|[.!?]\s+|\n\s*|\*\*_?\s*)You have Resistance to ([^.;\n]+)/g;
   for (const text of texts) {
-    for (const m of text.matchAll(pattern)) {
-      const named = damageTypesIn(m[1]);
-      const types = named.length ? named : lineage && /determined by/i.test(m[1]) ? damageTypesIn(lineage.description) : [];
+    const clauses = species.source ? lastingResistanceClauses(text) : [...text.matchAll(SRD_RESISTANCE)].map((m) => m[1]);
+    for (const clause of clauses) {
+      const named = damageTypesIn(clause);
+      const types = named.length ? named : lineage && /determined by/i.test(clause) ? damageTypesIn(lineage.description) : [];
       for (const t of types) if (!out.includes(t)) out.push(t);
     }
   }

@@ -279,10 +279,12 @@ export function gearTables(text: string): GfmTable[] {
 
 const BLOCK_PATH_LIMIT = 8;
 
-/** A chain's block for a candidate: id "B<n>", the source title left out of the path (no book title in requests). */
+/**
+ * A chain's block for a candidate: id "B<n>", the document's heading path as stored. Requests leave the
+ * document's top-level heading (often the book's title) out of it: src/dm/extract/blocks.ts requestPath.
+ */
 function blockOf(chain: Chain, n: number): CandidateBlock {
-  const sourceName = chain.entries[0].sourceName;
-  const path = chain.path.length > 1 && nameKey(chain.path[0]) === nameKey(sourceName) ? chain.path.slice(1) : chain.path;
+  const path = chain.path;
   const text = chain.entries.map((e) => e.text).join('\n\n');
   return {
     id: `B${n}`,

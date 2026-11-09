@@ -72,7 +72,7 @@ function MonsterSizeEditor() {
     <div className="flex min-w-0 flex-col gap-2">
       <SelectField path="size" label="Size" options={SIZE_OPTIONS} />
       <details open={sizes.length > 1} className="text-sm">
-        <summary className="cursor-pointer text-xs font-medium text-muted">It can be more than one size</summary>
+        <summary className={cn('flex cursor-pointer items-center text-xs font-medium text-muted', TOUCH)}>It can be more than one size</summary>
         <div className="mt-2">
           <ChipsField
             path="sizes"

@@ -44,6 +44,7 @@ import {
   type LevelUpOptions,
 } from '@/engine';
 import type { RulesIndex } from '@/data';
+import { withAdaptationNotes } from '@/data/options/adaptationNotes';
 import { inventoryFromEntry } from '@/data/options/inventory';
 import { gainedFeatures } from '@/data/options/leveling';
 import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
@@ -664,18 +665,30 @@ function tieNote(option: ClassOption, classes: readonly ClassOption[], own: bool
   return `${count} classes are named ${option.name} (${named.map(optionSourceLabel).join(', ')}); used ${own ? "the hero's own" : `the one from ${optionSourceLabel(option)}`}.`;
 }
 
+/** "Two subclasses of Fighter are named Champion (SRD 5.2.1, The Gloamwood Almanac); used the one from SRD 5.2.1." */
+function subclassTieNote(option: ClassOption, sub: SubclassOption | undefined, name: string): string | null {
+  const named = option.subclasses.filter((s) => nameKey(s.name) === nameKey(name));
+  if (named.length < 2) return null;
+  const count = COUNT_WORDS[named.length] ?? String(named.length);
+  const used = sub ? `used the one from ${optionSourceLabel(sub)}` : 'used the name only';
+  return `${count} subclasses of ${option.name} are named ${named[0].name} (${named.map(optionSourceLabel).join(', ')}); ${used}.`;
+}
+
 function planFromData(c: Character, data: BuilderData, input: ToolInput<'level_up'>): DataLevel | null {
   const key = nameKey(input.class_name);
   const existing = c.classes.find((cl) => nameKey(cl.name) === key);
   const option = existing ? classOptionFor(existing, data.classes) : classByName(data.classes, input.class_name, c).option;
   if (!option) return null;
   const classLevel = (existing?.level ?? 0) + 1;
+  // Naming the hero's own subclass again chooses nothing: it stays the one its id names (B2), so a book's
+  // "Champion" never turns into the SRD's. Only a new name is looked up among the class's subclasses.
   const subclassChosenNow = Boolean(input.subclass) && nameKey(existing?.subclass ?? '') !== nameKey(input.subclass ?? '');
-  const sub = input.subclass ? subclassOptionFor({ subclass: input.subclass }, option) : existing ? subclassOptionFor(existing, option) : undefined;
+  const sub = subclassChosenNow ? subclassOptionFor({ subclass: input.subclass }, option) : existing ? subclassOptionFor(existing, option) : undefined;
   const all = gainedFeatures(option, classLevel, sub, { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 }, { have: c.features, subclassChosenNow });
   // SRD classes and subclasses keep today's DM-supplied features: only a book's come from the data.
   const features = all.filter((f) => (f.source === 'subclass' ? Boolean(sub?.source) : Boolean(option.source)));
-  return { option, existing, classLevel, sub, subclassChosenNow, features, tie: tieNote(option, data.classes, Boolean(existing)) };
+  const ties = [tieNote(option, data.classes, Boolean(existing)), subclassChosenNow ? subclassTieNote(option, sub, input.subclass ?? '') : null];
+  return { option, existing, classLevel, sub, subclassChosenNow, features, tie: ties.filter(Boolean).join(' ') || null };
 }
 
 /** The DM's new_features as sheet features (as today), minus those the data adds with the book's text. */
@@ -694,7 +707,8 @@ function dmFeatures(input: ToolInput<'level_up'>, level: number, plan: DataLevel
 /** levelUp's options from the data: the class by id, a new class's numbers and ref, the subclass by id with its ref and casting. */
 function dataLevelOptions(plan: DataLevel, data: BuilderData, input: ToolInput<'level_up'>): Partial<LevelUpOptions> {
   const { option, existing, sub } = plan;
-  const chosen = input.subclass && sub ? sub : undefined;
+  // A subclass chosen now; the hero's own, named again, keeps its id and ref as they are.
+  const chosen = plan.subclassChosenNow && sub ? sub : undefined;
   const subclassRef = subclassRefOf(chosen);
   const subclassCasting = subclassCastingOf(chosen);
   const classRef = existing ? undefined : classRefOf(option);
@@ -762,16 +776,20 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
       ...(plan && data ? dataLevelOptions(plan, data, input) : {}),
       newFeatures: [...(plan?.features ?? []), ...extra],
     });
-    if (r.character === c || !plan?.sub?.source) return r;
-    const toAdd = subclassSpellsToAdd(plan.sub, plan.classLevel, r.character.spellcasting?.spells ?? [], findSpell);
+    if (r.character === c || !plan) return r;
+    // The older-edition notes of the class and its subclass (a 2014 subclass chosen now) join the sheet's (B6).
+    const noted = withAdaptationNotes(r.character, [plan.option, plan.sub]);
+    if (!plan.sub?.source) return noted === r.character ? r : { ...r, character: noted };
+    const toAdd = subclassSpellsToAdd(plan.sub, plan.classLevel, noted.spellcasting?.spells ?? [], findSpell);
     spells.added = toAdd.spells.map((sp) => sp.name);
     spells.missing = toAdd.missing;
-    return { ...r, character: addSubclassSpells(r.character, toAdd.spells) };
+    return { ...r, character: addSubclassSpells(noted, toAdd.spells) };
   });
   const className = plan && !plan.existing ? plan.option.name : input.class_name;
   const summary = `Level up! Level ${change.newLevel} (${className}) · HP +${change.hpGained} (max ${change.character.hp.max})`;
   const uses = updatedUses(before, change.character);
-  const books = bookLines(plan, replaced, spells);
+  const notes = (change.character.adaptationNotes ?? []).filter((n) => !(before.adaptationNotes ?? []).includes(n));
+  const books = [...bookLines(plan, replaced, spells), ...(notes.length ? ['Older-edition notes now on the sheet (app notes):', ...notes.map((n) => `- ${n}`)] : [])];
   await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...books, ...change.reminders].join('\n') || undefined });
   const lines = [summary, ...eventLines(change.events), ...books];
   if (uses.length) lines.push('Limited-use features that grew with the level (already on the sheet):', ...uses.map((u) => `- ${u}`));
