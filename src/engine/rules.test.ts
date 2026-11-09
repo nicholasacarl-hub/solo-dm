@@ -510,3 +510,92 @@ describe('syncArmorClass (SRD 5.2.1 Armor table, Armor Class; Ring of Protection
     expect(syncArmorClass(fighter, worn).character.armorClass).toBe(12); // unknown without the catalog: kept
   });
 });
+
+describe('imported classes and subclasses keep to their own rules (SRD 5.2.1 Classes; Champion: Improved Critical; Draconic Sorcery: Draconic Resilience)', () => {
+  const asFighter = (patch: Partial<Character['classes'][number]>) =>
+    mira({ classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level: 3, hitDie: 10, casterType: 'none', ...patch }], features: [] });
+
+  it('scores Improved Critical only for the SRD Champion when the entry has a subclass id', () => {
+    expect(weaponCritRange(asFighter({ subclass: 'Champion', subclassId: 'srd:subclass:champion' }))).toBe(19);
+    expect(weaponCritRange(asFighter({ subclass: 'Champion' }))).toBe(19);
+    expect(weaponCritRange(asFighter({ subclass: 'Champion', subclassId: 'lib:gloam:subclass:champion' }))).toBe(20);
+    expect(weaponCritRange(asFighter({ classId: 'lib:gloam:class:fighter', subclass: 'Champion' }))).toBe(20);
+  });
+
+  it('gives Draconic Resilience only to the SRD Draconic Sorcery by id', () => {
+    const sorcerer = (patch: Partial<Character['classes'][number]>) =>
+      mira({
+        classes: [{ classId: 'srd:class:sorcerer', name: 'Sorcerer', level: 3, hitDie: 6, casterType: 'full', spellcastingAbility: 'cha', ...patch }],
+        features: [],
+        inventory: [],
+        abilityScores: { str: 8, dex: 14, con: 13, int: 10, wis: 12, cha: 16 },
+      });
+    expect(computeArmorClass(sorcerer({ subclass: 'Draconic Sorcery', subclassId: 'srd:subclass:draconic-sorcery' })).ac).toBe(15);
+    expect(computeArmorClass(sorcerer({ subclass: 'Draconic Bloodline', subclassId: 'lib:gloam:subclass:draconic-bloodline' })).ac).toBe(12);
+  });
+
+  it('gives an imported "Barbarian" no Unarmored Defense', () => {
+    const c = mira({ classes: [{ classId: 'lib:gloam:class:barbarian', name: 'Barbarian', level: 1, hitDie: 12, casterType: 'none' }], features: [], inventory: [] });
+    expect(computeArmorClass(c).formula).not.toMatch(/Unarmored Defense/);
+  });
+});
+
+describe('structured magic item bonuses (SRD 5.2.1 Attunement; Ring of Protection)', () => {
+  const ring = (patch: Partial<InventoryItem> = {}): InventoryItem => ({
+    id: 'ring',
+    name: 'Ring of Protection',
+    quantity: 1,
+    category: 'magic-item',
+    magic: true,
+    requiresAttunement: true,
+    bonuses: { ac: 1, savingThrows: 1 },
+    ...patch,
+  });
+  const bare = (inventory: InventoryItem[]) => mira({ inventory, features: [], armorClass: 12 });
+
+  it('applies AC and save bonuses only while worn and, when required, attuned', () => {
+    expect(computeArmorClass(bare([ring()])).ac).toBe(12);
+    expect(computeArmorClass(bare([ring({ equipped: true })])).ac).toBe(12);
+    expect(computeArmorClass(bare([ring({ attuned: true })])).ac).toBe(13);
+    expect(computeArmorClass(bare([ring({ attuned: true, equipped: false })])).ac).toBe(12);
+    expect(savingThrowModifier(bare([ring({ attuned: true })]), 'dex')).toBe(savingThrowModifier(bare([]), 'dex') + 1);
+    expect(deathSaveModifier(bare([ring({ attuned: true })]))).toBe(deathSaveModifier(bare([])) + 1);
+    // No attunement needed: worn is enough.
+    expect(computeArmorClass(bare([ring({ requiresAttunement: false, equipped: true })])).ac).toBe(13);
+  });
+
+  it('counts a Ring of Protection with structured bonuses once, not again by its name', () => {
+    const c = bare([ring({ attuned: true })]);
+    expect(computeArmorClass(c).ac).toBe(13);
+    expect(savingThrowModifier(c, 'wis')).toBe(savingThrowModifier(bare([]), 'wis') + 1);
+    // Two of the same item don't stack.
+    expect(computeArmorClass(bare([ring({ attuned: true }), ring({ id: 'ring-2', attuned: true })])).ac).toBe(13);
+  });
+
+  it('respects "only without armor (and shield)"', () => {
+    const bracers = (when: 'no-armor' | 'no-armor-no-shield'): InventoryItem => ({ id: 'b', name: 'Mothsilk Bracers', quantity: 1, magic: true, equipped: true, bonuses: { ac: 2, acOnlyWhen: when } });
+    const armor: InventoryItem = { id: 'a', name: 'Leather Armor', quantity: 1, category: 'armor', equipped: true };
+    const shield: InventoryItem = { id: 's', name: 'Shield', quantity: 1, category: 'shield', equipped: true };
+    const trained = (inventory: InventoryItem[]) => mira({ inventory, features: [], armorTraining: ['Light armor', 'Shields'] });
+    expect(computeArmorClass(trained([bracers('no-armor')])).ac).toBe(14);
+    expect(computeArmorClass(trained([bracers('no-armor'), armor])).ac).toBe(13);
+    expect(computeArmorClass(trained([bracers('no-armor'), shield])).ac).toBe(16);
+    expect(computeArmorClass(trained([bracers('no-armor-no-shield'), shield])).ac).toBe(14);
+  });
+
+  it("adds a magic armor's bonus once, on top of its stored base", () => {
+    const mail: InventoryItem = {
+      id: 'm',
+      name: "Warden's Mail",
+      quantity: 1,
+      category: 'armor',
+      magic: true,
+      equipped: true,
+      requiresAttunement: false,
+      armor: { kind: 'armor', armorType: 'heavy', baseAc: 16, dexCap: 0, strength: 13, stealthDisadvantage: true },
+      bonuses: { ac: 1 },
+    };
+    const c = mira({ inventory: [mail], features: [], armorTraining: ['Heavy armor'] });
+    expect(computeArmorClass(c)).toEqual({ ac: 17, formula: "Warden's Mail 16 + 1 (magic)" });
+  });
+});

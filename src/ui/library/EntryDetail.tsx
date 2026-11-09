@@ -1,5 +1,11 @@
-/** Full text of one compendium entry (spell, monster, rule...). */
-import { ArrowLeft, Link2 } from 'lucide-react';
+/**
+ * Full text of one compendium entry (spell, monster, rule...). An entry the player reviewed from an
+ * imported book also shows its "Reviewed stats" (the stats line the DM's lookups carry) with a link to
+ * the record on the book page.
+ */
+import { Link } from 'react-router';
+import { ArrowLeft, CircleCheck, Link2 } from 'lucide-react';
+import { isReviewedImport, statsLine } from '@/data';
 import type { CompendiumEntry } from '@/types';
 import { Badge, Button, IconButton } from '@/ui/components/ui';
 import { Markdown } from '@/ui/components/Markdown';
@@ -42,7 +48,33 @@ export function EntryDetail({ entry, onBack }: { entry: CompendiumEntry; onBack?
       </h2>
       {entry.summary && <p className="mt-1 text-sm text-muted italic">{entry.summary}</p>}
       {entry.path && entry.path.length > 0 && <p className="mt-1 text-xs text-muted">{entry.path.join(' › ')}</p>}
+      <ReviewedStats entry={entry} />
       <Markdown className="mt-4">{entry.text}</Markdown>
     </article>
+  );
+}
+
+/** The card for an entry materialized from an accepted record (spec §6.7). */
+function ReviewedStats({ entry }: { entry: CompendiumEntry }) {
+  if (!isReviewedImport(entry)) return null;
+  const line = statsLine(entry).replace(/^Reviewed stats:\s*/, '');
+  const recordId = typeof entry.data?.recordId === 'string' ? entry.data.recordId : null;
+  if (!line) return null;
+  return (
+    <section aria-labelledby="reviewed-stats-title" className="mt-3 rounded-xl border border-success/30 bg-success-soft/40 px-3 py-2.5">
+      <h3 id="reviewed-stats-title" className="inline-flex items-center gap-1.5 font-display text-xs font-semibold tracking-[0.14em] text-success uppercase">
+        <CircleCheck className="size-3.5" aria-hidden />
+        Reviewed stats
+      </h3>
+      <p className="mt-1 text-sm whitespace-pre-line">{line}</p>
+      {recordId && (
+        <Link
+          to={`/library/source/${encodeURIComponent(entry.sourceId)}?c=${encodeURIComponent(recordId)}&f=all`}
+          className="mt-1 inline-block text-xs text-accent underline underline-offset-2"
+        >
+          Edit it on the book's page
+        </Link>
+      )}
+    </section>
   );
 }

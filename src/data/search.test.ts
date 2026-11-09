@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CompendiumEntry, HomebrewEntry } from '@/types';
-import { createRulesIndex, makeSnippet, processTerm } from './search';
+import { createRulesIndex, makeSnippet, processTerm, sourcePriority } from './search';
 
 const srd = (kind: CompendiumEntry['kind'], name: string, text: string, extra: Partial<CompendiumEntry> = {}): CompendiumEntry => ({
   id: `srd:${kind}:${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
@@ -116,12 +116,16 @@ describe('rules index search', () => {
 });
 
 describe('rules index lookups', () => {
-  it('finds names case- and punctuation-insensitively, preferring homebrew > imports > SRD', () => {
+  it('finds names case- and punctuation-insensitively, preferring homebrew > reviewed imports > SRD > unreviewed imports', () => {
     expect(index.findByName('FIREBALL', { campaignId: 'camp-1' })?.id).toBe('hb:camp-1');
     expect(index.findByName('fireball')?.id).toBe('hb:shared');
     expect(index.findByName('Fire-Ball', { campaignId: 'camp-2' })?.id).toBe('hb:shared');
-    const withoutHomebrew = createRulesIndex(FIXTURE.filter((e) => e.sourceId !== 'homebrew'));
-    expect(withoutHomebrew.findByName('Fireball')?.id).toBe('lib:import-phb:1');
+    const withoutHomebrew = FIXTURE.filter((e) => e.sourceId !== 'homebrew');
+    // An unreviewed imported spell (the chunker's guess) no longer shadows the SRD's (spec §6.2)…
+    expect(createRulesIndex(withoutHomebrew).findByName('Fireball')?.id).toBe('srd:spell:fireball');
+    // …a reviewed one does.
+    const reviewed = withoutHomebrew.map((e) => (e.id === 'lib:import-phb:1' ? { ...e, data: { recordId: 'rec:import-phb:spell:fireball', level: 3 } } : e));
+    expect(createRulesIndex(reviewed).findByName('Fireball')?.id).toBe('lib:import-phb:1');
     expect(createRulesIndex(FIXTURE.filter((e) => e.sourceId === 'srd-5.2.1')).findByName("fire ball!")?.id).toBe('srd:spell:fireball');
   });
 
@@ -166,6 +170,54 @@ describe('rules index lookups', () => {
     const dup = createRulesIndex([FIXTURE[0], { ...FIXTURE[0], name: 'Duplicate' }]);
     expect(dup.list()).toHaveLength(1);
     expect(dup.get(FIXTURE[0].id)?.name).toBe('Fireball');
+  });
+});
+
+describe('structured imports in the index (spec §6.1, §6.2)', () => {
+  const reviewedOf = (e: CompendiumEntry, data: Record<string, unknown> = {}): CompendiumEntry => ({ ...e, data: { ...e.data, ...data, recordId: `rec:${e.id}` } });
+  const goblin = srd('monster', 'Goblin Warrior', 'A goblin.', { data: { size: 'Small', ac: 15 } });
+  const thin = { ...lib(3, 'monster', 'Goblin Warrior', 'A goblin of the book.'), data: { cr: '1/4' } };
+
+  it('ranks by the §6.2 table', () => {
+    expect(sourcePriority(homebrew('hb:c', 'X', 'camp-1'))).toBe(0);
+    expect(sourcePriority(homebrew('hb:s', 'X', null))).toBe(1);
+    expect(sourcePriority(reviewedOf(thin))).toBe(2);
+    for (const kind of ['rule', 'condition', 'boon', 'other'] as const) expect(sourcePriority(lib(4, kind, 'X', 'x'))).toBe(2);
+    expect(sourcePriority(goblin)).toBe(3);
+    for (const kind of ['monster', 'spell', 'magic-item', 'item', 'feat', 'class', 'subclass', 'species', 'background'] as const) {
+      expect(sourcePriority(lib(5, kind, 'X', 'x'))).toBe(4);
+    }
+  });
+
+  it('keeps the SRD stat block over an unreviewed duplicate, and takes a reviewed one over the SRD', () => {
+    expect(createRulesIndex([goblin, thin]).findByName('Goblin Warrior', { kind: 'monster' })?.id).toBe(goblin.id);
+    expect(createRulesIndex([goblin, reviewedOf(thin)]).findByName('Goblin Warrior', { kind: 'monster' })?.id).toBe(thin.id);
+    // A book's own rules section still answers before the SRD's.
+    const rule = lib(6, 'rule', 'Initiative', 'House initiative.');
+    expect(createRulesIndex([...FIXTURE.filter((e) => e.sourceId === 'srd-5.2.1'), rule]).findByName('Initiative')?.id).toBe(rule.id);
+  });
+
+  it('resolves the chunk ids a materialized entry replaced, without listing or searching them', () => {
+    const merged: CompendiumEntry = {
+      ...lib(7, 'species', 'Mothkin', 'Soft-winged folk.'),
+      id: 'lib:import-phb:species:mothkin',
+      data: { recordId: 'rec:import-phb:species:mothkin', aliasIds: ['lib:import-phb:8', 'lib:import-phb:9', 'srd:spell:fireball'] },
+    };
+    const idx = createRulesIndex([...FIXTURE, merged]);
+    expect(idx.get('lib:import-phb:8')?.id).toBe(merged.id);
+    expect(idx.get('lib:import-phb:9')?.id).toBe(merged.id);
+    // An alias never takes over an id an entry owns.
+    expect(idx.get('srd:spell:fireball')?.name).toBe('Fireball');
+    expect(idx.list({ sourceId: 'import-phb' }).map((e) => e.id)).not.toContain('lib:import-phb:8');
+    expect(idx.search('mothkin').map((h) => h.entry.id)).toEqual([merged.id]);
+    // Four-segment ids never pop down to a wrong three-segment entry.
+    expect(idx.get('lib:import-phb:species:unknown')).toBeUndefined();
+  });
+
+  it('keeps the materialized entry over a raw chunk with the same id (first wins)', () => {
+    const raw = lib(1, 'monster', 'Glimmerwing Drake', 'raw');
+    const reviewed = reviewedOf({ ...raw, text: 'reviewed' }, { size: 'Large' });
+    expect(createRulesIndex([reviewed, raw]).get(raw.id)?.text).toBe('reviewed');
   });
 });
 

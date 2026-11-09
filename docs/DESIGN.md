@@ -18,8 +18,12 @@ It is compatible with fifth edition (the 2024 rules, via SRD 5.2.1).
    campaign compendium where the player can read, edit or retire it.
 5. **Everything is local and portable.** Saves, imports and the API key stay in this browser.
    Campaigns export to a file and can optionally sync to the player's own private GitHub repo.
+   Book text copied onto a character remembers where it came from: exports and GitHub saves keep the
+   names and leave the text out, and a device that has the book fills it back in.
 6. **No copyrighted content in the repo.** Only CC-BY-4.0 SRD 5.2.1 content ships. The player's purchased
    books are imported into their own browser storage and are never committed or uploaded.
+7. **Nothing from a book changes the game until the player checks it.** Structured records sit beside the
+   imported text and feed the builder, combat and the DM only once accepted; app code parses every number.
 
 ## Architecture
 
@@ -29,8 +33,11 @@ src/
   engine/       Pure rules logic: dice, derived stats, damage/healing, slots, rests, leveling,
                 combat tracker, oracle, conditions, text summaries. No React, no I/O. Unit-tested.
   data/         SRD 5.2.1 loaders, the rules search index (MiniSearch over SRD + imports + homebrew),
-                character-builder data, the import pipeline (paste / PDF / photo via Claude vision).
-  storage/      IndexedDB (Dexie) persistence, save slots, export/import bundles, GitHub sync.
+                character-builder data, the import pipeline (paste / PDF / photo via Claude vision),
+                structured imports (data/structured: detection, parsers, normalizers, materialize, merge,
+                restore, packs) and option lookups (data/options).
+  storage/      IndexedDB (Dexie) persistence, save slots, export/import bundles (with export redaction),
+                GitHub sync, structured records and extraction jobs.
   state/        Zustand stores: gameStore (the loaded campaign; write-through to storage),
                 settingsStore (browser-only settings and the API key).
   dm/           The AI DM: client, system prompt, tool definitions + handlers, the streaming agent
@@ -108,15 +115,15 @@ tool_result so Claude can correct itself.
 | `request_player_roll` | Ask the player to roll a check/save/attack/damage/initiative/death save. Uses the sheet's modifiers; resolves per roll mode (auto / tap / physical). Returns total, natural, success vs DC. |
 | `update_character` | Batched sheet changes: HP (damage/healing/temp), conditions, exhaustion, slots, feature uses, inventory, currency, XP, inspiration, features, spells, concentration, AC/speed. Returns a summary and warnings. |
 | `take_rest` | Short rest (player chooses hit dice in a dialog) or long rest. |
-| `level_up` | Apply a level (HP, hit dice, slots, proficiency, new features) and return reminders for choices. |
+| `level_up` | Apply a level (HP, hit dice, slots, proficiency, new features) and return reminders for choices. For an imported class or subclass the app adds that level's features with their text. |
 | `transform_character` | Begin, advance or end a **transformation** (vampirism, lycanthropy, a fey mark...): features, defenses, senses, speeds, size and ability changes applied atomically and recorded with what they granted, so ending one undoes exactly that. Enforces the campaign's transformations rule (see below). |
-| `start_combat` / `update_combat` / `end_combat` | Initiative tracker: add combatants (auto-numbered), roll NPC initiative, request the player's, advance turns, damage/heal/conditions on NPCs, end with a summary. `start_combat` can lay out a battle map (size, terrain, places, positions; stats default from SRD stat blocks); `update_combat` can `reveal` / `hide` creatures, and its `next_turn` result says where everyone stands. |
+| `start_combat` / `update_combat` / `end_combat` | Initiative tracker: add combatants (auto-numbered), roll NPC initiative, request the player's, advance turns, damage/heal/conditions on NPCs, end with a summary. AC, HP and initiative default to the stat block (SRD or reviewed import) when left out; `start_combat` can lay out a battle map (size, terrain, places, positions; size, speeds and reach default from the stat block); `update_combat` can `reveal` / `hide` creatures, and its `next_turn` result says where everyone stands. |
 | `update_map` | Battle map: create, replace or remove it; add or clear terrain; open, close or lock doors; name places; set creatures' size, speeds and reach. |
 | `move_tokens` | Every position change on the map: moves on the creature's own turn (turn guard), off-turn moves, forced movement, teleports and placement. The engine prices the path (SRD grid rules), stops at Opportunity Attacks (asking the player in-tool when the hero can react), refuses illegal moves with the nearest reachable square, and records the turn's movement. |
 | `resolve_area` | Areas of effect (sphere, cylinder, cone, line, cube, emanation, listed squares): who is caught, with cover; lasting areas become terrain (difficult, obscured, hazard). |
 | `check_map` | Read-only: measure distance, line of sight and cover, plan a path, preview an area, or draw the map. |
 | `lookup_rules` | Search SRD 5.2.1 + enabled imports + homebrew. |
-| `get_entry` | Full text of one spell / monster / item / feature by name. |
+| `get_entry` | Full text of one spell / monster / item / feature by name (reviewed imports add their stats line; other entries with the same name are listed). |
 | `get_character_sheet` | Full current sheet. |
 | `create_homebrew` / `update_homebrew` | Create or modify homebrew (refused when the campaign disables homebrew). |
 | `update_journal` | Upsert NPCs, locations, factions, lore, secrets (DM-only when `secret`). |
@@ -271,15 +278,91 @@ arcane violet = magic & homebrew, gold = treasure/XP. Cinzel only for small-caps
 the wordmark; Spectral for narration; Inter for UI. Avoid gradients, glassmorphism, and emoji-heavy UI
 chrome (emoji are fine for campaign covers and portraits).
 
-## Structured imports (in progress)
+## Structured imports
 
-The player's imported books can be structured into per-kind records (spells, monsters, items, feats,
-species, backgrounds, classes, subclasses) that sit beside the raw library entries, are reviewed, and
-only then feed the rules index, the builder, combat and the DM. The contracts are in
-`src/types/structured.ts`, `src/data/structured/{wire,schemas}.ts`, `src/dm/libraryRequests.ts` and
-`src/dm/extract/`; the test book is `src/test/structuredFixtures.ts` (invented content only).
-TODO (E1, when the feature lands): describe the pipeline, review, provenance, export redaction, restore
-and the `DM_TOOLS` change with its one-time cost here and in the principles above.
+The player's imported books can be structured into per-kind **records** — classes, subclasses, species,
+backgrounds, feats, spells, magic items, gear and monsters — that sit beside the raw library entries,
+are reviewed by the player, and only then feed the rules index, the character builder, level-up,
+combat, the battle map, spell lists, inventory and the DM. Contracts: `src/types/structured.ts`,
+`src/data/structured/{wire,schemas}.ts`, `src/dm/libraryRequests.ts`, `src/dm/extract/`; the test book
+is `src/test/structuredFixtures.ts` (invented content only).
+
+**Pipeline.** Import is unchanged (read → Markdown → `chunkDocument` → `saveLibrarySource`) and stores
+the book's fingerprint (FNV-1a over its entries in ordinal order). `detectStructure` then runs locally
+and for free: it segments the entries in reading order, detects candidates by their labels, parses
+what it can offline into the same wire object Claude returns, and normalizes it with one normalizer
+per kind. What the offline reader can't read waits as *Not read yet*. With the player's consent (the
+model, the kinds, three cost estimates and a spending limit), the runner sends one entry per request —
+streamed, structured-output JSON, adaptive thinking at effort `low`, one cached system block per kind,
+a warm-up request per kind before fanning out — and normalizes each answer the same way. **Claude
+labels, the app parses**: Claude returns short verbatim excerpts and paragraph spans, never rules text
+or computed numbers; app code parses, grounds and cross-checks every number. Extraction has its own
+ledger (`job.usage`) and never touches a DM session, transcript or `Campaign.usage`.
+
+**Storage** (Dexie version 3, `src/storage/structured.ts`): `libraryRecords` (one row per record, with
+the run state of the latest job that touched it) and `libraryJobs`. Neither is part of
+`campaignTables()`: like the library, they never leave the device. Every record write keeps the book's
+denormalized counts (`LibrarySource.structure`) right in the same transaction; deleting a book removes
+its records and jobs and is refused while a job runs.
+
+**Records beside entries.** Nothing writes structure into `libraryEntries`. `getLibrarySnapshot()` reads
+the enabled imports, their entries and their accepted, schema-valid records once per rules-index version;
+`materializeEntries` turns accepted records into SRD-shaped index entries on read (a one-entry record keeps
+its chunk id; sections and table rows get four-segment ids; replaced chunk ids stay resolvable as
+aliases, so old links and `KnownSpell`/`statBlockId` ids keep working); `mergeBuilderData` adds the
+accepted options to the builder data without mutating the SRD object (an SRD class that gains a
+subclass is cloned). Un-accepting, switching a book off or deleting it reverts every consumer by
+construction. Without imports the index contents and the builder data are exactly the SRD's.
+
+**Review.** The book page (`#/library/source/:id`) lists what was found; nothing is used until the
+player accepts it. *Accept N confident* takes only clean reads and never classes or subclasses; a
+`block` warning disables Accept; every bulk action has an Undo; accepted records can move back to
+review. Accepting refreshes the index and the builder data once per batch and tells DMs with a session
+in progress (names and counts only).
+
+**Consumers.** Name lookups rank this campaign's homebrew, shared homebrew, **reviewed imports** (and a
+book's own rules text), the SRD, then **unreviewed imported entities** — so a thin unreviewed duplicate
+never shadows an SRD stat block (`search.ts` `sourcePriority`, mirrored by the DM's `findAllowedEntry`).
+The DM's lookups put a one-line "Reviewed stats: …" (plus any "Adapted for 2024" note) inside the
+imported-content wrapper and say "reviewed" in the heading; `get_entry` names other entries with the same
+name. `start_combat` takes AC, HP and initiative from the stat block (the SRD's or a reviewed import's)
+when the DM leaves them out, and says where they came from; the battle map takes size, speeds and reach
+from it (`data.reachFt` first, then the attack lines, 2014 wording included, clamped to 5–60).
+
+**The one deliberate `DM_TOOLS` change.** `start_combat` / `update_combat add` make `ac`, `hp_max` and
+`initiative_bonus` optional (defaulting to the stat block; explicit numbers win; an error names what is
+missing), three descriptions say "SRD or reviewed import", and `level_up` gains one sentence about
+imported classes. The tools array is sent with every request, so every session in progress at the update
+sends a changed prefix once: its first request rewrites the cache for the whole prefix (about $0.25–0.80
+on Opus 5.5 for a 50–100K-token session) and its earlier thinking blocks are dropped by the request's
+`drop_block` binding — a one-time dip in continuity, never a 400. Within every session afterwards the
+array is static again (`definitions.snapshot.test.ts` pins it). Sessions started after the update with
+imports get two system-prompt lines: what "reviewed" and "Adapted for 2024" mean, and that left-out
+text can be read again with `get_character_sheet` / `get_entry`. Without imports the prompt is
+byte-identical.
+
+**Provenance, export redaction, restore.** Every copy of book text onto a character (features, traits,
+lineages, feats, a background's feature; the DM's words about an imported entry) carries an
+`ImportedRef`: the book's title and fingerprint, the option and part, where the text sits and its hash.
+The sheet text wraps copied text after truncating, so the DM's frozen prompt can be redacted whole.
+Exports and GitHub saves (`exportCampaignBundleWithReport`) replace copied descriptions — and the DM's
+`level_up` / `update_character` inputs that echo them — with a placeholder sentence (the stored campaign
+and transcript are never changed), then remove every wrapped passage; the download toast says what was
+left out. Names stay, as titles always have. On a device that has the book, restore fills the text back
+in — by option id, then by the book's fingerprint and the text's location (works before the book is
+structured, or while it is switched off), then by title, then by a unique hash — only into empty or
+placeholder descriptions, and writes the character as is: `updatedAt` and the campaign row don't change,
+so sync sees no local edit. It runs after every load (pulls and bundle imports reload), after accepting
+or enabling a book, and from the sheet.
+
+**Packs and book data** (`docs/PACKS.md`). A `solo-dm-pack` JSON file carries entries and records;
+records always import pending, invalid ones are skipped with their issues. "Download book data" (the book
+page's ⋯ menu) writes one with the book's full text and review decisions, so a book moves to another of
+the player's devices without structuring it again; on import the records the other device accepted are
+offered with an unticked checkbox, never applied. Campaign exports and sync never import the pack module.
+
+**Demo mode and no key**: detection, offline reading, review and packs work; starting a job or
+transcribing photos refuses before anything is sent, and the Anthropic client is never created.
 
 Invariants, checked in CI (the definition of done):
 
@@ -314,7 +397,9 @@ Invariants, checked in CI (the definition of done):
 - Describe the app as "compatible with fifth edition"; never use Wizards' trademarks in branding.
 - Imported content is stored only in IndexedDB on the player's device. Passages the DM looks up from
   imported books are wrapped in `<imported-content>` markers in tool results, and exports / GitHub
-  saves redact them (src/lib/importedContent.ts); the DM's own narration may still paraphrase them.
+  saves redact them (src/lib/importedContent.ts); book text copied onto a character is replaced by a
+  placeholder in exports (src/storage/redact.ts) and restored on a device that has the book; the DM's
+  own narration may still paraphrase them.
   GitHub sync refuses public and internal repositories.
 - One tab at a time per campaign: the play screen holds a Web Lock; a second tab offers "Use this tab
   instead".

@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { Character } from '@/types';
+import type { Character, Feature } from '@/types';
+import { importedPlaceholder, redactImported } from '@/lib/importedContent';
 import { sampleCharacter } from '@/test/fixtures';
+import { GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, importedRef, TEXT } from '@/test/structuredFixtures';
 import { applyDamage } from './character';
 import { characterSheetText, characterStatusLine } from './summary';
 import { beginTransformation, endTransformation } from './transform';
@@ -94,6 +96,52 @@ describe('characterSheetText', () => {
     expect(bare).not.toContain('### Spellcasting');
     expect(bare).not.toContain('### Attacks');
     expect(bare).toContain('### Equipment\nnothing');
+  });
+});
+
+describe('book text copied onto the sheet (structured imports, spec §7.2)', () => {
+  const emberWard: Feature = {
+    id: 'f-ember',
+    name: 'Ember Ward',
+    source: 'subclass',
+    sourceName: 'Ember Warden 3',
+    description: TEXT.emberWard.join('\n\n'),
+    ref: importedRef(),
+  };
+
+  it("leaves an SRD-only character's sheet byte-identical (frozen prompts are unaffected)", async () => {
+    // Generated from the summary module as it was before structured imports.
+    await expect(`${characterSheetText(mira())}\n`).toMatchFileSnapshot('./__snapshots__/sheet-srd-character.md');
+  });
+
+  it('wraps imported text after truncating, so redaction removes the whole passage', () => {
+    const sheet = characterSheetText(mira({ features: [emberWard] }));
+    const line = sheet.split('### Features\n')[1].split('\n\n')[0];
+    expect(line.startsWith(`- **Ember Ward** (Ember Warden 3): <imported-content source="${GLOAMWOOD_TITLE}">\n`)).toBe(true);
+    expect(line.endsWith('…\n</imported-content>')).toBe(true);
+    const redacted = redactImported(sheet);
+    expect(redacted).toContain(`- **Ember Ward** (Ember Warden 3): ${importedPlaceholder(GLOAMWOOD_TITLE)}`);
+    for (const marker of GLOAMWOOD_MARKERS) expect(redacted).not.toContain(marker);
+    expect(redacted).not.toContain('banked heat');
+  });
+
+  it('says how to get the text back when a save left it out', () => {
+    const left = { ...emberWard, description: importedPlaceholder(GLOAMWOOD_TITLE) };
+    const line = `- **Ember Ward** (Ember Warden 3): (text from the player's book “${GLOAMWOOD_TITLE}” isn't on this device — call get_character_sheet after they import it, or rule from the name)`;
+    expect(characterSheetText(mira({ features: [left] }))).toContain(line);
+    expect(characterSheetText(mira({ features: [{ ...emberWard, ref: { ...importedRef(), redacted: true } }] }))).toContain(line);
+  });
+
+  it("doesn't wrap a ref'd feature whose description is the app's own", () => {
+    const linked = { ...emberWard, description: 'Ember Ward, from your book.', ref: importedRef({ textCopied: false }) };
+    expect(characterSheetText(mira({ features: [linked] }))).toContain('- **Ember Ward** (Ember Warden 3): Ember Ward, from your book.');
+  });
+
+  it('lists older-edition notes only when the character has some', () => {
+    expect(characterSheetText(mira())).not.toContain('Older-edition');
+    const notes = ['Older edition: Ferry Hand doesn\'t grant an Origin feat, so you choose one.'];
+    const sheet = characterSheetText(mira({ adaptationNotes: notes }));
+    expect(sheet).toContain(`### Older-edition options (app notes)\n- ${notes[0]}\n\n### Equipment`);
   });
 });
 

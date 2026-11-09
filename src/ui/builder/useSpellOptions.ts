@@ -1,8 +1,10 @@
 /**
- * All spells from the rules index (SRD + the player's enabled imports + homebrew), as SpellInfo.
+ * All spells from the rules index (SRD + the player's enabled imports + homebrew), as SpellInfo. The list
+ * follows the index version (D28): accepting a book's spells re-lists them without a reload, and the
+ * previous list stays while the index rebuilds.
  */
-import { useEffect, useState } from 'react';
-import { getRulesIndex } from '@/data';
+import { useMemo } from 'react';
+import { useRulesIndexState } from '@/data';
 import { spellInfo, type SpellInfo } from './spells';
 
 export interface SpellOptionsState {
@@ -12,21 +14,7 @@ export interface SpellOptionsState {
 }
 
 export function useSpellOptions(): SpellOptionsState {
-  const [state, setState] = useState<SpellOptionsState>({ spells: [], loading: true, error: null });
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const index = await getRulesIndex();
-        const spells = index.list({ kind: 'spell' }).map(spellInfo);
-        if (alive) setState({ spells, loading: false, error: null });
-      } catch (err) {
-        if (alive) setState({ spells: [], loading: false, error: err instanceof Error ? err.message : String(err) });
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-  return state;
+  const { index, error } = useRulesIndexState();
+  const spells = useMemo(() => (index ? index.list({ kind: 'spell' }).map(spellInfo) : []), [index]);
+  return { spells, loading: index === null && !error, error: index ? null : error };
 }

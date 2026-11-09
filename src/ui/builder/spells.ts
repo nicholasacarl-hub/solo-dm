@@ -3,7 +3,8 @@
  * are preferred (level, classes, ritual, concentration); the one-line summary
  * ("Level 1 Evocation (Sorcerer, Wizard)") is the fallback.
  */
-import type { Attack, ClassOption, CompendiumEntry, KnownSpell } from '@/types';
+import type { Attack, ClassOption, CompendiumEntry, ImportedRef, KnownSpell } from '@/types';
+import { isReviewedImport } from '@/data/structured/materialize';
 import { nameKey, newId } from '@/lib/id';
 import { wordNumber } from './classFeatures';
 
@@ -75,9 +76,31 @@ export function spellsForClass(spells: SpellInfo[], className: string, level?: n
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 
+/**
+ * Spells on a class option's list: by its list's name (its own, or the one it borrows, `spellListName`)
+ * and, for an imported class, every spell its own list prints (`spellNames`, SRD spells included).
+ */
 export function spellsForClassOption(spells: SpellInfo[], cls: ClassOption, level?: number): SpellInfo[] {
-  const byName = spellsForClass(spells, cls.name, level);
-  return byName.length ? byName : spellsForClass(spells, cls.id, level);
+  const listName = cls.spellListName ?? cls.name;
+  const byName = spellsForClass(spells, listName, level);
+  const base = byName.length || cls.spellListName ? byName : spellsForClass(spells, cls.id, level);
+  if (!cls.spellNames?.length) return base;
+  const printed = new Set(cls.spellNames.map(nameKey));
+  const ids = new Set(base.map((s) => s.id));
+  const extra = spells.filter((s) => !ids.has(s.id) && printed.has(nameKey(s.name)) && (level === undefined || s.level === level));
+  return [...base, ...extra].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** An imported spell's provenance (no text is copied: the sheet reads the spell from the rules index). */
+export function spellRef(spell: SpellInfo | undefined): ImportedRef | undefined {
+  const entry = spell?.entry;
+  if (!entry || !entry.id.startsWith('lib:')) return undefined;
+  return { sourceId: entry.sourceId, sourceTitle: entry.sourceName, entryId: entry.id, kind: 'spell', entryName: entry.name, textHash: '', textCopied: false };
+}
+
+/** A spell from an imported book that hasn't been reviewed ("From <book> · not reviewed"). */
+export function unreviewedImport(spell: SpellInfo): boolean {
+  return spell.entry.id.startsWith('lib:') && !isReviewedImport(spell.entry);
 }
 
 export function findSpellByName(spells: SpellInfo[], name: string): SpellInfo | undefined {
@@ -91,6 +114,7 @@ export function knownSpell(
   fallback: { name: string; level: number },
   extra: Partial<KnownSpell> = {},
 ): KnownSpell {
+  const ref = spellRef(spell);
   return {
     id: spell?.id ?? newId(),
     name: spell?.name ?? fallback.name,
@@ -98,6 +122,7 @@ export function knownSpell(
     prepared: true,
     ...(spell?.ritual ? { ritual: true } : {}),
     ...(spell?.concentration ? { concentration: true } : {}),
+    ...(ref ? { ref } : {}),
     ...extra,
   };
 }
@@ -131,12 +156,25 @@ function beamUpgrades(text: string): string | null {
   return steps.map((s, i) => (i === 0 ? `${s.n} beams at level ${s.level}` : `${s.n} at ${s.level}`)).join(', ');
 }
 
+/**
+ * A reviewed import's attack, damage and range come from its fields (the player checked them); SRD
+ * entries and unreviewed imports are read from the text.
+ */
+function reviewedAttack(spell: SpellInfo): { kind: string; damage: string; type: string } | null {
+  if (!isReviewedImport(spell.entry)) return null;
+  const data = spell.entry.data ?? {};
+  const types = Array.isArray(data.damageTypes) ? data.damageTypes.filter((t): t is string => typeof t === 'string') : [];
+  if ((data.attack !== 'melee' && data.attack !== 'ranged') || typeof data.damage !== 'string' || !types.length) return null;
+  return { kind: data.attack, damage: data.damage, type: types[0] };
+}
+
 /** An attack for a spell-attack cantrip such as Fire Bolt ("Make a ranged spell attack … 1d10 Fire damage"). */
 export function spellAttack(spell: SpellInfo): Attack | null {
   const text = spell.entry.text;
-  const kind = /make an? (melee|ranged) spell attack/i.exec(text);
+  const reviewed = reviewedAttack(spell);
+  const kind = reviewed ? [reviewed.kind, reviewed.kind] : /make an? (melee|ranged) spell attack/i.exec(text);
   if (!kind) return null;
-  const damage = /(\d+d\d+)\s+(\w+)\s+damage/i.exec(text);
+  const damage = reviewed ? [reviewed.damage, reviewed.damage, reviewed.type] : /(\d+d\d+)\s+(\w+)\s+damage/i.exec(text);
   if (!damage) return null;
   const rangeData = str(spell.entry.data?.range);
   const rangeText = rangeData ?? /\*\*Range:\*\*\s*([^\n]+)/i.exec(text)?.[1] ?? /Range:\s*([^\n]+)/i.exec(text)?.[1];

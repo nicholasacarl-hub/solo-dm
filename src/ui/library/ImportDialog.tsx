@@ -2,20 +2,67 @@
  * Import the player's own content into the library: paste text, upload a file (PDF with a text
  * layer, Markdown, plain text, JSON) or photograph pages (transcribed by Claude with the player's
  * API key). Shows progress from importLibraryDocument and can be cancelled.
+ *
+ * Structured imports (spec §4.1): once the import is saved, the dialog looks for spells, monsters and
+ * character options on this device (detectStructure, dismissible: closing lets it finish) and ends on
+ * a done page with what it found and a link to the book page. A JSON pack's records arrive pending
+ * with one tap to accept the confident ones. In demo mode photos are refused (no API calls).
  */
 import { useId, useRef, useState, type ReactNode } from 'react';
-import { Link } from 'react-router';
+import { Link, useNavigate } from 'react-router';
 import { useShallow } from 'zustand/react/shallow';
 import { Camera, ClipboardType, FileUp, Info, Trash2, X } from 'lucide-react';
-import { importLibraryDocument, type ImportFormat, type ImportInput, type ImportProgress } from '@/data';
+import {
+  detectStructure,
+  importLibraryDocument,
+  type DetectionSummary,
+  type ImportFormat,
+  type ImportInput,
+  type ImportProgress,
+  type PackImport,
+} from '@/data';
 import { useSettings } from '@/state/settingsStore';
-import { MODELS } from '@/types';
+import { findSourcesByFingerprint, listRecords } from '@/storage';
+import { MODELS, type LibrarySource } from '@/types';
 import { Button, Dialog, Field, IconButton, Input, Textarea } from '@/ui/components/ui';
 import { SegmentedField } from '@/ui/components/OptionCards';
 import { ProgressBar } from '@/ui/components/ProgressBar';
 import { toast } from '@/ui/components/toast';
 import { errorMessage, formatBytes, formatUsd, isAbortError, plural } from '@/ui/shell/format';
 import { refreshRulesIndex } from './kinds';
+import { ImportDonePage } from './structure/ImportDonePage';
+import { PRIVACY_PROMISES } from './structure/labels';
+import { restoreLoadedCharacter } from './structure/reviewActions';
+
+/** Photos are transcribed by Claude, so demo mode (no API calls) refuses them (spec §3.13). */
+export const DEMO_PHOTOS = 'Demo mode makes no API calls. Turn it off in Settings to transcribe photos.';
+
+interface Finished {
+  source: LibrarySource;
+  summary: DetectionSummary | null;
+  pack: PackImport | null;
+  detectError: string | null;
+  duplicateOf: { id: string; title: string } | null;
+}
+
+/** A pack's records arrive with the import (they never go through detection). */
+async function packImportOf(source: LibrarySource): Promise<PackImport | null> {
+  const records = await listRecords(source.id);
+  if (!records.some((r) => r.origin === 'pack')) return null;
+  return {
+    source: { title: source.title, license: source.license, attribution: source.attribution, notes: source.notes, fingerprint: source.fingerprint },
+    entries: [],
+    records,
+    issues: [],
+    reviewedElsewhere: records.filter((r) => r.reviewedElsewhere).length,
+  };
+}
+
+async function sameBook(source: LibrarySource): Promise<{ id: string; title: string } | null> {
+  if (!source.fingerprint) return null;
+  const others = (await findSourcesByFingerprint(source.fingerprint)).filter((s) => s.id !== source.id);
+  return others[0] ? { id: others[0].id, title: others[0].title } : null;
+}
 
 type Method = 'paste' | 'file' | 'photos';
 type PasteFormat = 'markdown' | 'text' | 'json';
@@ -84,7 +131,12 @@ const PASTE_FORMATS = [
 
 export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
   const id = useId();
-  const { apiKey, model } = useSettings(useShallow((s) => ({ apiKey: s.apiKey, model: s.model })));
+  const navigate = useNavigate();
+  const { apiKey, model, mockMode } = useSettings(useShallow((s) => ({ apiKey: s.apiKey, model: s.model, mockMode: s.mockMode })));
+  const [detecting, setDetecting] = useState<{ title: string; done: number; total: number } | null>(null);
+  const [finished, setFinished] = useState<Finished | null>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
   const [method, setMethod] = useState<Method>('paste');
   const [title, setTitle] = useState('');
   const [notes, setNotes] = useState('');
@@ -111,6 +163,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
       if (!format) return 'That file type isn’t supported. Use PDF, Markdown, plain text or JSON.';
       return { ...base, format, files: [file] };
     }
+    if (mockMode) return DEMO_PHOTOS;
     if (!apiKey.trim()) return 'Transcribing photos needs your Anthropic API key. Add it in Settings first.';
     if (photos.length === 0) return 'Add at least one photo.';
     return { ...base, format: 'image', files: photos };
@@ -126,18 +179,56 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
     const abort = new AbortController();
     controller.current = abort;
     setProgress({ stage: 'reading', done: 0, total: 1 });
+    let source: LibrarySource;
     try {
-      const source = await importLibraryDocument(input, setProgress, abort.signal);
+      source = await importLibraryDocument(input, setProgress, abort.signal);
       refreshRulesIndex();
-      toast.success(`Imported “${source.title}”: ${plural(source.entryCount, 'entry', 'entries')}.`);
-      onClose();
+      void restoreLoadedCharacter();
     } catch (err) {
       if (abort.signal.aborted || isAbortError(err)) toast.info('Import cancelled.');
       else setError(errorMessage(err, 'The import failed.'));
+      return;
     } finally {
       controller.current = null;
       setProgress(null);
     }
+    await structure(source);
+  };
+
+  /** After the import: look for structured entries on this device (closing the dialog lets it finish). */
+  const structure = async (source: LibrarySource) => {
+    const result: Finished = { source, summary: null, pack: null, detectError: null, duplicateOf: null };
+    try {
+      result.pack = await packImportOf(source);
+      if (result.pack) {
+        result.duplicateOf = await sameBook(source);
+      } else {
+        setDetecting({ title: source.title, done: 0, total: 1 });
+        result.summary = await detectStructure(source.id, { onProgress: (done, total) => setDetecting({ title: source.title, done, total }) });
+        refreshRulesIndex();
+      }
+    } catch (err) {
+      result.detectError = errorMessage(err, 'something went wrong');
+    } finally {
+      setDetecting(null);
+    }
+    if (openRef.current) {
+      setFinished(result);
+      return;
+    }
+    // Closed while looking: say what was found.
+    const found = result.summary?.total ?? result.pack?.records.length ?? 0;
+    toast.success(
+      found > 0
+        ? `“${source.title}”: found ${found} ${found === 1 ? 'thing' : 'things'} to review. Open it from My library.`
+        : `Imported “${source.title}”: ${plural(source.entryCount, 'entry', 'entries')}.`,
+    );
+  };
+
+  const openBook = (source: LibrarySource) => {
+    const needsClaude = (finished?.summary?.needClaude ?? 0) > 0;
+    onClose();
+    navigate(`/library/source/${encodeURIComponent(source.id)}${needsClaude ? '?setup=1' : ''}`);
   };
 
   const chooseFile = (picked: File | null) => {
@@ -165,12 +256,16 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
       }}
       dismissible={!running}
       size="lg"
-      title="Import into your library"
-      description="Rules from books you own become searchable for your DM."
+      title={finished ? 'Imported' : 'Import into your library'}
+      description={finished || detecting ? undefined : 'Rules from books you own become searchable for your DM.'}
       footer={
-        running ? (
+        finished ? undefined : running ? (
           <Button variant="ghost" icon={<X className="size-4" aria-hidden />} onClick={() => controller.current?.abort()}>
             Cancel import
+          </Button>
+        ) : detecting ? (
+          <Button variant="ghost" onClick={onClose}>
+            Close (it keeps looking)
           </Button>
         ) : (
           <>
@@ -184,7 +279,28 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
         )
       }
     >
-      {running && progress ? (
+      {finished ? (
+        <ImportDonePage
+          source={finished.source}
+          summary={finished.summary}
+          pack={finished.pack}
+          detectError={finished.detectError}
+          duplicateOf={finished.duplicateOf}
+          onDone={onClose}
+          onOpenBook={() => openBook(finished.source)}
+        />
+      ) : detecting ? (
+        <div className="flex flex-col gap-3 py-6" role="status" aria-live="polite">
+          <p className="text-sm font-medium">Looking for spells, monsters and character options…</p>
+          <ProgressBar
+            label="Looking through the book"
+            value={detecting.done}
+            max={Math.max(detecting.total, 1)}
+            valueText={`${detecting.done} of ${detecting.total}`}
+          />
+          <p className="text-xs text-muted">This happens on this device, for free. You can close this; it keeps going.</p>
+        </div>
+      ) : running && progress ? (
         <div className="flex flex-col gap-3 py-6" role="status" aria-live="polite">
           <p className="text-sm font-medium">{progressText(progress)}</p>
           <ProgressBar
@@ -205,9 +321,10 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
           }}
         >
           <Note>
-            Imports stay on this device. Passages the DM looks up from them are removed from exported saves and
-            GitHub backups, though the DM’s own narration may paraphrase what it read. Only import content you own,
-            such as books you’ve bought or your own notes.
+            Imports stay on this device. Text goes to Anthropic, with your API key, only when you ask: photos to transcribe,
+            entries to structure, and passages the DM looks up while you play. Save files and GitHub backups leave the book's
+            text out. Only import content you own.
+            <span className="mt-1.5 block">{PRIVACY_PROMISES.map((p) => p.title).join(' ')}</span>
           </Note>
 
           <SegmentedField
@@ -289,7 +406,9 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
                   </ul>
                 )}
               </FilePicker>
-              {apiKey.trim() ? (
+              {mockMode ? (
+                <Note tone="warning">{DEMO_PHOTOS}</Note>
+              ) : apiKey.trim() ? (
                 <Note>
                   Photos are sent to Anthropic with your API key so Claude can transcribe them: roughly{' '}
                   {formatUsd(perPage)} per page with {modelInfo.label}

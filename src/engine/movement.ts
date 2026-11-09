@@ -243,9 +243,16 @@ export function heroReachFt(c: Character): number {
   return 5;
 }
 
-const REACH_LINE = /(?:Melee|Melee or Ranged) Attack Roll:[^.]*?reach (\d+) (?:ft\.|feet)/g;
+/** A melee attack line's reach: 2024 "Melee Attack Roll: +5, reach 10 ft." and 2014 "Melee Weapon Attack: +4 to hit, reach 5 ft.". */
+const REACH_LINE = /(?:Melee|Melee or Ranged) (?:Attack Roll|Weapon Attack):[^.]*?reach (\d+) ?(?:ft\.|feet)/g;
+/** The battle map's reach limits (the DM tools' reach_ft range). */
+const STAT_BLOCK_REACH = { min: 5, max: 60 } as const;
 
-/** Map stats from a stat-block entry: data.size, data.speeds, and the largest "reach N ft." / "reach N feet" on a melee attack line. */
+/**
+ * Map stats from a stat-block entry: data.size, data.speeds, and its reach — `data.reachFt` when a reviewed
+ * import (or anything else) stores a whole number of feet in 5–60, else the largest "reach N ft." / "reach N feet"
+ * on a melee attack line (SRD 5.2.1 "Reach"; the 2014 "Weapon Attack" wording too), clamped to 5–60.
+ */
 export function statBlockMapStats(entry: {
   text: string;
   data?: Record<string, unknown>;
@@ -265,9 +272,14 @@ export function statBlockMapStats(entry: {
     if (given.hover === true) speeds.hover = true;
     if (Object.keys(speeds).length > 0) out.speeds = speeds;
   }
+  const stored = data.reachFt;
+  if (typeof stored === 'number' && Number.isInteger(stored) && stored >= STAT_BLOCK_REACH.min && stored <= STAT_BLOCK_REACH.max) {
+    out.reachFt = stored;
+    return out;
+  }
   let reach = 0;
   for (const m of (typeof entry.text === 'string' ? entry.text : '').matchAll(REACH_LINE)) reach = Math.max(reach, Number(m[1]));
-  if (reach > 0) out.reachFt = reach;
+  if (reach > 0) out.reachFt = Math.min(STAT_BLOCK_REACH.max, Math.max(STAT_BLOCK_REACH.min, reach));
   return out;
 }
 

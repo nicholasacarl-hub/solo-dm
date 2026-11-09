@@ -4,7 +4,7 @@
  * `letDmDecide` re-decides a whole step. Randomness comes from the engine's Rng.
  */
 import { cryptoRng, rollDice, type Rng } from '@/engine';
-import { ABILITIES, SKILLS, SKILL_ABILITY, type Ability, type BuilderData, type Skill } from '@/types';
+import { ABILITIES, SKILLS, SKILL_ABILITY, type Ability, type BuilderData, type OptionSource, type Skill } from '@/types';
 import { nameKey } from '@/lib/id';
 import {
   POINT_BUY_BUDGET,
@@ -23,6 +23,7 @@ import { DM_BACKSTORY, defaultPortrait, pick, suggestAlignment, suggestName, sug
 import {
   activeSteps,
   classSpellOptions,
+  fightingStyleChoices,
   masteryPlan,
   selectClass,
   selectSpecies,
@@ -30,9 +31,12 @@ import {
   validateStep,
   type BuilderContext,
 } from './logic';
+import { backgroundAbilityPool } from './abilities';
+import { inSourceFilter, spellInSourceFilter } from './sources';
 import {
   MAGIC_INITIATE_LISTS,
   STANDARD_LANGUAGES,
+  choosesSubclassAtLevel1,
   classSkillOptions,
   grantedSkills,
   isMagicInitiate,
@@ -43,6 +47,7 @@ import {
   picks,
   skillPlan,
   skillProficiencies,
+  suggestedLanguages,
 } from './origin';
 import { findSpellByName, spellsForClass, type SpellInfo } from './spells';
 import { STANDARD_ARRAY, emptyDraft, type BuilderDraft, type BuilderStep } from './types';
@@ -112,13 +117,17 @@ function recommendedPlain(description: string): string | undefined {
 // Per-step fillers (keep what's valid, fill the rest)
 // ---------------------------------------------------------------------------
 
+/** The options of a list the source filter shows (autofill picks only among those). */
+const shown = <T extends { source?: OptionSource }>(list: readonly T[], draft: BuilderDraft): T[] => list.filter((o) => inSourceFilter(o, draft.sourceFilter));
+
 function fillClass(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDraft {
-  const cls = picks(draft, data).cls ?? (data.classes.length ? pick(data.classes, rng) : undefined);
+  const classes = shown(data.classes, draft);
+  const cls = picks(draft, data).cls ?? (classes.length ? pick(classes, rng) : undefined);
   if (!cls) return draft;
   const next = selectClass(draft, cls.id);
   let fightingStyle = next.fightingStyle;
   if (needsFightingStyle(cls) && !fightingStyle) {
-    const styles = data.feats.filter((f) => f.category === 'fighting-style');
+    const styles = fightingStyleChoices(cls, data, draft.sourceFilter);
     const recommended = recommendedPlain(findFeatureDef(cls, 'Fighting Style')?.description ?? '');
     fightingStyle = (styles.find((f) => recommended && nameKey(f.name) === nameKey(recommended)) ?? styles[0])?.name ?? null;
   }
@@ -126,28 +135,46 @@ function fillClass(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDra
   for (const { feature, options } of classChoiceFeatures(cls)) {
     if (!options.some((o) => o.name === classOptions[feature.name])) classOptions[feature.name] = pick(options, rng).name;
   }
-  return { ...next, fightingStyle, classOptions };
+  const subclassId =
+    choosesSubclassAtLevel1(cls) && !cls.subclasses.some((s) => s.id === next.subclassId) ? pick(cls.subclasses, rng).id : next.subclassId;
+  return { ...next, fightingStyle, classOptions, subclassId };
+}
+
+/** A background that lets the player choose: an Origin feat (and a Magic Initiate list) when it grants none. */
+function fillBackgroundFeat(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDraft {
+  const { background } = picks(draft, data);
+  if (!background?.featChoice) return draft;
+  const options = shown(originFeatOptions(data), draft);
+  const current = options.find((f) => f.id === draft.backgroundFeat);
+  const feat = current ?? (options.length ? pick(options, rng) : undefined);
+  if (!feat) return draft;
+  const list = isMagicInitiate(feat.name) ? (draft.backgroundFeatList ?? pick(MAGIC_INITIATE_LISTS, rng)) : null;
+  return { ...draft, backgroundFeat: feat.id, backgroundFeatList: list };
 }
 
 function fillBackground(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDraft {
   const { cls } = picks(draft, data);
   let next = draft;
-  if (!picks(draft, data).background && data.backgrounds.length) {
+  const backgrounds = shown(data.backgrounds, draft);
+  if (!picks(draft, data).background && backgrounds.length) {
     const priority = abilityPriority(cls);
+    // "Any three" backgrounds fit as well as the class's three best abilities.
+    const abilitiesOf = (b: (typeof backgrounds)[number]) => (b.abilityChoice === 'any' ? priority.slice(0, 3) : b.abilityScores);
     const fit = (abilities: Ability[]) => abilities.reduce((sum, a) => sum + (ABILITIES.length - priority.indexOf(a)), 0);
-    const best = Math.max(...data.backgrounds.map((b) => fit(b.abilityScores)));
+    const best = Math.max(...backgrounds.map((b) => fit(abilitiesOf(b))));
     const background = pick(
-      data.backgrounds.filter((b) => fit(b.abilityScores) === best),
+      backgrounds.filter((b) => fit(abilitiesOf(b)) === best),
       rng,
     );
-    next = { ...draft, backgroundId: background.id, bonusPlus2: null, bonusPlus1: null, backgroundEquipment: null };
+    next = { ...draft, backgroundId: background.id, bonusPlus2: null, bonusPlus1: null, backgroundAbilities: [], backgroundFeat: null, backgroundFeatList: null, backgroundEquipment: null };
   }
-  return next;
+  return fillBackgroundFeat(next, data, rng);
 }
 
 function fillSpecies(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDraft {
   let next = draft;
-  if (!picks(next, data).species && data.species.length) next = selectSpecies(next, pick(data.species, rng).id);
+  const species = shown(data.species, draft);
+  if (!picks(next, data).species && species.length) next = selectSpecies(next, pick(species, rng).id);
   const p = picks(next, data);
   const { choices, cls } = p;
   if (!p.species) return next;
@@ -173,7 +200,7 @@ function fillSpecies(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderD
   }
   if (choices.originFeat) {
     const taken = new Set(originFeats(next, data).filter((f) => f.from === 'background').map((f) => f.feat?.id));
-    const options = originFeatOptions(data).filter((f) => f.repeatable || !taken.has(f.id));
+    const options = shown(originFeatOptions(data), next).filter((f) => f.repeatable || !taken.has(f.id));
     const current = options.find((f) => f.id === next.speciesFeat);
     const recommended = recommendedPlain(p.species.traits.find((t) => t.name === choices.originFeat?.trait)?.description ?? '');
     const feat = current ?? options.find((f) => recommended && nameKey(f.name) === nameKey(recommended)) ?? options[0];
@@ -208,14 +235,16 @@ function fillAbilities(draft: BuilderDraft, data: BuilderData, rng: Rng): Builde
       next = { ...next, assignment: recommendedAssignment(cls, scorePool(next)) };
     }
   }
+  const pool = backgroundAbilityPool(background);
+  const anyThreeValid = background?.abilityChoice !== 'any' || new Set(next.backgroundAbilities.filter((a) => ABILITIES.includes(a))).size === 3;
   const bonusValid =
-    next.bonusMode === 'one-one-one' ||
+    (next.bonusMode === 'one-one-one' && anyThreeValid) ||
     (background &&
       next.bonusPlus2 &&
       next.bonusPlus1 &&
       next.bonusPlus2 !== next.bonusPlus1 &&
-      background.abilityScores.includes(next.bonusPlus2) &&
-      background.abilityScores.includes(next.bonusPlus1));
+      pool.includes(next.bonusPlus2) &&
+      pool.includes(next.bonusPlus1));
   if (!bonusValid) next = { ...next, ...recommendedBonuses(cls, background) };
   return next;
 }
@@ -251,8 +280,9 @@ function fillSkills(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDr
   const langs = languagePlan(draft, data);
   const required = langs.standard + langs.any;
   const keptLangs = draft.languages.filter((l) => !langs.fixed.includes(l));
-  const speciesLang = SPECIES_LANGUAGE[nameKey(p.species?.name ?? '').split('-')[0]];
-  const pool = [speciesLang, ...shuffle(STANDARD_LANGUAGES, rng)].filter(
+  const speciesLang = p.species?.source ? undefined : SPECIES_LANGUAGE[nameKey(p.species?.name ?? '').split('-')[0]];
+  // Languages an older species or background prints come first (§5.6: suggested for the two picks).
+  const pool = [...suggestedLanguages(draft, data).languages, speciesLang, ...shuffle(STANDARD_LANGUAGES, rng)].filter(
     (l): l is string => l !== undefined && !langs.fixed.includes(l),
   );
   const languages = topUp(keptLangs, pool, required);
@@ -299,8 +329,9 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
   let next = draft;
   if (plan.casting) {
     const recommended = recommendedSpells(draft, ctx);
-    const cantripOptions = classSpellOptions(draft, ctx, 0);
-    const levelOneOptions = classSpellOptions(draft, ctx, 1);
+    const visible = (list: SpellInfo[]) => list.filter((sp) => spellInSourceFilter(sp, draft.sourceFilter));
+    const cantripOptions = visible(classSpellOptions(draft, ctx, 0));
+    const levelOneOptions = visible(classSpellOptions(draft, ctx, 1));
     const cantripIds = cantripOptions.map((s) => s.id);
     const levelOneIds = levelOneOptions.map((s) => s.id);
     const cantrips = topUp(
@@ -387,11 +418,21 @@ export function clearStep(step: BuilderStep, draft: BuilderDraft): BuilderDraft 
     case 'class':
       return { ...selectClass(draft, ''), classId: null };
     case 'background':
-      return { ...draft, backgroundId: null, bonusPlus2: null, bonusPlus1: null, backgroundEquipment: null, magicInitiate: {} };
+      return {
+        ...draft,
+        backgroundId: null,
+        bonusPlus2: null,
+        bonusPlus1: null,
+        backgroundAbilities: [],
+        backgroundFeat: null,
+        backgroundFeatList: null,
+        backgroundEquipment: null,
+        magicInitiate: {},
+      };
     case 'species':
       return { ...selectSpecies(draft, ''), speciesId: null };
     case 'abilities':
-      return { ...draft, assignment: {}, pointBuy: blank.pointBuy, bonusMode: 'two-one', bonusPlus2: null, bonusPlus1: null };
+      return { ...draft, assignment: {}, pointBuy: blank.pointBuy, bonusMode: 'two-one', bonusPlus2: null, bonusPlus1: null, backgroundAbilities: [] };
     case 'skills':
       return { ...draft, classSkills: [], featSkills: [], expertise: [], languages: [] };
     case 'equipment':

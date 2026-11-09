@@ -9,7 +9,10 @@ import type {
   InventoryItem,
   ItemCategory,
 } from '@/types';
+import { findEquipment as findCatalogMatch, inventoryFromOption, type CatalogMatch } from '@/data/options/resolve';
 import { newId, nameKey } from '@/lib/id';
+
+export type { CatalogMatch };
 
 /** SRD 5.2.1 Simple weapons (everything else in the catalog is Martial). */
 const SIMPLE_WEAPONS = new Set(
@@ -38,33 +41,12 @@ function singular(key: string): string {
   return key;
 }
 
-export interface CatalogMatch {
-  option: EquipmentOption;
-  /** How the package named the item ("Arcane Focus" for "Arcane Focus (Quarterstaff)"). */
-  via: 'name' | 'parenthetical' | 'base';
-  /** The words outside the parentheses, when matched via the parenthetical. */
-  base?: string;
-}
-
-/** Find a package item in the catalog: exact or singular name, then "(…)" contents, then the base name. */
-export function findEquipment(name: string, catalog: EquipmentOption[]): CatalogMatch | null {
-  const byKey = new Map<string, EquipmentOption>();
-  for (const option of catalog) {
-    const key = nameKey(option.name);
-    byKey.set(key, option);
-    byKey.set(singular(key), byKey.get(singular(key)) ?? option);
-  }
-  const lookup = (text: string) => byKey.get(nameKey(text)) ?? byKey.get(singular(nameKey(text)));
-  const direct = lookup(name);
-  if (direct) return { option: direct, via: 'name' };
-  const paren = /^(.*?)\s*\(([^)]+)\)\s*$/.exec(name);
-  if (paren) {
-    const inner = lookup(paren[2]);
-    if (inner) return { option: inner, via: 'parenthetical', base: paren[1].trim() };
-    const outer = lookup(paren[1]);
-    if (outer) return { option: outer, via: 'base' };
-  }
-  return null;
+/**
+ * Find a package item in the catalog: exact or singular name, then "(…)" contents, then the base name;
+ * the package's own book first, then the SRD, then other books (resolve.ts). Magic items never match.
+ */
+export function findEquipment(name: string, catalog: readonly EquipmentOption[], preferSourceId?: string): CatalogMatch | null {
+  return findCatalogMatch(name, catalog, preferSourceId);
 }
 
 export function isRangedWeapon(option: EquipmentOption): boolean {
@@ -77,6 +59,7 @@ export function hasProperty(option: EquipmentOption, property: string): boolean 
 }
 
 export function weaponCategory(option: EquipmentOption): 'simple' | 'martial' {
+  if (option.weaponCategory) return option.weaponCategory;
   const hint = `${(option.properties ?? []).join(' ')} ${option.description ?? ''}`;
   if (/\bsimple\b/i.test(hint)) return 'simple';
   if (/\bmartial\b/i.test(hint)) return 'martial';
@@ -197,10 +180,24 @@ export function unarmedStrike(martialArtsDie: string | null): Attack {
 export interface StartingGear {
   items: InventoryItem[];
   gp: number;
+  /** Package items the catalog doesn't know: added as plain gear (the Equipment step lists them). */
+  unmatched: string[];
 }
 
 export interface GearContext {
   armorTraining: string[];
+  /** Per package (same order): the book it came from, whose gear is matched first. */
+  sources?: (string | undefined)[];
+}
+
+/** An inventory item for a catalog option: an imported one copies numbers and a ref only (inventoryFromOption). */
+function catalogItem(option: EquipmentOption, name: string, quantity: number, entryName: string, catalog: readonly EquipmentOption[]): InventoryItem {
+  if (option.source) return { id: newId(), ...inventoryFromOption(option, quantity, catalog), name };
+  const item: InventoryItem = { id: newId(), name, quantity, category: itemCategory(option, entryName) };
+  if (option.weight !== undefined) item.weight = option.weight;
+  if (option.description) item.description = option.description;
+  item.compendiumId = option.id;
+  return item;
 }
 
 /**
@@ -209,14 +206,15 @@ export interface GearContext {
  */
 export function gearFromPackages(packages: (EquipmentPackage | undefined)[], catalog: EquipmentOption[], ctx: GearContext): StartingGear {
   const items: InventoryItem[] = [];
+  const unmatched: string[] = [];
   let gp = 0;
   let armorEquipped = false;
   let shieldEquipped = false;
-  for (const pkg of packages) {
-    if (!pkg) continue;
+  packages.forEach((pkg, index) => {
+    if (!pkg) return;
     gp += pkg.gp;
     for (const entry of pkg.items) {
-      const match = findEquipment(entry.name, catalog);
+      const match = findEquipment(entry.name, catalog, ctx.sources?.[index]);
       const name = displayName(entry.name, match);
       const existing = items.find((i) => nameKey(i.name) === nameKey(name));
       if (existing) {
@@ -224,15 +222,10 @@ export function gearFromPackages(packages: (EquipmentPackage | undefined)[], cat
         continue;
       }
       const option = match?.option;
-      const item: InventoryItem = {
-        id: newId(),
-        name,
-        quantity: entry.quantity,
-        category: itemCategory(option, entry.name),
-      };
-      if (option?.weight !== undefined) item.weight = option.weight;
-      if (option?.description) item.description = option.description;
-      if (option) item.compendiumId = option.id;
+      if (!option && !unmatched.includes(entry.name)) unmatched.push(entry.name);
+      const item: InventoryItem = option
+        ? catalogItem(option, name, entry.quantity, entry.name, catalog)
+        : { id: newId(), name, quantity: entry.quantity, category: itemCategory(undefined, entry.name) };
       if (option && hasArmorTraining(option, ctx.armorTraining)) {
         if (option.category === 'armor' && !armorEquipped) {
           item.equipped = armorEquipped = true;
@@ -242,8 +235,8 @@ export function gearFromPackages(packages: (EquipmentPackage | undefined)[], cat
       }
       items.push(item);
     }
-  }
-  return { items, gp };
+  });
+  return { items, gp, unmatched };
 }
 
 /** Attacks for every distinct weapon in the inventory (plus an Unarmed Strike). */
@@ -255,7 +248,7 @@ export function attacksForInventory(
   const attacks: Attack[] = [];
   const seen = new Set<string>();
   for (const item of items) {
-    const option = catalog.find((o) => o.id === item.compendiumId) ?? findEquipment(item.name, catalog)?.option;
+    const option = catalog.find((o) => o.id === item.compendiumId) ?? findEquipment(item.name, catalog, item.ref?.sourceId)?.option;
     if (!option || option.category !== 'weapon' || !option.damage) continue;
     const key = nameKey(option.name);
     if (seen.has(key)) continue;
@@ -275,6 +268,7 @@ export function masteryCandidates(
   return catalog.filter(
     (o) =>
       o.category === 'weapon' &&
+      !o.magic &&
       Boolean(o.mastery) &&
       isWeaponProficient(o, proficiencies) &&
       !(opts.meleeOnly && isRangedWeapon(o)),

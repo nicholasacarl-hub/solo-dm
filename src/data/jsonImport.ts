@@ -1,10 +1,12 @@
 /**
  * JSON imports: a CompendiumEntry[] or { entries: [...] } file (our own format, for backups and
- * sharing). Entries are validated, then re-homed in the new library source.
+ * sharing), or a "solo-dm-pack" file (entries with their structured records, spec §3.12), routed to
+ * parsePack. Legacy entries are validated, then re-homed in the new library source, exactly as before.
  */
 import { z } from 'zod';
 import { CONTENT_KINDS, type CompendiumEntry, type ContentKind } from '@/types';
 import { guessKind } from './chunk';
+import { isPackFile, parsePack, type PackImport } from './structured/packs';
 
 const MAX_ISSUES_SHOWN = 5;
 
@@ -81,4 +83,22 @@ export function parseJsonImport(input: string | unknown, opts: { sourceId: strin
     throw new Error(`Some entries in the JSON file are invalid:\n${issues.slice(0, MAX_ISSUES_SHOWN).join('\n')}${more}`);
   }
   return entries;
+}
+
+function parseJson(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch (err) {
+    throw new Error(`That isn't valid JSON (${err instanceof Error ? err.message : 'parse error'}).`, { cause: err });
+  }
+}
+
+/** What a JSON import holds: a pack (entries and records) or plain entries (the legacy shapes, unchanged). */
+export type JsonImport = { type: 'pack'; pack: PackImport } | { type: 'entries'; entries: CompendiumEntry[] };
+
+/** Route one JSON text: { "format": "solo-dm-pack" } → parsePack; anything else → parseJsonImport. */
+export function routeJsonImport(text: string, opts: { sourceId: string; sourceName: string }): JsonImport {
+  const json = parseJson(text);
+  if (isPackFile(json)) return { type: 'pack', pack: parsePack(json, opts) };
+  return { type: 'entries', entries: parseJsonImport(json, opts) };
 }

@@ -268,6 +268,26 @@ describe('statBlockMapStats (D44; SRD 5.2.1 stat blocks)', () => {
     expect(djinni).toEqual({ size: 'Large', speeds: { walk: 30, fly: 90, hover: true }, reachFt: 5 });
   });
 
+  it('takes a stored reach first (a reviewed import), then the text, clamped to 5–60 ("Reach")', () => {
+    // A reviewed stat block's number wins over its text: the player corrected it in review.
+    expect(statBlockMapStats({ text: '_Melee Attack Roll:_ +5, reach 5 ft.', data: { size: 'Large', reachFt: 10 } })).toEqual({ size: 'Large', reachFt: 10 });
+    // Out-of-range or fractional stored values fall back to the text.
+    expect(statBlockMapStats({ text: '_Melee Attack Roll:_ +5, reach 15 ft.', data: { reachFt: 7.5 } })).toEqual({ reachFt: 15 });
+    expect(statBlockMapStats({ text: '_Melee Attack Roll:_ +5, reach 15 ft.', data: { reachFt: 90 } })).toEqual({ reachFt: 15 });
+    // The text scan is clamped like every other reach on the map.
+    expect(statBlockMapStats({ text: '_Melee Attack Roll:_ +19, reach 100 ft.' })).toEqual({ reachFt: 60 });
+    expect(statBlockMapStats({ text: '_Melee Attack Roll:_ +2, reach 2 ft.' })).toEqual({ reachFt: 5 });
+  });
+
+  it('reads the older "Melee Weapon Attack" wording (2014 stat blocks)', () => {
+    const hound = statBlockMapStats({ text: '***Bite.*** *Melee Weapon Attack:* +4 to hit, reach 5 ft., one target. *Hit:* 7 (1d10 + 2) piercing damage.' });
+    expect(hound).toEqual({ reachFt: 5 });
+    const tail = statBlockMapStats({
+      text: '***Bite.*** *Melee Weapon Attack:* +7 to hit, reach 10 ft., one target.\n\n***Tail.*** *Melee or Ranged Weapon Attack:* +7 to hit, reach 15ft., one target.',
+    });
+    expect(tail).toEqual({ reachFt: 15 });
+  });
+
   it('gives nothing for homebrew without data, and ignores ranged lines and odd values', () => {
     expect(statBlockMapStats({ text: 'A shadowy thing.' })).toEqual({});
     expect(statBlockMapStats({ text: '_Ranged Attack Roll:_ +4, reach 30 ft.', data: { size: 'Enormous', speeds: { walk: 'fast' } } })).toEqual({});

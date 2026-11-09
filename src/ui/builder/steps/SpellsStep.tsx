@@ -5,8 +5,21 @@ import { cn } from '@/lib/cn';
 import { ABILITY_NAMES, type Ability } from '@/types';
 import { Badge, Input, Spinner } from '@/ui/components/ui';
 import { RulesEntryDialog } from '@/ui/sheet/SpellsPanel';
+import { SourceFilter } from '../BookBadges';
 import { Issues, RadioCards, StepHeader, SubHeading } from '../BuilderParts';
-import { classSpellOptions, picks, spellPlan, spellsForClass, toggleInList, validateStep, type MagicInitiateChoice, type SpellInfo } from '../logic';
+import {
+  classSpellOptions,
+  optionBooks,
+  picks,
+  spellInSourceFilter,
+  spellPlan,
+  spellsForClass,
+  toggleInList,
+  unreviewedImport,
+  validateStep,
+  type MagicInitiateChoice,
+  type SpellInfo,
+} from '../logic';
 import type { StepProps } from './stepTypes';
 
 const MENTAL: Ability[] = ['int', 'wis', 'cha'];
@@ -71,6 +84,12 @@ function SpellChoiceList({
                     className="size-4 shrink-0 accent-[var(--arcane)]"
                   />
                   <span className="truncate font-medium">{spell.name}</span>
+                  {spell.entry.id.startsWith('lib:') && (
+                    <span className="truncate text-xs text-faint">
+                      From {spell.entry.sourceName}
+                      {unreviewedImport(spell) ? ' · not reviewed' : ''}
+                    </span>
+                  )}
                   {spell.concentration && (
                     <Badge tone="arcane" className="px-1.5">
                       C
@@ -145,13 +164,17 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
   const initiateIds = new Set(plan.magicInitiate.flatMap((m) => initiateIdsOf(m.list)));
   const classIds = [...draft.cantrips, ...draft.spellbook, ...draft.prepared];
   const takenFor = (list: string) => new Set([...classIds, ...plan.magicInitiate.filter((m) => m.list !== list).flatMap((m) => initiateIdsOf(m.list))]);
-  const cantripOptions = classSpellOptions(draft, ctx, 0);
-  const levelOneOptions = classSpellOptions(draft, ctx, 1);
-  const spellbookSpells = levelOneOptions.filter((s) => draft.spellbook.includes(s.id));
+  // The source filter narrows what's listed; spells already chosen stay visible.
+  const chosen = new Set([...classIds, ...initiateIds]);
+  const visible = (list: SpellInfo[]) => list.filter((sp) => spellInSourceFilter(sp, draft.sourceFilter) || chosen.has(sp.id));
+  const cantripOptions = visible(classSpellOptions(draft, ctx, 0));
+  const levelOneOptions = visible(classSpellOptions(draft, ctx, 1));
+  const spellbookSpells = classSpellOptions(draft, ctx, 1).filter((s) => draft.spellbook.includes(s.id));
 
   return (
     <div className="flex flex-col gap-6">
       {header}
+      <SourceFilter books={optionBooks(ctx.data, ctx.spells)} value={draft.sourceFilter} onChange={(sourceFilter) => setDraft((d) => ({ ...d, sourceFilter }))} label="Show spells from" />
       {ability && (
         <div className="flex flex-wrap gap-2 text-sm">
           <Badge tone="arcane">Spellcasting: {ABILITY_NAMES[ability]}</Badge>
@@ -232,7 +255,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
             </div>
             <SpellChoiceList
               label={`${list} cantrips`}
-              options={spellsForClass(ctx.spells, list, 0)}
+              options={visible(spellsForClass(ctx.spells, list, 0))}
               selected={choice.cantrips}
               max={2}
               onChange={(cantrips) => update({ cantrips })}
@@ -241,7 +264,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
             />
             <SpellChoiceList
               label={`${list} level 1 spell`}
-              options={spellsForClass(ctx.spells, list, 1)}
+              options={visible(spellsForClass(ctx.spells, list, 1))}
               selected={choice.spell ? [choice.spell] : []}
               max={1}
               onChange={(ids) => update({ spell: ids[0] ?? null })}

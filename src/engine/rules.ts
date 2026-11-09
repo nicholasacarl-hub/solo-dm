@@ -20,7 +20,7 @@ import {
 } from '@/types';
 import { nameKey } from '@/lib/id';
 import { resolveArmor, wornArmor, type WornArmor } from './armorData';
-import { srdClassFor } from './classData';
+import { isLibraryId, srdClassFor } from './classData';
 import { INCAPACITATING_CONDITIONS, SPEED_ZERO_CONDITIONS, conditionKey, conditionName } from './conditions';
 import {
   DiceError,
@@ -148,15 +148,41 @@ export function skillModifier(c: Character, skill: Skill): number {
 
 const PROTECTION_ITEMS = new Set(['ring-of-protection', 'cloak-of-protection']);
 
-/** Attuned items that aren't explicitly unequipped (rings, cloaks and bracers must be worn to work). */
+/**
+ * Attuned items that aren't explicitly unequipped (rings, cloaks and bracers must be worn to work). Items
+ * with structured `bonuses` (imported magic items) are counted by itemBonuses instead, never by name.
+ */
 function wornAttuned(c: Character) {
-  return c.inventory.filter((i) => i.attuned && i.equipped !== false);
+  return c.inventory.filter((i) => i.attuned && i.equipped !== false && !i.bonuses);
 }
 
 /** +1 per distinct attuned Ring / Cloak of Protection (SRD magic items: +1 to AC and saving throws). */
 function protectionItemBonus(c: Character): number {
   const owned = new Set(wornAttuned(c).map((i) => nameKey(i.name)));
   return [...PROTECTION_ITEMS].filter((key) => owned.has(key)).length;
+}
+
+/**
+ * Items whose structured bonuses apply now (SRD 5.2.1 "Attunement"): worn (equipped, or attuned and not
+ * taken off) and, when the item requires attunement, attuned. The same item counts once, and two copies
+ * of a magic item don't stack.
+ */
+export function activeBonusItems(c: Character): InventoryItem[] {
+  const seen = new Set<string>();
+  return c.inventory.filter((i) => {
+    if (!i.bonuses) return false;
+    const worn = i.equipped === true || (i.attuned === true && i.equipped !== false);
+    if (!worn || (i.requiresAttunement && !i.attuned)) return false;
+    const key = nameKey(i.name);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Saving throw bonus from active magic items (a Cloak's "+1 to saving throws"). */
+function itemSaveBonus(c: Character): number {
+  return activeBonusItems(c).reduce((sum, i) => sum + Math.max(0, toInt(i.bonuses?.savingThrows)), 0);
 }
 
 function classLevelOf(c: Character, className: string): number {
@@ -181,12 +207,12 @@ function auraOfProtectionBonus(c: Character): number {
  */
 export function savingThrowModifier(c: Character, ability: Ability): number {
   const proficient = c.savingThrows.includes(ability) ? pb(c) : 0;
-  return mod(c, ability) + proficient + protectionItemBonus(c) + auraOfProtectionBonus(c);
+  return mod(c, ability) + proficient + protectionItemBonus(c) + itemSaveBonus(c) + auraOfProtectionBonus(c);
 }
 
 /** Modifier for a Death Saving Throw: it's a saving throw, so the exhaustion penalty and save bonuses apply. */
 export function deathSaveModifier(c: Character): number {
-  return exhaustionPenalty(c) + protectionItemBonus(c) + auraOfProtectionBonus(c);
+  return exhaustionPenalty(c) + protectionItemBonus(c) + itemSaveBonus(c) + auraOfProtectionBonus(c);
 }
 
 /** Raw ability check (no skill): the ability modifier. */
@@ -376,8 +402,10 @@ function hasFeatureBase(c: Character, name: string): boolean {
  * (SRD 5.2.1 Fighter, "Fighter Subclass: Champion").
  */
 export function weaponCritRange(c: Character): number {
+  // By id when the entry has one (an imported "Champion" isn't the SRD's); by name for older sheets.
+  const isChampion = (cl: Character['classes'][number]) => (cl.subclassId ? cl.subclassId === 'srd:subclass:champion' : /champion/i.test(cl.subclass ?? ''));
   const champion = c.classes
-    .filter((cl) => srdClassFor(cl)?.name === 'Fighter' && /champion/i.test(cl.subclass ?? ''))
+    .filter((cl) => srdClassFor(cl)?.name === 'Fighter' && isChampion(cl))
     .reduce((sum, cl) => sum + Math.max(0, toInt(cl.level)), 0);
   if (champion >= 15 || hasFeatureBase(c, 'Superior Critical')) return 18;
   if (champion >= 3 || hasFeatureBase(c, 'Improved Critical')) return 19;
@@ -492,7 +520,8 @@ function armoredOption(c: Character, worn: WornArmor): AcOption {
 function unarmoredOptions(c: Character): AcOption[] {
   const dex = mod(c, 'dex');
   const options: AcOption[] = [{ ac: 10 + dex, parts: ['10', signedPart('DEX', dex)], allowsShield: true }];
-  const classNames = new Set(c.classes.map((cl) => srdClassFor(cl)?.name ?? cl.name));
+  // An imported class named like an SRD one gets no SRD Unarmored Defense (spec §5.7; SRD 5.2.1 "Classes").
+  const classNames = new Set(c.classes.map((cl) => srdClassFor(cl)?.name ?? (isLibraryId(cl.classId) ? undefined : cl.name)));
   const udSources = c.features.filter((f) => nameKey(f.name) === 'unarmored-defense').map((f) => (f.sourceName ?? '').toLowerCase());
   if (classNames.has('Barbarian') || udSources.some((s) => s.includes('barbarian'))) {
     const con = mod(c, 'con');
@@ -504,7 +533,11 @@ function unarmoredOptions(c: Character): AcOption[] {
   }
   const draconic =
     hasFeature(c, 'Draconic Resilience') ||
-    c.classes.some((cl) => srdClassFor(cl)?.name === 'Sorcerer' && /draconic/i.test(cl.subclass ?? ''));
+    c.classes.some(
+      (cl) =>
+        srdClassFor(cl)?.name === 'Sorcerer' &&
+        (cl.subclassId ? cl.subclassId === 'srd:subclass:draconic-sorcery' : /draconic/i.test(cl.subclass ?? '')),
+    );
   if (draconic) {
     const cha = mod(c, 'cha');
     options.push({ ac: 10 + dex + cha, parts: ['Draconic Resilience: 10', signedPart('DEX', dex), signedPart('CHA', cha)], allowsShield: true });
@@ -573,6 +606,20 @@ export function computeArmorClass(c: Character, catalog: readonly EquipmentOptio
       parts.push(`${item.name} 2`);
       counted.add(key);
     }
+  }
+  // Structured bonuses (imported magic items): applied once, by the engine, and only while they work.
+  const usedShield = shield && hasArmorTraining(c, 'shield') ? shield.item : undefined;
+  for (const item of activeBonusItems(c)) {
+    const bonus = Math.max(0, toInt(item.bonuses?.ac));
+    if (!bonus) continue;
+    const when = item.bonuses?.acOnlyWhen;
+    if ((when === 'no-armor' || when === 'no-armor-no-shield') && armors.length) continue;
+    if (when === 'no-armor-no-shield' && shield) continue;
+    // A suit of armor or a shield adds its bonus only when it is the one that counts.
+    if (item.armor?.kind === 'armor' && base.worn?.item.id !== item.id) continue;
+    if (item.armor?.kind === 'shield' && usedShield?.id !== item.id) continue;
+    ac += bonus;
+    parts.push(base.worn?.item.id === item.id ? `${bonus} (magic)` : `${item.name} ${bonus}`);
   }
   const formula = parts.join(' + ') + (notes.length ? ` (${notes.join('; ')})` : '');
   return { ac, formula };
@@ -680,7 +727,7 @@ function baseRollModifier(c: Character, req: PlayerRollRequest): { modifier: num
       return { modifier: 0, label: 'Ability check' };
     case 'save':
       if (req.ability) return { modifier: savingThrowModifier(c, req.ability), label: `${ABILITY_NAMES[req.ability]} saving throw` };
-      return { modifier: protectionItemBonus(c) + auraOfProtectionBonus(c), label: 'Saving throw' };
+      return { modifier: protectionItemBonus(c) + itemSaveBonus(c) + auraOfProtectionBonus(c), label: 'Saving throw' };
     case 'attack': {
       const attack = req.attackName ? findAttack(c, req.attackName) : undefined;
       return attack ? { modifier: attackBonus(c, attack), label: `${attack.name} attack` } : improvisedAttack(c, req);

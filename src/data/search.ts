@@ -7,6 +7,7 @@ import MiniSearch, { type SearchResult } from 'minisearch';
 import { HOMEBREW_SOURCE_ID, SRD_SOURCE_ID, type CompendiumEntry, type ContentKind, type HomebrewEntry } from '@/types';
 import { nameKey } from '@/lib/id';
 import type { RulesIndex, SearchHit, SearchOptions } from './index';
+import { isReviewedImport } from './structured/materialize';
 import { escapeRegExp, toPlainText } from './text';
 
 const DEFAULT_LIMIT = 20;
@@ -52,10 +53,22 @@ function homebrewVisible(entry: CompendiumEntry, campaignId: string | null | und
   return owner === null || (campaignId != null && owner === campaignId);
 }
 
-/** 0 = this campaign's homebrew, 1 = shared homebrew, 2 = imports, 3 = SRD. */
-function sourcePriority(entry: CompendiumEntry): number {
+/** Kinds the app structures from imports: an unreviewed import of one of these is thin (a guessed `{ cr }` at most). */
+const ENTITY_KINDS: ReadonlySet<ContentKind> = new Set<ContentKind>([
+  'monster', 'spell', 'magic-item', 'item', 'feat', 'class', 'subclass', 'species', 'background',
+]);
+
+/**
+ * Name ranking (spec §6.2; dm/tools/rules.ts sourceRank mirrors it): 0 = this campaign's homebrew,
+ * 1 = shared homebrew, 2 = reviewed imports and imported rules text (rule, condition, boon, other),
+ * 3 = SRD, 4 = unreviewed imported entries of an entity kind — so a thin unreviewed duplicate never
+ * shadows an SRD stat block, while a book's own rules sections still answer.
+ */
+export function sourcePriority(entry: CompendiumEntry): number {
   if (isHomebrew(entry)) return homebrewOf(entry).campaignId ? 0 : 1;
-  return entry.sourceId === SRD_SOURCE_ID ? 3 : 2;
+  if (entry.sourceId === SRD_SOURCE_ID) return 3;
+  if (isReviewedImport(entry)) return 2;
+  return ENTITY_KINDS.has(entry.kind) ? 4 : 2;
 }
 
 /**
@@ -118,6 +131,8 @@ class MiniSearchRulesIndex implements RulesIndex {
   private readonly order = new Map<string, number>();
   private readonly byName = new Map<string, CompendiumEntry[]>();
   private readonly byAlias = new Map<string, CompendiumEntry[]>();
+  /** Chunk ids a materialized entry replaced (`data.aliasIds`): resolvable by get(), never listed or searched. */
+  private readonly aliasIds = new Map<string, CompendiumEntry>();
   private readonly mini: MiniSearch<CompendiumEntry>;
 
   constructor(entries: CompendiumEntry[]) {
@@ -131,6 +146,14 @@ class MiniSearchRulesIndex implements RulesIndex {
       this.entries.push(entry);
       push(this.byName, key, entry);
       for (const alias of aliasKeys(entry.name)) push(this.byAlias, alias, entry);
+    }
+    // Old ids (Browse links, KnownSpell ids, statBlockIds) keep resolving to the entry that replaced their chunk.
+    for (const entry of this.entries) {
+      const ids = entry.data?.aliasIds;
+      if (!Array.isArray(ids)) continue;
+      for (const id of ids) {
+        if (typeof id === 'string' && !this.byId.has(id) && !this.aliasIds.has(id)) this.aliasIds.set(id, entry);
+      }
     }
     this.mini = new MiniSearch<CompendiumEntry>({
       idField: 'id',
@@ -170,7 +193,7 @@ class MiniSearchRulesIndex implements RulesIndex {
   }
 
   get(id: string): CompendiumEntry | undefined {
-    const exact = this.byId.get(id);
+    const exact = this.byId.get(id) ?? this.aliasIds.get(id);
     if (exact) return exact;
     // Variant ids ("srd:item:arcane-focus:crystal") resolve to their base entry.
     const parts = id.split(':');

@@ -28,7 +28,7 @@ import * as leveling from '@/data/options/leveling';
 import * as refs from '@/data/options/refs';
 import * as resolve from '@/data/options/resolve';
 import { ExtractionUnavailableError, describeExtractionError } from '@/dm/extract/errors';
-import { IDLE_RUNNER, type RunnerSnapshot } from '@/dm/extract/runner';
+import type { RunnerSnapshot } from '@/dm/extract/runner';
 import {
   EXPECTED_MERGED,
   GLOAMWOOD_CANDIDATES,
@@ -181,6 +181,22 @@ export function gameStoreRestoreMock() {
   return { restoreImportedText: vi.fn(async () => null) };
 }
 
+/**
+ * The runner's idle snapshot (equal to IDLE_RUNNER). A copy: importing the real runner here would import
+ * @/data and @/storage, which these factories mock (a circular import inside vi.mock).
+ */
+export const IDLE_RUNNER_SNAPSHOT: RunnerSnapshot = Object.freeze({
+  activeJobId: null,
+  inFlight: [],
+  effectiveConcurrency: 0,
+  waitingUntil: null,
+  hold: null,
+  cacheWarnings: [],
+  spentUsd: 0,
+  projectedUsd: 0,
+  etaMinutes: null,
+}) as RunnerSnapshot;
+
 /** A cost estimate in the consent's style (spec §4.7). */
 export function costEstimate(model: ModelId, usd: number, minutes: number): CostEstimate {
   return {
@@ -214,7 +230,7 @@ export function dmMock() {
     cancelJob: vi.fn(async () => undefined),
     retryRecords: vi.fn(async () => 'job:retry'),
     recoverJobsOnStartup: vi.fn(async () => undefined),
-    useRunner: vi.fn((): RunnerSnapshot => IDLE_RUNNER),
+    useRunner: vi.fn((): RunnerSnapshot => IDLE_RUNNER_SNAPSHOT),
     setExtractionDeps: vi.fn(),
     ExtractionUnavailableError,
     describeExtractionError: vi.fn(describeExtractionError),

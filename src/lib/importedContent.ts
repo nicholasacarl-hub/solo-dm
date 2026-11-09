@@ -6,10 +6,14 @@
 const OPEN = '<imported-content';
 const CLOSE = '</imported-content>';
 
-/** Wrap text that came from an imported (non-SRD, non-homebrew) source. */
+/**
+ * Wrap text that came from an imported (non-SRD, non-homebrew) source. A closing marker inside the text is
+ * escaped, so imported text can't end the wrapper early and leak its tail past redaction (spec §7.2).
+ */
 export function wrapImported(sourceName: string, text: string): string {
   const safeName = sourceName.replace(/["<>]/g, '');
-  return `${OPEN} source="${safeName}">\n${text}\n${CLOSE}`;
+  const safeText = text.replace(/<\/imported-content/gi, '&lt;/imported-content');
+  return `${OPEN} source="${safeName}">\n${safeText}\n${CLOSE}`;
 }
 
 const PATTERN = /<imported-content source="([^"]*)">[\s\S]*?<\/imported-content>/g;
@@ -25,8 +29,8 @@ export function hasImported(text: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Structured imports (spec §7.2): placeholders and text fingerprints. Implemented on Day 0 because the
-// fixtures' refs and records carry real hashes; E1 owns this file.
+// Structured imports (spec §7.2): placeholders and text fingerprints (the fixtures' refs and records
+// carry real hashes).
 // ---------------------------------------------------------------------------
 
 const PLACEHOLDER = /^\[Text from the player's imported book "[^"]*" was left out of this copy\.\]$/;

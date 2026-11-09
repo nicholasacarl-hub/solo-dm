@@ -1,21 +1,40 @@
-import { ABILITY_NAMES, SKILL_NAMES, type Ability, type CreatureSize, type Skill } from '@/types';
+import { ABILITY_NAMES, SKILL_NAMES, type Ability, type CreatureSize, type Skill, type SpeciesOption } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
 import { Badge, Card } from '@/ui/components/ui';
-import { Issues, proseSummary, RadioCards, StepHeader, SubHeading, ToggleChip } from '../BuilderParts';
+import { OlderEditionNotes, OptionSourceBadges, PendingReviewHint, SourceFilter } from '../BookBadges';
+import { Detail, Issues, proseSummary, RadioCards, StepHeader, SubHeading, ToggleChip } from '../BuilderParts';
 import {
   MAGIC_INITIATE_LISTS,
+  clashingNames,
+  filtered,
   grantedSkills,
   isMagicInitiate,
+  optionBooks,
   originFeatOptions,
   originFeats,
   picks,
   selectSpecies,
   skillPlan,
   validateSpeciesSkill,
+  validateStep,
 } from '../logic';
 import type { StepProps } from './stepTypes';
 
 const MENTAL: Ability[] = ['int', 'wis', 'cha'];
+
+/** An older species' printed increases and languages: shown for reference (§5.6), never applied. */
+function OlderSpeciesDetails({ species }: { species: SpeciesOption }) {
+  const increases = species.legacyAbilityIncreases ?? [];
+  const languages = species.languages ?? [];
+  if (!increases.length && !languages.length) return null;
+  const increaseText = increases.map((i) => `${i.ability === 'any' ? 'any ability' : ABILITY_NAMES[i.ability]} +${i.amount}`).join(', ');
+  return (
+    <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      {increases.length > 0 && <Detail label="Printed ability score increases">{increaseText} — for reference, not applied</Detail>}
+      {languages.length > 0 && <Detail label="Languages it lists">{languages.join(', ')} — suggested for your two language choices</Detail>}
+    </dl>
+  );
+}
 
 export function SpeciesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
   const { data } = ctx;
@@ -27,6 +46,9 @@ export function SpeciesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
   const featOptions = originFeatOptions(data).filter((f) => f.repeatable || f.id !== backgroundFeat?.feat?.id);
   const chosenFeat = data.feats.find((f) => f.id === draft.speciesFeat);
   const skillIssues = validateSpeciesSkill(draft, data).filter((e) => e.includes('already'));
+  const stale = validateStep('species', draft, ctx).filter((e) => e.includes('switched off or removed'));
+  const clashes = clashingNames(data.species);
+  const featClashes = clashingNames(originFeatOptions(data));
   return (
     <div className="flex flex-col gap-5">
       <StepHeader
@@ -34,13 +56,15 @@ export function SpeciesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
         description="Your species sets your size and speed and gives you special traits — darkvision, resistances, innate magic and more."
         onDmDecide={onDmDecide}
       />
+      <SourceFilter books={optionBooks(data, ctx.spells)} value={draft.sourceFilter} onChange={(sourceFilter) => setDraft((d) => ({ ...d, sourceFilter }))} />
+      <Issues issues={stale} />
       <RadioCards
         label="Species"
         collapsible
         value={draft.speciesId}
         onChange={(id) => setDraft((d) => selectSpecies(d, id))}
         columns="sm:grid-cols-2 xl:grid-cols-3"
-        options={data.species.map((s) => ({
+        options={filtered(data.species, draft.sourceFilter, draft.speciesId).map((s) => ({
           value: s.id,
           title: s.name,
           meta: (
@@ -48,15 +72,19 @@ export function SpeciesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
               <Badge>{s.sizes.join(' or ')}</Badge>
               <Badge>{s.speed} ft.</Badge>
               {s.darkvision ? <Badge>Darkvision {s.darkvision} ft.</Badge> : null}
+              <OptionSourceBadges option={s} clashes={clashes} />
             </>
           ),
           description: proseSummary(s.summary),
         }))}
       />
+      <PendingReviewHint kinds={['species']} />
       {species && (
         <>
           <Card className="flex flex-col gap-2 p-4">
-            <SubHeading>{species.name} traits</SubHeading>
+            <OlderSpeciesDetails species={species} />
+            <OlderEditionNotes notes={species.source?.adaptations.map((a) => a.note) ?? []} />
+            <SubHeading hint={species.source ? `From ${species.source.title}` : undefined}>{species.name} traits</SubHeading>
             <ul className="flex flex-col gap-1.5">
               {species.traits.map((t) => (
                 <li key={t.name} className="rounded-lg border border-border bg-surface-2">
@@ -140,7 +168,12 @@ export function SpeciesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
                 label="Origin feat"
                 value={draft.speciesFeat}
                 onChange={(id) => setDraft((d) => ({ ...d, speciesFeat: id, speciesFeatList: null, featSkills: [] }))}
-                options={featOptions.map((f) => ({ value: f.id, title: f.name, description: f.description.replace(/\*\*/g, '') }))}
+                options={filtered(featOptions, draft.sourceFilter, draft.speciesFeat).map((f) => ({
+                  value: f.id,
+                  title: f.name,
+                  meta: <OptionSourceBadges option={f} clashes={featClashes} />,
+                  description: f.description.replace(/\*\*/g, ''),
+                }))}
               />
               {chosenFeat && isMagicInitiate(chosenFeat.name) && (
                 <div className="flex flex-col gap-2">

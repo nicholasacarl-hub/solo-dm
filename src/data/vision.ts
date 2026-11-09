@@ -15,34 +15,19 @@ import type {
   MessageCreateParamsNonStreaming,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { getAnthropicClient } from '@/dm/client';
+import { transcriptionRequest, type EncodedImage } from '@/dm/libraryRequests';
 import { getSettings } from '@/state/settingsStore';
-import { MODELS } from '@/types';
 import { abortError, throwIfAborted } from './text';
+
+/** The request builder lives with the other non-DM requests (src/dm/libraryRequests.ts); re-exported for callers here. */
+export { TRANSCRIBE_SYSTEM_PROMPT, transcriptionRequest, type EncodedImage } from '@/dm/libraryRequests';
+
+/** transcribeImages refuses in demo mode (defense in depth: the import dialog refuses photos there first). */
+export const DEMO_PHOTO_MESSAGE = 'Demo mode makes no API calls. Turn it off in Settings to transcribe photos.';
 
 /** Claude's recommended maximum image edge; larger images are downscaled server-side anyway. */
 export const MAX_IMAGE_SIDE = 1568;
 const JPEG_QUALITY = 0.85;
-const MAX_TOKENS = 8000;
-
-export const TRANSCRIBE_SYSTEM_PROMPT = `You transcribe photos of printed tabletop roleplaying-game book pages into Markdown for the reader's own offline rules library.
-
-Reproduce the printed text faithfully and completely: the same words, numbers and order. Do not summarize, paraphrase, correct, translate or add commentary.
-
-Formatting:
-- Use Markdown headings for the page's headings: # for chapter titles, ## for sections, ### for subsections. Start each spell, creature stat block, magic item and feat with a ## heading of its name.
-- Keep paragraphs, bulleted and numbered lists, and tables (as Markdown tables). Keep bold and italic where printed.
-- In a stat block, keep each statistic on its own line, and write its section labels (Traits, Actions, Bonus Actions, Reactions, Legendary Actions) as bold lines, not headings.
-- Read multi-column pages one column at a time, top to bottom.
-- Leave out page numbers, running headers and footers, and artwork. Write [illegible] where text is cut off or unreadable.
-- If the page starts in the middle of a section, begin with that text as printed, without inventing a heading.
-
-Reply with the Markdown only.`;
-
-export interface EncodedImage {
-  /** Base64 data (no data: prefix). */
-  data: string;
-  mediaType: 'image/jpeg';
-}
 
 /** The part of the Anthropic client this module uses (the real client satisfies it). */
 export interface TranscriptionClient {
@@ -119,30 +104,6 @@ export async function encodeImageForClaude(file: Blob): Promise<EncodedImage> {
   }
 }
 
-/** The request for one photo: model from Settings, low effort (transcription needs little reasoning). */
-export function transcriptionRequest(image: EncodedImage): MessageCreateParamsNonStreaming {
-  const settings = getSettings();
-  const known = MODELS.find((m) => m.id === settings.model);
-  return {
-    model: settings.model,
-    max_tokens: MAX_TOKENS,
-    system: TRANSCRIBE_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: 'user',
-        content: [
-          { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } },
-          { type: 'text', text: 'Transcribe this page.' },
-        ],
-      },
-    ],
-    ...(known ? { output_config: { effort: 'low' as const } } : {}),
-    ...(known?.supportsFallbacks && settings.useFallbacks
-      ? { betas: ['server-side-fallback-2026-07-01'], fallbacks: 'default' as const }
-      : {}),
-  };
-}
-
 /** Text blocks of a response, without a wrapping ```markdown fence. */
 function responseText(message: BetaMessage): string {
   const text = message.content
@@ -167,6 +128,7 @@ function friendlyError(err: unknown, photo: number): Error {
 /** Transcribe photos of book pages to Markdown, one Claude request per photo. */
 export async function transcribeImages(files: Blob[], opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
   const { signal, onProgress } = opts;
+  if (getSettings().mockMode) throw new Error(DEMO_PHOTO_MESSAGE);
   const encode = opts.encode ?? encodeImageForClaude;
   const client = opts.client ?? getAnthropicClient();
   const pages: string[] = [];

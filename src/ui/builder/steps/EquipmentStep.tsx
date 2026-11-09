@@ -2,20 +2,27 @@ import { Backpack, Coins, Shield } from 'lucide-react';
 import { nameKey } from '@/lib/id';
 import { Badge, Card } from '@/ui/components/ui';
 import { Issues, RadioCards, StepHeader, SubHeading, ToggleChip } from '../BuilderParts';
-import { describePackage, findEquipment, masteryPlan, picks, toggleInList, validateStep } from '../logic';
+import { describePackage, findEquipment, gearFromPackages, masteryPlan, picks, toggleInList, validateStep } from '../logic';
 import type { StepProps } from './stepTypes';
 
 export function EquipmentStep({ draft, setDraft, ctx, onDmDecide, built }: StepProps) {
   const { data } = ctx;
   const { cls, background } = picks(draft, data);
   const mastery = masteryPlan(draft, data);
+  const packages = [
+    draft.classEquipment === null ? undefined : cls?.startingEquipment[draft.classEquipment],
+    draft.backgroundEquipment === null ? undefined : background?.equipment[draft.backgroundEquipment],
+  ];
+  const sources = [cls?.source?.sourceId, background?.source?.sourceId];
   const packed = new Set(
-    [draft.classEquipment === null ? undefined : cls?.startingEquipment[draft.classEquipment], draft.backgroundEquipment === null ? undefined : background?.equipment[draft.backgroundEquipment]]
-      .flatMap((p) => p?.items ?? [])
-      .map((i) => findEquipment(i.name, data.equipment)?.option.name)
+    packages
+      .flatMap((p, i) => (p?.items ?? []).map((item) => findEquipment(item.name, data.equipment, sources[i])?.option.name))
       .filter((n): n is string => Boolean(n))
       .map(nameKey),
   );
+  // Items a book's package names that the gear list doesn't know: they're added as plain gear.
+  const fromBooks = packages.map((p, i) => (sources[i] ? p : undefined));
+  const unmatched = gearFromPackages(fromBooks, data.equipment, { armorTraining: [], sources }).unmatched;
   const masteryFull = draft.weaponMasteries.length >= mastery.count;
   const issues = validateStep('equipment', draft, ctx).filter((e) => !e.startsWith('Choose your'));
   return (
@@ -82,6 +89,11 @@ export function EquipmentStep({ draft, setDraft, ctx, onDmDecide, built }: StepP
         </div>
       )}
       <Issues issues={issues} />
+      {unmatched.length > 0 && (
+        <p className="text-sm text-muted">
+          {unmatched.map((n) => `${n} isn't in your gear list`).join('; ')}: {unmatched.length === 1 ? "it's" : "they're"} added as plain gear (ask your DM what {unmatched.length === 1 ? 'it does' : 'they do'}).
+        </p>
+      )}
       {built && (
         <Card className="flex flex-col gap-3 p-4">
           <div className="flex flex-wrap items-center gap-3 text-sm">

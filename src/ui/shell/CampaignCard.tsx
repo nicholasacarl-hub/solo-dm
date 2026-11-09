@@ -1,7 +1,7 @@
 /** A save-slot card on the Home screen. */
 import { useId, useState } from 'react';
 import { Clock, Copy, Download, Loader2, Play, ScrollText, Trash2 } from 'lucide-react';
-import { downloadCampaign, duplicateCampaign, type CampaignSummary } from '@/storage';
+import { downloadCampaign, duplicateCampaign, type CampaignSummary, type ExportReport } from '@/storage';
 import { Badge, IconButton } from '@/ui/components/ui';
 import { ButtonLink } from '@/ui/components/ButtonLink';
 import { portraitDisplay } from '@/ui/components/portrait';
@@ -9,6 +9,17 @@ import { toast } from '@/ui/components/toast';
 import { DEFAULT_COVER_COLOR, DEFAULT_COVER_EMOJI, coverTint } from './campaignOptions';
 import { characterLine, errorMessage, formatRelativeTime, plural } from './format';
 import { askToKeepSaves } from './persistentStorage';
+
+/**
+ * The toast after an export (spec §7.3): "Saved “The Drowned Lantern”. Text from “The Gloamwood Almanac”
+ * was left out (7 passages)." Plain "Exported …" when nothing was left out (or an older caller gave no report).
+ */
+export function exportMessage(campaignName: string, report: ExportReport | void | undefined): string {
+  if (!report || report.passages === 0 || report.books.length === 0) return `Exported “${campaignName}”.`;
+  const books = report.books.map((b) => `“${b}”`);
+  const list = books.length === 1 ? books[0] : `${books.slice(0, -1).join(', ')} and ${books[books.length - 1]}`;
+  return `Saved “${campaignName}”. Text from ${list} was left out (${report.passages} ${report.passages === 1 ? 'passage' : 'passages'}).`;
+}
 
 /** Where "Continue" goes: the table if there's a character, otherwise the builder. */
 export function continuePath(campaign: CampaignSummary['campaign']): string {
@@ -42,8 +53,8 @@ export function CampaignCard({ summary, onDelete }: { summary: CampaignSummary; 
         const copy = await duplicateCampaign(campaign.id);
         toast.success(`Duplicated as “${copy.name}”.`);
       } else {
-        await downloadCampaign(campaign.id);
-        toast.success(`Exported “${campaign.name}”.`);
+        const report = await downloadCampaign(campaign.id);
+        toast.success(exportMessage(campaign.name, report));
       }
     } catch (error) {
       toast.error(errorMessage(error, kind === 'duplicate' ? 'Could not duplicate the campaign.' : 'Could not export the campaign.'));

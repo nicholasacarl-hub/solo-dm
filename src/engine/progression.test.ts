@@ -411,3 +411,56 @@ describe('levelUp: Armor Class', () => {
     expect(levelUp(knight, { className: 'Paladin', hpMethod: 'average', ...defense }).character.armorClass).toBe(18); // unknown armor: kept
   });
 });
+
+describe('levelUp: imported classes and subclasses (SRD 5.2.1 Multiclassing; Multiclassing: Spell Slots)', () => {
+  const fighter = (level: number, extra: Partial<ClassLevel> = {}) => asClass('Fighter', level, extra);
+
+  it('never merges an imported "Fighter" into the SRD Fighter when the call names its id', () => {
+    const c = mira({ classes: [fighter(3)], abilityScores: { str: 15, dex: 13, con: 14, int: 10, wis: 10, cha: 8 } });
+    const r = levelUp(c, { className: 'Fighter', classId: 'lib:gloam:class:fighter', hitDie: 10, casterType: 'none', hpMethod: 'average' });
+    expect(r.character.classes.map((cl) => [cl.classId, cl.level])).toEqual([
+      ['srd:class:fighter', 3],
+      ['lib:gloam:class:fighter', 1],
+    ]);
+    // It is a new class without SRD reference data: no SRD reminders for it.
+    expect(r.reminders.some((x) => x.startsWith('Fighter 1:'))).toBe(false);
+  });
+
+  it('still levels a class by name when the call gives no id (the DM)', () => {
+    const c = mira({ classes: [fighter(3)] });
+    expect(levelUp(c, { className: 'Fighter', hpMethod: 'average' }).character.classes).toEqual([{ ...fighter(4) }]);
+  });
+
+  it('stores the subclass id and ref, and copies the class ref onto a new entry', () => {
+    const subclassRef = { sourceId: 'gloam', sourceTitle: 'The Gloamwood Almanac', entryId: 'lib:gloam:subclass:ember-warden', kind: 'subclass' as const, entryName: 'Ember Warden', textHash: '', textCopied: false };
+    const c = mira({ classes: [fighter(2)] });
+    const r = levelUp(c, { className: 'Fighter', classId: 'srd:class:fighter', subclass: 'Ember Warden', subclassId: subclassRef.entryId, subclassRef, hpMethod: 'average' });
+    expect(r.character.classes[0]).toMatchObject({ level: 3, subclass: 'Ember Warden', subclassId: subclassRef.entryId, subclassRef });
+    const classRef = { ...subclassRef, entryId: 'lib:gloam:class:wickwright', kind: 'class' as const, entryName: 'Wickwright' };
+    const multi = levelUp(mira({ classes: [fighter(3)], abilityScores: { str: 13, dex: 10, con: 10, int: 13, wis: 10, cha: 10 } }), {
+      className: 'Wickwright',
+      classId: classRef.entryId,
+      classRef,
+      hitDie: 8,
+      casterType: 'half',
+      spellcastingAbility: 'int',
+      hpMethod: 'average',
+    });
+    expect(multi.character.classes[1]).toMatchObject({ classId: classRef.entryId, name: 'Wickwright', ref: classRef, casterType: 'half' });
+  });
+
+  it("makes a third-caster subclass's class count as a third caster for spell slots", () => {
+    const c = mira({ classes: [fighter(2)], spellcasting: undefined });
+    const r = levelUp(c, {
+      className: 'Fighter',
+      classId: 'srd:class:fighter',
+      subclass: 'Lamp Knight',
+      subclassId: 'lib:gloam:subclass:lamp-knight',
+      subclassCasting: { casterType: 'third', spellcastingAbility: 'int' },
+      hpMethod: 'average',
+    });
+    expect(r.character.classes[0]).toMatchObject({ casterType: 'third', spellcastingAbility: 'int' });
+    // A third caster has two 1st-level slots at class level 3.
+    expect(r.character.spellcasting?.slots[1]).toEqual({ max: 2, used: 0 });
+  });
+});

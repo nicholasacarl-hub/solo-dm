@@ -5,6 +5,8 @@ import { cn } from '@/lib/cn';
 const widths = {
   narrow: 'max-w-3xl',
   wide: 'max-w-6xl',
+  /** The book page's three panes (list · fields · source text). */
+  full: 'max-w-[88rem]',
 } as const;
 
 export function Page({

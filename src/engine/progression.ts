@@ -18,7 +18,7 @@ import {
   type RollResult,
 } from '@/types';
 import { newId, nameKey, slugify } from '@/lib/id';
-import { asiLevels, featuresAtLevel, findSrdClass, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
+import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
 import { abilityModifier, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
 import { recomputeSlots, resetSpellSlots } from './spellcasting';
@@ -87,9 +87,14 @@ function totalClassLevels(c: Character): number {
   return c.classes.reduce((sum, cl) => sum + Math.max(0, toInt(cl.level)), 0);
 }
 
+/**
+ * The class entry a level-up adds to: by id when one is given (an imported "Fighter" never merges into the
+ * SRD Fighter, SRD 5.2.1 "Multiclassing"), by name only for name-only calls (the DM's level_up).
+ */
 function findClassIndex(classes: readonly ClassLevel[], name: string, classId?: string): number {
+  if (classId) return classes.findIndex((cl) => cl.classId === classId);
   const key = nameKey(name);
-  return classes.findIndex((cl) => (classId && cl.classId === classId) || nameKey(cl.name) === key);
+  return classes.findIndex((cl) => nameKey(cl.name) === key);
 }
 
 function hasFeatureNamed(features: readonly { name: string }[], name: string): boolean {
@@ -229,7 +234,31 @@ function newClassEntry(opts: LevelUpOptions, info: SrdClassInfo | undefined, hit
   const ability = opts.spellcastingAbility ?? info?.spellcastingAbility;
   if (ability) entry.spellcastingAbility = ability;
   if (opts.subclass) entry.subclass = opts.subclass;
-  return entry;
+  if (opts.subclass && opts.subclassId) entry.subclassId = opts.subclassId;
+  if (opts.classRef) entry.ref = opts.classRef;
+  if (opts.subclass && opts.subclassRef) entry.subclassRef = opts.subclassRef;
+  return withSubclassCasting(entry, opts);
+}
+
+/**
+ * A subclass that grants spellcasting (a third caster, SRD 5.2.1 "Multiclassing: Spell Slots") makes its
+ * class entry count as that caster type from the level it is chosen.
+ */
+function withSubclassCasting(entry: ClassLevel, opts: LevelUpOptions): ClassLevel {
+  const casting = opts.subclassCasting;
+  if (!casting || entry.casterType !== 'none') return entry;
+  return { ...entry, casterType: casting.casterType, ...(casting.spellcastingAbility ? { spellcastingAbility: casting.spellcastingAbility } : {}) };
+}
+
+/** The existing class entry one level up, with the subclass chosen now (name, id, ref) and its spellcasting. */
+function levelledEntry(existing: ClassLevel, opts: LevelUpOptions): ClassLevel {
+  const gained: ClassLevel = { ...existing, level: existing.level + 1 };
+  if (opts.subclass) {
+    gained.subclass = opts.subclass;
+    if (opts.subclassId) gained.subclassId = opts.subclassId;
+    if (opts.subclassRef) gained.subclassRef = opts.subclassRef;
+  }
+  return withSubclassCasting(gained, opts);
 }
 
 function unchanged(c: Character, message: string): LevelUpResult {
@@ -321,11 +350,11 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
 
   const index = findClassIndex(c.classes, className, opts.classId);
   const existing = index >= 0 ? c.classes[index] : undefined;
-  const info = existing ? srdClassFor(existing) : findSrdClass(opts.classId) ?? findSrdClass(className);
+  const info = existing ? srdClassFor(existing) : (findSrdClass(opts.classId) ?? (isLibraryId(opts.classId) ? undefined : findSrdClass(className)));
   let gained: ClassLevel;
   let classes: ClassLevel[];
   if (existing) {
-    gained = { ...existing, level: existing.level + 1, ...(opts.subclass ? { subclass: opts.subclass } : {}) };
+    gained = levelledEntry(existing, opts);
     classes = c.classes.map((cl, i) => (i === index ? gained : cl));
   } else {
     const hitDie = opts.hitDie ?? info?.hitDie;

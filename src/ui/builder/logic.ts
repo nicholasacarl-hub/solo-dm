@@ -32,36 +32,45 @@ import {
   type ClassLevel,
   type ClassOption,
   type EquipmentOption,
+  type FeatOption,
   type Feature,
+  type ImportedRef,
   type KnownSpell,
   type ProficiencyLevel,
   type Skill,
   type SkillBonus,
   type Spellcasting,
 } from '@/types';
+import { optionRef } from '@/data/options/refs';
 import { nameKey, newId } from '@/lib/id';
+import { textFingerprint } from '@/lib/importedContent';
 import { finalAbilityScores, validateAbilities } from './abilities';
 import {
   alwaysPreparedSpellNames,
   cantripsKnown,
   classChoiceFeatures,
   featuresAtLevel,
+  findFeatureDef,
+  inlineFightingStyles,
   martialArtsDie,
   masteryMeleeOnly,
   needsFightingStyle,
   optionGrants,
   preparedSpellCount,
   spellbookSize,
+  type FeatureOption,
 } from './classFeatures';
 import { attacksForInventory, gearFromPackages, masteryCandidates } from './equipment';
 import { inferFeatureUses, type UsesContext } from './featureUses';
 import { defaultPortrait } from './flavor';
 import {
   allLanguages,
+  choosesSubclassAtLevel1,
   findFeat,
   grantsInitiativeProficiency,
   isMagicInitiate,
   magicInitiateSources,
+  originFeatOptions,
   originFeats,
   picks,
   skillProficiencies,
@@ -70,6 +79,7 @@ import {
   validateSpeciesSkill,
   type Picks,
 } from './origin';
+import { adaptationNotes, inSourceFilter } from './sources';
 import { cantripNames, hpBonusPerLevel, lineageEffects, lineageFeatureText, speciesDisplayName, speciesResistances } from './species';
 import { findSpellByName, knownSpell, spellAttack, spellsForClass, spellsForClassOption, type SpellInfo } from './spells';
 import { BUILDER_STEPS, type BuilderDraft, type BuilderStep } from './types';
@@ -79,6 +89,7 @@ export * from './classFeatures';
 export * from './equipment';
 export * from './featureUses';
 export * from './origin';
+export * from './sources';
 export * from './species';
 export * from './spells';
 export * from './types';
@@ -97,6 +108,38 @@ function unique<T>(items: T[]): T[] {
 
 function notNone(text: string): boolean {
   return text.trim() !== '' && !/^none$/i.test(text.trim());
+}
+
+/** A draft id of an imported option that isn't in the data any more (its book was switched off or removed). */
+function staleImport(id: string | null, found: unknown, noun: string): string[] {
+  return id?.startsWith('lib:') && !found
+    ? [`The ${noun} you picked came from a book that's switched off or removed. Switch it on in the Library, or pick another.`]
+    : [];
+}
+
+// ---------------------------------------------------------------------------
+// Fighting Style
+// ---------------------------------------------------------------------------
+
+export interface FightingStyleChoice {
+  name: string;
+  description: string;
+  /** The Fighting Style feat, or null for a style the class feature prints itself. */
+  feat: FeatOption | null;
+}
+
+/**
+ * The Fighting Style picker (§5.3): every Fighting Style feat (all books, or the source filter's) plus
+ * the options the class's own Fighting Style feature prints, a feat winning over a same-named option.
+ */
+export function fightingStyleChoices(cls: ClassOption | undefined, data: BuilderData, filter: string | null = null, keep?: string | null): FightingStyleChoice[] {
+  const feats = data.feats.filter((f) => f.category === 'fighting-style' && (inSourceFilter(f, filter) || f.name === keep));
+  const out: FightingStyleChoice[] = feats.map((feat) => ({ name: feat.name, description: feat.description, feat }));
+  const inline: FeatureOption[] = inlineFightingStyles(cls ? findFeatureDef(cls, 'Fighting Style') : undefined);
+  for (const option of inline) {
+    if (!out.some((c) => nameKey(c.name) === nameKey(option.name))) out.push({ name: option.name, description: option.description, feat: null });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -245,36 +288,62 @@ function buildSpellcasting(draft: BuilderDraft, ctx: BuilderContext, p: Picks, c
 // Features
 // ---------------------------------------------------------------------------
 
-function feature(name: string, source: Feature['source'], sourceName: string, description: string, uses: Feature['uses']): Feature {
-  return { id: newId(), name, source, sourceName, description, ...(uses ? { uses } : {}) };
+function feature(name: string, source: Feature['source'], sourceName: string, description: string, uses: Feature['uses'], ref?: ImportedRef): Feature {
+  return { id: newId(), name, source, sourceName, description, ...(uses ? { uses } : {}), ...(ref ? { ref } : {}) };
+}
+
+/** The chosen Fighting Style as a sheet feature: a feat (with its book's ref), or an option the class feature prints. */
+function fightingStyleFeature(draft: BuilderDraft, data: BuilderData, cls: ClassOption): Feature | null {
+  if (!needsFightingStyle(cls) || !draft.fightingStyle) return null;
+  const sourceName = `Fighting Style (${cls.name} 1)`;
+  const choice = fightingStyleChoices(cls, data).find((c) => c.name === draft.fightingStyle);
+  if (choice && !choice.feat) {
+    // Part of the class feature's text: its ref, with the hash of the part copied.
+    const def = findFeatureDef(cls, 'Fighting Style');
+    const ref = def?.ref ? { ...def.ref, textHash: textFingerprint(choice.description), textCopied: true } : undefined;
+    return feature(choice.name, 'class', sourceName, choice.description, undefined, ref);
+  }
+  const feat = choice?.feat ?? findFeat(data.feats, draft.fightingStyle, cls.source?.sourceId);
+  return feature(feat?.name ?? draft.fightingStyle, 'feat', sourceName, feat?.description ?? '', undefined, feat?.ref);
 }
 
 function buildFeatures(draft: BuilderDraft, data: BuilderData, p: Picks, usesCtx: UsesContext): Feature[] {
   const out: Feature[] = [];
-  const { cls, species, lineage, choices } = p;
+  const { cls, subclass, species, background, lineage, choices } = p;
   if (cls) {
     // Only real choices get the option in their name (a stale draft may still hold e.g. Rage: "Duration").
     const choiceOptions = new Map(classChoiceFeatures(cls).map(({ feature: def, options }) => [def.name, options]));
     for (const def of featuresAtLevel(cls, 1)) {
       const chosen = choiceOptions.get(def.name)?.find((o) => o.name === draft.classOptions[def.name])?.name;
       const name = chosen ? `${def.name} (${chosen})` : def.name;
-      out.push(feature(name, 'class', `${cls.name} 1`, def.description, inferFeatureUses(def.name, def.description, { ...usesCtx, cls })));
+      out.push(feature(name, 'class', `${cls.name} 1`, def.description, inferFeatureUses(def.name, def.description, { ...usesCtx, cls }), def.ref));
     }
-    if (needsFightingStyle(cls) && draft.fightingStyle) {
-      const feat = findFeat(data.feats, draft.fightingStyle);
-      out.push(feature(feat?.name ?? draft.fightingStyle, 'feat', `Fighting Style (${cls.name} 1)`, feat?.description ?? '', undefined));
+    const style = fightingStyleFeature(draft, data, cls);
+    if (style) out.push(style);
+    // A class that chooses its subclass at level 1 gains its level-1 features now.
+    for (const def of subclass ? subclass.features.filter((f) => f.level <= 1) : []) {
+      out.push(feature(def.name, 'subclass', `${subclass!.name} 1`, def.description, inferFeatureUses(def.name, def.description, { ...usesCtx, cls }), def.ref));
     }
   }
   for (const originFeat of originFeats(draft, data)) {
     const description = originFeat.feat?.description ?? '';
-    out.push(feature(originFeat.name, 'feat', originFeat.source, description, inferFeatureUses(originFeat.name, description, usesCtx)));
+    out.push(feature(originFeat.name, 'feat', originFeat.source, description, inferFeatureUses(originFeat.name, description, usesCtx), originFeat.feat?.ref));
   }
   for (const trait of species?.traits ?? []) {
     if (trait === choices.lineageTrait && lineage) {
       // Only the chosen option: Giant Ancestry's use limit is in its preamble, and the Forest Gnome's
       // Proficiency Bonus uses must not reach a Rock Gnome.
       const text = lineageFeatureText(trait, lineage);
-      out.push(feature(`${trait.name} (${lineage.name})`, 'species', species!.name, text, inferFeatureUses(trait.name, text, usesCtx)));
+      const uses = inferFeatureUses(trait.name, text, usesCtx);
+      const imported = species!.lineages?.find((l) => l.name === lineage.name)?.ref;
+      if (imported && trait.ref) {
+        // A book's lineage keeps the book's words exactly, part by part (so a device that has the book can
+        // fill each back in): the trait as printed, and the chosen lineage as its own feature.
+        out.push(feature(`${trait.name} (${lineage.name})`, 'species', species!.name, trait.description, uses, trait.ref));
+        out.push(feature(lineage.name, 'species', species!.name, lineage.description, undefined, imported));
+      } else {
+        out.push(feature(`${trait.name} (${lineage.name})`, 'species', species!.name, text, uses));
+      }
       continue;
     }
     let name = trait.name;
@@ -283,8 +352,37 @@ function buildFeatures(draft: BuilderDraft, data: BuilderData, p: Picks, usesCtx
       const feat = data.feats.find((f) => f.id === draft.speciesFeat);
       if (feat) name = `${trait.name} (${feat.name})`;
     }
-    out.push(feature(name, 'species', species!.name, trait.description, inferFeatureUses(trait.name, trait.description, usesCtx)));
+    out.push(feature(name, 'species', species!.name, trait.description, inferFeatureUses(trait.name, trait.description, usesCtx), trait.ref));
   }
+  // An older background's named feature, kept on the sheet (§5.6 background-feature-kept).
+  const legacy = background?.legacyFeature;
+  if (background && legacy) {
+    out.push(feature(legacy.name, 'background', `${background.name} (background)`, legacy.description, inferFeatureUses(legacy.name, legacy.description, usesCtx), legacy.ref));
+  }
+  return out;
+}
+
+/** Older-edition notes of every option the draft uses (§5.6), for the sheet and the Review step. */
+export function draftAdaptationNotes(draft: BuilderDraft, data: BuilderData): string[] {
+  const p = picks(draft, data);
+  const feats = originFeats(draft, data).map((f) => f.feat);
+  const style = p.cls && draft.fightingStyle ? fightingStyleChoices(p.cls, data).find((c) => c.name === draft.fightingStyle)?.feat : undefined;
+  return adaptationNotes([p.cls, p.subclass, p.species, p.background, style ?? undefined, ...feats]);
+}
+
+/** "From your books: Ember Warden (subclass), Mothkin (species)" — the imported options a draft uses. */
+export function draftImports(draft: BuilderDraft, data: BuilderData): { name: string; kind: string; book: string }[] {
+  const p = picks(draft, data);
+  const out: { name: string; kind: string; book: string }[] = [];
+  const add = (o: { name: string; source?: { title: string } } | undefined | null, kind: string) => {
+    if (o?.source) out.push({ name: o.name, kind, book: o.source.title });
+  };
+  add(p.cls, 'class');
+  add(p.subclass, 'subclass');
+  add(p.species, 'species');
+  add(p.background, 'background');
+  for (const f of originFeats(draft, data)) add(f.feat, 'feat');
+  if (p.cls && draft.fightingStyle) add(fightingStyleChoices(p.cls, data).find((c) => c.name === draft.fightingStyle)?.feat, 'feat');
   return out;
 }
 
@@ -309,6 +407,9 @@ export function buildCharacter(draft: BuilderDraft, ctx: BuilderContext, opts: B
   const weaponProficiencies = weaponProficienciesFor(draft, cls);
   const armorTraining = armorTrainingFor(draft, cls);
 
+  const { subclass } = p;
+  const classRef = cls ? optionRef(cls, 'class') : undefined;
+  const subclassRef = subclass ? optionRef(subclass, 'subclass') : undefined;
   const classes: ClassLevel[] = cls
     ? [
         {
@@ -316,15 +417,21 @@ export function buildCharacter(draft: BuilderDraft, ctx: BuilderContext, opts: B
           name: cls.name,
           level: 1,
           hitDie: cls.hitDie,
+          ...(subclass ? { subclass: subclass.name, subclassId: subclass.id } : {}),
           casterType: cls.casterType,
           ...(cls.spellcastingAbility ? { spellcastingAbility: cls.spellcastingAbility } : {}),
+          ...(classRef ? { ref: classRef } : {}),
+          ...(subclassRef ? { subclassRef } : {}),
         },
       ]
     : [];
 
   const classPackage = draft.classEquipment === null ? undefined : cls?.startingEquipment[draft.classEquipment];
   const backgroundPackage = draft.backgroundEquipment === null ? undefined : background?.equipment[draft.backgroundEquipment];
-  const gear = gearFromPackages([classPackage, backgroundPackage], data.equipment, { armorTraining });
+  const gear = gearFromPackages([classPackage, backgroundPackage], data.equipment, {
+    armorTraining,
+    sources: [cls?.source?.sourceId, background?.source?.sourceId],
+  });
   const masteries = chosenMasteries(draft, data);
   const unarmedDie = martialArtsDie(cls);
   const attacks = attacksForInventory(gear.items, data.equipment, {
@@ -351,6 +458,9 @@ export function buildCharacter(draft: BuilderDraft, ctx: BuilderContext, opts: B
   const resistances = speciesResistances(species, lineage);
   const skillBonuses = classOptionGrants(draft, cls).skillBonuses;
 
+  const speciesRef = species ? optionRef(species, 'species') : undefined;
+  const backgroundRef = background ? optionRef(background, 'background') : undefined;
+  const notes = draftAdaptationNotes(draft, data);
   const character: Character = {
     ...blank,
     id: opts.id ?? blank.id,
@@ -359,8 +469,11 @@ export function buildCharacter(draft: BuilderDraft, ctx: BuilderContext, opts: B
     pronouns: draft.pronouns.trim() || undefined,
     species: speciesDisplayName(species, lineage?.name ?? null),
     speciesId: species?.id,
+    ...(speciesRef ? { speciesRef } : {}),
     background: background?.name ?? '',
     backgroundId: background?.id,
+    ...(backgroundRef ? { backgroundRef } : {}),
+    ...(notes.length ? { adaptationNotes: notes } : {}),
     classes,
     alignment: draft.alignment.trim() || undefined,
     xp: 0,
@@ -468,20 +581,31 @@ export function activeSteps(draft: BuilderDraft, data: BuilderData): BuilderStep
 }
 
 function validateClass(draft: BuilderDraft, data: BuilderData): string[] {
-  const { cls } = picks(draft, data);
-  if (!cls) return ['Choose a class.'];
+  const { cls, subclass } = picks(draft, data);
+  if (!cls) return staleImport(draft.classId, cls, 'class').concat(draft.classId?.startsWith('lib:') ? [] : ['Choose a class.']);
   const errors: string[] = [];
   if (needsFightingStyle(cls) && !draft.fightingStyle) errors.push('Choose a Fighting Style.');
   for (const { feature: def, options } of classChoiceFeatures(cls)) {
     if (!options.some((o) => o.name === draft.classOptions[def.name])) errors.push(`Choose your ${def.name}.`);
   }
+  if (choosesSubclassAtLevel1(cls) && !subclass) errors.push(`Choose your ${cls.name} subclass: ${cls.name} chooses it at level 1.`);
   return errors;
+}
+
+function validateBackground(draft: BuilderDraft, data: BuilderData): string[] {
+  const { background } = picks(draft, data);
+  if (!background) return staleImport(draft.backgroundId, background, 'background').concat(draft.backgroundId?.startsWith('lib:') ? [] : ['Choose a background.']);
+  if (!background.featChoice) return [];
+  const feat = originFeatOptions(data).find((f) => f.id === draft.backgroundFeat);
+  if (!feat) return [`Choose an Origin feat: ${background.name} lets you pick one.`];
+  if (isMagicInitiate(feat.name) && !draft.backgroundFeatList) return ['Choose a spell list for Magic Initiate.'];
+  return [];
 }
 
 function validateSpecies(draft: BuilderDraft, data: BuilderData): string[] {
   const p = picks(draft, data);
   const { species, choices } = p;
-  if (!species) return ['Choose a species.'];
+  if (!species) return staleImport(draft.speciesId, species, 'species').concat(draft.speciesId?.startsWith('lib:') ? [] : ['Choose a species.']);
   const errors: string[] = [];
   if (choices.lineages.length && !p.lineage) errors.push(`Choose a ${choices.lineageNoun}.`);
   if (choices.lineageNeedsAbility && !(draft.lineageAbility && MENTAL_ABILITIES.includes(draft.lineageAbility))) {
@@ -565,7 +689,7 @@ export function validateStep(step: BuilderStep, draft: BuilderDraft, ctx: Builde
     case 'class':
       return validateClass(draft, data);
     case 'background':
-      return picks(draft, data).background ? [] : ['Choose a background.'];
+      return validateBackground(draft, data);
     case 'species':
       return validateSpecies(draft, data);
     case 'abilities':
@@ -600,6 +724,7 @@ export function selectClass(draft: BuilderDraft, classId: string): BuilderDraft 
   return {
     ...draft,
     classId,
+    subclassId: null,
     fightingStyle: null,
     classOptions: {},
     classSkills: [],
@@ -615,7 +740,17 @@ export function selectClass(draft: BuilderDraft, classId: string): BuilderDraft 
 /** Changing background resets its increases and equipment; class skill overlaps are flagged, not dropped. */
 export function selectBackground(draft: BuilderDraft, backgroundId: string): BuilderDraft {
   if (draft.backgroundId === backgroundId) return draft;
-  return { ...draft, backgroundId, bonusPlus2: null, bonusPlus1: null, backgroundEquipment: null, magicInitiate: {} };
+  return {
+    ...draft,
+    backgroundId,
+    bonusPlus2: null,
+    bonusPlus1: null,
+    backgroundAbilities: [],
+    backgroundFeat: null,
+    backgroundFeatList: null,
+    backgroundEquipment: null,
+    magicInitiate: {},
+  };
 }
 
 export function selectSpecies(draft: BuilderDraft, speciesId: string): BuilderDraft {

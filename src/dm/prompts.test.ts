@@ -152,6 +152,17 @@ describe('buildSystemPrompt', () => {
     expect(text).not.toContain('## Combat in progress');
   });
 
+  it('explains reviewed entries, older-format notes and left-out book text only when the player has imports (spec §6.5)', () => {
+    const reviewed = '- Entries marked "reviewed" in lookups carry numbers the player checked; start_combat uses them when you leave AC, HP and initiative out. "Adapted for 2024" lines say how the app fitted older-format content: keep the sheet as the app set it unless the player agrees to a change.';
+    const leftOut = `- Text marked "[Text from the player's imported book … was left out of this copy.]" can be read again: get_character_sheet for the hero's features, get_entry for rules.`;
+    const withImports = buildSystemPrompt(input());
+    expect(withImports).toContain(`- My PHB notes (imported by the player — look its content up before relying on it)\n${reviewed}\n${leftOut}`);
+    const srdOnly = buildSystemPrompt(input({ librarySources: [{ id: 'srd-5.2.1', name: 'SRD 5.2.1' }, { id: 'homebrew', name: 'Homebrew' }] }));
+    expect(srdOnly).not.toContain('reviewed');
+    expect(srdOnly).not.toContain('was left out of this copy');
+    expect(srdOnly).toContain('## Rules library (lookup_rules and get_entry search all of it)\n- SRD 5.2.1 (always available)\n\n');
+  });
+
   it('describes each table-rule level and includes an active combat', () => {
     const base = sampleCampaign();
     const text = buildSystemPrompt(

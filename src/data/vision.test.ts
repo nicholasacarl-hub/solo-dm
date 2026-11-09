@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { APIUserAbortError, AuthenticationError } from '@anthropic-ai/sdk';
 import type { BetaMessage, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/beta/messages/messages';
 import { useSettings } from '@/state/settingsStore';
-import { TRANSCRIBE_SYSTEM_PROMPT, transcribeImages, type EncodedImage, type TranscriptionClient } from './vision';
+import { DEMO_PHOTO_MESSAGE, TRANSCRIBE_SYSTEM_PROMPT, transcribeImages, type EncodedImage, type TranscriptionClient } from './vision';
 
 type Reply = { text?: string; stop_reason?: BetaMessage['stop_reason']; category?: string };
 
@@ -130,5 +130,14 @@ describe('transcribeImages', () => {
   it('explains API errors', async () => {
     const { client } = fakeClient(new AuthenticationError(401, { type: 'error' }, 'invalid x-api-key', new Headers()));
     await expect(transcribeImages(photos(1), { client, encode })).rejects.toThrow('Claude rejected the API key. Check it in Settings.');
+  });
+
+  it('refuses in demo mode before encoding or sending anything (spec §3.13)', async () => {
+    useSettings.getState().update({ mockMode: true });
+    const { client, calls } = fakeClient({ text: 'Text.' });
+    await expect(transcribeImages(photos(1), { client, encode })).rejects.toThrow(DEMO_PHOTO_MESSAGE);
+    expect(DEMO_PHOTO_MESSAGE).toBe('Demo mode makes no API calls. Turn it off in Settings to transcribe photos.');
+    expect(calls).toHaveLength(0);
+    expect(encode).not.toHaveBeenCalled();
   });
 });

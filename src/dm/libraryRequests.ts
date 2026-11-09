@@ -66,15 +66,48 @@ export function renderBlocks(kind: StructuredKind, blocks: readonly ExtractionBl
   return `${body}\n\nLabel the ${KIND_NOUN[kind]} above.`;
 }
 
-/** Moved from vision.ts (which will re-export it from here). Base64 data, no data: prefix. */
+/** A photo for transcription: base64 data (no data: prefix), JPEG. Moved from vision.ts (which re-exports it). */
 export interface EncodedImage { data: string; mediaType: 'image/jpeg' }
 
+/** Moved unchanged from data/vision.ts (which re-exports it); vision.test.ts pins the request it makes. */
+export const TRANSCRIBE_SYSTEM_PROMPT = `You transcribe photos of printed tabletop roleplaying-game book pages into Markdown for the reader's own offline rules library.
+
+Reproduce the printed text faithfully and completely: the same words, numbers and order. Do not summarize, paraphrase, correct, translate or add commentary.
+
+Formatting:
+- Use Markdown headings for the page's headings: # for chapter titles, ## for sections, ### for subsections. Start each spell, creature stat block, magic item and feat with a ## heading of its name.
+- Keep paragraphs, bulleted and numbered lists, and tables (as Markdown tables). Keep bold and italic where printed.
+- In a stat block, keep each statistic on its own line, and write its section labels (Traits, Actions, Bonus Actions, Reactions, Legendary Actions) as bold lines, not headings.
+- Read multi-column pages one column at a time, top to bottom.
+- Leave out page numbers, running headers and footers, and artwork. Write [illegible] where text is cut off or unreadable.
+- If the page starts in the middle of a section, begin with that text as printed, without inventing a heading.
+
+Reply with the Markdown only.`;
+
+/** Output budget for one transcribed page. */
+export const TRANSCRIBE_MAX_TOKENS = 8000;
+
 /**
- * Photo transcription, moved unchanged from data/vision.ts:123-144 except that fallbacks come from fallbackParams().
- * Day-0 stub (not implemented): E2 moves the body here (with TRANSCRIBE_SYSTEM_PROMPT) and points vision.ts at it;
- * until then vision.ts keeps building its own request and nothing calls this.
+ * Photo transcription, moved unchanged from data/vision.ts except that fallbacks come from fallbackParams():
+ * the Settings model, low effort for known models (transcription needs little reasoning), no thinking
+ * parameter (adaptive by default), fallbacks when Settings allow them and the model supports them.
  */
 export function transcriptionRequest(image: EncodedImage, settings: AppSettings = getSettings()): MessageCreateParamsNonStreaming {
-  void [image, settings];
-  throw new Error('dm/libraryRequests: transcriptionRequest not implemented');
+  const fb = fallbackParams(settings.model, settings.useFallbacks);
+  return {
+    model: settings.model,
+    max_tokens: TRANSCRIBE_MAX_TOKENS,
+    system: TRANSCRIBE_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } },
+          { type: 'text', text: 'Transcribe this page.' },
+        ],
+      },
+    ],
+    ...(isKnownModel(settings.model) ? { output_config: { effort: 'low' as const } } : {}),
+    ...(fb.fallbacks ? { betas: fb.betas, fallbacks: fb.fallbacks } : {}),
+  };
 }

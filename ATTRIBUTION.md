@@ -15,7 +15,7 @@ Solo DM is an unofficial fan project, **compatible with fifth edition**. It is n
 
 ## Your own content
 
-Books and notes you import into Solo DM stay in your browser's storage on your device. They are never added to this repository. When the DM looks something up in an imported book, that passage is removed from exported save files and GitHub cloud saves; the DM's own narration may still paraphrase or quote what it read. Only import content you own.
+Books and notes you import into Solo DM stay in your browser's storage on your device. They are never added to this repository. When the DM looks something up in an imported book, that passage is removed from exported save files and GitHub cloud saves; the DM's own narration may still paraphrase or quote what it read. Character features copied from imported books are also left out of exports and GitHub saves; a device that has the book fills them back in. Only import content you own.
 
 ## Fonts and icons
 

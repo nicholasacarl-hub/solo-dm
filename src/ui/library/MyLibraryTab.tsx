@@ -1,13 +1,19 @@
-/** Library › My library: the bundled SRD plus the player's imports (enable, delete, import). */
+/**
+ * Library › My library: the bundled SRD plus the player's imports (enable, delete, import). Each book
+ * links to its book page and shows its structuring status; switching a book off or deleting it says
+ * which characters use it (spec D41).
+ */
 import { useState } from 'react';
-import { BookOpenText, BookPlus, FileText, Lock, Trash2 } from 'lucide-react';
-import { deleteLibrarySource, setLibrarySourceEnabled, useLibrarySources } from '@/storage';
-import { SRD_SOURCE_ID, type LibrarySource } from '@/types';
-import { Badge, Button, Dialog, EmptyState, IconButton, Spinner, Switch } from '@/ui/components/ui';
-import { toast } from '@/ui/components/toast';
-import { errorMessage, formatRelativeTime, plural } from '@/ui/shell/format';
+import { Link } from 'react-router';
+import { BookOpenText, BookPlus, FileText, ListChecks, Lock, Trash2 } from 'lucide-react';
+import { useJobs, useLibrarySources } from '@/storage';
+import { SRD_SOURCE_ID, type ExtractionJob, type LibrarySource } from '@/types';
+import { ButtonLink } from '@/ui/components/ButtonLink';
+import { Badge, Button, EmptyState, IconButton, Spinner, Switch } from '@/ui/components/ui';
+import { formatRelativeTime, plural } from '@/ui/shell/format';
 import { ImportDialog } from './ImportDialog';
-import { refreshRulesIndex } from './kinds';
+import { DeleteBookDialog, useBookSwitch } from './structure/bookControls';
+import { SourceRowStatus } from './structure/SourceRowStatus';
 import { manifestEntryCount, useSrdManifest } from './useSrdManifest';
 
 const FORMAT_LABELS: Record<NonNullable<LibrarySource['format']>, string> = {
@@ -19,7 +25,9 @@ const FORMAT_LABELS: Record<NonNullable<LibrarySource['format']>, string> = {
 
 export function MyLibraryTab() {
   const sources = useLibrarySources();
+  const jobs = useJobs();
   const manifest = useSrdManifest();
+  const { toggle, dialog: switchDialog } = useBookSwitch();
   const [importOpen, setImportOpen] = useState(false);
   const [importKey, setImportKey] = useState(0);
   const [toDelete, setToDelete] = useState<LibrarySource | null>(null);
@@ -32,21 +40,13 @@ export function MyLibraryTab() {
     setImportOpen(true);
   };
 
-  const toggle = async (source: LibrarySource, enabled: boolean) => {
-    try {
-      await setLibrarySourceEnabled(source.id, enabled);
-      refreshRulesIndex();
-    } catch (error) {
-      toast.error(errorMessage(error, 'Could not update that source.'));
-    }
-  };
-
   return (
     <div className="flex flex-col gap-5">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <p className="max-w-2xl text-sm text-muted">
           Bring in rules from books you own: paste text, upload a PDF that has selectable text, or photograph pages.
-          Your DM searches every source that’s switched on. Imports stay on this device.
+          Your DM searches every source that’s switched on. Imports stay on this device. Structure a book to use its
+          spells, monsters, items and character options in the builder, combat and spell lists.
         </p>
         <Button variant="primary" icon={<BookPlus className="size-4" aria-hidden />} onClick={openImport}>
           Import
@@ -65,7 +65,8 @@ export function MyLibraryTab() {
             <SourceRow
               key={source.id}
               source={source}
-              onToggle={(enabled) => void toggle(source, enabled)}
+              jobs={jobs ?? []}
+              onToggle={(enabled) => toggle(source, enabled)}
               onDelete={() => setToDelete(source)}
             />
           ))}
@@ -87,7 +88,8 @@ export function MyLibraryTab() {
       )}
 
       <ImportDialog key={importKey} open={importOpen} onClose={() => setImportOpen(false)} />
-      <DeleteSourceDialog source={toDelete} onClose={() => setToDelete(null)} />
+      <DeleteBookDialog source={toDelete} onClose={() => setToDelete(null)} />
+      {switchDialog}
     </div>
   );
 }
@@ -120,13 +122,16 @@ function SrdRow({ entryCount }: { entryCount?: number }) {
 
 function SourceRow({
   source,
+  jobs,
   onToggle,
   onDelete,
 }: {
   source: LibrarySource;
+  jobs: readonly ExtractionJob[];
   onToggle: (enabled: boolean) => void;
   onDelete: () => void;
 }) {
+  const book = `/library/source/${encodeURIComponent(source.id)}`;
   const meta = [
     plural(source.entryCount, 'entry', 'entries'),
     source.format ? FORMAT_LABELS[source.format] : null,
@@ -139,12 +144,18 @@ function SourceRow({
           <FileText className="size-[18px]" aria-hidden />
         </span>
         <div className="min-w-0">
-          <p className="font-medium [overflow-wrap:anywhere]">{source.title}</p>
+          <Link to={book} className="font-medium [overflow-wrap:anywhere] underline-offset-2 hover:underline">
+            {source.title}
+          </Link>
           <p className="mt-0.5 text-xs text-muted">{meta.join(' · ')}</p>
+          <SourceRowStatus source={source} jobs={jobs} />
           {source.notes && <p className="mt-1 text-xs text-muted [overflow-wrap:anywhere]">{source.notes}</p>}
         </div>
       </div>
       <div className="flex items-center gap-3 sm:shrink-0">
+        <ButtonLink to={book} size="sm" icon={<ListChecks className="size-4" aria-hidden />} aria-label={`Review ${source.title}`}>
+          Review
+        </ButtonLink>
         <div className="flex-1 sm:w-48 sm:flex-none">
           <Switch checked={source.enabled} onChange={onToggle} label="Use in rules search" />
         </div>
@@ -153,50 +164,5 @@ function SourceRow({
         </IconButton>
       </div>
     </li>
-  );
-}
-
-function DeleteSourceDialog({ source, onClose }: { source: LibrarySource | null; onClose: () => void }) {
-  const [deleting, setDeleting] = useState(false);
-  const confirm = async () => {
-    if (!source) return;
-    setDeleting(true);
-    try {
-      await deleteLibrarySource(source.id);
-      refreshRulesIndex();
-      toast.success(`Deleted “${source.title}”.`);
-      onClose();
-    } catch (error) {
-      toast.error(errorMessage(error, 'Could not delete that source.'));
-    } finally {
-      setDeleting(false);
-    }
-  };
-  return (
-    <Dialog
-      open={source !== null}
-      onClose={() => {
-        if (!deleting) onClose();
-      }}
-      size="sm"
-      title="Delete this import?"
-      footer={
-        <>
-          <Button variant="ghost" disabled={deleting} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button variant="danger" loading={deleting} onClick={() => void confirm()}>
-            Delete
-          </Button>
-        </>
-      }
-    >
-      {source && (
-        <p className="text-sm">
-          “{source.title}” and its {plural(source.entryCount, 'entry', 'entries')} will be removed from this browser. Your
-          campaigns keep any homebrew based on it.
-        </p>
-      )}
-    </Dialog>
   );
 }

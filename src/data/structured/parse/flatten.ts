@@ -15,7 +15,9 @@
 
 const HEADING = /^ {0,3}(#{1,6})[ \t]+(.+?)[ \t]*#*[ \t]*$/;
 const TABLE_ROW = /^\s*\|.*\|\s*$/;
-const TABLE_SEPARATOR = /^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+/** splitParagraphs' delimiter-row rule (paragraphs.ts), so both dialects number paragraphs alike. */
+const DELIMITER_ROW = /^\s*\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$/;
+const isDelimiterRow = (line: string) => DELIMITER_ROW.test(line) && /(?:^|\|)\s*(?::-|--|-:)/.test(line);
 const LIST_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+(.*)$/;
 
 /** Markdown emphasis and inline code marks removed. */
@@ -48,8 +50,8 @@ export function flatten(markdown: string): string {
     }
     if (TABLE_ROW.test(line)) {
       flush();
-      const isHeader = TABLE_SEPARATOR.test(lines[i + 1] ?? '');
-      if (!TABLE_SEPARATOR.test(line) && !isHeader) {
+      const isHeader = isDelimiterRow(lines[i + 1] ?? '');
+      if (!isDelimiterRow(line) && !isHeader) {
         const text = cells(line).join(' ');
         if (text) out.push(text);
       }

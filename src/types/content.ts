@@ -76,12 +76,18 @@ export interface LibrarySource {
   updatedAt: number;
   /** Imports: bookFingerprint() of the entries' texts as imported, in ordinal order. Set once; never recomputed. */
   fingerprint?: string;
-  /** Denormalized counts for the library row; rewritten by putRecords in the same transaction. */
+  /**
+   * Denormalized counts for the library row; kept by every record write in @/storage (putRecords,
+   * setRecordStatus, deleteRecords) in the same transaction. A gear table whose rows exist counts
+   * nowhere (its rows stand for it). Absent = never structured.
+   */
   structure?: {
+    /** When the first record of this source was written. */
     detectedAt: number;
+    /** PARSER_VERSION at that time. */
     parserVersion: number;
     counts: Partial<Record<StructuredKind, { pending: number; accepted: number; rejected: number }>>;
-    /** Records with data === null. */
+    /** Records with data === null that weren't kept as text ("Not read yet"). */
     needsClaude: number;
   };
 }

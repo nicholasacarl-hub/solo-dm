@@ -78,6 +78,34 @@ describe('descriptions stand alone for sessions whose frozen prompt predates the
   });
 });
 
+describe('the one structured-imports change to DM_TOOLS (spec §6.5)', () => {
+  type ObjectSchema = { properties: Record<string, { description?: string } & Partial<ObjectSchema> & { items?: ObjectSchema }>; required?: string[] };
+  const schemaOf = (name: string) => DM_TOOLS.find((t) => t.name === name)?.input_schema as unknown as ObjectSchema;
+  const startSpec = () => schemaOf('start_combat').properties.combatants.items as ObjectSchema;
+  const addSpec = () => schemaOf('update_combat').properties.combatant as unknown as ObjectSchema;
+
+  it('makes ac, hp_max and initiative_bonus optional, defaulting to the stat block', () => {
+    for (const spec of [startSpec(), addSpec()]) {
+      expect(spec.required).toEqual(['name', 'side']);
+      expect(spec.properties.ac.description).toBe("Armor Class. Omit to use the stat block's (the SRD's or a reviewed import's).");
+      expect(spec.properties.hp_max.description).toBe("Hit point maximum of each creature. Omit to use the stat block's.");
+      expect(spec.properties.initiative_bonus.description).toBe("Initiative modifier. Omit to use the stat block's.");
+      for (const key of ['size', 'speeds', 'reach_ft']) expect(spec.properties[key].description).toContain('Default: from the stat block (SRD or a reviewed import)');
+    }
+  });
+
+  it('says so in start_combat, and tells level_up what the app adds for imported classes', () => {
+    expect(TOOL_DESCRIPTIONS.start_combat).toContain(
+      "Leave AC, HP and initiative out to use the stat block's (the SRD's or one the player reviewed); give them for creatures without one, or to adjust one.",
+    );
+    expect(TOOL_DESCRIPTIONS.start_combat).toContain('a stat block (SRD or reviewed import) supplies size, speed and reach');
+    expect(TOOL_DESCRIPTIONS.start_combat).not.toContain('Use real values');
+    expect(TOOL_DESCRIPTIONS.level_up).toContain(
+      "For a class or subclass from the player's books the app adds that level's features with their text; use new_features only for anything extra.",
+    );
+  });
+});
+
 describe('toolActivity never names a creature for the map tools (hidden creatures, D41)', () => {
   const inputs: Record<(typeof MAP_TOOLS)[number], unknown> = {
     move_tokens: { moves: [{ who: 'Cutthroat', to: 'L8' }] },

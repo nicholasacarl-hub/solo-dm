@@ -1,5 +1,6 @@
 import { Lock } from 'lucide-react';
 import { SKILLS, SKILL_NAMES, type Skill } from '@/types';
+import { Button } from '@/ui/components/ui';
 import { Issues, StepHeader, SubHeading, ToggleChip } from '../BuilderParts';
 import {
   RARE_LANGUAGES,
@@ -10,6 +11,7 @@ import {
   picks,
   skillPlan,
   skillProficiencies,
+  suggestedLanguages,
   toggleInList,
   validateLanguages,
   validateSkills,
@@ -50,6 +52,11 @@ export function SkillsStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
   const expertiseFull = draft.expertise.length >= plan.expertise;
   const languagesFull = chosenLanguages.length >= languageCount;
   const FULL = 'Unselect one first';
+  // Languages an older species or background prints: suggestions for the two picks (§5.6), never added.
+  const suggested = suggestedLanguages(draft, data);
+  const unusedSuggestions = suggested.languages.filter((l) => !draft.languages.includes(l));
+  const useSuggested = () =>
+    setDraft((d) => ({ ...d, languages: [...new Set([...suggested.languages, ...d.languages.filter((l) => !langs.fixed.includes(l))])].slice(0, languageCount) }));
 
   const toggleClassSkill = (s: Skill) =>
     setDraft((d) => ({ ...d, classSkills: toggleInList(d.classSkills, s, plan.classChoice.count), expertise: d.expertise.filter((x) => x !== s) }));
@@ -181,6 +188,18 @@ export function SkillsStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
             </Locked>
           ))}
         </div>
+        {suggested.languages.length > 0 && (
+          <div className="flex flex-wrap items-center gap-2 text-sm text-muted">
+            <span>
+              Suggested by {suggested.from.join(' and ')} (older edition): {suggested.languages.join(', ')}.
+            </span>
+            {unusedSuggestions.length > 0 && (
+              <Button size="sm" variant="ghost" onClick={useSuggested}>
+                Use the suggestion
+              </Button>
+            )}
+          </div>
+        )}
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Standard languages">
           {STANDARD_LANGUAGES.filter((l) => !langs.fixed.includes(l)).map((l) => (
             <ToggleChip

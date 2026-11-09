@@ -5,14 +5,15 @@
  * only the tables whose indexes change (set a table to null to drop it), and transform existing
  * rows in an upgrade callback, e.g.
  *
- *   db.version(3)
+ *   db.version(4)
  *     .stores({ quests: 'id, campaignId, status' })
  *     .upgrade((tx) => tx.table('quests').toCollection().modify((q) => { q.status ??= 'active'; }));
  *
  * Dexie runs every pending upgrade in order the next time the database opens. Bump
  * CampaignBundle.version too if exported files change shape.
  *
- * History: 1 = the original schema; 2 = illustrations (the "images" and "imageData" tables).
+ * History: 1 = the original schema; 2 = illustrations (the "images" and "imageData" tables);
+ * 3 = structured imports (the "libraryRecords" and "libraryJobs" tables).
  */
 import Dexie, { type EntityTable, type IndexableType, type Table } from 'dexie';
 import type {
@@ -21,6 +22,7 @@ import type {
   Clock,
   CombatState,
   CompendiumEntry,
+  ExtractionJob,
   HomebrewEntry,
   JournalEntry,
   LibrarySource,
@@ -28,6 +30,7 @@ import type {
   Quest,
   Session,
   StoredImage,
+  StructuredRecord,
   TranscriptMessage,
 } from '@/types';
 
@@ -70,6 +73,8 @@ export type SoloDmDatabase = Dexie & {
   libraryEntries: EntityTable<CompendiumEntry, 'id'>;
   images: EntityTable<ImageRecord, 'id'>;
   imageData: EntityTable<ImageDataRecord, 'id'>;
+  libraryRecords: EntityTable<StructuredRecord, 'id'>;
+  libraryJobs: EntityTable<ExtractionJob, 'id'>;
 };
 
 export const db = new Dexie('solo-dm') as SoloDmDatabase;
@@ -98,9 +103,16 @@ db.version(2).stores({
   imageData: 'id, campaignId',
 });
 
+// Version 3: structured imports. Two new tables; no existing row changes, so no upgrade callback.
+// Neither table is part of campaignTables(): like the library, they never leave this device.
+db.version(3).stores({
+  libraryRecords: 'id, sourceId, [sourceId+kind], [sourceId+status], [jobId+runState]',
+  libraryJobs: 'id, sourceId, status, createdAt',
+});
+
 /**
- * Every table that holds a campaign's saved game (all of them except the library and the
- * illustrations, which stay on this device: see imageTables()).
+ * Every table that holds a campaign's saved game (all of them except the library, its structured
+ * records and jobs, and the illustrations, which stay on this device: see imageTables()).
  */
 export function campaignTables(): Table[] {
   return [

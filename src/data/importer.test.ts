@@ -1,13 +1,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompendiumEntry, LibrarySource } from '@/types';
 
-vi.mock('@/storage', () => ({ saveLibrarySource: vi.fn(async () => {}) }));
+vi.mock('@/storage', () => ({ saveLibrarySource: vi.fn(async () => {}), saveLibrarySourceWithRecords: vi.fn(async () => {}) }));
 vi.mock('./rulesIndexStore', () => ({ invalidateRulesIndex: vi.fn() }));
 vi.mock('./pdf', () => ({ extractPdfMarkdown: vi.fn() }));
 vi.mock('./vision', () => ({ transcribeImages: vi.fn() }));
 
-import { saveLibrarySource } from '@/storage';
+import { bookFingerprint } from '@/lib/importedContent';
+import { saveLibrarySource, saveLibrarySourceWithRecords } from '@/storage';
+import { gloamwoodEntries, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
 import { importLibraryDocument } from './importer';
+import { exportPack } from './structured/packs';
 import { extractPdfMarkdown } from './pdf';
 import { invalidateRulesIndex } from './rulesIndexStore';
 import { transcribeImages } from './vision';
@@ -105,5 +108,37 @@ describe('importLibraryDocument', () => {
     await expect(importLibraryDocument({ title: 'X', format: 'image', files: [new File(['x'], 'notes.txt')] })).rejects.toThrow(/photos/);
     expect(save).not.toHaveBeenCalled();
     expect(invalidateRulesIndex).not.toHaveBeenCalled();
+  });
+
+  it('stores the book’s fingerprint (entries as imported, in ordinal order) on the new source', async () => {
+    const source = await importLibraryDocument({ title: 'Notes', format: 'markdown', text: '# One\nFirst.\n\n# Two\nSecond.' });
+    const [, entries] = saved();
+    expect(source.fingerprint).toBe(bookFingerprint(entries.map((e) => e.text)));
+    expect(source.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('routes a Solo DM pack to the pack reader: entries and pending records saved together', async () => {
+    const pack = exportPack(gloamwoodSource(), gloamwoodEntries(), gloamwoodRecords());
+    const file = new File([JSON.stringify(pack)], 'gloamwood.book-data.json', { type: 'application/json' });
+    const source = await importLibraryDocument({ title: '', format: 'json', files: [file] });
+    expect(save).not.toHaveBeenCalled();
+    const [savedSource, entries, records] = vi.mocked(saveLibrarySourceWithRecords).mock.calls[0];
+    expect(savedSource).toBe(source);
+    expect(source).toMatchObject({ title: 'The Gloamwood Almanac', format: 'json', kind: 'import', enabled: true, fingerprint: gloamwoodSource().fingerprint });
+    expect(entries).toHaveLength(gloamwoodEntries().length);
+    expect(records.length).toBeGreaterThan(0);
+    expect(records.every((r) => r.status === 'pending' && r.origin === 'pack' && r.sourceId === source.id)).toBe(true);
+    expect(invalidateRulesIndex).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps legacy JSON as it was and refuses a pack mixed with other files or a file over 20 MB', async () => {
+    const pack = new File([JSON.stringify(exportPack(gloamwoodSource(), gloamwoodEntries(), []))], 'a.json');
+    const legacy = new File([JSON.stringify([{ name: 'Rule', text: 'Text.' }])], 'b.json');
+    await expect(importLibraryDocument({ title: 'Mixed', format: 'json', files: [pack, legacy] })).rejects.toThrow(/one Solo DM pack at a time/);
+    const big = new File(['[]'], 'big.json');
+    Object.defineProperty(big, 'size', { value: 21 * 1024 * 1024 });
+    await expect(importLibraryDocument({ title: 'Big', format: 'json', files: [big] })).rejects.toThrow(/larger than 20 MB/);
+    expect(save).not.toHaveBeenCalled();
+    expect(saveLibrarySourceWithRecords).not.toHaveBeenCalled();
   });
 });

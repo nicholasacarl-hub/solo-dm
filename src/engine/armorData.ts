@@ -2,21 +2,12 @@
  * Armor reference data (SRD 5.2.1 "Armor" table) and helpers to resolve worn items to armor stats.
  * The catalog passed in by callers (BuilderData.equipment) wins; this table is the fallback.
  */
-import type { EquipmentOption, InventoryItem } from '@/types';
+import type { EquipmentOption, InventoryItem, ItemArmorStats } from '@/types';
 
 export type ArmorType = 'light' | 'medium' | 'heavy';
 
-export interface ArmorStats {
-  name: string;
-  kind: 'armor' | 'shield';
-  armorType?: ArmorType;
-  /** Base AC for armor; the AC bonus for a shield. */
-  baseAc: number;
-  /** null = no cap, 0 = DEX not added. */
-  dexCap: number | null;
-  strength?: number;
-  stealthDisadvantage?: boolean;
-}
+/** Armor numbers (base AC and DEX cap; a shield's bonus) with the armor's name. */
+export type ArmorStats = ItemArmorStats & { name: string };
 
 const light = (name: string, baseAc: number, stealth = false): ArmorStats => ({
   name,
@@ -80,25 +71,46 @@ function armorKey(name: string): string {
     .trim();
 }
 
-function fromCatalog(option: EquipmentOption): ArmorStats | null {
+/**
+ * The armor numbers of a catalog option (armor or shield), as copied onto an inventory item so AC works
+ * without the catalog (DM tools, other devices). Null for anything else, or armor without an AC.
+ */
+export function armorStatsOf(option: EquipmentOption): ItemArmorStats | null {
   if (option.category !== 'armor' && option.category !== 'shield') return null;
-  if (option.category === 'shield') return { name: option.name, kind: 'shield', baseAc: option.armorClass ?? 2, dexCap: 0 };
+  if (option.category === 'shield') return { kind: 'shield', baseAc: option.armorClass ?? 2, dexCap: 0 };
   if (option.armorClass === undefined) return null;
   const dexCap =
     option.dexCap !== undefined ? option.dexCap : option.armorType === 'heavy' ? 0 : option.armorType === 'medium' ? 2 : null;
-  return {
-    name: option.name,
+  const stats: ItemArmorStats = {
     kind: 'armor',
     armorType: option.armorType ?? (dexCap === 0 ? 'heavy' : dexCap === null ? 'light' : 'medium'),
     baseAc: option.armorClass,
     dexCap,
-    strength: option.strengthRequirement,
-    stealthDisadvantage: option.stealthDisadvantage,
   };
+  if (option.strengthRequirement !== undefined) stats.strength = option.strengthRequirement;
+  if (option.stealthDisadvantage !== undefined) stats.stealthDisadvantage = option.stealthDisadvantage;
+  return stats;
 }
 
-/** Armor stats for an inventory item: catalog by compendium id, catalog by name, then the SRD table. */
+function fromCatalog(option: EquipmentOption): ArmorStats | null {
+  const stats = armorStatsOf(option);
+  return stats ? { name: option.name, ...stats } : null;
+}
+
+/** Numbers stored on the item (structured imports) win; anything malformed is ignored. */
+function fromItem(item: InventoryItem): ArmorStats | null {
+  const armor = item.armor;
+  if (!armor || (armor.kind !== 'armor' && armor.kind !== 'shield') || !Number.isFinite(armor.baseAc)) return null;
+  return { ...armor, name: item.name };
+}
+
+/**
+ * Armor stats for an inventory item: the numbers stored on the item, then the catalog by compendium id,
+ * the catalog by name, then the SRD table (SRD 5.2.1 "Armor").
+ */
 export function resolveArmor(item: InventoryItem, catalog: readonly EquipmentOption[] = []): ArmorStats | null {
+  const own = fromItem(item);
+  if (own) return own;
   const byId = item.compendiumId ? catalog.find((o) => o.id === item.compendiumId) : undefined;
   const fromId = byId ? fromCatalog(byId) : null;
   if (fromId) return fromId;
@@ -116,15 +128,16 @@ export function resolveArmor(item: InventoryItem, catalog: readonly EquipmentOpt
 export interface WornArmor {
   item: InventoryItem;
   stats: ArmorStats;
-  /** Magic +N bonus parsed from the item name. */
+  /** Magic +N bonus parsed from the item name (0 for items with structured `bonuses`, which the engine adds itself). */
   bonus: number;
 }
 
 const MAYBE_ARMOR = new Set(['armor', 'shield', 'magic-item', 'other']);
 
 /**
- * Equipped items that are armor or a shield (weapons, gear and tools never count). `unknown` lists
- * equipped items categorized as armor whose stats couldn't be found.
+ * Equipped items that are armor or a shield (weapons, gear and tools never count, unless the item
+ * carries armor numbers of its own: magic armor whatever its category). `unknown` lists equipped items
+ * categorized as armor whose stats couldn't be found.
  */
 export function wornArmor(
   items: readonly InventoryItem[],
@@ -133,10 +146,12 @@ export function wornArmor(
   const known: WornArmor[] = [];
   const unknown: InventoryItem[] = [];
   for (const item of items) {
-    if (!item.equipped || (item.category !== undefined && !MAYBE_ARMOR.has(item.category))) continue;
+    if (!item.equipped) continue;
+    const own = fromItem(item);
+    if (!own && item.category !== undefined && !MAYBE_ARMOR.has(item.category)) continue;
     // Any equipped shield works like a Shield even when its name isn't in the tables ("Spiked Shield").
-    const stats = resolveArmor(item, catalog) ?? (item.category === 'shield' ? { ...SHIELD, name: item.name } : null);
-    if (stats) known.push({ item, stats, bonus: magicBonus(item.name) });
+    const stats = own ?? resolveArmor(item, catalog) ?? (item.category === 'shield' ? { ...SHIELD, name: item.name } : null);
+    if (stats) known.push({ item, stats, bonus: item.bonuses ? 0 : magicBonus(item.name) });
     else if (item.category === 'armor') unknown.push(item);
   }
   return { known, unknown };

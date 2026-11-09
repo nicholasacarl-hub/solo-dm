@@ -4,6 +4,7 @@ import { ExternalLink } from 'lucide-react';
 import { SRD_ATTRIBUTION } from '@/data';
 import { Card, SectionTitle } from '@/ui/components/ui';
 import { plural } from '@/ui/shell/format';
+import { PRIVACY_PROMISES } from './structure/labels';
 import { manifestEntryCount, useSrdManifest } from './useSrdManifest';
 
 const CC_BY_URL = 'https://creativecommons.org/licenses/by/4.0/';
@@ -95,11 +96,33 @@ export function AboutTab() {
       </Card>
 
       <Card className="p-5 sm:p-6">
-        <SectionTitle>Your content</SectionTitle>
-        <p className="text-sm text-muted">
-          Books and notes you import stay in this browser on your device. They are never added to Solo DM itself, and
-          exported save files leave them out. Only import content you own.
-        </p>
+        <SectionTitle>How your books stay private</SectionTitle>
+        <ol className="flex flex-col gap-3 text-sm">
+          {PRIVACY_PROMISES.map((p) => (
+            <li key={p.title}>
+              <p className="font-medium">{p.title}</p>
+              <p className="mt-0.5 text-muted">{p.body}</p>
+            </li>
+          ))}
+        </ol>
+        <h4 className="mt-5 text-sm font-medium">What leaves this device</h4>
+        <ul className="mt-1.5 flex list-disc flex-col gap-1 pl-5 text-sm text-muted">
+          <li>
+            Entries you have Claude structure go to Anthropic with your API key, one at a time and only after you've seen the cost — never the
+            book's title, your characters or your campaigns. You pick the model, the kinds and a spending limit, and can pause or cancel; demo
+            mode sends nothing.
+          </li>
+          <li>Photographed pages go to Anthropic to be transcribed when you import them.</li>
+          <li>Passages the DM looks up go to Anthropic during play; switch a book off to keep the DM out of it.</li>
+          <li>
+            With illustrations on, the names of options you use (a species, a class, equipped gear) appear in picture prompts sent to OpenAI;
+            their text never does.
+          </li>
+          <li>Save files and GitHub backups keep your characters, transcripts and logs, with the book's text taken out and the names kept.</li>
+          <li>Structured records, extraction jobs and your library stay in this browser. Settings › Danger zone deletes them.</li>
+          <li>A “Download book data” file goes only where you save it.</li>
+        </ul>
+        <p className="mt-3 text-sm text-muted">Books and notes you import are never added to Solo DM itself. Only import content you own.</p>
       </Card>
 
       <Card className="p-5 sm:p-6">

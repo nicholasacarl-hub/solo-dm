@@ -5,6 +5,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, ArrowRight, Check, Eye, Wand2 } from 'lucide-react';
+import { getBuilderProblems } from '@/data';
 import { cn } from '@/lib/cn';
 import type { BuilderData, Campaign, Character } from '@/types';
 import { toast } from '@/ui/components/toast';
@@ -21,6 +22,7 @@ import {
   type PreviewStats,
 } from './logic';
 import { PreviewCard } from './PreviewCard';
+import { builderProblemLine } from './sources';
 import { AbilitiesStep } from './steps/AbilitiesStep';
 import { BackgroundStep } from './steps/BackgroundStep';
 import { ClassStep } from './steps/ClassStep';
@@ -136,6 +138,8 @@ export function CharacterBuilder({ campaign, data, spells, characterId, onSave }
   const issues = validateStep(step, draft, ctx);
   const allIssues = validateStep('review', draft, ctx);
   const casterNeedsSpells = spellPlan(draft, data).casting && spells.loading;
+  // Recomputed with the data (a new merge brings new problems).
+  const problemLine = useMemo(() => (data ? builderProblemLine(getBuilderProblems()) : null), [data]);
 
   const goTo = (s: BuilderStep) => setDraft((d) => ({ ...d, step: s }));
   const onDmDecide = () => setDraft((d) => letDmDecide(step, d, ctx));
@@ -188,10 +192,13 @@ export function CharacterBuilder({ campaign, data, spells, characterId, onSave }
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-muted">
-          Step {index + 1} of {steps.length}
-          {issues.length === 0 && step !== 'review' && <span className="text-success"> · done</span>}
-        </p>
+        <div className="flex flex-col gap-0.5">
+          <p className="text-sm text-muted">
+            Step {index + 1} of {steps.length}
+            {issues.length === 0 && step !== 'review' && <span className="text-success"> · done</span>}
+          </p>
+          {problemLine && <p className="text-xs text-faint">{problemLine}</p>}
+        </div>
         {step !== 'review' && (
           <Button
             variant="arcane"

@@ -35,17 +35,19 @@ import {
   type PlacementRequest,
   type PlacementResult,
 } from '@/engine';
-import type {
-  ActiveCondition,
-  BattleMap,
-  Campaign,
-  Character,
-  Combatant,
-  CombatState,
-  CompendiumEntry,
-  CreatureSize,
-  CreatureSpeeds,
+import {
+  SRD_SOURCE_ID,
+  type ActiveCondition,
+  type BattleMap,
+  type Campaign,
+  type Character,
+  type Combatant,
+  type CombatState,
+  type CompendiumEntry,
+  type CreatureSize,
+  type CreatureSpeeds,
 } from '@/types';
+import { isReviewedImport } from '@/data/structured/materialize';
 import { nameKey } from '@/lib/id';
 import { describeMapSetup, distanceFt, dmName, finalPositions, spaceText, turnStartLine, type MapStatsLine } from '../mapText';
 import { battleMapsMode } from '../modes';
@@ -117,18 +119,84 @@ function sourceText(size: StatSource, speed: StatSource, reach: StatSource): str
 
 interface Group {
   combatants: Combatant[];
-  /** "Goblin ×3: initiative 13 [d20 (11) + 2 = 13]". */
+  /** "Goblin ×3: initiative 13 [d20 (11) + 2 = 13]" (+ where the numbers came from). */
   line: string;
   /** Its map stats as the setup result lists them. */
   stats: MapStatsLine;
 }
 
-async function buildGroup(ctx: ToolContext, spec: CombatantSpec, taken: Set<string>, campaign: Campaign): Promise<Group> {
-  const roll = rollD20Test(spec.initiative_bonus, {
+/** A group's stat block and numbers, resolved (and checked) before anyone rolls. */
+interface ResolvedGroup {
+  spec: CombatantSpec;
+  entry?: CompendiumEntry;
+  ac: number;
+  hpMax: number;
+  initiativeBonus: number;
+  /** "AC 17, HP 52, initiative +2 from the stat block (The Gloamwood Almanac)" and/or "(the stat block says …)". */
+  provenance: string;
+}
+
+/** The DM tools' limits (definitions.ts combatantSpec): a stat-block number outside them is never used. */
+const NUMBER_RANGES = { ac: [1, 40], hp: [1, 2000], initiative: [-10, 20] } as const;
+
+/** Numbers a stat block supplies: the SRD's and reviewed imports' (spec §6.3); homebrew and unreviewed imports supply none. */
+function blockNumbers(entry: CompendiumEntry | undefined): { ac?: number; hp?: number; initiative?: number } {
+  if (!entry || !(entry.sourceId === SRD_SOURCE_ID || isReviewedImport(entry))) return {};
+  const data = entry.data ?? {};
+  const pick = (value: unknown, [min, max]: readonly [number, number]) =>
+    typeof value === 'number' && Number.isInteger(value) && value >= min && value <= max ? value : undefined;
+  return { ac: pick(data.ac, NUMBER_RANGES.ac), hp: pick(data.hp, NUMBER_RANGES.hp), initiative: pick(data.initiative, NUMBER_RANGES.initiative) };
+}
+
+const signedText = (n: number) => (n < 0 ? `${n}` : `+${n}`);
+const listText = (items: readonly string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+
+/**
+ * Resolve a group's stat block (`stat_block`, or — only when a number is left out — the group's name without a
+ * trailing number) and its numbers: explicit input wins (elites, variants), else the stat block's. Throws the
+ * DM-facing error when a number is neither given nor in a stat block. A call that gives all three numbers and no
+ * stat_block looks nothing up, as before structured imports.
+ */
+async function resolveGroup(ctx: ToolContext, spec: CombatantSpec, campaign: Campaign): Promise<ResolvedGroup> {
+  const omitted = spec.ac === undefined || spec.hp_max === undefined || spec.initiative_bonus === undefined;
+  const lookup = spec.stat_block ?? (omitted ? spec.name.replace(/\s+\d+$/, '').trim() : undefined);
+  const entry = await statBlockEntry(ctx, lookup, campaign);
+  const block = blockNumbers(entry);
+  const ac = spec.ac ?? block.ac;
+  const hpMax = spec.hp_max ?? block.hp;
+  const initiativeBonus = spec.initiative_bonus ?? block.initiative;
+  if (ac === undefined || hpMax === undefined || initiativeBonus === undefined) {
+    const missing = [ac === undefined && 'ac', hpMax === undefined && 'hp_max', initiativeBonus === undefined && 'initiative_bonus'].filter(
+      (m): m is string => Boolean(m),
+    );
+    throw new ToolInputError(
+      `Give ${listText(missing)} for ${spec.name}: no stat block with ${missing.length > 1 ? 'those numbers' : 'that number'} was found (name one in stat_block, or give the numbers).`,
+    );
+  }
+  const used: string[] = [];
+  const differs: string[] = [];
+  const note = (given: number | undefined, fromBlock: number | undefined, text: (n: number) => string) => {
+    if (given === undefined && fromBlock !== undefined) used.push(text(fromBlock));
+    else if (given !== undefined && fromBlock !== undefined && given !== fromBlock) differs.push(text(fromBlock));
+  };
+  note(spec.ac, block.ac, (n) => `AC ${n}`);
+  note(spec.hp_max, block.hp, (n) => `HP ${n}`);
+  note(spec.initiative_bonus, block.initiative, (n) => `initiative ${signedText(n)}`);
+  const provenance = [
+    used.length && entry ? `${used.join(', ')} from the stat block (${entry.sourceName})` : '',
+    differs.length ? `(the stat block says ${differs.join(', ')})` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+  return { spec, ...(entry ? { entry } : {}), ac, hpMax, initiativeBonus, provenance };
+}
+
+function buildGroup(ctx: ToolContext, resolved: ResolvedGroup, taken: Set<string>): Group {
+  const { spec, entry } = resolved;
+  const roll = rollD20Test(resolved.initiativeBonus, {
     advantage: spec.surprised ? 'disadvantage' : 'normal',
     rng: ctx.deps.rng,
   });
-  const entry = await statBlockEntry(ctx, spec.stat_block, campaign);
   // Map stats: explicit input, then the stat block (D44), then the engine's defaults (Medium, walk 30, reach 5).
   const block = entry ? statBlockMapStats(entry) : {};
   const size: CreatureSize | undefined = spec.size ?? block.size;
@@ -142,13 +210,13 @@ async function buildGroup(ctx: ToolContext, spec: CombatantSpec, taken: Set<stri
       side: spec.side,
       isPlayer: false,
       initiative: roll.total,
-      initiativeBonus: spec.initiative_bonus,
-      ac: spec.ac,
-      hp: { max: spec.hp_max, current: spec.hp_max, temp: 0 },
+      initiativeBonus: resolved.initiativeBonus,
+      ac: resolved.ac,
+      hp: { max: resolved.hpMax, current: resolved.hpMax, temp: 0 },
       conditions: [],
       defeated: false,
       hideHp: spec.hide_hp ?? spec.side === 'enemy',
-      ...defined({ statBlockName: spec.stat_block, statBlockId: entry?.id, notes: spec.notes, size, speeds, reachFt }),
+      ...defined({ statBlockName: spec.stat_block ?? entry?.name, statBlockId: entry?.id, notes: spec.notes, size, speeds, reachFt }),
       ...(spec.hidden ? { hidden: true } : {}),
     }),
   );
@@ -161,7 +229,8 @@ async function buildGroup(ctx: ToolContext, spec: CombatantSpec, taken: Set<stri
     reachFt: reachFt ?? 5,
     source: sourceText(source(spec.size, block.size), source(spec.speeds, block.speeds), source(spec.reach_ft, block.reachFt)),
   };
-  return { combatants, line: `${label}: initiative ${roll.total} [${roll.breakdown}]`, stats };
+  const line = `${label}: initiative ${roll.total} [${roll.breakdown}]${resolved.provenance ? ` · ${resolved.provenance}` : ''}`;
+  return { combatants, line, stats };
 }
 
 function turnLine(state: CombatState): string {
@@ -223,6 +292,9 @@ export async function startCombatTool(input: StartInput, ctx: ToolContext): Prom
   }
   // Every map input is checked before the player is asked to roll: a typo never wastes the roll.
   const plan = prepareStartMap(input, campaign);
+  // So are the numbers: a creature without AC, HP or initiative (and no stat block for them) fails here.
+  const resolved: ResolvedGroup[] = [];
+  for (const spec of input.combatants) resolved.push(await resolveGroup(ctx, spec, campaign));
 
   const heroRoll = await performPlayerRoll(ctx, {
     rollType: 'initiative',
@@ -245,8 +317,8 @@ export async function startCombatTool(input: StartInput, ctx: ToolContext): Prom
   const taken = new Set([nameKey(character.name)]);
   const groups: Group[] = [];
   const lines: string[] = [`${character.name}: initiative ${heroRoll.result.total}`, ...heroRoll.notes];
-  for (const spec of input.combatants) {
-    const group = await buildGroup(ctx, spec, taken, campaign);
+  for (const r of resolved) {
+    const group = buildGroup(ctx, r, taken);
     groups.push(group);
     lines.push(group.line);
   }
@@ -334,7 +406,7 @@ async function prepareReinforcements(ctx: ToolContext, state: CombatState, input
   // The position is checked before anything is rolled.
   const anchor = state.map && spec.position !== undefined ? parsePosition(spec.position, state.map, spec.count ?? 1, 'update_combat add: position') : null;
   const taken = new Set(state.combatants.map((c) => nameKey(c.name)));
-  const group = await buildGroup(ctx, spec, taken, campaign);
+  const group = buildGroup(ctx, await resolveGroup(ctx, spec, campaign), taken);
   const note = !state.map && spec.position !== undefined ? 'No map: positions were ignored.' : undefined;
   return { group, anchor, ...(spec.elevation_ft !== undefined ? { elevationFt: spec.elevation_ft } : {}), ...(note ? { note } : {}) };
 }

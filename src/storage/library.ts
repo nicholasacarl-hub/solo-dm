@@ -1,6 +1,7 @@
 /**
  * Homebrew and the player's imported library. Imported sourcebook text stays in this browser:
- * nothing here is ever exported in a campaign bundle or synced.
+ * nothing here is ever exported in a campaign bundle or synced. Characters keep provenance for book
+ * text they copy; exports replace that text (redact.ts).
  */
 import { useLiveQuery } from 'dexie-react-hooks';
 import type { CompendiumEntry, HomebrewEntry, LibrarySource } from '@/types';
@@ -73,9 +74,21 @@ export async function saveLibrarySource(source: LibrarySource, entries: Compendi
   });
 }
 
+/** The error deleteLibrarySource gives while Claude is reading the book (a job is running or pausing). */
+export const STRUCTURING_BUSY_ERROR = 'Pause or cancel structuring first.';
+
+/** Delete a source with its entries, structured records and extraction jobs (refused while a job runs). */
 export async function deleteLibrarySource(id: string): Promise<void> {
-  await db.transaction('rw', db.library, db.libraryEntries, async () => {
+  await db.transaction('rw', [db.library, db.libraryEntries, db.libraryRecords, db.libraryJobs], async () => {
+    const busy = await db.libraryJobs
+      .where('sourceId')
+      .equals(id)
+      .filter((j) => j.status === 'running' || j.status === 'pausing')
+      .count();
+    if (busy > 0) throw new Error(STRUCTURING_BUSY_ERROR);
     await db.libraryEntries.where('sourceId').equals(id).delete();
+    await db.libraryRecords.where('sourceId').equals(id).delete();
+    await db.libraryJobs.where('sourceId').equals(id).delete();
     await db.library.delete(id);
   });
 }

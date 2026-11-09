@@ -365,8 +365,16 @@ function librarySection(sources: PromptInput['librarySources']): string {
   const imports = [...new Set(sources.filter((s) => s.id !== SRD_SOURCE_ID && s.id !== HOMEBREW_SOURCE_ID).map((s) => s.name.trim() || s.id))].sort(byText);
   const lines = ['## Rules library (lookup_rules and get_entry search all of it)', '- SRD 5.2.1 (always available)'];
   for (const name of imports) lines.push(`- ${name} (imported by the player — look its content up before relying on it)`);
+  // Structured imports (spec §6.5): only when the player has imports, so an SRD-only prompt is byte-identical.
+  if (imports.length) lines.push(...IMPORTED_BOOK_LINES);
   return lines.join('\n');
 }
+
+/** How reviewed entries, older-format adaptations and left-out book text read (sessions with imports only). */
+const IMPORTED_BOOK_LINES = [
+  '- Entries marked "reviewed" in lookups carry numbers the player checked; start_combat uses them when you leave AC, HP and initiative out. "Adapted for 2024" lines say how the app fitted older-format content: keep the sheet as the app set it unless the player agrees to a change.',
+  `- Text marked "[Text from the player's imported book … was left out of this copy.]" can be read again: get_character_sheet for the hero's features, get_entry for rules.`,
+];
 
 function sceneSection(c: Campaign): string {
   const s = c.scene;

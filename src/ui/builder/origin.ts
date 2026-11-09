@@ -12,7 +12,9 @@ import {
   type ProficiencyLevel,
   type Skill,
   type SpeciesOption,
+  type SubclassOption,
 } from '@/types';
+import { findFeat as findFeatOption } from '@/data/options/resolve';
 import { nameKey } from '@/lib/id';
 import { classLanguages, expertiseCount } from './classFeatures';
 import { fixedSpeciesSkills, speciesChoices, type LineageOption, type SpeciesChoices } from './species';
@@ -20,17 +22,27 @@ import type { BuilderDraft } from './types';
 
 export interface Picks {
   cls?: ClassOption;
+  /** The subclass of a class that chooses it at level 1. */
+  subclass?: SubclassOption;
   background?: BackgroundOption;
   species?: SpeciesOption;
   lineage?: LineageOption;
   choices: SpeciesChoices;
 }
 
+/** Does the class choose its subclass at level 1 (some older imported classes)? */
+export function choosesSubclassAtLevel1(cls: ClassOption | undefined): boolean {
+  return Boolean(cls && cls.subclassLevel === 1 && cls.subclasses.length);
+}
+
 export function picks(draft: BuilderDraft, data: BuilderData): Picks {
   const species = data.species.find((s) => s.id === draft.speciesId);
   const choices = speciesChoices(species);
+  const cls = data.classes.find((c) => c.id === draft.classId);
+  const subclass = choosesSubclassAtLevel1(cls) ? cls?.subclasses.find((s) => s.id === draft.subclassId) : undefined;
   return {
-    cls: data.classes.find((c) => c.id === draft.classId),
+    cls,
+    ...(subclass ? { subclass } : {}),
     background: data.backgrounds.find((b) => b.id === draft.backgroundId),
     species,
     lineage: choices.lineages.find((l) => l.name === draft.lineage),
@@ -50,11 +62,9 @@ export function splitFeatName(name: string): { base: string; option: string | nu
   return match ? { base: match[1].trim(), option: match[2].trim() } : { base: name.trim(), option: null };
 }
 
-export function findFeat(feats: FeatOption[], name: string): FeatOption | undefined {
-  const exact = feats.find((f) => nameKey(f.name) === nameKey(name));
-  if (exact) return exact;
-  const { base } = splitFeatName(name);
-  return feats.find((f) => nameKey(f.name) === nameKey(base));
+/** Exact name, then the name before "(…)"; the given book's feat first, then the SRD's, then other books'. */
+export function findFeat(feats: readonly FeatOption[], name: string, preferSourceId?: string): FeatOption | undefined {
+  return findFeatOption(feats, name, preferSourceId);
 }
 
 export function isMagicInitiate(name: string): boolean {
@@ -79,10 +89,17 @@ export interface OriginFeat {
 export function originFeats(draft: BuilderDraft, data: BuilderData): OriginFeat[] {
   const { background, species, choices } = picks(draft, data);
   const out: OriginFeat[] = [];
-  if (background?.feat) {
+  if (background?.featChoice) {
+    // Older backgrounds grant no feat: the player picks an Origin feat (§5.6 background-feat-choice).
+    const feat = data.feats.find((f) => f.id === draft.backgroundFeat);
+    if (feat) {
+      const list = isMagicInitiate(feat.name) ? draft.backgroundFeatList : null;
+      out.push({ name: list ? `${feat.name} (${list})` : feat.name, feat, source: `${background.name} (Origin feat)`, option: list, from: 'background' });
+    }
+  } else if (background?.feat) {
     out.push({
       name: background.feat,
-      feat: findFeat(data.feats, background.feat),
+      feat: findFeat(data.feats, background.feat, background.source?.sourceId),
       source: `${background.name} (Origin feat)`,
       option: splitFeatName(background.feat).option,
       from: 'background',
@@ -273,6 +290,25 @@ export function languagePlan(draft: BuilderDraft, data: BuilderData): LanguagePl
   const { cls } = picks(draft, data);
   const fromClass = classLanguages(cls);
   return { fixed: ['Common', ...fromClass.fixed], standard: 2, any: fromClass.extraChoices };
+}
+
+/**
+ * Standard languages an older species or background prints (§5.6: suggested for the two picks, never added):
+ * the ones the player hasn't already got.
+ */
+export function suggestedLanguages(draft: BuilderDraft, data: BuilderData): { languages: string[]; from: string[] } {
+  const { background, species } = picks(draft, data);
+  const standard = new Set<string>(STANDARD_LANGUAGES);
+  const fixed = languagePlan(draft, data).fixed;
+  const languages: string[] = [];
+  const from: string[] = [];
+  for (const option of [species, background]) {
+    const printed = (option?.languages ?? []).filter((l) => standard.has(l) && !fixed.includes(l));
+    if (!option || !printed.length) continue;
+    from.push(option.name);
+    for (const l of printed) if (!languages.includes(l)) languages.push(l);
+  }
+  return { languages, from };
 }
 
 export function allLanguages(draft: BuilderDraft, data: BuilderData): string[] {

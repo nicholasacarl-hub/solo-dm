@@ -6,10 +6,13 @@
  */
 import type { CompendiumEntry, LibrarySource } from '@/types';
 import { newId } from '@/lib/id';
-import { saveLibrarySource } from '@/storage';
+import { bookFingerprint } from '@/lib/importedContent';
+import { saveLibrarySource, saveLibrarySourceWithRecords } from '@/storage';
 import { chunkDocument } from './chunk';
-import { parseJsonImport } from './jsonImport';
+import { routeJsonImport } from './jsonImport';
 import { invalidateRulesIndex } from './rulesIndexStore';
+import type { PackImport } from './structured/packs';
+import { STRUCTURED_LIMITS } from './structured/schemas';
 import { throwIfAborted } from './text';
 import type { ImportInput, ImportProgress } from './index';
 
@@ -96,10 +99,18 @@ export async function importLibraryDocument(
   let format: NonNullable<LibrarySource['format']>;
 
   if (input.format === 'json') {
+    const tooLarge = files.find((f) => f.size > STRUCTURED_LIMITS.pack.bytes);
+    if (tooLarge) throw new Error(`${tooLarge.name} is larger than ${STRUCTURED_LIMITS.pack.bytes / 1024 / 1024} MB, the most Solo DM imports from one JSON file.`);
     const texts = await readTexts(input, report, signal, { headings: false });
     if (!texts.length) throw new Error('Paste JSON or choose a .json file to import.');
     report({ stage: 'chunking', done: 0, total: 1, message: 'Checking entries…' });
-    entries = texts.flatMap((text) => parseJsonImport(text, opts));
+    const routed = texts.map((text) => routeJsonImport(text, opts));
+    const pack = routed.find((r) => r.type === 'pack');
+    if (pack) {
+      if (routed.length > 1) throw new Error('Import one Solo DM pack at a time, on its own.');
+      return savePack(pack.pack, { sourceId, title: input.title.trim(), notes, report });
+    }
+    entries = routed.flatMap((r) => (r.type === 'entries' ? r.entries : []));
     entries = entries.map((e, i) => ({ ...e, id: `lib:${sourceId}:${i + 1}` }));
     format = 'json';
   } else {
@@ -137,9 +148,43 @@ export async function importLibraryDocument(
     ...(notes.length ? { notes: notes.join('\n') } : {}),
     createdAt: now,
     updatedAt: now,
+    // The book's identity (spec D7): restores copied text on another device that imports the same book.
+    fingerprint: bookFingerprint(entries.map((e) => e.text)),
   };
   await saveLibrarySource(source, entries);
   invalidateRulesIndex();
   report({ stage: 'done', done: 1, total: 1, message: `Imported ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}.` });
+  return source;
+}
+
+/**
+ * A Solo DM pack (spec §3.12): its entries and records in one transaction (records arrive pending; a
+ * "Download book data" file's records accepted on the other device are only offered, never applied).
+ */
+async function savePack(
+  pack: PackImport,
+  opts: { sourceId: string; title: string; notes: string[]; report: Report },
+): Promise<LibrarySource> {
+  if (!pack.entries.length) throw new Error('Nothing to import: the pack has no entries.');
+  opts.report({ stage: 'saving', done: 0, total: 1, message: `Saving ${pack.entries.length} entries and ${pack.records.length} structured records…` });
+  const now = Date.now();
+  const notes = [...opts.notes, pack.source.notes].filter(Boolean).join('\n');
+  const source: LibrarySource = {
+    id: opts.sourceId,
+    title: opts.title || pack.source.title,
+    kind: 'import',
+    format: 'json',
+    enabled: true,
+    entryCount: pack.entries.length,
+    ...(pack.source.license ? { license: pack.source.license } : {}),
+    ...(pack.source.attribution ? { attribution: pack.source.attribution } : {}),
+    ...(notes ? { notes } : {}),
+    ...(pack.source.fingerprint ? { fingerprint: pack.source.fingerprint } : {}),
+    createdAt: now,
+    updatedAt: now,
+  };
+  await saveLibrarySourceWithRecords(source, pack.entries, pack.records);
+  invalidateRulesIndex();
+  opts.report({ stage: 'done', done: 1, total: 1, message: `Imported ${pack.entries.length} ${pack.entries.length === 1 ? 'entry' : 'entries'}.` });
   return source;
 }

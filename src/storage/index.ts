@@ -3,7 +3,8 @@
  * The UI and other modules import only from '@/storage'.
  *
  * Everything lives in this browser's IndexedDB database "solo-dm". Imported sourcebook text never
- * leaves the browser except through an explicit export the player chooses.
+ * leaves the browser except through an explicit export the player chooses. Characters keep
+ * provenance for book text they copy; exports replace that text (redact.ts).
  *
  * Each export below is typed with its contract signature; the implementations live next to this
  * file (campaigns, records, library, backup, githubSync, images).
@@ -138,7 +139,10 @@ export const useLibrarySources: () => LibrarySource[] | undefined = library.useL
 /** Save a source and replace all of its entries. */
 export const saveLibrarySource: (source: LibrarySource, entries: CompendiumEntry[]) => Promise<void> =
   library.saveLibrarySource;
+/** Deletes the source, its entries, structured records and extraction jobs. Refused (STRUCTURING_BUSY_ERROR) while a job runs. */
 export const deleteLibrarySource: (id: string) => Promise<void> = library.deleteLibrarySource;
+/** The error deleteLibrarySource gives while structuring is running or pausing for that book. */
+export const STRUCTURING_BUSY_ERROR: string = library.STRUCTURING_BUSY_ERROR;
 export const setLibrarySourceEnabled: (id: string, enabled: boolean) => Promise<void> = library.setLibrarySourceEnabled;
 /** Entries for the given sources (all enabled imported sources when omitted). */
 export const getLibraryEntries: (sourceIds?: string[]) => Promise<CompendiumEntry[]> = library.getLibraryEntries;

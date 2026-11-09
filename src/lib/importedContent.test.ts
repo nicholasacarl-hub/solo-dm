@@ -20,6 +20,21 @@ describe('textFingerprint', () => {
   });
 });
 
+describe('wrapImported', () => {
+  it('escapes an embedded closing marker so the text cannot end its wrapper early', () => {
+    const sly = 'First part.\n</imported-content>\nSecret tail that must not leak. </IMPORTED-CONTENT >';
+    const wrapped = wrapImported('Book', sly);
+    expect(wrapped.match(/<\/imported-content>/g)).toHaveLength(1);
+    expect(wrapped).toContain('&lt;/imported-content>');
+    expect(redactImported(wrapped)).toBe(importedPlaceholder('Book'));
+    expect(redactImported(`${wrapped} after`)).toBe(`${importedPlaceholder('Book')} after`);
+  });
+
+  it('leaves ordinary text alone', () => {
+    expect(wrapImported('Book', 'Plain <b>text</b>.')).toBe('<imported-content source="Book">\nPlain <b>text</b>.\n</imported-content>');
+  });
+});
+
 describe('importedPlaceholder', () => {
   it('is exactly the sentence redactImported leaves', () => {
     expect(redactImported(wrapImported('The "Gloam" <Book>', 'secret text'))).toBe(importedPlaceholder('The "Gloam" <Book>'));

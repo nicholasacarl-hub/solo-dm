@@ -3,9 +3,12 @@
  * and creating or revising homebrew within the campaign's homebrew-freedom setting.
  *
  * Text from an imported book is wrapped with wrapImported(), so exported saves and cloud sync can
- * leave it out of the copy (it stays in the live session).
+ * leave it out of the copy (it stays in the live session). Entries the player reviewed (structured
+ * imports) also carry their stats line inside that wrapper, and their heading says "reviewed".
  */
 import type { RulesIndex, SearchHit } from '@/data';
+import { isReviewedImport } from '@/data/structured/materialize';
+import { statsLine } from '@/data/structured/statsLine';
 import { nameKey } from '@/lib/id';
 import { wrapImported } from '@/lib/importedContent';
 import {
@@ -51,10 +54,21 @@ function shielded(entry: CompendiumEntry, text: string): string {
   return isImported(entry) ? wrapImported(entry.sourceName, text) : text;
 }
 
-/** 0 = this campaign's homebrew, 1 = shared homebrew, 2 = imports, 3 = SRD (as the index ranks them). */
+/** Kinds the app structures from imports: an unreviewed import of one of these ranks below the SRD. */
+const ENTITY_KINDS: ReadonlySet<ContentKind> = new Set<ContentKind>([
+  'monster', 'spell', 'magic-item', 'item', 'feat', 'class', 'subclass', 'species', 'background',
+]);
+
+/**
+ * As the index ranks names (search.ts sourcePriority, spec §6.2): 0 = this campaign's homebrew,
+ * 1 = shared homebrew, 2 = reviewed imports and imported rules text, 3 = SRD, 4 = unreviewed imported
+ * entries of an entity kind.
+ */
 function sourceRank(entry: CompendiumEntry): number {
   if (entry.sourceId === HOMEBREW_SOURCE_ID) return (entry as Partial<HomebrewEntry>).campaignId ? 0 : 1;
-  return entry.sourceId === SRD_SOURCE_ID ? 3 : 2;
+  if (entry.sourceId === SRD_SOURCE_ID) return 3;
+  if (isReviewedImport(entry)) return 2;
+  return ENTITY_KINDS.has(entry.kind) ? 4 : 2;
 }
 
 /**
@@ -102,9 +116,16 @@ function clip(text: string, max: number): string {
 }
 
 function entryHeading(entry: CompendiumEntry): string {
-  const status = (entry as Partial<HomebrewEntry>).status === 'retired' ? ', retired — do not use' : '';
+  const status = (entry as Partial<HomebrewEntry>).status === 'retired' ? ', retired — do not use' : isReviewedImport(entry) ? ', reviewed' : '';
   const path = entry.path?.length ? ` — ${entry.path.join(' › ')}` : '';
   return `${entry.name} (${entry.kind} · ${entry.sourceName}${status})${path}`;
+}
+
+/** The entry's text clipped so its stats line (reviewed imports) and the text share one budget. */
+function statsAndText(entry: CompendiumEntry, budget: number): string[] {
+  const stats = statsLine(entry);
+  const room = stats ? Math.max(400, budget - stats.length - 1) : budget;
+  return [stats, clip(entry.text, room)];
 }
 
 function formatHits(hits: readonly SearchHit[]): string {
@@ -112,7 +133,7 @@ function formatHits(hits: readonly SearchHit[]): string {
   let used = 0;
   for (const hit of hits) {
     const e = hit.entry;
-    const block = [`## ${entryHeading(e)}`, e.summary ?? '', clip(e.text, RULES_HIT_LIMIT)].filter(Boolean).join('\n');
+    const block = [`## ${entryHeading(e)}`, e.summary ?? '', ...statsAndText(e, RULES_HIT_LIMIT)].filter(Boolean).join('\n');
     if (used + block.length > RULES_OUTPUT_LIMIT) {
       const room = RULES_OUTPUT_LIMIT - used;
       if (room > 400) parts.push(shielded(e, clip(block, room)));
@@ -156,10 +177,25 @@ export async function getEntryTool(input: ToolInput<'get_entry'>, ctx: ToolConte
     return ok(`No entry named "${input.name}"${kind ? ` (${kind})` : ''}.${names ? ` Closest matches: ${names}.` : ''}`);
   }
   await logTool(ctx, 'get_entry', 'rules', `Looked up: ${found.name}`, { secret: isSpoiler([found]) });
-  const body = [`# ${entryHeading(found)}`, found.summary ?? '', clip(found.text, RULES_OUTPUT_LIMIT)].filter(Boolean);
+  const body = [`# ${entryHeading(found)}`, found.summary ?? '', ...statsAndText(found, RULES_OUTPUT_LIMIT)].filter(Boolean);
   const hb = found as Partial<HomebrewEntry>;
   if (hb.balanceNotes) body.push(`Balance notes: ${hb.balanceNotes}`);
+  const others = sameNamed(index, found, campaign);
+  if (others.length) body.push(`Also named this: ${others.map((e) => `${e.name} (${e.sourceName})`).join(', ')}. Use lookup_rules to read them.`);
   return ok(shielded(found, body.join('\n\n')));
+}
+
+/** Other entries the DM may consult with the found entry's name and kind (get_entry has no source parameter). */
+function sameNamed(index: RulesIndex, found: CompendiumEntry, campaign: Campaign): CompendiumEntry[] {
+  const key = nameKey(found.name);
+  const visible = (e: CompendiumEntry) => {
+    const owner = (e as Partial<HomebrewEntry>).campaignId ?? null;
+    return e.sourceId !== HOMEBREW_SOURCE_ID || owner === null || owner === campaign.id;
+  };
+  return allowedSources(campaign, index)
+    .flatMap((sourceId) => index.list({ kind: found.kind, sourceId }))
+    .filter((e) => e.id !== found.id && nameKey(e.name) === key && visible(e))
+    .sort((a, b) => sourceRank(a) - sourceRank(b));
 }
 
 // ---------------------------------------------------------------------------

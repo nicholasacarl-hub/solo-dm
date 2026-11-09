@@ -1,7 +1,8 @@
 /**
  * Save files: export a campaign to a JSON bundle, validate one, and import it back.
- * Bundles hold one campaign and what it owns — never the imported library, never shared homebrew,
- * never text from the player's imported books (the DM's rules lookups are redacted in exports), and
+ * Bundles hold one campaign and what it owns — never the imported library or its structured records,
+ * never shared homebrew, never text from the player's imported books (the DM's rules lookups and book
+ * text copied onto the character are redacted in exports; refs keep the names), and
  * never illustrations (they stay on this device; the story log's image entries travel without them,
  * and a device that doesn't have the picture says so).
  */
@@ -57,26 +58,21 @@ export function redactImportedDeep<T>(value: T): T {
 }
 
 /**
- * The campaign as a save file (used for downloads and GitHub pushes). Imported-book text that the
- * DM looked up is replaced by a placeholder in the transcript and everywhere else; tool_use ids and
- * the rest of the transcript are kept. The stored campaign is not changed.
- */
-export async function exportCampaignBundle(campaignId: string): Promise<CampaignBundle> {
-  const data = await readCampaignData(campaignId);
-  if (!data) throw new Error('That campaign no longer exists, so it could not be exported.');
-  return { format: BUNDLE_FORMAT, version: BUNDLE_VERSION, exportedAt: Date.now(), ...redactImportedDeep(data) };
-}
-
-/**
- * The export with book text copied onto the character left out too (spec §7.3): redactCopiedImports,
- * then redactImportedDeep, plus a report for the toast. CONTRACT (Day 0): throws until E1 implements
- * redactCopiedImports; exportCampaignBundle (GitHub pushes) and downloadCampaign switch to it then.
+ * The campaign as a save file with a report of what was left out (spec §7.3): book text copied onto the
+ * character (and the DM's tool inputs echoing it) becomes a placeholder (redactCopiedImports), then every
+ * passage the DM looked up is replaced too (redactImportedDeep). tool_use ids and the rest of the
+ * transcript are kept; the stored campaign is not changed.
  */
 export async function exportCampaignBundleWithReport(campaignId: string): Promise<{ bundle: CampaignBundle; report: ExportReport }> {
   const data = await readCampaignData(campaignId);
   if (!data) throw new Error('That campaign no longer exists, so it could not be exported.');
   const { data: copy, report } = redactCopiedImports(data);
   return { bundle: { format: BUNDLE_FORMAT, version: BUNDLE_VERSION, exportedAt: Date.now(), ...redactImportedDeep(copy) }, report };
+}
+
+/** The campaign as a save file (downloads and GitHub pushes): exportCampaignBundleWithReport without the report. */
+export async function exportCampaignBundle(campaignId: string): Promise<CampaignBundle> {
+  return (await exportCampaignBundleWithReport(campaignId)).bundle;
 }
 
 /** The file text of a bundle (pretty-printed so saves diff nicely in git). */
@@ -88,12 +84,9 @@ export function bundleFileName(campaignName: string): string {
   return `${slugify(campaignName) || 'campaign'}${BUNDLE_EXTENSION}`;
 }
 
-/**
- * Export and download. Resolves what was left out (callers may ignore it). Day 0: still the plain
- * export, so the report is always empty until E1 moves this onto exportCampaignBundleWithReport.
- */
+/** Export and download. Resolves what was left out (callers may ignore it; the campaign card shows it). */
 export async function downloadCampaign(campaignId: string): Promise<ExportReport> {
-  const bundle = await exportCampaignBundle(campaignId);
+  const { bundle, report } = await exportCampaignBundleWithReport(campaignId);
   const blob = new Blob([serializeBundle(bundle)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
@@ -108,7 +101,7 @@ export async function downloadCampaign(campaignId: string): Promise<ExportReport
     // Revoke after the click has been handled; some browsers read the URL asynchronously.
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
-  return { books: [], passages: 0 };
+  return report;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,6 +176,28 @@ const campaignSchema = z.looseObject({
 const abilitySchema = z.enum(['str', 'dex', 'con', 'int', 'wis', 'cha']);
 const hitDieSchema = z.union([z.literal(6), z.literal(8), z.literal(10), z.literal(12)]);
 
+/**
+ * Provenance of book text on a character (ImportedRef, spec §7.1). Read leniently: a malformed ref is dropped
+ * (the name and the rest of the entry stay), never the whole file.
+ */
+const refSchema = z.looseObject({
+  sourceId: z.string(),
+  sourceTitle: z.string(),
+  bookFingerprint: z.string().optional().catch(undefined),
+  entryId: z.string(),
+  kind: z.enum(['class', 'subclass', 'species', 'background', 'feat', 'spell', 'magic-item', 'item', 'monster']),
+  entryName: z.string(),
+  part: z.string().optional().catch(undefined),
+  level: z.number().optional().catch(undefined),
+  at: z.looseObject({ ordinals: z.array(z.number()), from: z.number(), to: z.number() }).optional().catch(undefined),
+  textHash: z.string().catch(''),
+  textCopied: z.boolean(),
+  redacted: z.literal(true).optional().catch(undefined),
+});
+const optionalRef = refSchema.optional().catch(undefined);
+/** Imported class ids ("lib:<source>:…") never borrow an SRD class's numbers by name (spec §5.7). */
+const isImportedClassId = (id: string | undefined) => Boolean(id?.startsWith('lib:'));
+
 /** A class entry; ids, hit die and caster type come from the SRD class of that name when missing. */
 const classLevelSchema = z
   .looseObject({
@@ -192,9 +207,12 @@ const classLevelSchema = z
     hitDie: hitDieSchema.optional().catch(undefined),
     casterType: z.enum(['full', 'half', 'third', 'pact', 'none']).optional().catch(undefined),
     spellcastingAbility: abilitySchema.optional().catch(undefined),
+    subclassId: z.string().optional().catch(undefined),
+    ref: optionalRef,
+    subclassRef: optionalRef,
   })
   .transform((cl) => {
-    const srd = findSrdClass(cl.classId) ?? findSrdClass(cl.name);
+    const srd = findSrdClass(cl.classId) ?? (isImportedClassId(cl.classId) ? undefined : findSrdClass(cl.name));
     return {
       ...cl,
       classId: cl.classId ?? srd?.id ?? `class:${slugify(cl.name) || 'unknown'}`,
@@ -278,18 +296,21 @@ const characterSchema = z
       .looseObject({
         ability: abilitySchema.optional().catch(undefined),
         slots: z.record(z.string(), z.looseObject({ max: z.number(), used: z.number().default(0) })).default(() => ({})),
-        spells: z.array(z.looseObject({ name: z.string() })).default([]),
+        spells: z.array(z.looseObject({ name: z.string(), ref: optionalRef })).default([]),
       })
       .optional(),
-    features: z.array(z.looseObject({ id, name: z.string() })).default([]),
+    features: z.array(z.looseObject({ id, name: z.string(), ref: optionalRef })).default([]),
     attacks: z.array(z.looseObject({ id, name: z.string() })).default([]),
-    inventory: z.array(z.looseObject({ id, name: z.string(), quantity: z.number() })).default([]),
+    inventory: z.array(z.looseObject({ id, name: z.string(), quantity: z.number(), ref: optionalRef })).default([]),
     currency: z.looseObject({ cp: coin, sp: coin, ep: coin, gp: coin, pp: coin }).default(() => ({ cp: 0, sp: 0, ep: 0, gp: 0, pp: 0 })),
     exhaustion: z.number().default(0),
     heroicInspiration: z.boolean().default(false),
     personality: z.looseObject({}).default(() => ({})),
     notes: z.string().default(''),
     transformations: keepReadable(transformationSchema).optional().catch(undefined),
+    speciesRef: optionalRef,
+    backgroundRef: optionalRef,
+    adaptationNotes: z.array(z.string()).optional().catch(undefined),
     createdAt: timestamp.default(0),
     updatedAt: timestamp.default(0),
   })

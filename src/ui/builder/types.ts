@@ -59,7 +59,9 @@ export interface BuilderDraft {
   step: BuilderStep;
 
   classId: string | null;
-  /** Fighting Style feat name (e.g. Fighter level 1). */
+  /** Classes that choose their subclass at level 1 (some imported, older-format classes): the SubclassOption id. */
+  subclassId: string | null;
+  /** Fighting Style feat name (e.g. Fighter level 1), or one of the class feature's own options. */
   fightingStyle: string | null;
   /** Chosen option per level-1 "choose one of the following" class feature, e.g. { "Divine Order": "Protector" }. */
   classOptions: Record<string, string>;
@@ -68,6 +70,12 @@ export interface BuilderDraft {
   bonusMode: BonusMode;
   bonusPlus2: Ability | null;
   bonusPlus1: Ability | null;
+  /** The three abilities a background that lists none ("any three", older books) raises with +1/+1/+1. */
+  backgroundAbilities: Ability[];
+  /** The Origin feat (feat id) for a background that grants a feat of the player's choice (older books). */
+  backgroundFeat: string | null;
+  /** The Magic Initiate spell list for that feat. */
+  backgroundFeatList: string | null;
 
   speciesId: string | null;
   lineage: string | null;
@@ -117,6 +125,9 @@ export interface BuilderDraft {
   alignment: string;
   portrait: string;
   personality: Personality;
+
+  /** Which options the lists show: null = all; SRD_SOURCE_ID; or a library source id. */
+  sourceFilter: string | null;
 }
 
 export const STANDARD_ARRAY: readonly number[] = [15, 14, 13, 12, 10, 8];
@@ -126,12 +137,16 @@ export function emptyDraft(): BuilderDraft {
     version: 1,
     step: 'class',
     classId: null,
+    subclassId: null,
     fightingStyle: null,
     classOptions: {},
     backgroundId: null,
     bonusMode: 'two-one',
     bonusPlus2: null,
     bonusPlus1: null,
+    backgroundAbilities: [],
+    backgroundFeat: null,
+    backgroundFeatList: null,
     speciesId: null,
     lineage: null,
     lineageAbility: null,
@@ -159,5 +174,6 @@ export function emptyDraft(): BuilderDraft {
     alignment: '',
     portrait: '',
     personality: {},
+    sourceFilter: null,
   };
 }

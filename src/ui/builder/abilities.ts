@@ -94,15 +94,28 @@ export function baseScores(draft: BuilderDraft): { scores: AbilityScores; comple
   return { scores, complete };
 }
 
+/** The abilities a background's increases may go to: its three, or all six when it lists none (older books, "any three"). */
+export function backgroundAbilityPool(background: BackgroundOption | undefined): Ability[] {
+  if (!background) return [];
+  return background.abilityChoice === 'any' ? [...ABILITIES] : background.abilityScores;
+}
+
+/** +1/+1/+1 for an "any three" background: the three distinct abilities the player picked. */
+function anyThree(draft: Partial<Pick<BuilderDraft, 'backgroundAbilities'>>): Ability[] {
+  return [...new Set(draft.backgroundAbilities ?? [])].filter((a) => ABILITIES.includes(a)).slice(0, 3);
+}
+
 /** The background's increases as chosen in the draft (only abilities the background lists count). */
 export function backgroundBonuses(
-  draft: Pick<BuilderDraft, 'bonusMode' | 'bonusPlus2' | 'bonusPlus1'>,
+  draft: Pick<BuilderDraft, 'bonusMode' | 'bonusPlus2' | 'bonusPlus1'> & Partial<Pick<BuilderDraft, 'backgroundAbilities'>>,
   background: BackgroundOption | undefined,
 ): Partial<Record<Ability, number>> {
   if (!background) return {};
-  const allowed = new Set(background.abilityScores);
+  const pool = backgroundAbilityPool(background);
+  const allowed = new Set(pool);
   if (draft.bonusMode === 'one-one-one') {
-    return Object.fromEntries(background.abilityScores.map((a) => [a, 1]));
+    const three = background.abilityChoice === 'any' ? anyThree(draft) : pool;
+    return Object.fromEntries(three.map((a) => [a, 1]));
   }
   const bonuses: Partial<Record<Ability, number>> = {};
   if (draft.bonusPlus2 && allowed.has(draft.bonusPlus2)) bonuses[draft.bonusPlus2] = 2;
@@ -141,9 +154,12 @@ const SRD_STANDARD_ARRAYS: Record<string, AbilityScores> = {
   wizard: { str: 8, dex: 12, con: 13, int: 15, wis: 14, cha: 10 },
 };
 
-/** Abilities from most to least important for a class (SRD suggestion, else primaries → CON → DEX → rest). */
+/**
+ * Abilities from most to least important for a class (SRD suggestion, else primaries → CON → DEX → rest).
+ * The SRD's suggestions are keyed by the SRD classes: an imported "Fighter" gets the generic order.
+ */
 export function abilityPriority(cls: ClassOption | undefined): Ability[] {
-  const suggested = cls ? SRD_STANDARD_ARRAYS[cls.name.trim().toLowerCase()] : undefined;
+  const suggested = cls && !cls.source && !cls.id.startsWith('lib:') ? SRD_STANDARD_ARRAYS[cls.name.trim().toLowerCase()] : undefined;
   if (suggested) {
     return [...ABILITIES].sort((a, b) => suggested[b] - suggested[a]);
   }
@@ -169,7 +185,7 @@ export function recommendedBonuses(
 ): { bonusMode: BonusMode; bonusPlus2: Ability | null; bonusPlus1: Ability | null } {
   if (!background) return { bonusMode: 'two-one', bonusPlus2: null, bonusPlus1: null };
   const priority = abilityPriority(cls);
-  const ranked = [...background.abilityScores].sort((a, b) => priority.indexOf(a) - priority.indexOf(b));
+  const ranked = [...backgroundAbilityPool(background)].sort((a, b) => priority.indexOf(a) - priority.indexOf(b));
   return { bonusMode: 'two-one', bonusPlus2: ranked[0] ?? null, bonusPlus1: ranked[1] ?? null };
 }
 
@@ -198,12 +214,15 @@ export function validateAbilities(draft: BuilderDraft, background: BackgroundOpt
     }
   }
   if (background && draft.bonusMode === 'two-one') {
-    const allowed = background.abilityScores;
+    const allowed = backgroundAbilityPool(background);
     if (!draft.bonusPlus2 || !allowed.includes(draft.bonusPlus2)) {
-      errors.push(`Choose which of ${listAbilities(allowed)} gets +2.`);
+      errors.push(background.abilityChoice === 'any' ? 'Choose which ability gets +2.' : `Choose which of ${listAbilities(allowed)} gets +2.`);
     } else if (!draft.bonusPlus1 || !allowed.includes(draft.bonusPlus1) || draft.bonusPlus1 === draft.bonusPlus2) {
       errors.push('Choose a different ability for the +1 increase.');
     }
+  }
+  if (background?.abilityChoice === 'any' && draft.bonusMode === 'one-one-one' && anyThree(draft).length !== 3) {
+    errors.push(`Choose three different abilities for +1 each (${anyThree(draft).length} chosen).`);
   }
   return errors;
 }

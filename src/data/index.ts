@@ -123,12 +123,50 @@ export { guessKind } from './chunk';
 
 /** Detection: segment → parse offline → normalize → records (local and free). */
 export { detectStructure, structureEntryAs, rereadOffline, type DetectionSummary } from './structured/detect';
+/**
+ * The pure halves of detection, shared with the extraction runner (src/dm/extract): a reading of a
+ * candidate (offline or Claude's wire) and §3.10's re-run table for writing it over stored records.
+ */
+export {
+  applyReading,
+  candidatesForRecords,
+  detectionContext,
+  mergeReadings,
+  NEEDS_CLAUDE_MESSAGE,
+  readCandidate,
+  readOffline,
+  type MergeResult,
+  type Reading,
+  type ReadingContext,
+} from './structured/detect';
+export { ENGINE_NAMES, nameNotices, noticeIndex, type NoticeIndex } from './structured/notices';
 /** Segmentation (pure) and paragraph numbering (pure; every TextSpan counts these paragraphs). */
-export { segment, type Candidate, type CandidateBlock, type SegmentContext, type SpellListHint } from './structured/segment';
-export { splitParagraphs, resolveSpan, featureText } from './structured/paragraphs';
+export {
+  segment,
+  blocksOf,
+  candidateFor,
+  gfmTables,
+  markCandidate,
+  type Candidate,
+  type CandidateBlock,
+  type SegmentContext,
+  type SpellListHint,
+} from './structured/segment';
+export { splitParagraphs, resolveSpan, featureText, requestParagraphs } from './structured/paragraphs';
 /** Offline parsers and the one normalizer per kind, shared with Claude's answers. */
-export { parseOffline, type OfflineParse } from './structured/parse';
-export { normalize, validateData, type NormalizeContext, type Normalized } from './structured/normalize';
+export { parseOffline, emptyWire, type OfflineParse } from './structured/parse';
+export {
+  normalize,
+  validateData,
+  schemaWarnings,
+  normalizeItemRows,
+  MONSTER_FIELDS,
+  SPELL_FIELDS,
+  MAGIC_ITEM_FIELDS,
+  ITEM_FIELDS,
+  type NormalizeContext,
+  type Normalized,
+} from './structured/normalize';
 /** The stored form's schemas (ranges, strict) and the wire format both producers return. */
 export { DATA_SCHEMAS, RECORD_SCHEMA, STRUCTURED_LIMITS, TEXT_SPAN } from './structured/schemas';
 export { WIRE, type Wire } from './structured/wire';

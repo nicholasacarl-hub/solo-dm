@@ -4,8 +4,11 @@ vi.mock('@/engine', () => import('../testing/fakeEngine'));
 vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
+import { createRulesIndex } from '@/data/search';
+import { materializeEntries } from '@/data/structured/materialize';
 import { sampleCombat, sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
-import type { CombatState, LogEntry, MapEffect, ToolLogEntry } from '@/types';
+import { gloamwoodEntries, gloamwoodEntryId, gloamwoodRecords, gloamwoodSource, GLOAMWOOD_TITLE } from '@/test/structuredFixtures';
+import type { CombatState, CompendiumEntry, LogEntry, MapEffect, ToolLogEntry } from '@/types';
 import { deps, resetDmDeps, setDmDeps } from '../deps';
 import { createFakeRulesIndex, SAMPLE_RULES } from '../testing/fakeData';
 import { fakeDice } from '../testing/fakeEngine';
@@ -294,6 +297,94 @@ describe('update_combat on a battle map', () => {
     expect(out.isError).toBeUndefined();
     expect(named(h.s().combat, 'Mira Voss')?.position).toEqual({ x: 2, y: 6 });
     expect(named(h.s().combat, 'Bandit')).toBeDefined();
+  });
+});
+
+describe('start_combat and update_combat add: numbers from the stat block (spec §6.3)', () => {
+  const srdGoblin: CompendiumEntry = {
+    id: 'srd:monster:goblin-warrior',
+    sourceId: 'srd-5.2.1',
+    sourceName: 'SRD 5.2.1',
+    kind: 'monster',
+    name: 'Goblin Warrior',
+    text: '_**Scimitar.**_ _Melee Attack Roll:_ +4, reach 5 ft.',
+    data: { size: 'Small', speeds: { walk: 30 }, ac: 15, hp: 10, initiative: 2 },
+  };
+  /** The real index (with its ranking) over an SRD goblin and the book with every record accepted. */
+  function withBook(opts: { campaignSources?: boolean } = {}) {
+    const h = setup({ campaignSettings: opts.campaignSources === false ? {} : { enabledSources: ['srd-5.2.1', 'gloam'] } });
+    const accepted = gloamwoodRecords('gloam', { status: 'accepted' }).filter((r) => r.data !== null);
+    const index = createRulesIndex([srdGoblin, ...materializeEntries(gloamwoodEntries(), accepted, [gloamwoodSource()])]);
+    setDmDeps({ rulesIndex: async () => index });
+    const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+    return { ...h, run: (name: string, input: unknown) => runTool(name, input, ctx) };
+  }
+
+  it('takes AC, HP and initiative from a reviewed import, says where they came from, and rolls with the bonus', async () => {
+    fakeDice.queue(10, 12);
+    const h = withBook();
+    const out = await h.run('start_combat', { combatants: [{ name: 'Glimmerwing Drake', side: 'enemy', stat_block: 'Glimmerwing Drake' }] });
+    expect(out.isError).toBeUndefined();
+    const drake = named(h.s().combat, 'Glimmerwing Drake');
+    expect(drake).toMatchObject({ ac: 17, hp: { max: 52, current: 52, temp: 0 }, initiativeBonus: 2, initiative: 14, size: 'Large', reachFt: 10 });
+    expect(drake?.speeds).toEqual({ walk: 30, fly: 60, hover: true });
+    expect(drake?.statBlockId).toBe(gloamwoodEntryId('Glimmerwing Drake'));
+    expect(out.content).toContain(`Glimmerwing Drake: initiative 14 [d20 (12) + 2 = 14] · AC 17, HP 52, initiative +2 from the stat block (${GLOAMWOOD_TITLE})`);
+  });
+
+  it('takes them from the SRD, looking the group name up when stat_block is left out', async () => {
+    fakeDice.queue(10, 9);
+    const h = withBook();
+    const out = await h.run('start_combat', { combatants: [{ name: 'Goblin Warrior', side: 'enemy', count: 2 }] });
+    expect(out.content).toContain('Goblin Warrior ×2: initiative 11 [d20 (9) + 2 = 11] · AC 15, HP 10, initiative +2 from the stat block (SRD 5.2.1)');
+    expect(named(h.s().combat, 'Goblin Warrior 2')).toMatchObject({ ac: 15, hp: { max: 10 }, statBlockId: 'srd:monster:goblin-warrior', statBlockName: 'Goblin Warrior' });
+    // The book's unreviewed Goblin Warrior (CR only) never shadows the SRD's numbers.
+  });
+
+  it('lets explicit numbers win and notes where they differ from the block', async () => {
+    fakeDice.queue(10, 5);
+    const h = withBook();
+    const out = await h.run('start_combat', { combatants: [{ name: 'Elder Drake', side: 'enemy', stat_block: 'Glimmerwing Drake', ac: 18, hp_max: 52 }] });
+    expect(named(h.s().combat, 'Elder Drake')).toMatchObject({ ac: 18, hp: { max: 52 }, initiativeBonus: 2 });
+    expect(out.content).toContain('Elder Drake: initiative 7 [d20 (5) + 2 = 7] · initiative +2 from the stat block (The Gloamwood Almanac) (the stat block says AC 17)');
+  });
+
+  it('is an error, before anyone rolls, when a number is neither given nor in a stat block', async () => {
+    const h = withBook();
+    const out = await h.run('start_combat', { combatants: [{ name: 'Lamp Wraith', side: 'enemy', ac: 13 }] });
+    expect(out).toMatchObject({ isError: true });
+    expect(out.content).toBe(
+      'Give hp_max and initiative_bonus for Lamp Wraith: no stat block with those numbers was found (name one in stat_block, or give the numbers).',
+    );
+    expect(h.s().combat).toBeNull();
+    expect(h.s().log).toHaveLength(0);
+    // An unreviewed imported stat block has no numbers to give.
+    const thin = await h.run('start_combat', { combatants: [{ name: 'Brute', side: 'enemy', stat_block: 'Bramble Hound', ac: 12, hp_max: 20 }] });
+    expect(thin.isError).toBeUndefined();
+  });
+
+  it('behaves exactly as before when all three numbers are given and no stat_block', async () => {
+    fakeDice.queue(10, 11);
+    const h = withBook();
+    const lookups = vi.fn();
+    const index = createRulesIndex([srdGoblin]);
+    setDmDeps({ rulesIndex: async () => (lookups(), index) });
+    const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+    const out = await runTool('start_combat', { combatants: [{ name: 'Goblin Warrior', side: 'enemy', ac: 12, hp_max: 7, initiative_bonus: 1 }] }, ctx);
+    expect(out.content).toContain('Goblin Warrior: initiative 12 [d20 (11) + 1 = 12]\n');
+    expect(lookups).not.toHaveBeenCalled();
+    expect(named(h.s().combat, 'Goblin Warrior')).not.toHaveProperty('statBlockId');
+  });
+
+  it('fills reinforcements the same way', async () => {
+    const h = withBook();
+    h.store.setState({ combat: sampleCombat() });
+    fakeDice.queue(15);
+    const out = await h.run('update_combat', { action: 'add', combatant: { name: 'Glimmerwing Drake', side: 'enemy', stat_block: 'Glimmerwing Drake' } });
+    expect(out.content).toContain('from the stat block (The Gloamwood Almanac)');
+    expect(named(h.s().combat, 'Glimmerwing Drake')).toMatchObject({ ac: 17, hp: { max: 52 } });
+    const bad = await h.run('update_combat', { action: 'add', combatant: { name: 'Lamp Wraith', side: 'enemy' } });
+    expect(bad).toMatchObject({ isError: true });
   });
 });
 

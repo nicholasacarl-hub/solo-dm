@@ -3,10 +3,12 @@
  * rebuilt after invalidateRulesIndex(). React components subscribe with useRulesIndex().
  */
 import { useEffect, useSyncExternalStore } from 'react';
-import type { CompendiumEntry, LibrarySource, StructuredRecord } from '@/types';
-import { getLibraryEntries, listHomebrew } from '@/storage';
+import { STRUCTURED_SCHEMA_VERSION, type CompendiumEntry, type LibrarySource, type StructuredRecord } from '@/types';
+import { getAcceptedRecords, getLibraryEntries, listHomebrew, listLibrarySources } from '@/storage';
 import { createRulesIndex } from './search';
 import { loadSrdCompendium } from './srd';
+import { materializeEntries } from './structured/materialize';
+import { DATA_SCHEMAS } from './structured/schemas';
 import { errorMessage } from './text';
 import type { RulesIndex } from './index';
 
@@ -41,11 +43,13 @@ async function optional(what: string, load: () => Promise<CompendiumEntry[]>): P
 }
 
 async function buildIndex(): Promise<RulesIndex> {
-  const [srd, imports, homebrew] = await Promise.all([
+  const [srd, snap, homebrew] = await Promise.all([
     loadSrdCompendium(),
-    optional('imported library entries', () => getLibraryEntries()),
+    getLibrarySnapshot(),
     optional('homebrew', () => listHomebrew()),
   ]);
+  // Records beside entries (spec D1): accepted records are materialized on read, never written into the library.
+  const imports = materializeEntries([...snap.entriesById.values()], snap.accepted, snap.sources);
   return createRulesIndex([...srd, ...imports, ...homebrew]);
 }
 
@@ -71,6 +75,7 @@ export function getRulesIndex(): Promise<RulesIndex> {
   return promise;
 }
 
+/** Starts a new index version: the rules index, the library snapshot and the builder data (D28) all refresh. */
 export function invalidateRulesIndex(): void {
   version += 1;
   building = null;
@@ -113,9 +118,64 @@ export interface LibrarySnapshot {
   accepted: StructuredRecord[];                      // accepted, DATA_SCHEMAS-valid records of those sources
 }
 
-/** Read once per rules-index version (invalidateRulesIndex() starts a new one). CONTRACT (Day 0 stub). Owner: E1. */
-export async function getLibrarySnapshot(): Promise<LibrarySnapshot> {
-  throw new Error('data/rulesIndexStore: getLibrarySnapshot not implemented');
+let librarySnapshot: { version: number; promise: Promise<LibrarySnapshot> } | null = null;
+
+/** An accepted record the index and the builder may use: data that DATA_SCHEMAS accepts, from this app's schema version. */
+function usableRecord(record: StructuredRecord): boolean {
+  if (record.status !== 'accepted' || record.data === null || record.schemaVersion > STRUCTURED_SCHEMA_VERSION) return false;
+  const schema = DATA_SCHEMAS[record.kind] as { safeParse(value: unknown): { success: boolean } } | undefined;
+  return schema?.safeParse(record.data).success === true;
+}
+
+/** Entries in reading order (the numeric suffix of lib:<sourceId>:<n>), source by source. */
+function readingOrder(entries: CompendiumEntry[], sources: readonly LibrarySource[]): CompendiumEntry[] {
+  const rank = new Map(sources.map((s, i) => [s.id, i]));
+  const ordinal = (id: string) => {
+    const parts = id.split(':');
+    return parts.length === 3 && /^\d+$/.test(parts[2]) ? Number(parts[2]) : Number.MAX_SAFE_INTEGER;
+  };
+  return [...entries].sort(
+    (a, b) => (rank.get(a.sourceId) ?? 0) - (rank.get(b.sourceId) ?? 0) || ordinal(a.id) - ordinal(b.id) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+  );
+}
+
+async function readLibrarySnapshot(target: number): Promise<LibrarySnapshot> {
+  try {
+    const sources = (await listLibrarySources()).filter((s) => s.kind === 'import' && s.enabled);
+    const ids = sources.map((s) => s.id);
+    const [entries, accepted] = ids.length ? await Promise.all([getLibraryEntries(ids), getAcceptedRecords(ids)]) : [[], []];
+    const usable = accepted.filter(usableRecord);
+    if (usable.length < accepted.length) {
+      console.warn(`Rules index: ${accepted.length - usable.length} accepted structured record(s) failed validation and are left out.`);
+    }
+    return {
+      version: target,
+      sources,
+      entriesById: new Map(readingOrder(entries, sources).map((e) => [e.id, e])),
+      accepted: usable,
+    };
+  } catch (err) {
+    console.warn(`Rules index: couldn't read imported library entries (${errorMessage(err)}); indexing without it.`);
+    return { version: target, sources: [], entriesById: new Map(), accepted: [] };
+  }
+}
+
+/**
+ * The player's enabled imports, their entries (reading order) and their accepted, DATA_SCHEMAS-valid records:
+ * read once per rules-index version (invalidateRulesIndex() starts a new one) and shared by the index and the
+ * builder data. When storage can't be read it is empty (the SRD still works), as the index always was.
+ */
+export function getLibrarySnapshot(): Promise<LibrarySnapshot> {
+  if (librarySnapshot && librarySnapshot.version === version) return librarySnapshot.promise;
+  const target = version;
+  const promise = readLibrarySnapshot(target);
+  librarySnapshot = { version: target, promise };
+  return promise;
+}
+
+/** The current rules-index version (bumped by invalidateRulesIndex()). */
+export function rulesIndexVersion(): number {
+  return version;
 }
 
 /** Tests only: forget the built index and listeners' state. */
@@ -123,5 +183,6 @@ export function resetRulesIndex(): void {
   version += 1;
   building = null;
   builtVersion = -1;
+  librarySnapshot = null;
   snapshot = { version, index: null, error: null };
 }

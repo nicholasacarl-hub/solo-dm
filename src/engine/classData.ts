@@ -231,9 +231,20 @@ export function findSrdClass(nameOrId: string | undefined): SrdClassInfo | undef
   return CLASSES.find((c) => nameKey(c.name) === key);
 }
 
-/** The SRD class a character's class entry refers to (by id first, then by name). */
+/** A class or subclass id from an imported book ("lib:<sourceId>:…"): never an SRD class by name. */
+export function isLibraryId(id: string | undefined): boolean {
+  return Boolean(id?.startsWith('lib:'));
+}
+
+/**
+ * The SRD class a character's class entry refers to (by id first, then by name). An imported class is
+ * never the SRD class of the same name (SRD 5.2.1 "Classes": an imported "Fighter" gets no SRD Fighter
+ * reminders, critical range, Unarmored Defense or Hit Point rules).
+ */
 export function srdClassFor(cl: Pick<ClassLevel, 'classId' | 'name'>): SrdClassInfo | undefined {
-  return (cl.classId.startsWith('srd:class:') ? findSrdClass(cl.classId) : undefined) ?? findSrdClass(cl.name);
+  const byId = cl.classId.startsWith('srd:class:') ? findSrdClass(cl.classId) : undefined;
+  if (byId || isLibraryId(cl.classId)) return byId;
+  return findSrdClass(cl.name);
 }
 
 /** Class levels at which a class gains the Ability Score Improvement feature (Fighter 6/14, Rogue 10 included). */

@@ -3,6 +3,7 @@
  * Keep them compact and deterministic (stable ordering) — they feed the prompt cache.
  */
 import { ABILITIES, SKILLS, SKILL_NAMES, type Character, type Feature, type InventoryItem, type KnownSpell, type SpellSlotLevel } from '@/types';
+import { isImportedPlaceholder, wrapImported } from '@/lib/importedContent';
 import { formatCurrency, totalGp } from './character';
 import { conditionName } from './conditions';
 import { xpSummary } from './progression';
@@ -217,13 +218,34 @@ function spellcastingLines(c: Character): string[] {
 
 const RECHARGE_TEXT: Record<string, string> = { short: 'short rest', long: 'long rest', dawn: 'dawn', turn: 'turn', none: 'total' };
 
+/**
+ * A feature's description for the DM. Text copied from an imported book (ref.textCopied) is wrapped AFTER
+ * truncating, so the closing marker survives the 200-character cut and exports can remove the whole passage
+ * (spec §7.2); a placeholder (text left out of a save) says how to get it back. SRD and homebrew features read
+ * exactly as before.
+ */
+function featureDescription(f: Feature): string {
+  const d = f.description?.trim();
+  if (!d) return '';
+  if (!f.ref?.textCopied) return `: ${truncate(d, 200)}`;
+  if (f.ref.redacted || isImportedPlaceholder(d)) {
+    return `: (text from the player's book “${f.ref.sourceTitle}” isn't on this device — call get_character_sheet after they import it, or rule from the name)`;
+  }
+  return `: ${wrapImported(f.ref.sourceTitle, truncate(d, 200))}`;
+}
+
 function featureLine(f: Feature): string {
   const source = f.source === 'transformation' ? `transformation: ${f.sourceName ?? 'unnamed'}` : (f.sourceName ?? '');
   const meta = [source, f.uses ? `${f.uses.max - f.uses.used}/${f.uses.max} per ${RECHARGE_TEXT[f.uses.recharge] ?? f.uses.recharge}` : '', f.homebrewId ? 'homebrew' : '']
     .filter((x) => x.trim() !== '')
     .join('; ');
-  const description = f.description?.trim() ? `: ${truncate(f.description, 200)}` : '';
-  return `- **${f.name}**${meta ? ` (${meta})` : ''}${description}`;
+  return `- **${f.name}**${meta ? ` (${meta})` : ''}${featureDescription(f)}`;
+}
+
+/** The app's notes on older-format (2014) options this character uses; only when there are any. */
+function adaptationLines(c: Character): string[] {
+  const notes = (c.adaptationNotes ?? []).map((n) => n.trim()).filter(Boolean);
+  return notes.length ? ['### Older-edition options (app notes)', ...notes.map((n) => `- ${n}`)] : [];
 }
 
 function itemText(i: InventoryItem): string {
@@ -294,6 +316,7 @@ export function characterSheetText(c: Character): string {
     attackLines(c),
     spellcastingLines(c),
     c.features.length ? ['### Features', ...c.features.map(featureLine)] : [],
+    adaptationLines(c),
     equipmentLines(c),
     personalityLines(c),
   ];

@@ -1,8 +1,9 @@
-import { CheckCircle2, Pencil } from 'lucide-react';
+import { BookMarked, CheckCircle2, Pencil } from 'lucide-react';
 import { Button, Card } from '@/ui/components/ui';
 import { CharacterSheet } from '@/ui/sheet/CharacterSheet';
+import { OlderEditionNotes } from '../BookBadges';
 import { StepHeader } from '../BuilderParts';
-import { activeSteps, validateStep } from '../logic';
+import { activeSteps, draftAdaptationNotes, draftImports, validateStep } from '../logic';
 import { STEP_LABELS } from '../types';
 import type { StepProps } from './stepTypes';
 
@@ -45,11 +46,30 @@ export function ReviewStep({ draft, ctx, built, goTo, onDmDecide }: StepProps) {
           <CheckCircle2 className="size-4" aria-hidden /> Ready for adventure.
         </p>
       )}
+      <Provenance imports={draftImports(draft, ctx.data)} notes={draftAdaptationNotes(draft, ctx.data)} />
       {built && (
         <Card className="p-4">
           <CharacterSheet character={built} variant="full" />
         </Card>
       )}
+    </div>
+  );
+}
+
+/** Which choices come from the player's books, and how older-format ones were fitted to the 2024 rules. */
+function Provenance({ imports, notes }: { imports: { name: string; kind: string; book: string }[]; notes: string[] }) {
+  if (!imports.length && !notes.length) return null;
+  return (
+    <div className="flex flex-col gap-3">
+      {imports.length > 0 && (
+        <p className="flex items-start gap-2 rounded-xl border border-info/30 bg-info-soft/60 px-3.5 py-2.5 text-sm">
+          <BookMarked className="mt-0.5 size-4 shrink-0 text-info" aria-hidden />
+          <span>
+            From your books: {imports.map((i) => `${i.name} (${i.kind})`).join(', ')}. Their text stays on this device; saves keep only the names.
+          </span>
+        </p>
+      )}
+      <OlderEditionNotes notes={notes} />
     </div>
   );
 }

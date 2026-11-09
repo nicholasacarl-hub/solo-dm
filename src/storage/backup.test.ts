@@ -339,6 +339,48 @@ describe('parseCampaignBundle', () => {
     expect(caster?.spellcasting?.ability).toBe('wis');
   });
 
+  it("never fills an imported class's hit die or caster type from an SRD class of the same name (spec §5.7)", () => {
+    const data = valid();
+    const character = data.character as Record<string, unknown>;
+    const classes = [
+      { name: 'Fighter', level: 3, classId: 'lib:gloam:class:fighter' },
+      { name: 'Fighter', level: 2 },
+    ];
+    const c = parseCampaignBundle({ ...data, character: { ...character, classes } }).character;
+    expect(c?.classes[0]).toMatchObject({ classId: 'lib:gloam:class:fighter', hitDie: 8, casterType: 'none' });
+    expect(c?.classes[1]).toMatchObject({ classId: 'srd:class:fighter', hitDie: 10, casterType: 'none' });
+  });
+
+  it('keeps provenance refs and drops a malformed one without losing the entry', () => {
+    const data = valid();
+    const character = data.character as Record<string, unknown>;
+    const ref = { sourceId: 'gloam', sourceTitle: 'The Gloamwood Almanac', entryId: 'lib:gloam:35', kind: 'feat', entryName: "Moth's Grace", textHash: 'abc', textCopied: true, redacted: true };
+    const c = parseCampaignBundle({
+      ...data,
+      character: {
+        ...character,
+        features: [
+          { id: 'f1', name: "Moth's Grace", source: 'feat', description: 'x', ref },
+          { id: 'f2', name: 'Broken', source: 'feat', ref: { sourceId: 5 } },
+        ],
+        inventory: [{ id: 'i1', name: 'Hookstaff', quantity: 1, ref: { ...ref, kind: 'not-a-kind' } }],
+        classes: [{ name: 'Wickwright', level: 1, classId: 'lib:gloam:class:wickwright', hitDie: 8, ref: { ...ref, kind: 'class' }, subclassRef: 'oops' }],
+        speciesRef: { ...ref, kind: 'species', entryName: 'Mothkin' },
+        backgroundRef: [],
+        adaptationNotes: ['Older edition: a note.'],
+      },
+    }).character;
+    expect(c?.features[0].ref).toEqual(ref);
+    expect(c?.features[1]).toMatchObject({ id: 'f2', name: 'Broken' });
+    expect(c?.features[1].ref).toBeUndefined();
+    expect(c?.inventory[0].ref).toBeUndefined();
+    expect(c?.classes[0].ref?.kind).toBe('class');
+    expect(c?.classes[0].subclassRef).toBeUndefined();
+    expect(c?.speciesRef?.entryName).toBe('Mothkin');
+    expect(c?.backgroundRef).toBeUndefined();
+    expect(c?.adaptationNotes).toEqual(['Older edition: a note.']);
+  });
+
   it('drops display-log entries that lack what their kind needs, and fills the rest', () => {
     const data = valid();
     const log = data.log as Record<string, unknown>[];
@@ -539,8 +581,9 @@ describe('downloadCampaign', () => {
       clicked.push(this);
     });
 
-    await downloadCampaign('a-camp');
+    const report = await downloadCampaign('a-camp');
 
+    expect(report).toEqual({ books: [], passages: 0 });
     expect(clicked).toHaveLength(1);
     expect(clicked[0].download).toBe('mira-s-lantern-act-ii.solodm.json');
     expect(clicked[0].href).toBe('blob:solo-dm-test');

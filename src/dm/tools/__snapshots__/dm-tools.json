@@ -787,7 +787,7 @@
   },
   {
     "name": "level_up",
-    "description": "Advance the hero one level in a class (for multiclassing, a new class with its hit_die). Applies HP (fixed average by default), Hit Dice, proficiency bonus, spell slots and the class features you list, and returns reminders of choices the player must make (subclass, feats, new spells). Use at story milestones in milestone campaigns, or once the hero has enough XP in XP campaigns. One level per call; then tell the player what improved and ask about their choices.",
+    "description": "Advance the hero one level in a class (for multiclassing, a new class with its hit_die). Applies HP (fixed average by default), Hit Dice, proficiency bonus, spell slots and the class features you list, and returns reminders of choices the player must make (subclass, feats, new spells). For a class or subclass from the player's books the app adds that level's features with their text; use new_features only for anything extra. Use at story milestones in milestone campaigns, or once the hero has enough XP in XP campaigns. One level per call; then tell the player what improved and ask about their choices.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1148,7 +1148,7 @@
   },
   {
     "name": "start_combat",
-    "description": "Start an encounter when a fight actually begins. Adds the hero automatically, adds each group of combatants (\"Goblin\" with count 3 becomes Goblin 1–3), rolls NPC initiative, has the player roll the hero's initiative, and returns the turn order. Use real values (AC, HP, initiative bonus) from the stat block — get_entry it if unsure. With `map` the fight is played on a battle map: its size in 5-ft squares (A1 is the top-left; letters run left to right, numbers top to bottom), walls, doors and terrain as squares and ranges (\"A1:P1\"), named places, and where the hero and each group start (`hero_position`, `position`: a square or a place). Anything you leave out is placed automatically, and an SRD stat block supplies size, speed and reach. Map input is checked before anyone rolls. Mark creatures the hero hasn't noticed with `hidden`. Don't use it for a single blow that settles a scene without a fight. Only one combat can be active.",
+    "description": "Start an encounter when a fight actually begins. Adds the hero automatically, adds each group of combatants (\"Goblin\" with count 3 becomes Goblin 1–3), rolls NPC initiative, has the player roll the hero's initiative, and returns the turn order. Leave AC, HP and initiative out to use the stat block's (the SRD's or one the player reviewed); give them for creatures without one, or to adjust one. With `map` the fight is played on a battle map: its size in 5-ft squares (A1 is the top-left; letters run left to right, numbers top to bottom), walls, doors and terrain as squares and ranges (\"A1:P1\"), named places, and where the hero and each group start (`hero_position`, `position`: a square or a place). Anything you leave out is placed automatically, and a stat block (SRD or reviewed import) supplies size, speed and reach. Map input is checked before anyone rolls. Mark creatures the hero hasn't noticed with `hidden`. Don't use it for a single blow that settles a scene without a fight. Only one combat can be active.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1185,21 +1185,22 @@
                 "maximum": 20
               },
               "ac": {
+                "description": "Armor Class. Omit to use the stat block's (the SRD's or a reviewed import's).",
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 40
               },
               "hp_max": {
+                "description": "Hit point maximum of each creature. Omit to use the stat block's.",
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 2000,
-                "description": "Hit point maximum of each creature."
+                "maximum": 2000
               },
               "initiative_bonus": {
+                "description": "Initiative modifier. Omit to use the stat block's.",
                 "type": "integer",
                 "minimum": -10,
-                "maximum": 20,
-                "description": "Initiative modifier from the stat block (usually its DEX modifier)."
+                "maximum": 20
               },
               "stat_block": {
                 "description": "Stat block name, e.g. \"Goblin Warrior\" or a homebrew monster.",
@@ -1233,7 +1234,7 @@
                 "maximum": 500
               },
               "size": {
-                "description": "Battle map size. Default: from the SRD stat block, else Medium.",
+                "description": "Battle map size. Default: from the stat block (SRD or a reviewed import), else Medium.",
                 "type": "string",
                 "enum": [
                   "Tiny",
@@ -1245,7 +1246,7 @@
                 ]
               },
               "speeds": {
-                "description": "Speeds in feet. Default: from the SRD stat block, else walk 30.",
+                "description": "Speeds in feet. Default: from the stat block (SRD or a reviewed import), else walk 30.",
                 "type": "object",
                 "properties": {
                   "walk": {
@@ -1281,7 +1282,7 @@
                 "additionalProperties": false
               },
               "reach_ft": {
-                "description": "Longest melee reach in feet. Default: from the SRD stat block, else 5.",
+                "description": "Longest melee reach in feet. Default: from the stat block (SRD or a reviewed import), else 5.",
                 "type": "integer",
                 "minimum": 5,
                 "maximum": 60
@@ -1293,10 +1294,7 @@
             },
             "required": [
               "name",
-              "side",
-              "ac",
-              "hp_max",
-              "initiative_bonus"
+              "side"
             ],
             "additionalProperties": false
           },
@@ -1526,21 +1524,22 @@
               "maximum": 20
             },
             "ac": {
+              "description": "Armor Class. Omit to use the stat block's (the SRD's or a reviewed import's).",
               "type": "integer",
               "minimum": 1,
               "maximum": 40
             },
             "hp_max": {
+              "description": "Hit point maximum of each creature. Omit to use the stat block's.",
               "type": "integer",
               "minimum": 1,
-              "maximum": 2000,
-              "description": "Hit point maximum of each creature."
+              "maximum": 2000
             },
             "initiative_bonus": {
+              "description": "Initiative modifier. Omit to use the stat block's.",
               "type": "integer",
               "minimum": -10,
-              "maximum": 20,
-              "description": "Initiative modifier from the stat block (usually its DEX modifier)."
+              "maximum": 20
             },
             "stat_block": {
               "description": "Stat block name, e.g. \"Goblin Warrior\" or a homebrew monster.",
@@ -1574,7 +1573,7 @@
               "maximum": 500
             },
             "size": {
-              "description": "Battle map size. Default: from the SRD stat block, else Medium.",
+              "description": "Battle map size. Default: from the stat block (SRD or a reviewed import), else Medium.",
               "type": "string",
               "enum": [
                 "Tiny",
@@ -1586,7 +1585,7 @@
               ]
             },
             "speeds": {
-              "description": "Speeds in feet. Default: from the SRD stat block, else walk 30.",
+              "description": "Speeds in feet. Default: from the stat block (SRD or a reviewed import), else walk 30.",
               "type": "object",
               "properties": {
                 "walk": {
@@ -1622,7 +1621,7 @@
               "additionalProperties": false
             },
             "reach_ft": {
-              "description": "Longest melee reach in feet. Default: from the SRD stat block, else 5.",
+              "description": "Longest melee reach in feet. Default: from the stat block (SRD or a reviewed import), else 5.",
               "type": "integer",
               "minimum": 5,
               "maximum": 60
@@ -1634,10 +1633,7 @@
           },
           "required": [
             "name",
-            "side",
-            "ac",
-            "hp_max",
-            "initiative_bonus"
+            "side"
           ],
           "additionalProperties": false
         },

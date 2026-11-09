@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { parseJsonImport } from './jsonImport';
+import { gloamwoodEntries, gloamwoodSource } from '@/test/structuredFixtures';
+import { parseJsonImport, routeJsonImport } from './jsonImport';
+import { exportPack } from './structured/packs';
 
 const opts = { sourceId: 'import-json', sourceName: 'Shared Pack' };
 
@@ -77,5 +79,16 @@ describe('parseJsonImport', () => {
     expect(run).toThrow(/Entry 2: name: needs a name/);
     expect(run).toThrow(/Entry 3 \("No Text"\): text: needs text/);
     expect(run).toThrow(/Entry 4 \("Bad Path"\): path:/);
+  });
+});
+
+describe('routeJsonImport', () => {
+  it('sends a "solo-dm-pack" file to the pack reader and anything else to the entry reader', () => {
+    const pack = routeJsonImport(JSON.stringify(exportPack(gloamwoodSource(), gloamwoodEntries(), [])), opts);
+    expect(pack.type).toBe('pack');
+    expect(pack.type === 'pack' && pack.pack.entries[0].id).toBe('lib:import-json:1');
+    const plain = routeJsonImport(JSON.stringify([{ name: 'Rule', text: 'Text.' }]), opts);
+    expect(plain).toEqual({ type: 'entries', entries: parseJsonImport([{ name: 'Rule', text: 'Text.' }], opts) });
+    expect(() => routeJsonImport('{nope', opts)).toThrow(/valid JSON/);
   });
 });

@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HeroMoveRequest } from '@/engine/movement';
 import type { CombatState, GridPoint, InteractionResponse, LogEntry } from '@/types';
+import { importedPlaceholder } from '@/lib/importedContent';
 import { sampleCharacter, sampleMappedCombat, sampleSession, sampleSettings, sampleStopCombat, zeroUsage } from '@/test/fixtures';
+import { EXPECTED_MERGED, GLOAMWOOD_TITLE } from '@/test/structuredFixtures';
 import * as storage from '@/storage';
 import { db } from '@/storage/db';
 import { emitCampaignChange } from '@/storage/events';
@@ -32,6 +34,20 @@ vi.mock('@/storage', async (importOriginal) => {
   };
 });
 
+// The store loads @/data lazily for restore (spec §7.4): the real pure restore over this device's "library".
+const libraryLookup = vi.hoisted(() => ({ calls: 0 }));
+vi.mock('@/data', async () => {
+  const restore = await import('@/data/structured/restore');
+  const fixtures = await import('@/test/structuredFixtures');
+  return {
+    restoreImportedText: restore.restoreImportedText,
+    buildLibraryLookup: async () => {
+      libraryLookup.calls += 1;
+      return { entriesById: new Map(), sourcesByFingerprint: new Map(), sourcesByTitle: new Map(), builder: fixtures.EXPECTED_MERGED };
+    },
+  };
+});
+
 const game = () => useGame.getState();
 
 async function loadSeeded(tag = 'a', opts?: Parameters<typeof seedCampaign>[1]) {
@@ -52,6 +68,51 @@ afterEach(() => {
   for (const fn of [storage.putLog, storage.putTranscript, storage.putCombat, storage.putCharacter, storage.isCampaignOpenElsewhere]) {
     vi.mocked(fn).mockReset();
   }
+});
+
+describe('restoreImportedText (spec §7.4)', () => {
+  const placeholder = importedPlaceholder(GLOAMWOOD_TITLE);
+  const ember = EXPECTED_MERGED.classes.find((c) => c.id === 'srd:class:fighter')?.subclasses.find((x) => x.name === 'Ember Warden');
+  const def = ember?.features[0];
+  if (!def?.ref) throw new Error('fixture changed');
+  const pulledFeature = { id: 'f-ember', name: 'Ember Ward', source: 'subclass' as const, sourceName: 'Ember Warden 3', description: placeholder, ref: { ...def.ref, redacted: true as const } };
+
+  it('fills book text back after a load and writes the character as is (same updatedAt, campaign row untouched)', async () => {
+    const graph = await seedCampaign('a', { character: { features: [...sampleCharacter().features, pulledFeature] } });
+    const storedCampaign = await db.campaigns.get('a-camp');
+    const storedCharacter = await db.characters.get(graph.character?.id as string);
+    await game().loadCampaign('a-camp');
+    await vi.waitFor(() => expect(game().character?.features.find((f) => f.id === 'f-ember')?.description).toBe(def.description));
+    await whenPersisted();
+    const after = await db.characters.get(graph.character?.id as string);
+    expect(after?.features.find((f) => f.id === 'f-ember')).toMatchObject({ description: def.description, ref: { entryId: def.ref?.entryId } });
+    expect(after?.features.find((f) => f.id === 'f-ember')?.ref?.redacted).toBeUndefined();
+    expect(after?.updatedAt).toBe(storedCharacter?.updatedAt);
+    expect(game().character?.updatedAt).toBe(storedCharacter?.updatedAt);
+    expect(await db.campaigns.get('a-camp')).toEqual(storedCampaign);
+    expect(game().campaign?.updatedAt).toBe(storedCampaign?.updatedAt);
+    // Run again: nothing left to restore.
+    expect(await game().restoreImportedText()).toBeNull();
+  });
+
+  it('reports what stays missing and writes nothing', async () => {
+    const unknown = { ...pulledFeature, ref: { ...pulledFeature.ref, entryId: 'lib:elsewhere:subclass:x', entryName: 'Unknown Order', part: 'Unknown Gift', textHash: 'ffff' } };
+    await loadSeeded('a', { character: { features: [unknown] } });
+    vi.mocked(storage.putCharacter).mockClear();
+    const report = await game().restoreImportedText();
+    expect(report).toEqual({ restored: 0, differs: 0, missing: [{ book: GLOAMWOOD_TITLE, entryName: 'Unknown Order', part: 'Unknown Gift' }] });
+    await whenPersisted();
+    expect(storage.putCharacter).not.toHaveBeenCalled();
+  });
+
+  it('is a no-op (null, the library untouched) without a ref needing it', async () => {
+    await loadSeeded('a');
+    const before = libraryLookup.calls;
+    expect(await game().restoreImportedText()).toBeNull();
+    expect(libraryLookup.calls).toBe(before);
+    game().unloadCampaign();
+    expect(await game().restoreImportedText()).toBeNull();
+  });
 });
 
 describe('loading', () => {

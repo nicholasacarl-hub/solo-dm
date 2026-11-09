@@ -79,6 +79,24 @@ describe('layering', () => {
     expect(violations((f) => saves.has(f), (e) => e.target === '/src/data/structured/packs')).toEqual([]);
   });
 
+  it('nor reach it through other modules (no path from a save to the pack module)', () => {
+    const fileOf = (target: string) => [`${target}.ts`, `${target}.tsx`].find((f) => SOURCES[f] !== undefined);
+    const seen = new Set<string>();
+    const queue = ['/src/storage/backup.ts', '/src/storage/campaignData.ts', '/src/storage/githubSync.ts'];
+    while (queue.length) {
+      const file = queue.pop() as string;
+      if (seen.has(file)) continue;
+      seen.add(file);
+      for (const edge of importsOf(file)) {
+        if (edge.typeOnly) continue;
+        const next = fileOf(edge.target);
+        if (next && !seen.has(next)) queue.push(next);
+      }
+    }
+    expect([...seen].filter((f) => f.startsWith('/src/data/structured/packs'))).toEqual([]);
+    expect(seen.has('/src/storage/redact.ts')).toBe(true);
+  });
+
   it('the extraction request modules and the wire leaf never import the @/data or @/dm barrels', () => {
     const leaves = new Set([
       '/src/dm/libraryRequests.ts',

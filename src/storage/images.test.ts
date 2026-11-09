@@ -302,34 +302,72 @@ describe('image hooks', () => {
   });
 });
 
+/** The schema as version 1 shipped it. */
+const V1_STORES = {
+  campaigns: 'id, updatedAt, lastPlayedAt',
+  characters: 'id, campaignId',
+  sessions: 'id, campaignId, [campaignId+number]',
+  transcript: 'id, sessionId, [sessionId+seq]',
+  log: 'id, campaignId, [campaignId+seq]',
+  combat: 'campaignId',
+  journal: 'id, campaignId, [campaignId+kind]',
+  quests: 'id, campaignId',
+  clocks: 'id, campaignId',
+  homebrew: 'id, campaignId, kind',
+  library: 'id',
+  libraryEntries: 'id, sourceId, kind',
+};
+/** The tables version 2 added (illustrations). */
+const V2_STORES = {
+  images: 'id, campaignId, createdAt, [campaignId+createdAt]',
+  imageData: 'id, campaignId',
+};
+
 describe('upgrading a database from before illustrations', () => {
   it('keeps every save and adds the picture tables', async () => {
     db.close();
     await Dexie.delete('solo-dm');
-    // The schema as version 1 shipped it.
     const v1 = new Dexie('solo-dm');
-    v1.version(1).stores({
-      campaigns: 'id, updatedAt, lastPlayedAt',
-      characters: 'id, campaignId',
-      sessions: 'id, campaignId, [campaignId+number]',
-      transcript: 'id, sessionId, [sessionId+seq]',
-      log: 'id, campaignId, [campaignId+seq]',
-      combat: 'campaignId',
-      journal: 'id, campaignId, [campaignId+kind]',
-      quests: 'id, campaignId',
-      clocks: 'id, campaignId',
-      homebrew: 'id, campaignId, kind',
-      library: 'id',
-      libraryEntries: 'id, sourceId, kind',
-    });
+    v1.version(1).stores(V1_STORES);
     await v1.table('campaigns').put(sampleCampaign({ id: 'old-camp' }));
     v1.close();
 
     await db.open();
 
-    expect(db.verno).toBe(2);
+    expect(db.verno).toBe(3);
     expect(await getCampaign('old-camp')).toMatchObject({ id: 'old-camp' });
     await saveImage(storedImage({ campaignId: 'old-camp' }));
     expect((await listImages('old-camp')).map((i) => i.id)).toEqual(['img-1']);
+  });
+});
+
+describe('upgrading a database from before structured imports (version 2 → 3)', () => {
+  it('keeps saves, pictures and the library intact and adds the record and job tables', async () => {
+    db.close();
+    await Dexie.delete('solo-dm');
+    const v2 = new Dexie('solo-dm');
+    v2.version(1).stores(V1_STORES);
+    v2.version(2).stores(V2_STORES);
+    const library = { id: 'gloam', title: 'The Gloamwood Almanac', kind: 'import', enabled: true, entryCount: 1, createdAt: 1, updatedAt: 1 };
+    const entry = { id: 'lib:gloam:1', sourceId: 'gloam', sourceName: 'The Gloamwood Almanac', kind: 'rule', name: 'The Long Dusk', text: 'Lanterns on every branch.' };
+    await v2.table('campaigns').put(sampleCampaign({ id: 'old-camp' }));
+    await v2.table('library').put(library);
+    await v2.table('libraryEntries').put(entry);
+    await v2.table('images').put({ ...storedImage({ campaignId: 'old-camp' }), blob: undefined, size: 3 });
+    v2.close();
+
+    await db.open();
+
+    expect(db.verno).toBe(3);
+    expect(await getCampaign('old-camp')).toMatchObject({ id: 'old-camp' });
+    expect(await db.library.get('gloam')).toEqual(library);
+    expect(await db.libraryEntries.get('lib:gloam:1')).toEqual(entry);
+    expect(await db.images.count()).toBe(1);
+    expect(await db.libraryRecords.count()).toBe(0);
+    expect(await db.libraryJobs.count()).toBe(0);
+    // The new indexes work.
+    await db.libraryRecords.put({ id: 'rec:gloam:spell:x', sourceId: 'gloam', kind: 'spell', status: 'pending', jobId: 'job:1', runState: 'queued' } as never);
+    expect(await db.libraryRecords.where('[sourceId+status]').equals(['gloam', 'pending']).count()).toBe(1);
+    expect(await db.libraryRecords.where('[jobId+runState]').equals(['job:1', 'queued']).count()).toBe(1);
   });
 });

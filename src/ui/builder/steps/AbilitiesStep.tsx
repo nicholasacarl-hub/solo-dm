@@ -3,11 +3,12 @@ import { abilityModifier, formatModifier, rollDice } from '@/engine';
 import { cn } from '@/lib/cn';
 import { ABILITIES, ABILITY_NAMES, type Ability } from '@/types';
 import { Button, Select } from '@/ui/components/ui';
-import { RadioCards, StepHeader, SubHeading } from '../BuilderParts';
+import { RadioCards, StepHeader, SubHeading, ToggleChip } from '../BuilderParts';
 import {
   POINT_BUY_BUDGET,
   adjustPointBuy,
   assignScore,
+  backgroundAbilityPool,
   backgroundBonuses,
   baseScores,
   canAdjustPointBuy,
@@ -57,6 +58,14 @@ export function AbilitiesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
   const roll = () => setDraft((d) => ({ ...d, rolls: rollAbilityScores((e) => rollDice(e)), assignment: {} }));
   const recommend = () => setDraft((d) => ({ ...d, assignment: recommendedAssignment(cls, scorePool(d)) }));
   const setBonusMode = (bonusMode: BonusMode) => setDraft((d) => ({ ...d, bonusMode }));
+  const bonusPool = backgroundAbilityPool(background);
+  const anyThree = background?.abilityChoice === 'any';
+  const toggleAnyThree = (a: Ability) =>
+    setDraft((d) => {
+      const has = d.backgroundAbilities.includes(a);
+      if (has) return { ...d, backgroundAbilities: d.backgroundAbilities.filter((x) => x !== a) };
+      return d.backgroundAbilities.length >= 3 ? d : { ...d, backgroundAbilities: [...d.backgroundAbilities, a] };
+    });
 
   return (
     <div className="flex flex-col gap-5">
@@ -193,6 +202,7 @@ export function AbilitiesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
       {background ? (
         <div className="flex flex-col gap-3 rounded-xl border border-border bg-surface p-4">
           <SubHeading>{background.name} ability increases</SubHeading>
+          {anyThree && <p className="text-sm text-muted">{background.name} lists no abilities: you choose which to increase.</p>}
           <RadioCards<BonusMode>
             variant="pills"
             label="Increase pattern"
@@ -212,7 +222,7 @@ export function AbilitiesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
                   label="Ability that gets +2"
                   value={draft.bonusPlus2}
                   onChange={(a) => setDraft((d) => ({ ...d, bonusPlus2: a, bonusPlus1: d.bonusPlus1 === a ? null : d.bonusPlus1 }))}
-                  options={background.abilityScores.map((a) => ({ value: a, title: ABILITY_NAMES[a] }))}
+                  options={bonusPool.map((a) => ({ value: a, title: ABILITY_NAMES[a] }))}
                 />
               </div>
               <div className="flex flex-col gap-1.5">
@@ -222,8 +232,24 @@ export function AbilitiesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
                   label="Ability that gets +1"
                   value={draft.bonusPlus1}
                   onChange={(a) => setDraft((d) => ({ ...d, bonusPlus1: a }))}
-                  options={background.abilityScores.map((a) => ({ value: a, title: ABILITY_NAMES[a], disabled: a === draft.bonusPlus2 }))}
+                  options={bonusPool.map((a) => ({ value: a, title: ABILITY_NAMES[a], disabled: a === draft.bonusPlus2 }))}
                 />
+              </div>
+            </div>
+          )}
+          {draft.bonusMode === 'one-one-one' && anyThree && (
+            <div className="flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-muted">+1 to three abilities ({draft.backgroundAbilities.length}/3)</span>
+              <div className="flex flex-wrap gap-1.5" role="group" aria-label="Abilities that get +1">
+                {bonusPool.map((a) => {
+                  const on = draft.backgroundAbilities.includes(a);
+                  const full = !on && draft.backgroundAbilities.length >= 3;
+                  return (
+                    <ToggleChip key={a} pressed={on} disabled={full} reason={full ? 'Unselect one first' : undefined} onToggle={() => toggleAnyThree(a)}>
+                      {ABILITY_NAMES[a]}
+                    </ToggleChip>
+                  );
+                })}
               </div>
             </div>
           )}

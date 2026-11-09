@@ -169,7 +169,7 @@ export function RadioCards<T extends string>({
 }
 
 /** True below the `sm` breakpoint (640px). */
-function useSmallScreen(): boolean {
+export function useSmallScreen(): boolean {
   const query = '(max-width: 639px)';
   const [small, setSmall] = useState(() => typeof window !== 'undefined' && Boolean(window.matchMedia?.(query).matches));
   useEffect(() => {

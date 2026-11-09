@@ -47,6 +47,7 @@ import type { RestoreReport } from '@/data/structured/restore';
 import type { HeroMoveOutcome, HeroMoveRequest, MoveRefusal } from '@/engine/movement';
 import { normalizeCombatState } from '@/engine/mapNormalize';
 import { nameKey, newId } from '@/lib/id';
+import { isImportedPlaceholder } from '@/lib/importedContent';
 import * as storage from '@/storage';
 import type { CampaignRecords } from '@/storage';
 import { onCampaignChange } from '@/storage/events';
@@ -241,6 +242,11 @@ const writeQueues = new Map<string, Promise<void>>();
 /** Incremented on every enqueued write, so readers can tell whether writes slipped in meanwhile. */
 let writeGeneration = 0;
 const noop = () => {};
+
+/** Book text a save left out of the sheet (empty or the placeholder) that a device with the book can restore. */
+function needsRestore(f: Character['features'][number]): boolean {
+  return Boolean(f.ref?.textCopied && (!f.description?.trim() || isImportedPlaceholder(f.description)));
+}
 
 function enqueueWrite<T>(key: string, task: () => Promise<T>): Promise<T> {
   const run = (writeQueues.get(key) ?? Promise.resolve()).then(task);
@@ -645,14 +651,17 @@ export const useGame = create<GameStore>()((set, get) => ({
       const { log, settled } = fresh ? settleCutOffNarration(slice.log) : { log: slice.log, settled: [] };
       if (settled.length === 0 || !slice.campaign) {
         set(slice);
-        return;
+      } else {
+        const touched = touch(slice.campaign);
+        set({ ...slice, log, campaign: touched });
+        void persist(id, 'the log', async () => {
+          await storage.putLog(settled);
+          await saveCampaign(touched);
+        }).catch(noop);
       }
-      const touched = touch(slice.campaign);
-      set({ ...slice, log, campaign: touched });
-      void persist(id, 'the log', async () => {
-        await storage.putLog(settled);
-        await saveCampaign(touched);
-      }).catch(noop);
+      // A device that has the book fills its text back into the sheet (spec §7.4). This covers GitHub pulls and
+      // bundle imports too, since both reload the campaign. It never touches the campaign row.
+      void get().restoreImportedText().catch(noop);
     } catch (error) {
       if (token !== loadToken) return;
       console.error('[gameStore] Failed to load the campaign:', error);
@@ -1192,9 +1201,20 @@ export const useGame = create<GameStore>()((set, get) => ({
   },
 
   async restoreImportedText() {
-    // not implemented (Day-0 stub): resolves null ("nothing to restore") until E1 lands restore (spec §7.4).
-    // Correct for every save made before structured imports ship: none has a ref to restore.
-    return null;
+    const { campaign, character } = get();
+    if (!campaign || !character || !character.features.some(needsRestore)) return null;
+    // Loaded lazily: the store never imports @/data statically (no gameStore → @/data edge, no cycle).
+    const data = await import('@/data');
+    const lookup = await data.buildLibraryLookup();
+    const s = get();
+    if (s.campaign?.id !== campaign.id || !s.character || s.character.id !== character.id) return null;
+    const { character: restored, report } = data.restoreImportedText(s.character, lookup);
+    if (report.restored > 0) {
+      set({ character: restored });
+      // As is (spec D39): character.updatedAt and the campaign row are left alone, so sync sees no local change.
+      await persist(campaign.id, 'the character', () => storage.putCharacter(restored)).catch(noop);
+    }
+    return report;
   },
 }));
 
