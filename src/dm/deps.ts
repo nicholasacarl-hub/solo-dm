@@ -8,14 +8,14 @@ import type {
   BetaRawMessageStreamEvent,
   MessageCreateParamsBase,
 } from '@anthropic-ai/sdk/resources/beta/messages/messages';
-import { getRulesIndex, invalidateRulesIndex, type RulesIndex } from '@/data';
+import { getRulesIndex, invalidateRulesIndex, loadBuilderData, type RulesIndex } from '@/data';
 import type { Rng } from '@/engine';
 import { imagesAvailable, requestIllustration, type IllustrationRequest, type IllustrationStart } from '@/images';
 import { newId } from '@/lib/id';
 import { useGame, type GameStore } from '@/state/gameStore';
 import { getSettings } from '@/state/settingsStore';
 import { listLibrarySources } from '@/storage';
-import type { AppSettings } from '@/types';
+import type { AppSettings, BuilderData } from '@/types';
 import { getAnthropicClient } from './client';
 
 /** The parts of a message stream the agent loop uses. The SDK's BetaMessageStream satisfies it. */
@@ -55,6 +55,11 @@ export interface DmDeps {
   keyClient: (apiKey: string) => KeyCheckClient;
   rulesIndex: () => Promise<RulesIndex>;
   invalidateRulesIndex: () => void;
+  /**
+   * Builder data for level_up, inventory_add and AC (merged: SRD + accepted imported options, once E4 lands it).
+   * Callers treat a failure as "no data" and keep today's behavior.
+   */
+  builderData: () => Promise<BuilderData>;
   /** Imported books switched on in the player's Library (the DM searches them in every campaign). */
   libraryImports: () => Promise<{ id: string; name: string }[]>;
   images: DmImages;
@@ -93,6 +98,7 @@ const defaultDeps: DmDeps = {
   keyClient: (apiKey) => getAnthropicClient(apiKey),
   rulesIndex: () => getRulesIndex(),
   invalidateRulesIndex: () => invalidateRulesIndex(),
+  builderData: () => loadBuilderData(),
   libraryImports: async () =>
     (await listLibrarySources()).filter((s) => s.kind === 'import' && s.enabled).map((s) => ({ id: s.id, name: s.title })),
   // Called lazily, so the images module may load after this one.

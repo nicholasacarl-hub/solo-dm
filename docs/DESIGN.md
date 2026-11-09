@@ -271,6 +271,42 @@ arcane violet = magic & homebrew, gold = treasure/XP. Cinzel only for small-caps
 the wordmark; Spectral for narration; Inter for UI. Avoid gradients, glassmorphism, and emoji-heavy UI
 chrome (emoji are fine for campaign covers and portraits).
 
+## Structured imports (in progress)
+
+The player's imported books can be structured into per-kind records (spells, monsters, items, feats,
+species, backgrounds, classes, subclasses) that sit beside the raw library entries, are reviewed, and
+only then feed the rules index, the builder, combat and the DM. The contracts are in
+`src/types/structured.ts`, `src/data/structured/{wire,schemas}.ts`, `src/dm/libraryRequests.ts` and
+`src/dm/extract/`; the test book is `src/test/structuredFixtures.ts` (invented content only).
+TODO (E1, when the feature lands): describe the pipeline, review, provenance, export redaction, restore
+and the `DM_TOOLS` change with its one-time cost here and in the principles above.
+
+Invariants, checked in CI (the definition of done):
+
+- **Unchanged without imports.** With an empty library, the builder data (the SRD object itself), the
+  rules index contents, an SRD character's sheet text, the DM system prompt and the DM request bodies
+  are byte-identical to before (`src/dm/requestBytes.test.ts` pins the request bytes).
+- **One deliberate `DM_TOOLS` change**, made once by E1 and reviewed with its cost; otherwise `DM_TOOLS`
+  equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
+- **Privacy.** No marker sentence of the test book appears in any exported bundle (the e2e test). Every
+  copy of book text onto a character carries an `ImportedRef`; exports replace that text with a
+  placeholder, and a device that has the book fills it back in.
+- **Records are the only structured state.** Nothing writes structure into `libraryEntries`: their one
+  writer stays `saveLibrarySource` (the importer). Un-accepting, switching a book off or deleting it
+  reverts every consumer by construction.
+- **Extraction stays out of play.** It never touches a DM session, transcript, system prompt or
+  `Campaign.usage`; it has its own ledger (`job.usage`, `record.extraction.usage`). Every request it
+  sends is built in `src/dm/libraryRequests.ts` under CLAUDE.md rule 4, and none is sent in demo mode or
+  without a key.
+- **Layering.** `src/test/layering.test.ts` and `src/dm/requestAudit.test.ts` pass: `src/data` never
+  imports `src/dm` (except `vision.ts` → the client and `libraryRequests`), nothing outside `src/ui`
+  imports it, campaign exports and sync never import the pack module, the request leaves never import
+  a barrel, the game store reaches `@/data` only dynamically, and the engine stays pure.
+- **No file moves** except E4's four helper moves from `src/ui/builder` to `src/data/options`, each
+  leaving a one-line re-export shim.
+- `npm run typecheck`, `npm test`, `npm run lint` and `npm run build` are green; no
+  `dangerouslySetInnerHTML`; theme tokens only.
+
 ## Content & licensing
 
 - Bundled rules: SRD 5.2.1, CC-BY-4.0. The attribution statement (in `SRD_ATTRIBUTION`) appears in

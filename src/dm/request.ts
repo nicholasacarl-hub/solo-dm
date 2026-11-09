@@ -9,10 +9,11 @@
  * - messages = the stored transcript, verbatim and append-only.
  * - Never sent: temperature / top_p / top_k, tool_choice any/tool, an assistant prefill.
  * - Server-side refusal fallbacks when enabled and supported by the model.
+ * Requests outside the DM loop (extraction, transcription) are built in libraryRequests.ts under the same rules.
  */
 import type { AnthropicBeta } from '@anthropic-ai/sdk/resources/beta/beta';
 import type { MessageCreateParamsBase } from '@anthropic-ai/sdk/resources/beta/messages/messages';
-import type { AppSettings, Session, TranscriptMessage } from '@/types';
+import { MODELS, type AppSettings, type ModelId, type Session, type TranscriptMessage } from '@/types';
 import { modelInfo } from './client';
 import { DM_TOOLS } from './tools/definitions';
 
@@ -47,4 +48,10 @@ export function buildMessageRequest(
     betas,
     ...(useFallbacks ? { fallbacks: 'default' as const } : {}),
   };
+}
+
+/** Server-side refusal fallbacks for non-DM requests: Settings allow them and MODELS lists the model as supporting them. */
+export function fallbackParams(model: ModelId, useFallbacks: boolean): { betas: AnthropicBeta[]; fallbacks?: 'default' } {
+  const known = MODELS.find((m) => m.id === model);
+  return useFallbacks && known?.supportsFallbacks ? { betas: [BETA_FALLBACKS], fallbacks: 'default' } : { betas: [] };
 }

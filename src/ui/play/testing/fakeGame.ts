@@ -296,5 +296,9 @@ export function createFakeActions(): GameStoreActions {
       set({ pendingDmNotices: [] });
       return notices;
     },
+    // Structured imports: nothing to restore in Play tests.
+    async restoreImportedText() {
+      return null;
+    },
   };
 }

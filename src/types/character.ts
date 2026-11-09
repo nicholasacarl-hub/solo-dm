@@ -4,6 +4,7 @@
  * The app — never the language model — owns this state. The DM changes it only
  * through tools (see src/dm/tools), and every change is shown to the player.
  */
+import type { ImportedRef, ItemBonuses } from './structured';
 
 export type Ability = 'str' | 'dex' | 'con' | 'int' | 'wis' | 'cha';
 
@@ -122,6 +123,12 @@ export interface ClassLevel {
   subclass?: string;
   casterType: CasterType;
   spellcastingAbility?: Ability;
+  /** The SubclassOption id; `subclass` stays the display name. */
+  subclassId?: string;
+  /** An imported class. */
+  ref?: ImportedRef;
+  /** An imported subclass. */
+  subclassRef?: ImportedRef;
 }
 
 export interface HitPoints {
@@ -165,6 +172,8 @@ export interface KnownSpell {
   concentration?: boolean;
   homebrewId?: string;
   notes?: string;
+  /** A spell from an imported book (no text is copied). */
+  ref?: ImportedRef;
 }
 
 export interface Spellcasting {
@@ -235,6 +244,8 @@ export interface Feature {
   description: string;
   uses?: FeatureUses;
   homebrewId?: string;
+  /** Text from an imported book (or the DM's words about it): exports replace the description. */
+  ref?: ImportedRef;
 }
 
 export type ItemCategory =
@@ -262,6 +273,26 @@ export interface InventoryItem {
   charges?: SlotTrack;
   compendiumId?: string;
   homebrewId?: string;
+  /** An imported item: textCopied false unless the DM wrote the description. */
+  ref?: ImportedRef;
+  armor?: ItemArmorStats;
+  bonuses?: ItemBonuses;
+  /** Explicit; absent = the heuristic of InventoryPanel (magic or a magic-item category). */
+  requiresAttunement?: boolean;
+  /** "a Wizard": shown, never enforced. */
+  attunementBy?: string;
+}
+
+/** Armor numbers copied onto an item, so AC works without the catalog (DM tools, other devices). */
+export interface ItemArmorStats {
+  kind: 'armor' | 'shield';
+  armorType?: 'light' | 'medium' | 'heavy';
+  /** Armor: base AC; shield: its bonus. */
+  baseAc: number;
+  /** null = no cap, 0 = DEX not added. */
+  dexCap: number | null;
+  strength?: number;
+  stealthDisadvantage?: boolean;
 }
 
 export interface Currency {
@@ -433,6 +464,12 @@ export interface Character {
   notes: string;
   /** Emoji or data URL. */
   portrait?: string;
+  /** An imported species. */
+  speciesRef?: ImportedRef;
+  /** An imported background. */
+  backgroundRef?: ImportedRef;
+  /** App-written notes for older-format options this character uses (sheet text, review step). */
+  adaptationNotes?: string[];
   createdAt: number;
   updatedAt: number;
 }

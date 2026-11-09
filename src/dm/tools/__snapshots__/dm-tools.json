@@ -1,0 +1,3080 @@
+[
+  {
+    "name": "roll_dice",
+    "description": "Roll dice for the DM's side of the table: NPC and monster attacks, damage, saving throws and checks; random tables; secret checks. The app rolls with real randomness and logs the result (secret rolls go behind the DM screen). For a d20 test give the full expression with its modifier (\"1d20+4\") plus `dc` (the DC, or the target's AC) and `advantage` if any; the result says whether it meets the target. Do NOT use it for the hero's own checks, saves, attacks, damage or initiative — use request_player_roll so the player rolls. Never narrate a result before this returns. On a battle map, give `attacker` and `target` with an attack: the result adds the distance, reach, line of sight and cover the map shows, and warns when a melee attacker isn't in reach.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "expression": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Dice expression: NdM terms, keep-highest/lowest and flat modifiers, e.g. \"1d20+5\", \"2d6+3\", \"4d6kh3\", \"1d100\"."
+        },
+        "purpose": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120,
+          "description": "What the roll is for, shown in the log: \"Bandit 2 attacks Mira\", \"Goblin Stealth\"."
+        },
+        "dc": {
+          "description": "For a d20 test: the DC, or the target's AC for an attack roll.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "is_attack": {
+          "description": "An attack roll: a natural 20 always hits (Critical Hit), a natural 1 always misses.",
+          "type": "boolean"
+        },
+        "advantage": {
+          "description": "Advantage or Disadvantage on a single-d20 test.",
+          "type": "string",
+          "enum": [
+            "normal",
+            "advantage",
+            "disadvantage"
+          ]
+        },
+        "critical": {
+          "description": "Double the damage dice (Critical Hit damage).",
+          "type": "boolean"
+        },
+        "secret": {
+          "description": "Keep the result behind the DM screen (hidden from the player unless they reveal DM rolls).",
+          "type": "boolean"
+        },
+        "attacker": {
+          "description": "With is_attack, on a battle map: who attacks. The result adds the distance to `target`, reach, line of sight and cover.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "target": {
+          "description": "With is_attack, on a battle map: who is attacked (a name, or \"hero\").",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        }
+      },
+      "required": [
+        "expression",
+        "purpose"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "request_player_roll",
+    "description": "Ask the player to roll for their hero: ability checks, skill checks, saving throws, attack rolls, damage, death saving throws (and initiative outside start_combat). The app applies the sheet's modifiers and the hero's own conditions, armor and traits (e.g. Disadvantage while Poisoned, an automatic failure for a Paralyzed hero's Dexterity save, Halfling Luck, a Champion's wider critical range — the result says what it applied), rolls per the player's roll mode — instantly, after they tap Roll, or from their physical dice — and returns the total and, with `dc`, success or failure. Call it only when the outcome is uncertain and failure matters; decide the DC and the stakes first and put the stakes in `reason`. For attacks set `dc` to the target's AC (a natural 20 is a Critical Hit, a natural 1 always misses); `attack_name` can be a sheet attack, a spell the hero knows, or another weapon with `ability`. Don't use it for NPC or monster rolls (roll_dice), and don't roll initiative when a fight starts — start_combat does that.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "roll_type": {
+          "type": "string",
+          "enum": [
+            "ability",
+            "skill",
+            "save",
+            "attack",
+            "damage",
+            "initiative",
+            "death-save",
+            "hit-die",
+            "custom"
+          ]
+        },
+        "ability": {
+          "description": "Ability for ability checks and saving throws; for skill checks, an unusual ability to pair with the skill.",
+          "type": "string",
+          "enum": [
+            "str",
+            "dex",
+            "con",
+            "int",
+            "wis",
+            "cha"
+          ]
+        },
+        "skill": {
+          "description": "Skill for skill checks.",
+          "type": "string",
+          "enum": [
+            "acrobatics",
+            "animal-handling",
+            "arcana",
+            "athletics",
+            "deception",
+            "history",
+            "insight",
+            "intimidation",
+            "investigation",
+            "medicine",
+            "nature",
+            "perception",
+            "performance",
+            "persuasion",
+            "religion",
+            "sleight-of-hand",
+            "stealth",
+            "survival"
+          ]
+        },
+        "attack_name": {
+          "description": "For attack and damage rolls: an attack on the hero's sheet, a spell the hero knows (rolled as a spell attack), or another weapon — then also give `ability` (\"str\", or \"dex\" for a ranged or finesse weapon). For damage from a spell or an off-sheet weapon, give `expression` instead.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "expression": {
+          "description": "Dice for damage or custom rolls when no sheet attack applies, e.g. \"8d6\" for Fireball damage.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "dc": {
+          "description": "DC, or the target's AC for an attack roll. Omit for damage.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50
+        },
+        "reveal_dc": {
+          "description": "Show the DC to the player, before the roll and on their roll card (when the hero would know how hard it is). Otherwise they see only their total until you narrate the outcome.",
+          "type": "boolean"
+        },
+        "advantage": {
+          "type": "string",
+          "enum": [
+            "normal",
+            "advantage",
+            "disadvantage"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "What is at stake, shown to the player: \"Leap the chasm — on a failure you fall 20 feet\"."
+        },
+        "critical": {
+          "description": "Damage after a Critical Hit: double the dice.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "roll_type",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "update_character",
+    "description": "Change the hero's character sheet: HP (damage, healing, temporary HP), conditions, exhaustion, spell slots, concentration, limited-use features, inventory, money, XP, Heroic Inspiration, spells, ability scores (Ability Score Improvements, feats), skill / saving throw / tool proficiencies, languages, AC and speed. Batch several sections in one call. Amounts must come from rolls (roll_dice / request_player_roll results) or fixed rules values — never invented. Returns what changed, warnings (no slot left, not enough gold, item not found) and the hero's new status. Don't use it for NPCs or monsters (update_combat), rests (take_rest), leveling up (level_up) or transformations (transform_character).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "hp": {
+          "type": "object",
+          "properties": {
+            "amount": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9999
+            },
+            "kind": {
+              "type": "string",
+              "enum": [
+                "damage",
+                "healing",
+                "temp"
+              ]
+            },
+            "damage_type": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 30
+            },
+            "critical": {
+              "description": "Damage from a Critical Hit (matters at 0 HP: two death-save failures).",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "amount",
+            "kind"
+          ],
+          "additionalProperties": false
+        },
+        "conditions_add": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "condition": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60,
+                "description": "A condition such as \"poisoned\", \"prone\", \"frightened\", or a homebrew condition name."
+              },
+              "source": {
+                "description": "What caused it, e.g. \"Giant spider venom\".",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "duration": {
+                "description": "Free text: \"1 minute\", \"until the end of your next turn\", \"until cured\".",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "condition"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "conditions_remove": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          }
+        },
+        "exhaustion_change": {
+          "description": "Change in Exhaustion level (+1 gains a level, −1 removes one).",
+          "type": "integer",
+          "minimum": -6,
+          "maximum": 6
+        },
+        "spell_slots_spend": {
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9
+              },
+              "pact": {
+                "description": "Spend a Pact Magic slot.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "level"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "spell_slots_restore": {
+          "maxItems": 9,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9
+              },
+              "pact": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "level"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "concentration": {
+          "description": "Spell the hero starts concentrating on, or null when concentration ends.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "features_use": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "amount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "features_restore": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "amount": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "features_add": {
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "class",
+                  "subclass",
+                  "species",
+                  "background",
+                  "feat",
+                  "boon",
+                  "item",
+                  "homebrew",
+                  "other"
+                ]
+              },
+              "uses_max": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "recharge": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "long",
+                  "dawn",
+                  "turn",
+                  "none"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "description",
+              "source"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "inventory_add": {
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9999
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              },
+              "category": {
+                "type": "string",
+                "enum": [
+                  "weapon",
+                  "armor",
+                  "shield",
+                  "gear",
+                  "tool",
+                  "consumable",
+                  "treasure",
+                  "magic-item",
+                  "other"
+                ]
+              },
+              "magic": {
+                "type": "boolean"
+              },
+              "weight": {
+                "description": "Pounds per unit.",
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5000
+              }
+            },
+            "required": [
+              "name",
+              "quantity"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "inventory_remove": {
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "quantity": {
+                "description": "Default: all of them.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 9999
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "inventory_update": {
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "equipped": {
+                "type": "boolean"
+              },
+              "attuned": {
+                "type": "boolean"
+              },
+              "quantity": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9999
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 1000
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "currency_change": {
+          "description": "Coins gained (positive) or spent (negative); change is made automatically.",
+          "type": "object",
+          "properties": {
+            "cp": {
+              "type": "integer",
+              "minimum": -1000000,
+              "maximum": 1000000
+            },
+            "sp": {
+              "type": "integer",
+              "minimum": -1000000,
+              "maximum": 1000000
+            },
+            "ep": {
+              "type": "integer",
+              "minimum": -1000000,
+              "maximum": 1000000
+            },
+            "gp": {
+              "type": "integer",
+              "minimum": -1000000,
+              "maximum": 1000000
+            },
+            "pp": {
+              "type": "integer",
+              "minimum": -1000000,
+              "maximum": 1000000
+            }
+          },
+          "additionalProperties": false
+        },
+        "xp_gain": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000
+        },
+        "heroic_inspiration": {
+          "description": "true to award Heroic Inspiration, false when it is spent.",
+          "type": "boolean"
+        },
+        "spells_add": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "level": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 9,
+                "description": "0 for a cantrip."
+              },
+              "prepared": {
+                "type": "boolean"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "ritual": {
+                "type": "boolean"
+              },
+              "concentration": {
+                "type": "boolean"
+              },
+              "notes": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400
+              }
+            },
+            "required": [
+              "name",
+              "level"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "spells_remove": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "ability_scores": {
+          "description": "Ability score changes the rules grant: an Ability Score Improvement (+2 to one score or +1 to two), a feat's +1, an Epic Boon. A Constitution change also changes the HP maximum as if the new modifier had applied from level 1; Armor Class is recomputed when it depends on the score.",
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ability": {
+                "type": "string",
+                "enum": [
+                  "str",
+                  "dex",
+                  "con",
+                  "int",
+                  "wis",
+                  "cha"
+                ]
+              },
+              "change": {
+                "type": "integer",
+                "minimum": -10,
+                "maximum": 10,
+                "description": "Points to add (negative to lower), e.g. 2 for an Ability Score Improvement."
+              },
+              "max": {
+                "description": "Highest the score may reach: 20 (default) for Ability Score Improvements and feats, 30 for an Epic Boon.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 30
+              }
+            },
+            "required": [
+              "ability",
+              "change"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "skill_proficiencies": {
+          "description": "Set skill proficiency levels: \"proficient\", \"expertise\" (double proficiency: Bard or Rogue Expertise), \"half\" (half the Proficiency Bonus, rounded down — Jack of All Trades: set it for each skill the hero lacks) or \"none\".",
+          "maxItems": 18,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "skill": {
+                "type": "string",
+                "enum": [
+                  "acrobatics",
+                  "animal-handling",
+                  "arcana",
+                  "athletics",
+                  "deception",
+                  "history",
+                  "insight",
+                  "intimidation",
+                  "investigation",
+                  "medicine",
+                  "nature",
+                  "perception",
+                  "performance",
+                  "persuasion",
+                  "religion",
+                  "sleight-of-hand",
+                  "stealth",
+                  "survival"
+                ]
+              },
+              "level": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "half",
+                  "proficient",
+                  "expertise"
+                ]
+              }
+            },
+            "required": [
+              "skill",
+              "level"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "saving_throws_add": {
+          "description": "Gain saving throw proficiency (e.g. the Resilient feat).",
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "str",
+              "dex",
+              "con",
+              "int",
+              "wis",
+              "cha"
+            ]
+          }
+        },
+        "tools_add": {
+          "description": "Gain tool proficiencies.",
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "languages_add": {
+          "description": "Learn languages.",
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          }
+        },
+        "armor_class": {
+          "description": "New Armor Class (e.g. after donning armor or a spell like Shield of Faith ends).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 40
+        },
+        "speed": {
+          "description": "New walking speed in feet.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 200
+        },
+        "reason": {
+          "description": "Why, shown in the log: \"Goblin scimitar\", \"Bought a rope\".",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "take_rest",
+    "description": "The hero takes a Short Rest (1 hour: may spend Hit Dice to heal; short-rest features recharge) or a Long Rest (8 hours: all HP, spent Hit Dice and spell slots return; one Exhaustion level is removed). For a short rest the player chooses which Hit Dice to spend unless their dice roll automatically. Use only when the hero actually rests and the time passes; never during combat. Narrate any interruption yourself — don't call this if the rest is interrupted early.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "short",
+            "long"
+          ]
+        },
+        "reason": {
+          "description": "Where and how the hero rests, shown to the player.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "level_up",
+    "description": "Advance the hero one level in a class (for multiclassing, a new class with its hit_die). Applies HP (fixed average by default), Hit Dice, proficiency bonus, spell slots and the class features you list, and returns reminders of choices the player must make (subclass, feats, new spells). Use at story milestones in milestone campaigns, or once the hero has enough XP in XP campaigns. One level per call; then tell the player what improved and ask about their choices.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "class_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Class to gain a level in: an existing class, or a new one for multiclassing."
+        },
+        "subclass": {
+          "description": "Subclass chosen at this level (usually level 3).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "hp_method": {
+          "description": "Hit points: the fixed average (default) or a roll.",
+          "type": "string",
+          "enum": [
+            "average",
+            "roll"
+          ]
+        },
+        "hit_die": {
+          "description": "Required for a new multiclass class.",
+          "anyOf": [
+            {
+              "type": "number",
+              "const": 6
+            },
+            {
+              "type": "number",
+              "const": 8
+            },
+            {
+              "type": "number",
+              "const": 10
+            },
+            {
+              "type": "number",
+              "const": 12
+            }
+          ]
+        },
+        "caster_type": {
+          "description": "For a new multiclass class.",
+          "type": "string",
+          "enum": [
+            "full",
+            "half",
+            "third",
+            "pact",
+            "none"
+          ]
+        },
+        "spellcasting_ability": {
+          "description": "For a new spellcasting class.",
+          "type": "string",
+          "enum": [
+            "str",
+            "dex",
+            "con",
+            "int",
+            "wis",
+            "cha"
+          ]
+        },
+        "new_features": {
+          "description": "Class features gained at this level (look them up with get_entry if unsure).",
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000
+              },
+              "uses_max": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "recharge": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "long",
+                  "dawn",
+                  "turn",
+                  "none"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "description"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "class_name"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "transform_character",
+    "description": "Begin, advance or end a transformation — a lasting, story-driven change to who the hero is (vampirism, lycanthropy, a fey mark, a celestial blessing). One call applies the whole change atomically: transformation features, damage resistances, immunities and vulnerabilities, condition immunities, Darkvision and other speeds, walking speed, size and ability scores, recorded on the sheet with its stage and how it could end. `begin` with origin \"accepted\" only after the player has explicitly chosen it in the fiction (player_chose_it: true); origin \"imposed\" only when the campaign's transformations rule is Consequences, after clear warnings, and always with how_it_ends. Give it real costs as well as powers, balanced like homebrew against SRD comparables. `advance` moves it to a new stage and adds traits (features_remove takes its own away); in Offered campaigns only when the player chose it. `end` (a cure, a reversal, a bargain fulfilled) removes everything it granted. Refused when the transformations rule doesn't allow the change. Not for temporary effects (spells, conditions: update_character), ordinary boons or magic items (create_homebrew, update_character), or leveling (level_up).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "begin",
+            "advance",
+            "end"
+          ]
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "The transformation, e.g. \"Vampirism\" or \"Lycanthropy\" (advance and end match it by name)."
+        },
+        "summary": {
+          "description": "begin (required), advance (optional): one or two sentences — what the hero is becoming, and what it costs.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        },
+        "origin": {
+          "description": "begin (required): \"accepted\" = the player chose it in the fiction; \"imposed\" = the consequence of a knowing choice (Consequences campaigns only).",
+          "type": "string",
+          "enum": [
+            "accepted",
+            "imposed"
+          ]
+        },
+        "player_chose_it": {
+          "description": "true only when the player has explicitly chosen this change in the fiction. Required for origin \"accepted\", and to advance a stage in Offered campaigns.",
+          "type": "boolean"
+        },
+        "stage": {
+          "description": "begin: the first stage, if it unfolds in stages; advance (required): the new stage, e.g. \"Stage 2: the hunger\".",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "how_it_ends": {
+          "description": "How it could end: a cure, a ritual, a price. Required for imposed transformations.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "features_add": {
+          "description": "Powers and drawbacks, added to the sheet as transformation features. Reusing the name of one of its own features rewrites that feature.",
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2000,
+                "description": "Rules text: what it does, and its limits or price."
+              },
+              "uses_max": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "recharge": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "long",
+                  "dawn",
+                  "turn",
+                  "none"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "description"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "defenses_add": {
+          "description": "Defenses it grants. Ones the hero already has are kept as they are.",
+          "type": "object",
+          "properties": {
+            "resistances": {
+              "description": "Damage types, e.g. [\"Necrotic\"].",
+              "maxItems": 13,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 30
+              }
+            },
+            "immunities": {
+              "maxItems": 13,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 30
+              }
+            },
+            "vulnerabilities": {
+              "maxItems": 13,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 30
+              }
+            },
+            "condition_immunities": {
+              "description": "Conditions, e.g. [\"Poisoned\"].",
+              "maxItems": 15,
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 30
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        "darkvision": {
+          "description": "Darkvision range in feet (a longer one the hero already has is kept).",
+          "type": "integer",
+          "minimum": 10,
+          "maximum": 300
+        },
+        "other_speeds": {
+          "description": "Speeds in feet (a faster one the hero already has is kept).",
+          "type": "object",
+          "properties": {
+            "fly": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 120
+            },
+            "swim": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 120
+            },
+            "climb": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 120
+            },
+            "burrow": {
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 120
+            }
+          },
+          "additionalProperties": false
+        },
+        "speed_change": {
+          "description": "Change to walking speed in feet, e.g. 10 or -10.",
+          "type": "integer",
+          "minimum": -30,
+          "maximum": 30
+        },
+        "size": {
+          "type": "string",
+          "enum": [
+            "Tiny",
+            "Small",
+            "Medium",
+            "Large",
+            "Huge",
+            "Gargantuan"
+          ]
+        },
+        "ability_changes": {
+          "description": "Ability score changes (scores stay within 1–30; a Constitution change also changes the HP maximum).",
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ability": {
+                "type": "string",
+                "enum": [
+                  "str",
+                  "dex",
+                  "con",
+                  "int",
+                  "wis",
+                  "cha"
+                ]
+              },
+              "change": {
+                "type": "integer",
+                "minimum": -6,
+                "maximum": 6
+              }
+            },
+            "required": [
+              "ability",
+              "change"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "features_remove": {
+          "description": "advance: this transformation's own features the new stage takes away.",
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "What happened in the fiction, shown in the log: \"Bitten by Count Varo\", \"Drank from the Moonwell\"."
+        }
+      },
+      "required": [
+        "action",
+        "name",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "start_combat",
+    "description": "Start an encounter when a fight actually begins. Adds the hero automatically, adds each group of combatants (\"Goblin\" with count 3 becomes Goblin 1–3), rolls NPC initiative, has the player roll the hero's initiative, and returns the turn order. Use real values (AC, HP, initiative bonus) from the stat block — get_entry it if unsure. With `map` the fight is played on a battle map: its size in 5-ft squares (A1 is the top-left; letters run left to right, numbers top to bottom), walls, doors and terrain as squares and ranges (\"A1:P1\"), named places, and where the hero and each group start (`hero_position`, `position`: a square or a place). Anything you leave out is placed automatically, and an SRD stat block supplies size, speed and reach. Map input is checked before anyone rolls. Mark creatures the hero hasn't noticed with `hidden`. Don't use it for a single blow that settles a scene without a fight. Only one combat can be active.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "encounter_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "combatants": {
+          "minItems": 1,
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "Display name, e.g. \"Goblin\" (numbered automatically when count > 1) or \"Captain Vell\"."
+              },
+              "side": {
+                "type": "string",
+                "enum": [
+                  "enemy",
+                  "ally",
+                  "neutral"
+                ]
+              },
+              "count": {
+                "description": "How many identical creatures (default 1). They share one initiative roll.",
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "ac": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 40
+              },
+              "hp_max": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2000,
+                "description": "Hit point maximum of each creature."
+              },
+              "initiative_bonus": {
+                "type": "integer",
+                "minimum": -10,
+                "maximum": 20,
+                "description": "Initiative modifier from the stat block (usually its DEX modifier)."
+              },
+              "stat_block": {
+                "description": "Stat block name, e.g. \"Goblin Warrior\" or a homebrew monster.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "hide_hp": {
+                "description": "Hide exact HP from the player (default: true for enemies).",
+                "type": "boolean"
+              },
+              "surprised": {
+                "description": "Surprised creatures roll initiative with Disadvantage.",
+                "type": "boolean"
+              },
+              "notes": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400
+              },
+              "position": {
+                "description": "Battle map: where it starts — a square (\"E5\"; for Large and bigger, the top-left square of its space), a place (\"the balcony\"), or one square per creature (\"E5, F5, G5\"). Omit to let the app place it.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "elevation_ft": {
+                "description": "Battle map: feet above the ground (a flier, a creature on a ledge). Default 0.",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 500
+              },
+              "size": {
+                "description": "Battle map size. Default: from the SRD stat block, else Medium.",
+                "type": "string",
+                "enum": [
+                  "Tiny",
+                  "Small",
+                  "Medium",
+                  "Large",
+                  "Huge",
+                  "Gargantuan"
+                ]
+              },
+              "speeds": {
+                "description": "Speeds in feet. Default: from the SRD stat block, else walk 30.",
+                "type": "object",
+                "properties": {
+                  "walk": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 200
+                  },
+                  "fly": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 300
+                  },
+                  "swim": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 200
+                  },
+                  "climb": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 200
+                  },
+                  "burrow": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 200
+                  },
+                  "hover": {
+                    "description": "It can hover (stays aloft while Prone or Incapacitated).",
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "reach_ft": {
+                "description": "Longest melee reach in feet. Default: from the SRD stat block, else 5.",
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 60
+              },
+              "hidden": {
+                "description": "The hero hasn't noticed it (an ambusher, an invisible foe): kept off the player's tracker, map and log until update_combat reveal.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "side",
+              "ac",
+              "hp_max",
+              "initiative_bonus"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Everyone except the hero, who is added automatically."
+        },
+        "player_surprised": {
+          "description": "The hero is surprised: Disadvantage on their Initiative roll.",
+          "type": "boolean"
+        },
+        "map": {
+          "description": "Play this fight on a battle map (see the battle-maps table rule). Omit it to run the fight in the theater of the mind.",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "What the battlefield is, e.g. \"Smugglers' cellar\".",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 60
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 40,
+              "description": "Columns of 5-ft squares, lettered A, B, C… from the left. Most rooms: 10–20."
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 40,
+              "description": "Rows of 5-ft squares, numbered 1, 2, 3… from the top."
+            },
+            "terrain": {
+              "description": "Everything that isn't open floor. Map only what the hero can perceive.",
+              "maxItems": 40,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "wall",
+                      "door",
+                      "difficult",
+                      "shallow-water",
+                      "deep-water",
+                      "pit",
+                      "hazard",
+                      "half-cover",
+                      "three-quarters-cover",
+                      "obscured"
+                    ],
+                    "description": "wall: blocks movement and sight (Total Cover). door: a wall while closed or locked; it replaces any wall on its squares. difficult: rubble, furniture, steep stairs (double cost). shallow-water: shin- to waist-deep (double cost). deep-water: swimming (double cost without a Swim Speed). pit: no walking in or across; fliers cross. hazard: fire, acid, spikes (passable; the app reports who enters). half-cover: crates, a low wall (Half Cover; double cost to cross). three-quarters-cover: an arrow slit, a portcullis (Three-Quarters Cover; impassable). obscured: darkness, thick fog (blocks sight only)."
+                  },
+                  "squares": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "description": "Squares and rectangles, comma-separated: \"F5\", \"A1:P1\" (every square between two corners), \"A1:P1, A2:A12\". A1 is the top-left square; letters run left to right, numbers top to bottom."
+                  },
+                  "label": {
+                    "description": "What it is, shown on the map: \"crates\", \"bar counter\", \"chasm\".",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  "door": {
+                    "description": "kind \"door\" only: open, closed (default) or locked.",
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "closed",
+                      "locked"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "squares"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "places": {
+              "description": "Named places you will narrate; positions can name them.",
+              "maxItems": 12,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40,
+                    "description": "A place you will narrate: \"the balcony\", \"the altar\"."
+                  },
+                  "squares": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "Squares and rectangles, comma-separated: \"F5\", \"A1:P1\" (every square between two corners), \"A1:P1, A2:A12\". A1 is the top-left square; letters run left to right, numbers top to bottom."
+                  }
+                },
+                "required": [
+                  "name",
+                  "squares"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "width",
+            "height"
+          ],
+          "additionalProperties": false
+        },
+        "hero_position": {
+          "description": "Battle map: where the hero starts — a square or a place. Default: placed by the app.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        }
+      },
+      "required": [
+        "combatants"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "update_combat",
+    "description": "Change the active combat. `next_turn` when the current turn ends (on a battle map the result says where the next creature stands and how far it can move); `damage` / `heal` an NPC or monster by `amount` (from a roll); `conditions` to add or remove conditions on an NPC; `defeat` when a combatant falls, flees or surrenders; `remove` to take one out of the order (and off the map); `add` reinforcements via `combatant` (with `position` on a battle map); `reveal` a hidden creature once the hero notices it (it attacks, is found, steps into view) and `hide` one that slips out of sight — hidden creatures stay off the player's tracker, map and log, with or without a map; `note` to record a private DM note about a combatant (never shown to the player). Targets are names (\"Goblin 2\") or ids. The hero's HP and conditions are NOT changed here — use update_character.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "next_turn",
+            "damage",
+            "heal",
+            "add",
+            "remove",
+            "conditions",
+            "defeat",
+            "note",
+            "reveal",
+            "hide"
+          ]
+        },
+        "target": {
+          "description": "Combatant name (\"Goblin 2\") or id. Required for every action except next_turn and add.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "amount": {
+          "description": "Damage or healing (from a roll).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9999
+        },
+        "conditions_add": {
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "condition": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60,
+                "description": "A condition such as \"poisoned\", \"prone\", \"frightened\", or a homebrew condition name."
+              },
+              "source": {
+                "description": "What caused it, e.g. \"Giant spider venom\".",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "duration": {
+                "description": "Free text: \"1 minute\", \"until the end of your next turn\", \"until cured\".",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              }
+            },
+            "required": [
+              "condition"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "conditions_remove": {
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          }
+        },
+        "combatant": {
+          "description": "For action \"add\": the newcomers (with `position` on a battle map).",
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "description": "Display name, e.g. \"Goblin\" (numbered automatically when count > 1) or \"Captain Vell\"."
+            },
+            "side": {
+              "type": "string",
+              "enum": [
+                "enemy",
+                "ally",
+                "neutral"
+              ]
+            },
+            "count": {
+              "description": "How many identical creatures (default 1). They share one initiative roll.",
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 20
+            },
+            "ac": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 40
+            },
+            "hp_max": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2000,
+              "description": "Hit point maximum of each creature."
+            },
+            "initiative_bonus": {
+              "type": "integer",
+              "minimum": -10,
+              "maximum": 20,
+              "description": "Initiative modifier from the stat block (usually its DEX modifier)."
+            },
+            "stat_block": {
+              "description": "Stat block name, e.g. \"Goblin Warrior\" or a homebrew monster.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "hide_hp": {
+              "description": "Hide exact HP from the player (default: true for enemies).",
+              "type": "boolean"
+            },
+            "surprised": {
+              "description": "Surprised creatures roll initiative with Disadvantage.",
+              "type": "boolean"
+            },
+            "notes": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 400
+            },
+            "position": {
+              "description": "Battle map: where it starts — a square (\"E5\"; for Large and bigger, the top-left square of its space), a place (\"the balcony\"), or one square per creature (\"E5, F5, G5\"). Omit to let the app place it.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "elevation_ft": {
+              "description": "Battle map: feet above the ground (a flier, a creature on a ledge). Default 0.",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 500
+            },
+            "size": {
+              "description": "Battle map size. Default: from the SRD stat block, else Medium.",
+              "type": "string",
+              "enum": [
+                "Tiny",
+                "Small",
+                "Medium",
+                "Large",
+                "Huge",
+                "Gargantuan"
+              ]
+            },
+            "speeds": {
+              "description": "Speeds in feet. Default: from the SRD stat block, else walk 30.",
+              "type": "object",
+              "properties": {
+                "walk": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 200
+                },
+                "fly": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 300
+                },
+                "swim": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 200
+                },
+                "climb": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 200
+                },
+                "burrow": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 200
+                },
+                "hover": {
+                  "description": "It can hover (stays aloft while Prone or Incapacitated).",
+                  "type": "boolean"
+                }
+              },
+              "additionalProperties": false
+            },
+            "reach_ft": {
+              "description": "Longest melee reach in feet. Default: from the SRD stat block, else 5.",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 60
+            },
+            "hidden": {
+              "description": "The hero hasn't noticed it (an ambusher, an invisible foe): kept off the player's tracker, map and log until update_combat reveal.",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "name",
+            "side",
+            "ac",
+            "hp_max",
+            "initiative_bonus"
+          ],
+          "additionalProperties": false
+        },
+        "note": {
+          "description": "For action \"note\": a private note for yourself (never shown to the player).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 400
+        }
+      },
+      "required": [
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "end_combat",
+    "description": "End the active combat as soon as the fighting stops (foes defeated, fled or surrendered, or the hero escaped), with a one-line summary. In XP campaigns pass `xp_award` (total XP for the defeated foes); it is ignored in milestone campaigns.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "How the fight ended, in a sentence."
+        },
+        "xp_award": {
+          "description": "Total XP for the encounter (XP campaigns only).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "move_tokens",
+    "description": "Move creatures on the battle map by the rules. The app finds the route (fewest Opportunity Attacks, then shortest; or yours via `via`), charges the movement — Difficult Terrain, other creatures' spaces and crawling cost double, deep water costs double without a Swim Speed — and refuses an illegal move with the reason, the closest square it can reach, and whether Dash would get there. `to` can be a square, a creature (it ends within reach of it) or a place. Each creature moves on its own turn (kind \"move\", refused for anyone else: call update_combat next_turn first); readied moves and legendary actions use kind \"off-turn\", shoves and pushes \"forced\", teleports \"teleport\", arrivals and corrections \"place\". A Prone creature stands first unless stay_prone. A move stops on the square where leaving a creature's reach provokes an Opportunity Attack: if the hero can take it, the app asks the player there and then and tells you the answer — don't ask again; for a monster or NPC, roll its attack, then repeat the same call to finish the move (add `declined` for any that let it go). Moves run in order and a stop ends the batch. Move the hero only as the player declared, or by forced movement — the player usually moves the hero on the map. Returns where each creature ended, what it cost, what is left, and who is now within reach.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "moves": {
+          "description": "Usually one: the creature whose turn it is. Several for one push that moves many creatures, or for placing tokens. Applied in order; a move that stops for an Opportunity Attack ends the batch.",
+          "minItems": 1,
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "who": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "The creature: a name (\"Goblin 2\"), or \"hero\"."
+              },
+              "to": {
+                "description": "Where it ends: a square (\"E5\"; for Large and bigger, the top-left square of its space), a creature (it ends within its reach of that creature by the cheapest route), or a place (\"the balcony\"). Not needed for a push.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "kind": {
+                "description": "move (default): its own movement on its own turn. off-turn: its own movement outside its turn (a readied move, a legendary action). forced: pushed, pulled or shoved — no movement spent, no Opportunity Attacks, stops at walls and creatures. teleport: no path, no Opportunity Attacks; an occupied square shifts it to the nearest open one. place: no rules (arrivals, a climb or jump you ruled on, corrections).",
+                "type": "string",
+                "enum": [
+                  "move",
+                  "off-turn",
+                  "forced",
+                  "teleport",
+                  "place"
+                ]
+              },
+              "via": {
+                "description": "Squares to pass through on the way, in order: \"D5, D3\". Otherwise the route that provokes the fewest Opportunity Attacks, then the shortest.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 120
+              },
+              "partial": {
+                "description": "If it can't get all the way this turn, move it as far as it can toward `to`.",
+                "type": "boolean"
+              },
+              "prefer": {
+                "description": "safest (default): fewest Opportunity Attacks, then shortest. shortest: ignore them (a mindless rush).",
+                "type": "string",
+                "enum": [
+                  "safest",
+                  "shortest"
+                ]
+              },
+              "dash": {
+                "description": "It takes the Dash action now: extra movement equal to its Speed this turn.",
+                "type": "boolean"
+              },
+              "dash_again": {
+                "description": "A second Dash this turn (Cunning Action, a second action).",
+                "type": "boolean"
+              },
+              "disengage": {
+                "description": "It takes the Disengage action: no Opportunity Attacks against its movement for the rest of its turn.",
+                "type": "boolean"
+              },
+              "stay_prone": {
+                "description": "A Prone creature crawls (double cost) instead of standing up first for half its Speed.",
+                "type": "boolean"
+              },
+              "mode": {
+                "description": "fly: use its Fly Speed (ignores ground terrain and pits; needed to change height). Default walk (swimming is automatic in deep water).",
+                "type": "string",
+                "enum": [
+                  "walk",
+                  "fly"
+                ]
+              },
+              "elevation_ft": {
+                "description": "Feet above the ground where it ends (mode fly, teleport or place). Walking keeps its height.",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 500
+              },
+              "push": {
+                "description": "kind \"forced\": a straight push or pull (Shove, Thunderwave, the Push mastery). Give one of away_from, toward or direction.",
+                "type": "object",
+                "properties": {
+                  "distance_ft": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "maximum": 120
+                  },
+                  "away_from": {
+                    "description": "A creature or square it is pushed straight away from.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "toward": {
+                    "description": "A creature or square it is pulled straight toward.",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 80
+                  },
+                  "direction": {
+                    "type": "string",
+                    "enum": [
+                      "north",
+                      "north-east",
+                      "east",
+                      "south-east",
+                      "south",
+                      "south-west",
+                      "west",
+                      "north-west"
+                    ]
+                  }
+                },
+                "required": [
+                  "distance_ft"
+                ],
+                "additionalProperties": false
+              },
+              "max_ft": {
+                "description": "kind \"teleport\": its range (Misty Step 30).",
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 1000
+              },
+              "budget_ft": {
+                "description": "kind \"off-turn\": how far it may move (default its Speed).",
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 400
+              },
+              "spend_ft": {
+                "description": "kind \"place\": movement it spends this turn (a climb or jump you ruled on).",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 400
+              },
+              "declined": {
+                "description": "Repeating a move that stopped for Opportunity Attacks: the creatures there that let it go. The others count as having used their Reaction.",
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              }
+            },
+            "required": [
+              "who"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "reactions_used": {
+          "description": "Creatures that just used their Reaction on something else (Shield, Counterspell, a readied action): no Opportunity Attacks from them until their next turn starts.",
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "update_map",
+    "description": "Set up or change the battle map of the active combat. `create` puts the running fight on a map (`replace: true` swaps it for a new room): its size in 5-ft squares, walls, doors and terrain as squares and ranges (\"A1:P1\"; A1 is the top-left), named places, and `positions` (anyone left out is placed automatically). `terrain_add` / `terrain_clear` and `doors` change the map as the fiction changes it (a door opens, a wall collapses — moves never open doors); `places_add` / `places_remove` name the places you narrate; `creatures` changes a creature's size, speeds, reach or an ongoing speed change (Enlarge, the Fly spell, Haste, Ray of Frost); `effects_end` removes lasting areas; `remove` takes the map away. Each call is all-or-nothing. Map only what the hero can perceive and add the rest when it is found. `create` is refused when the campaign's battle maps are Off. Use move_tokens for movement and resolve_area for areas of effect.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "create": {
+          "description": "Put the running fight on a battle map. With replace: true, swap the current map for a new one (a new room).",
+          "type": "object",
+          "properties": {
+            "name": {
+              "description": "What the battlefield is, e.g. \"Smugglers' cellar\".",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 60
+            },
+            "width": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 40,
+              "description": "Columns of 5-ft squares, lettered A, B, C… from the left. Most rooms: 10–20."
+            },
+            "height": {
+              "type": "integer",
+              "minimum": 4,
+              "maximum": 40,
+              "description": "Rows of 5-ft squares, numbered 1, 2, 3… from the top."
+            },
+            "terrain": {
+              "description": "Everything that isn't open floor. Map only what the hero can perceive.",
+              "maxItems": 40,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "wall",
+                      "door",
+                      "difficult",
+                      "shallow-water",
+                      "deep-water",
+                      "pit",
+                      "hazard",
+                      "half-cover",
+                      "three-quarters-cover",
+                      "obscured"
+                    ],
+                    "description": "wall: blocks movement and sight (Total Cover). door: a wall while closed or locked; it replaces any wall on its squares. difficult: rubble, furniture, steep stairs (double cost). shallow-water: shin- to waist-deep (double cost). deep-water: swimming (double cost without a Swim Speed). pit: no walking in or across; fliers cross. hazard: fire, acid, spikes (passable; the app reports who enters). half-cover: crates, a low wall (Half Cover; double cost to cross). three-quarters-cover: an arrow slit, a portcullis (Three-Quarters Cover; impassable). obscured: darkness, thick fog (blocks sight only)."
+                  },
+                  "squares": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 300,
+                    "description": "Squares and rectangles, comma-separated: \"F5\", \"A1:P1\" (every square between two corners), \"A1:P1, A2:A12\". A1 is the top-left square; letters run left to right, numbers top to bottom."
+                  },
+                  "label": {
+                    "description": "What it is, shown on the map: \"crates\", \"bar counter\", \"chasm\".",
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40
+                  },
+                  "door": {
+                    "description": "kind \"door\" only: open, closed (default) or locked.",
+                    "type": "string",
+                    "enum": [
+                      "open",
+                      "closed",
+                      "locked"
+                    ]
+                  }
+                },
+                "required": [
+                  "kind",
+                  "squares"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "places": {
+              "description": "Named places you will narrate; positions can name them.",
+              "maxItems": 12,
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 40,
+                    "description": "A place you will narrate: \"the balcony\", \"the altar\"."
+                  },
+                  "squares": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "Squares and rectangles, comma-separated: \"F5\", \"A1:P1\" (every square between two corners), \"A1:P1, A2:A12\". A1 is the top-left square; letters run left to right, numbers top to bottom."
+                  }
+                },
+                "required": [
+                  "name",
+                  "squares"
+                ],
+                "additionalProperties": false
+              }
+            }
+          },
+          "required": [
+            "width",
+            "height"
+          ],
+          "additionalProperties": false
+        },
+        "replace": {
+          "type": "boolean"
+        },
+        "positions": {
+          "description": "With create: where creatures stand. Everyone else is placed automatically.",
+          "maxItems": 24,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "who": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80
+              },
+              "at": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60,
+                "description": "A square or a place."
+              }
+            },
+            "required": [
+              "who",
+              "at"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "remove": {
+          "description": "Take the map away: the fight goes on in the theater of the mind.",
+          "type": "boolean"
+        },
+        "terrain_add": {
+          "maxItems": 20,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "wall",
+                  "door",
+                  "difficult",
+                  "shallow-water",
+                  "deep-water",
+                  "pit",
+                  "hazard",
+                  "half-cover",
+                  "three-quarters-cover",
+                  "obscured"
+                ],
+                "description": "wall: blocks movement and sight (Total Cover). door: a wall while closed or locked; it replaces any wall on its squares. difficult: rubble, furniture, steep stairs (double cost). shallow-water: shin- to waist-deep (double cost). deep-water: swimming (double cost without a Swim Speed). pit: no walking in or across; fliers cross. hazard: fire, acid, spikes (passable; the app reports who enters). half-cover: crates, a low wall (Half Cover; double cost to cross). three-quarters-cover: an arrow slit, a portcullis (Three-Quarters Cover; impassable). obscured: darkness, thick fog (blocks sight only)."
+              },
+              "squares": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 300,
+                "description": "Squares and rectangles, comma-separated: \"F5\", \"A1:P1\" (every square between two corners), \"A1:P1, A2:A12\". A1 is the top-left square; letters run left to right, numbers top to bottom."
+              },
+              "label": {
+                "description": "What it is, shown on the map: \"crates\", \"bar counter\", \"chasm\".",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "door": {
+                "description": "kind \"door\" only: open, closed (default) or locked.",
+                "type": "string",
+                "enum": [
+                  "open",
+                  "closed",
+                  "locked"
+                ]
+              }
+            },
+            "required": [
+              "kind",
+              "squares"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "terrain_clear": {
+          "description": "Squares or ranges to clear of all terrain (\"F5\", \"A1:C3\"), or a terrain label (\"crates\").",
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "doors": {
+          "description": "Open, close or lock doors.",
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "at": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 60,
+                "description": "The door's square or label."
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "closed",
+                  "locked"
+                ]
+              }
+            },
+            "required": [
+              "at",
+              "state"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "places_add": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40,
+                "description": "A place you will narrate: \"the balcony\", \"the altar\"."
+              },
+              "squares": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200,
+                "description": "Squares and rectangles, comma-separated: \"F5\", \"A1:P1\" (every square between two corners), \"A1:P1, A2:A12\". A1 is the top-left square; letters run left to right, numbers top to bottom."
+              }
+            },
+            "required": [
+              "name",
+              "squares"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "places_remove": {
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          }
+        },
+        "creatures": {
+          "description": "Change a creature's size, speeds or reach (Enlarge, a new form, Ray of Frost, Haste).",
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "who": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 80,
+                "description": "A name, or \"hero\"."
+              },
+              "size": {
+                "type": "string",
+                "enum": [
+                  "Tiny",
+                  "Small",
+                  "Medium",
+                  "Large",
+                  "Huge",
+                  "Gargantuan"
+                ]
+              },
+              "speeds": {
+                "description": "New speeds (NPCs), or speeds granted to the hero for now (the Fly spell: {\"fly\": 60, \"hover\": true}).",
+                "type": "object",
+                "properties": {
+                  "walk": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 200
+                  },
+                  "fly": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 300
+                  },
+                  "swim": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 200
+                  },
+                  "climb": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 200
+                  },
+                  "burrow": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 200
+                  },
+                  "hover": {
+                    "description": "It can hover (stays aloft while Prone or Incapacitated).",
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              },
+              "reach_ft": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 60
+              },
+              "speed_change_ft": {
+                "description": "An ongoing change to all its speeds: Haste +30 on a 30-ft Speed, Slow -15, Ray of Frost -10; 0 clears it.",
+                "type": "integer",
+                "minimum": -120,
+                "maximum": 120
+              }
+            },
+            "required": [
+              "who"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "effects_end": {
+          "description": "Lasting areas that ended, by label (\"Web\").",
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 60
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "resolve_area",
+    "description": "Resolve an area of effect on the battle map — a spell, breath weapon, explosion or aura — and show it to the player. Give the shape and size from the effect's text and either `from` (the creature it comes from; aim cones, lines and cubes with `toward`) or `at` (the centre: a square \"G4\", a corner \"G4/H5\", or a creature). Returns exactly who is inside, each one's cover against it (Half: +2, Three-Quarters: +5 to Dexterity saves), who Total Cover shields, the distance from `from`, and a warning when the hero or an ally is caught. The app's rules: a square counts when its centre is inside; spheres and cylinders are round; cones and lines are measured like movement; an Emanation surrounds its creature (and moves with it if lasting). With `lasting` the area stays on the map (Web, Fog Cloud, Spirit Guardians) until update_map effects_end, and `terrain` makes its squares difficult, obscured or hazardous. Then roll the saves for exactly the creatures it lists (the hero's with request_player_roll). A player's [Area: …] note names the parameters to use. Never decide who is in an area by eye.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40,
+          "description": "What it is, shown on the map and in the log: \"Fireball\", \"Fire Breath\"."
+        },
+        "shape": {
+          "type": "string",
+          "enum": [
+            "sphere",
+            "cylinder",
+            "cone",
+            "line",
+            "cube",
+            "emanation",
+            "squares"
+          ]
+        },
+        "size_ft": {
+          "description": "Sphere and Cylinder: the radius. Cone and Line: the length. Cube: the side. Emanation: how far it extends. Not for \"squares\".",
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 500
+        },
+        "width_ft": {
+          "description": "Line width (default 5).",
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 60
+        },
+        "height_ft": {
+          "description": "Cylinder height (default 40).",
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 500
+        },
+        "at": {
+          "description": "Sphere, Cylinder or a placed Cube: its centre — a square (\"G4\", its centre), a grid corner written as two diagonal squares (\"G4/H5\"), or a creature. Cone or Line from no creature: the square it starts in.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "from": {
+          "description": "Who makes it. Cones, Lines, Emanations and a Cube \"originating from you\" come out of this creature's space; for the other shapes the result gives the distance and line of sight from it.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "toward": {
+          "description": "Cone, Line, or a Cube from a creature: the square or creature it aims at, or a direction (\"north-east\").",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "squares": {
+          "description": "shape \"squares\": exactly these squares — \"N-foot square\" ground effects (Entangle, Grease) or odd shapes: \"G7:J10\".",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "include_origin": {
+          "description": "Include the creature it comes from (Cone, Line, Cube, Emanation; excluded by default).",
+          "type": "boolean"
+        },
+        "range_ft": {
+          "description": "The effect's range: refused when its centre is farther than this from `from`.",
+          "type": "integer",
+          "minimum": 5,
+          "maximum": 1000
+        },
+        "lasting": {
+          "description": "It stays on the map until update_map effects_end (Web, Fog Cloud, Spirit Guardians). Otherwise it is shown until this turn ends.",
+          "type": "boolean"
+        },
+        "terrain": {
+          "description": "lasting only: what it does to its squares (Web: difficult + obscured; Spike Growth: difficult + hazard; Fog Cloud: obscured).",
+          "maxItems": 3,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "difficult",
+              "obscured",
+              "hazard"
+            ]
+          }
+        },
+        "elevation_ft": {
+          "description": "Height of its centre or base above the ground (default: the height of `from`, else 0).",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 500
+        }
+      },
+      "required": [
+        "label",
+        "shape"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "check_map",
+    "description": "Ask the battle map a question without changing anything: the distance between creatures or squares, with line of sight, cover and reach both ways; whether a creature can get to a square, creature or place this turn (route, cost, Opportunity Attacks it would provoke, the closest it can get); who an area would catch, without showing it to the player; what cover a creature can reach this turn; or a text drawing of the whole map. <game_state> already lists positions, distances from the hero and who is within reach — use this for anything else. Never estimate distances, reach or cover yourself.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "description": "A creature or square to measure from. Alone: the distance to everyone and, for a creature, the best cover it can reach this turn (add `to` for line of sight, cover and reach).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "to": {
+          "description": "Creatures or squares to measure to: distance, line of sight, cover and reach, both ways.",
+          "minItems": 1,
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          }
+        },
+        "path_to": {
+          "description": "With `from` a creature: can it get to this square, creature or place this turn? Route, cost, Opportunity Attacks it would provoke, and the closest it can get.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "area": {
+          "description": "Preview an area of effect: who it would catch, without showing it to the player.",
+          "type": "object",
+          "properties": {
+            "shape": {
+              "type": "string",
+              "enum": [
+                "sphere",
+                "cylinder",
+                "cone",
+                "line",
+                "cube",
+                "emanation",
+                "squares"
+              ]
+            },
+            "size_ft": {
+              "description": "Sphere and Cylinder: the radius. Cone and Line: the length. Cube: the side. Emanation: how far it extends. Not for \"squares\".",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 500
+            },
+            "width_ft": {
+              "description": "Line width (default 5).",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 60
+            },
+            "height_ft": {
+              "description": "Cylinder height (default 40).",
+              "type": "integer",
+              "minimum": 5,
+              "maximum": 500
+            },
+            "at": {
+              "description": "Sphere, Cylinder or a placed Cube: its centre — a square (\"G4\", its centre), a grid corner written as two diagonal squares (\"G4/H5\"), or a creature. Cone or Line from no creature: the square it starts in.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "from": {
+              "description": "Who makes it. Cones, Lines, Emanations and a Cube \"originating from you\" come out of this creature's space; for the other shapes the result gives the distance and line of sight from it.",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "toward": {
+              "description": "Cone, Line, or a Cube from a creature: the square or creature it aims at, or a direction (\"north-east\").",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            "squares": {
+              "description": "shape \"squares\": exactly these squares — \"N-foot square\" ground effects (Entangle, Grease) or odd shapes: \"G7:J10\".",
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300
+            },
+            "include_origin": {
+              "description": "Include the creature it comes from (Cone, Line, Cube, Emanation; excluded by default).",
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "shape"
+          ],
+          "additionalProperties": false
+        },
+        "show": {
+          "description": "Draw the whole map as text: terrain, places, effects and every creature.",
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "lookup_rules",
+    "description": "Search the rules: SRD 5.2.1, the player's imported books (every one switched on in their Library), and this campaign's homebrew. Returns matching rules sections, spells, monsters, items and more, with excerpts. Use it whenever you're unsure of a rule, spell, monster or item — especially imported content you may not know. Don't use it for story facts (search_memory) or the hero's own abilities (get_character_sheet).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "kinds": {
+          "description": "Limit to kinds of content, e.g. [\"spell\"] or [\"monster\"].",
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "rule",
+              "spell",
+              "monster",
+              "magic-item",
+              "item",
+              "class",
+              "subclass",
+              "species",
+              "background",
+              "feat",
+              "condition",
+              "boon",
+              "other"
+            ]
+          }
+        },
+        "limit": {
+          "description": "Number of results (default 5).",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 8
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "get_entry",
+    "description": "Get the full text of one rules entry by name: a spell, monster stat block, magic item, feat, condition, class feature, rules section, or homebrew. Use when you know the name; use lookup_rules to search.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "spell",
+            "monster",
+            "magic-item",
+            "item",
+            "class",
+            "subclass",
+            "species",
+            "background",
+            "feat",
+            "condition",
+            "boon",
+            "other"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "get_character_sheet",
+    "description": "Get the hero's full current character sheet: abilities, saves, skills, attacks, spells and slots, features and their uses, inventory, money, personality and backstory. The per-turn status line is usually enough; use this for detail — e.g. to check an item or spell the player says they have.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "create_homebrew",
+    "description": "Save new or modified rules content you are introducing — a spell, magic item, monster, boon, feat, condition or rule change — before it affects play, so the player can read it in their compendium and veto it. Improvise freely whenever the story calls for something made for this moment (a unique reward, a monster variant, a fey bargain, a strange boon). Balance it against named SRD comparables of similar level, rarity or CR and explain why in balance_notes. Only within the campaign's homebrew-freedom setting (refused when homebrew is off). Don't use it for ordinary story facts (update_journal) or for official rules, which are already in the compendium.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "rule",
+            "spell",
+            "monster",
+            "magic-item",
+            "item",
+            "class",
+            "subclass",
+            "species",
+            "background",
+            "feat",
+            "condition",
+            "boon",
+            "other"
+          ],
+          "description": "What it is: spell, magic-item, item, monster, boon, feat, condition, rule…"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "One line, e.g. \"Level 2 Evocation (homebrew)\" or \"Uncommon wondrous item\"."
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12000,
+          "description": "Full rules text in markdown, written like a rulebook entry."
+        },
+        "based_on": {
+          "description": "The official content this modifies, if any.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "comparables": {
+          "minItems": 1,
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          },
+          "description": "SRD content of similar power you balanced it against."
+        },
+        "power_tier": {
+          "description": "Spell level, item rarity, CR, or \"minor\" / \"major\" for boons.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "balance_notes": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500,
+          "description": "Why it is balanced against the comparables; its costs and limits."
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "summary",
+        "text",
+        "comparables",
+        "balance_notes"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "update_homebrew",
+    "description": "Revise or retire homebrew this campaign created — after a player veto, a balance problem, or a story change. Explain why in `reason` (the player sees it). Retire with status 'retired' instead of deleting.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100,
+          "description": "Current name of the homebrew entry."
+        },
+        "new_name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 12000
+        },
+        "comparables": {
+          "minItems": 1,
+          "maxItems": 6,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120
+          }
+        },
+        "power_tier": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "balance_notes": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "retired"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300,
+          "description": "Why it changed, shown to the player."
+        }
+      },
+      "required": [
+        "name",
+        "reason"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "update_journal",
+    "description": "Record or update the campaign's memory: NPCs, locations, factions, items, lore, events, rulings and notes. Call it when a new named NPC, place, faction or notable item appears, when something important about one changes (an NPC dies, a place is cleared), and whenever you make a rules ruling (kind 'ruling') so you stay consistent. Entries are matched by kind + name. Mark anything the hero hasn't learned with secret: true. Don't use it for quests (update_quest) or threats on a timer (update_clocks).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "entries": {
+          "minItems": 1,
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "npc",
+                  "location",
+                  "faction",
+                  "item",
+                  "lore",
+                  "event",
+                  "ruling",
+                  "note"
+                ]
+              },
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "summary": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400,
+                "description": "One or two sentences."
+              },
+              "details": {
+                "description": "Longer markdown notes.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 4000
+              },
+              "status": {
+                "description": "e.g. \"ally\", \"hostile\", \"deceased\", \"missing\", \"explored\".",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 40
+              },
+              "tags": {
+                "description": "Aliases and keywords; they help the app recognize mentions.",
+                "maxItems": 8,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 40
+                }
+              },
+              "secret": {
+                "description": "The hero has not learned this (hidden from the player).",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "kind",
+              "name",
+              "summary"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "entries"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "update_quest",
+    "description": "Create or update a quest the hero knows about — a rumor, an active quest and its objectives, completion or failure. Matched by title. Add objectives as the hero learns them and mark them done; set status 'completed', 'failed' or 'abandoned' when it ends. Keep your private plans in secret_notes. For an ambition — a big goal the player set for the hero (found a guild, take the throne) — set ambition: true, add objectives only for concrete steps the hero has identified themselves (never a checklist of your own), and track its progress on a progress clock.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "rumor",
+            "active",
+            "completed",
+            "failed",
+            "abandoned"
+          ]
+        },
+        "summary": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 600
+        },
+        "giver": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "reward": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "objectives": {
+          "description": "Objectives to add or update, matched by text.",
+          "maxItems": 12,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "text": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "done": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "text"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "secret_notes": {
+          "description": "DM-only notes (hidden from the player).",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "ambition": {
+          "description": "true for an ambition: a goal the player set for the hero themselves (found a guild, take the throne). Not a checklist — track its progress on a progress clock.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "title"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "update_clocks",
+    "description": "Create or advance progress clocks: fronts and threats that advance off-screen, countdowns, long projects, and an ambition's progress (6–12 segments by its scale; advance it only for accomplishments the hero earned, and back for setbacks). A new clock needs `segments` (4, 6 or 8 is typical) and a `consequence`. Advance threats when time passes, the hero fails or ignores them, or a complication fits. When a clock fills, its consequence happens: narrate it, then mark the clock resolved. Secret clocks are hidden from the player.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "clocks": {
+          "minItems": 1,
+          "maxItems": 8,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 100
+              },
+              "segments": {
+                "description": "Size of a new clock (4, 6 or 8 is typical).",
+                "type": "integer",
+                "minimum": 2,
+                "maximum": 12
+              },
+              "advance": {
+                "description": "Segments to fill (negative to roll back).",
+                "type": "integer",
+                "minimum": -12,
+                "maximum": 12
+              },
+              "set_filled": {
+                "description": "Set the filled count exactly.",
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 12
+              },
+              "consequence": {
+                "description": "What happens when the clock fills.",
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 400
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "threat",
+                  "progress",
+                  "countdown"
+                ]
+              },
+              "secret": {
+                "description": "Hidden from the player.",
+                "type": "boolean"
+              },
+              "resolved": {
+                "description": "The consequence has landed, or the threat was defused.",
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "clocks"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "search_memory",
+    "description": "Search the campaign's memory: journal entries, quests, earlier session recaps and your private notes. Use before reintroducing an NPC, place or thread from an earlier session, or when the player mentions something you don't see in context. Not for rules (lookup_rules).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "set_scene",
+    "description": "Update the scene header the player sees: location, region, time of day, in-world date, weather, mood (omit fields that didn't change). With new_scene: true the app runs a scene check against the tension dial and may return 'altered' or 'interrupted' plus a twist to build the scene around. tension_change is applied first: +1 when the last scene slipped out of the hero's control, −1 when they took charge. Call it when the hero arrives somewhere new, time skips, or conditions change.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "location": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "region": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "time_of_day": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "in_world_date": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "weather": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "mood": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        },
+        "new_scene": {
+          "description": "A new scene begins: run the scene check.",
+          "type": "boolean"
+        },
+        "tension_change": {
+          "description": "+1 when the last scene slipped out of the hero's control, −1 when they took charge.",
+          "type": "integer",
+          "minimum": -1,
+          "maximum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "show_image",
+    "description": "Have an illustration painted for the story log: you write the picture, the player's OpenAI image model paints it. Returns at once and the picture appears in the log when it's ready — keep narrating, and don't describe the picture or wait for it. Use it only as the illustrations rule allows (the campaign notes, or a later app note): when the player asks to see something, and — with key moments on — at most about once per scene for a key moment (arriving somewhere new, a big reveal, a fight about to start). Never for routine beats. If illustrations aren't available the result says why; don't mention pictures unless the player asked for one.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "subject": {
+          "type": "string",
+          "enum": [
+            "scene",
+            "character",
+            "npc",
+            "creature",
+            "item",
+            "battle"
+          ],
+          "description": "scene = a place; character = the hero; npc = another person; creature; item; battle = a fight (painted atmospherically, never as a tactical map)."
+        },
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "A short caption shown with the picture, e.g. \"The drowned bell tower\"."
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 1500,
+          "description": "A vivid, specific visual description: who and what is in frame, the setting, light, mood and composition. No text, captions, labels, maps or interface elements. The app adds the campaign's art style, and the hero's look from the sheet when they're in frame."
+        },
+        "aspect": {
+          "description": "landscape (scenes, battles), portrait (people, creatures) or square (items). Default: by subject.",
+          "type": "string",
+          "enum": [
+            "landscape",
+            "portrait",
+            "square"
+          ]
+        },
+        "hero_in_frame": {
+          "description": "Whether the hero is in the picture. Default: yes for character and battle, otherwise when the title or prompt names them.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "subject",
+        "title",
+        "prompt"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  },
+  {
+    "name": "consult_oracle",
+    "description": "Ask the yes/no oracle when you genuinely don't know how the world would answer and neither the fiction nor the rules decide it (Is anyone home? Did the bridge hold?). Set the likelihood honestly before asking. The answer is yes or no, sometimes with 'and' (stronger) or 'but' (a complication), and doubles add a random twist. Honor it. Don't use it for choices you should make as DM, questions a check should resolve, or to dodge hard calls.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "A yes/no question about the world."
+        },
+        "likelihood": {
+          "type": "string",
+          "enum": [
+            "nearly-impossible",
+            "very-unlikely",
+            "unlikely",
+            "even",
+            "likely",
+            "very-likely",
+            "nearly-certain"
+          ]
+        },
+        "secret": {
+          "description": "Hide it from the player when the question itself would spoil something.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "question",
+        "likelihood"
+      ],
+      "additionalProperties": false
+    },
+    "eager_input_streaming": true
+  }
+]

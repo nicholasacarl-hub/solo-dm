@@ -16,6 +16,7 @@ import { deleteCampaignData, normalizeCampaignData, readCampaignData, writeCampa
 import { isCampaignOpenElsewhere, OPEN_ELSEWHERE_ERROR } from './campaignLock';
 import { emitCampaignChange } from './events';
 import { copyImages, imagesToCopy } from './images';
+import { redactCopiedImports, type ExportReport } from './redact';
 import { IdMap, remapCampaignData } from './remap';
 import type { CampaignBundle, CampaignData } from './types';
 
@@ -66,6 +67,18 @@ export async function exportCampaignBundle(campaignId: string): Promise<Campaign
   return { format: BUNDLE_FORMAT, version: BUNDLE_VERSION, exportedAt: Date.now(), ...redactImportedDeep(data) };
 }
 
+/**
+ * The export with book text copied onto the character left out too (spec §7.3): redactCopiedImports,
+ * then redactImportedDeep, plus a report for the toast. CONTRACT (Day 0): throws until E1 implements
+ * redactCopiedImports; exportCampaignBundle (GitHub pushes) and downloadCampaign switch to it then.
+ */
+export async function exportCampaignBundleWithReport(campaignId: string): Promise<{ bundle: CampaignBundle; report: ExportReport }> {
+  const data = await readCampaignData(campaignId);
+  if (!data) throw new Error('That campaign no longer exists, so it could not be exported.');
+  const { data: copy, report } = redactCopiedImports(data);
+  return { bundle: { format: BUNDLE_FORMAT, version: BUNDLE_VERSION, exportedAt: Date.now(), ...redactImportedDeep(copy) }, report };
+}
+
 /** The file text of a bundle (pretty-printed so saves diff nicely in git). */
 export function serializeBundle(bundle: CampaignBundle): string {
   return `${JSON.stringify(bundle, null, 2)}\n`;
@@ -75,7 +88,11 @@ export function bundleFileName(campaignName: string): string {
   return `${slugify(campaignName) || 'campaign'}${BUNDLE_EXTENSION}`;
 }
 
-export async function downloadCampaign(campaignId: string): Promise<void> {
+/**
+ * Export and download. Resolves what was left out (callers may ignore it). Day 0: still the plain
+ * export, so the report is always empty until E1 moves this onto exportCampaignBundleWithReport.
+ */
+export async function downloadCampaign(campaignId: string): Promise<ExportReport> {
   const bundle = await exportCampaignBundle(campaignId);
   const blob = new Blob([serializeBundle(bundle)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
@@ -91,6 +108,7 @@ export async function downloadCampaign(campaignId: string): Promise<void> {
     // Revoke after the click has been handled; some browsers read the URL asynchronously.
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
+  return { books: [], passages: 0 };
 }
 
 // ---------------------------------------------------------------------------

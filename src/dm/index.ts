@@ -75,3 +75,25 @@ export { DM_TOOLS, READ_ONLY_TOOLS, TOOL_SCHEMAS, type ToolName } from './tools/
 export { parseChoices, isOoc } from './narration';
 export { setDmDeps, resetDmDeps, type DmDeps } from './deps';
 export { MOCK_MODEL } from './mock';
+
+// Structuring the player's imported books with Claude (spec §3.10). Nothing here touches a DM session,
+// transcript, system prompt or Campaign.usage: extraction has its own ledger (job.usage, record.extraction).
+export {
+  cancelJob,
+  describeExtractionError,
+  estimateJob,
+  estimateModels,
+  extractionAvailability,
+  ExtractionUnavailableError,
+  pauseJob,
+  recoverJobsOnStartup,
+  resumeJob,
+  retryRecords,
+  setExtractionDeps,
+  startJob,
+  useRunner,
+  type ExtractionClient,
+  type ExtractionDeps,
+  type JobChoices,
+  type RunnerSnapshot,
+} from './extract';

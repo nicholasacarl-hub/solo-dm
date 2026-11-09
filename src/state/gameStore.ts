@@ -43,6 +43,7 @@ import type {
   TranscriptMessage,
   UsageTotals,
 } from '@/types';
+import type { RestoreReport } from '@/data/structured/restore';
 import type { HeroMoveOutcome, HeroMoveRequest, MoveRefusal } from '@/engine/movement';
 import { normalizeCombatState } from '@/engine/mapNormalize';
 import { nameKey, newId } from '@/lib/id';
@@ -210,6 +211,14 @@ export interface GameStoreActions {
 
   /** Queue a note for the DM's next turn; saved with the campaign, so it survives a reload. */
   queueDmNotice(text: string): void;
+  /**
+   * Fill book text back into the loaded character's ref'd features from this device's Library (spec §7.4):
+   * loads @/data with a dynamic import (no static gameStore → @/data edge), runs the pure restore, and when
+   * anything was restored writes the character with storage.putCharacter AS IS — character.updatedAt and the
+   * campaign row are untouched, so sync sees no change. Resolves null when there was nothing to restore
+   * (no campaign or character loaded, or no ref needing it).
+   */
+  restoreImportedText(): Promise<RestoreReport | null>;
   /**
    * Return and clear pending DM notices. The stored copy is cleared by the campaign's next save —
    * normally the transcript append that delivers them — so a failed append can't lose them.
@@ -1180,6 +1189,12 @@ export const useGame = create<GameStore>()((set, get) => ({
     // clears the stored copy, so a failed append can't lose them.
     set({ pendingDmNotices: [], ...(s.campaign && { campaign: { ...s.campaign, pendingDmNotices: [] } }) });
     return notices;
+  },
+
+  async restoreImportedText() {
+    // not implemented (Day-0 stub): resolves null ("nothing to restore") until E1 lands restore (spec §7.4).
+    // Correct for every save made before structured imports ship: none has a ref to restore.
+    return null;
   },
 }));
 

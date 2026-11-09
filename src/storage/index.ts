@@ -14,14 +14,20 @@ import type {
   Clock,
   CombatState,
   CompendiumEntry,
+  ExtractionJob,
   GithubSyncSettings,
   HomebrewEntry,
+  JobStatus,
   JournalEntry,
   LibrarySource,
   LogEntry,
   Quest,
+  RecordStatus,
+  RunState,
   Session,
   StoredImage,
+  StructuredKind,
+  StructuredRecord,
   TranscriptMessage,
 } from '@/types';
 import * as backup from './backup';
@@ -34,8 +40,12 @@ import * as images from './images';
 import type { ImageLogPatch, ImageStats, ImageUrlState, StoredImageMeta } from './images';
 import * as library from './library';
 import * as records from './records';
+import * as redact from './redact';
+import type { ExportReport } from './redact';
+import * as structured from './structured';
 import type {
   CampaignBundle,
+  CampaignData,
   CampaignRecords,
   CampaignSummary,
   NewCampaignInput,
@@ -43,6 +53,7 @@ import type {
   SyncReport,
 } from './types';
 
+export type { ExportReport } from './redact';
 export type {
   CampaignBundle,
   CampaignData,
@@ -137,8 +148,16 @@ export const getLibraryEntries: (sourceIds?: string[]) => Promise<CompendiumEntr
 // ---------------------------------------------------------------------------
 
 export const exportCampaignBundle: (campaignId: string) => Promise<CampaignBundle> = backup.exportCampaignBundle;
-/** Export and trigger a browser download of "<campaign-name-slug>.solodm.json". */
-export const downloadCampaign: (campaignId: string) => Promise<void> = backup.downloadCampaign;
+/**
+ * The export with book text copied onto the character left out too (placeholders, ref.redacted), and a
+ * report of what was left out for the toast. The stored campaign is never changed.
+ */
+export const exportCampaignBundleWithReport: (campaignId: string) => Promise<{ bundle: CampaignBundle; report: ExportReport }> =
+  backup.exportCampaignBundleWithReport;
+/** Pure: the export copy with ref'd copied descriptions (and DM tool inputs echoing them) replaced by placeholders. */
+export const redactCopiedImports: (data: CampaignData) => { data: CampaignData; report: ExportReport } = redact.redactCopiedImports;
+/** Export and trigger a browser download of "<campaign-name-slug>.solodm.json". Resolves what was left out (callers may ignore it). */
+export const downloadCampaign: (campaignId: string) => Promise<ExportReport> = backup.downloadCampaign;
 /** Validate a parsed file (a JSON string is also accepted). Throws a readable Error when it isn't a valid bundle. */
 export const parseCampaignBundle: (data: unknown) => CampaignBundle = backup.parseCampaignBundle;
 /**
@@ -232,3 +251,48 @@ export const useImageStats: () => ImageStats | undefined = images.useImageStats;
 export const markImageLogEntry: (entryId: string, patch: ImageLogPatch) => Promise<boolean> = images.markImageLogEntry;
 /** The error saveImage gives when the picture's campaign no longer exists. */
 export const IMAGE_CAMPAIGN_MISSING: string = images.IMAGE_CAMPAIGN_MISSING;
+
+// ---------------------------------------------------------------------------
+// Structured imports (records and extraction jobs; spec §2.5). Only on this device: never in exports or
+// GitHub saves. Characters keep provenance for book text they copy; exports replace that text (redact.ts).
+// ---------------------------------------------------------------------------
+
+/** A source's entries in reading order (numeric suffix of lib:<sourceId>:<n>, not IndexedDB string order). */
+export const getSourceEntries: (sourceId: string) => Promise<CompendiumEntry[]> = structured.getSourceEntries;
+export const listRecords: (sourceId: string, opts?: { kind?: StructuredKind; status?: RecordStatus }) => Promise<StructuredRecord[]> =
+  structured.listRecords;
+/** React hook: live records of a source (undefined while loading), re-emitting at most every 500 ms. */
+export const useRecords: (
+  sourceId: string | undefined,
+  filter?: { status?: RecordStatus; kind?: StructuredKind },
+) => StructuredRecord[] | undefined = structured.useRecords;
+export const getRecords: (ids: string[]) => Promise<(StructuredRecord | undefined)[]> = structured.getRecords;
+/** Upsert; keeps the source's denormalized counts (source.structure) right in the same transaction. */
+export const putRecords: (records: StructuredRecord[]) => Promise<void> = structured.putRecords;
+/** Accept, reject or undo. Returns the previous statuses (for Undo). Sets reviewedAt. */
+export const setRecordStatus: (ids: string[], status: RecordStatus) => Promise<{ id: string; status: RecordStatus }[]> =
+  structured.setRecordStatus;
+export const deleteRecords: (ids: string[]) => Promise<void> = structured.deleteRecords;
+/** Accepted records of enabled import sources (or of the given sources). */
+export const getAcceptedRecords: (sourceIds?: string[]) => Promise<StructuredRecord[]> = structured.getAcceptedRecords;
+/** Records of a job in a run state, in queue order (STRUCTURED_KINDS, then reading order). */
+export const listJobRecords: (jobId: string, runState: RunState) => Promise<StructuredRecord[]> = structured.listJobRecords;
+export const putJob: (job: ExtractionJob) => Promise<void> = structured.putJob;
+export const getJob: (id: string) => Promise<ExtractionJob | undefined> = structured.getJob;
+export const listJobs: (filter?: { sourceId?: string; status?: JobStatus[] }) => Promise<ExtractionJob[]> = structured.listJobs;
+/** React hook: live jobs (of one source, or all), undefined while loading. */
+export const useJobs: (sourceId?: string) => ExtractionJob[] | undefined = structured.useJobs;
+/** Lifetime spend on structuring (sum of job usage, books still in the library). */
+export const structuringSpendUsd: () => Promise<number> = structured.structuringSpendUsd;
+export const setSourceFingerprint: (sourceId: string, fingerprint: string) => Promise<void> = structured.setSourceFingerprint;
+export const findSourcesByFingerprint: (fingerprint: string) => Promise<LibrarySource[]> = structured.findSourcesByFingerprint;
+/** Characters with a ref into this source (for "Used by …" on switch-off / delete). */
+export const charactersUsingSource: (
+  sourceId: string,
+) => Promise<{ campaignId: string; campaignName: string; characterName: string }[]> = structured.charactersUsingSource;
+/** Pack import: a new source with its entries and records in one transaction. */
+export const saveLibrarySourceWithRecords: (
+  source: LibrarySource,
+  entries: CompendiumEntry[],
+  records: StructuredRecord[],
+) => Promise<void> = structured.saveLibrarySourceWithRecords;

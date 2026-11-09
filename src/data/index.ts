@@ -114,3 +114,57 @@ export { useRulesIndexState } from './rulesIndexStore';
 export { createRulesIndex } from './search';
 /** The kind an imported entry would get ('spell', 'monster', 'magic-item', 'feat' or 'rule'). */
 export { guessKind } from './chunk';
+
+// ---------------------------------------------------------------------------
+// Structured imports (spec §2–§7): records beside entries, read on this device (and, with the player's
+// key and consent, by Claude), reviewed, then used by the index, the builder, combat and the DM.
+// CONTRACT (Day 0): final names; several are stubs until their owner lands them (grep "not implemented").
+// ---------------------------------------------------------------------------
+
+/** Detection: segment → parse offline → normalize → records (local and free). */
+export { detectStructure, structureEntryAs, rereadOffline, type DetectionSummary } from './structured/detect';
+/** Segmentation (pure) and paragraph numbering (pure; every TextSpan counts these paragraphs). */
+export { segment, type Candidate, type CandidateBlock, type SegmentContext, type SpellListHint } from './structured/segment';
+export { splitParagraphs, resolveSpan, featureText } from './structured/paragraphs';
+/** Offline parsers and the one normalizer per kind, shared with Claude's answers. */
+export { parseOffline, type OfflineParse } from './structured/parse';
+export { normalize, validateData, type NormalizeContext, type Normalized } from './structured/normalize';
+/** The stored form's schemas (ranges, strict) and the wire format both producers return. */
+export { DATA_SCHEMAS, RECORD_SCHEMA, STRUCTURED_LIMITS, TEXT_SPAN } from './structured/schemas';
+export { WIRE, type Wire } from './structured/wire';
+/** Accepted records as rules-index entries, and the stats line the review and the DM's lookups show. */
+export { materializeEntries, isReviewedImport } from './structured/materialize';
+export { statsLine } from './structured/statsLine';
+/** One library snapshot per rules-index version (shared by the index and the builder data). */
+export { getLibrarySnapshot, type LibrarySnapshot } from './rulesIndexStore';
+/** Merged builder data: SRD + accepted imported options (the SRD object is never mutated). */
+export { importedOptions, mergeBuilderData, type ImportedOptions, type MergeProblem } from './structured/merge';
+export { getBuilderProblems, countUnreviewedOptions } from './builderData';
+/** Option lookups (id-first; an imported id never binds to an SRD option by name). */
+export {
+  backgroundOptionFor,
+  classByName,
+  classOptionFor,
+  findEquipment,
+  findFeat,
+  inventoryFromOption,
+  isImportedId,
+  optionSourceLabel,
+  primaryRuleOf,
+  speciesOptionFor,
+  subclassOptionFor,
+  suggestParentClass,
+  type CatalogMatch,
+} from './options/resolve';
+/** Provenance for copies, and app-written item descriptions (numbers, never book text). */
+export { refFor, type RefOption, type RefText } from './options/refs';
+export { describeOption } from './options/describe';
+/** Level-up and feature-use helpers (moved here from src/ui/builder by E4, so src/dm never imports src/ui). */
+export { gainedFeatures, refreshFeatureUses, featureUseChanges, type GainedFeaturesOptions, type LevelingData } from './options/leveling';
+export { inferFeatureUses, type UsesContext } from './options/featureUses';
+/** Restore book text onto a character on a device that has the book. */
+export { restoreImportedText, buildLibraryLookup, type LibraryLookup, type RestoreReport } from './structured/restore';
+/** JSON packs and "Download book data". */
+export { parsePack, exportPack, isPackFile, type PackFileV1, type PackImport, type PackRecordV1 } from './structured/packs';
+/** Older-format (2014) adaptation notes. */
+export { adaptationNote, type AdaptationFields } from './structured/adaptations';

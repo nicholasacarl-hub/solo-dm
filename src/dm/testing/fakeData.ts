@@ -3,7 +3,7 @@
  * rules index over a few entries, so tests never load SRD JSON, Dexie or pdf.js.
  */
 import type { RulesIndex, SearchHit, SearchOptions } from '@/data';
-import type { CompendiumEntry, ContentKind } from '@/types';
+import type { BuilderData, CompendiumEntry, ContentKind } from '@/types';
 
 export const SRD_ATTRIBUTION = 'SRD 5.2.1 attribution (test)';
 
@@ -99,11 +99,63 @@ export function setFakeRulesIndex(next: RulesIndex): void {
   index = next;
 }
 export const useRulesIndex = (): RulesIndex | null => index;
-export const loadBuilderData = async () => {
-  throw new Error('fake data: builder data is not used by the DM');
-};
+/** The merged builder data of the Gloamwood fixture (SRD Cleric and Fighter + the book), loaded on first use. */
+export const loadBuilderData = async (): Promise<BuilderData> => (await import('@/test/structuredFixtures')).EXPECTED_MERGED;
 export const useBuilderData = () => ({ data: null, error: null, loading: false });
 export const importLibraryDocument = async () => {
   throw new Error('fake data: imports are not used by the DM');
 };
 export const chunkDocument = () => [];
+
+// ---------------------------------------------------------------------------
+// Structured imports (the same names as the @/data barrel). Pure modules are the real ones, imported by
+// path; anything that would read storage is a fake (DM tests never load Dexie).
+// ---------------------------------------------------------------------------
+
+export { segment } from '@/data/structured/segment';
+export { splitParagraphs, resolveSpan, featureText } from '@/data/structured/paragraphs';
+export { parseOffline } from '@/data/structured/parse';
+export { normalize, validateData } from '@/data/structured/normalize';
+export { DATA_SCHEMAS, RECORD_SCHEMA, STRUCTURED_LIMITS, TEXT_SPAN } from '@/data/structured/schemas';
+export { WIRE } from '@/data/structured/wire';
+export { materializeEntries, isReviewedImport } from '@/data/structured/materialize';
+export { statsLine } from '@/data/structured/statsLine';
+export { importedOptions, mergeBuilderData } from '@/data/structured/merge';
+export {
+  backgroundOptionFor,
+  classByName,
+  classOptionFor,
+  findEquipment,
+  findFeat,
+  inventoryFromOption,
+  isImportedId,
+  optionSourceLabel,
+  primaryRuleOf,
+  speciesOptionFor,
+  subclassOptionFor,
+  suggestParentClass,
+} from '@/data/options/resolve';
+export { refFor } from '@/data/options/refs';
+export { describeOption } from '@/data/options/describe';
+export { gainedFeatures, refreshFeatureUses, featureUseChanges } from '@/data/options/leveling';
+export { inferFeatureUses } from '@/data/options/featureUses';
+export { adaptationNote } from '@/data/structured/adaptations';
+
+const notUsed = (name: string) => async (): Promise<never> => {
+  throw new Error(`fake data: ${name} is not used by the DM`);
+};
+export const detectStructure = notUsed('detectStructure');
+export const structureEntryAs = notUsed('structureEntryAs');
+export const rereadOffline = notUsed('rereadOffline');
+export const getLibrarySnapshot = notUsed('getLibrarySnapshot');
+export const buildLibraryLookup = notUsed('buildLibraryLookup');
+export const countUnreviewedOptions = async () => [];
+export const getBuilderProblems = () => [];
+export const restoreImportedText = () => {
+  throw new Error('fake data: restoreImportedText is not used by the DM');
+};
+export const parsePack = () => {
+  throw new Error('fake data: packs are not used by the DM');
+};
+export const exportPack = parsePack;
+export const isPackFile = () => false;

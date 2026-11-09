@@ -2,6 +2,7 @@
  * Rules content: the bundled SRD 5.2.1, the player's imported library, and homebrew.
  */
 import type { Ability, CasterType, CreatureSize, HitDie, Skill } from './character';
+import type { FeatData, ImportedRef, ItemBonuses, OptionSource, Rarity, StructuredKind } from './structured';
 
 export type ContentKind =
   | 'rule'
@@ -73,6 +74,16 @@ export interface LibrarySource {
   notes?: string;
   createdAt: number;
   updatedAt: number;
+  /** Imports: bookFingerprint() of the entries' texts as imported, in ordinal order. Set once; never recomputed. */
+  fingerprint?: string;
+  /** Denormalized counts for the library row; rewritten by putRecords in the same transaction. */
+  structure?: {
+    detectedAt: number;
+    parserVersion: number;
+    counts: Partial<Record<StructuredKind, { pending: number; accepted: number; rejected: number }>>;
+    /** Records with data === null. */
+    needsClaude: number;
+  };
 }
 
 export type HomebrewOrigin = 'dm' | 'player';
@@ -109,6 +120,8 @@ export interface ClassFeatureDef {
   description: string;
   /** Short version (≈300 chars) for sheets and the DM prompt. */
   summary?: string;
+  /** Imported options only: where the text came from (copied onto the sheet with the feature). */
+  ref?: ImportedRef;
 }
 
 export interface SubclassOption {
@@ -116,6 +129,14 @@ export interface SubclassOption {
   name: string;
   summary: string;
   features: ClassFeatureDef[];
+  /** Imported options only. */
+  source?: OptionSource;
+  /** Level of its first feature as printed (1–2 in some 2014 books); features below the parent's subclassLevel arrive then. */
+  firstLevel?: number;
+  /** A subclass that grants Spellcasting with its own slots (third caster). */
+  casterType?: 'third';
+  spellcastingAbility?: Ability;
+  alwaysPreparedSpells?: { level: number; spells: string[] }[];
 }
 
 export interface ClassOption {
@@ -140,11 +161,21 @@ export interface ClassOption {
   features: ClassFeatureDef[];
   /** Per-level class table rows: { level, proficiencyBonus, ...class-specific columns }. */
   levelTable: Array<Record<string, string | number>>;
+  /** Imported options only. */
+  source?: OptionSource;
+  /** "Strength or Dexterity" = 'any'. Absent: 'any' for the SRD Fighter, else 'all' (resolve.ts primaryRuleOf). */
+  primaryAbilityRule?: 'all' | 'any';
+  /** Another class's spell list it casts from ("Wizard"); absent = its own name. */
+  spellListName?: string;
+  /** Spell names its own list prints (SRD spells included). */
+  spellNames?: string[];
 }
 
 export interface SpeciesTrait {
   name: string;
   description: string;
+  /** Imported options only. */
+  ref?: ImportedRef;
 }
 
 export interface SpeciesOption {
@@ -157,7 +188,15 @@ export interface SpeciesOption {
   darkvision?: number;
   traits: SpeciesTrait[];
   /** Lineages / ancestries the player picks from (e.g. elven lineages, draconic ancestry). */
-  lineages?: { name: string; description: string }[];
+  lineages?: { name: string; description: string; ref?: ImportedRef }[];
+  /** Imported options only. */
+  source?: OptionSource;
+  /** The trait that offers the lineages (wins over the /Lineage|Ancestry|Legacy/ name rule). */
+  lineageTrait?: string;
+  /** Older books: printed ability score increases, shown for reference and never applied. */
+  legacyAbilityIncreases?: { ability: Ability | 'any'; amount: number }[];
+  /** Printed languages: suggested for the two language picks, never added. */
+  languages?: string[];
 }
 
 export interface BackgroundOption {
@@ -171,6 +210,16 @@ export interface BackgroundOption {
   skills: Skill[];
   tool: string;
   equipment: EquipmentPackage[];
+  /** Imported options only. */
+  source?: OptionSource;
+  /** 'any': the player picks any three abilities (absent = 'listed'). */
+  abilityChoice?: 'listed' | 'any';
+  /** true: `feat` is '' and the player picks an Origin feat. */
+  featChoice?: boolean;
+  /** Printed languages: suggested for the two language picks. */
+  languages?: string[];
+  /** Older books: the background's named feature (with its ref), kept as a 'background' feature. */
+  legacyFeature?: SpeciesTrait;
 }
 
 export type FeatCategory = 'origin' | 'general' | 'fighting-style' | 'epic-boon';
@@ -182,6 +231,13 @@ export interface FeatOption {
   prerequisite?: string;
   repeatable?: boolean;
   description: string;
+  /** Imported options only. */
+  source?: OptionSource;
+  /** From "Level N+": the only prerequisite part the app checks. */
+  minLevel?: number;
+  abilityIncrease?: FeatData['abilityIncrease'];
+  /** Imported options only: where `description` came from. */
+  ref?: ImportedRef;
 }
 
 export interface BuilderData {
@@ -217,4 +273,17 @@ export interface EquipmentOption {
   stealthDisadvantage?: boolean;
   armorType?: 'light' | 'medium' | 'heavy';
   description?: string;
+  /** Imported options only. */
+  source?: OptionSource;
+  /** Magic items in the catalog (imported): base stats are the base item's; bonuses apply once, in the engine. */
+  magic?: EquipmentMagic;
+}
+
+/** A magic item's numbers on a catalog option. */
+export interface EquipmentMagic {
+  rarity: Rarity;
+  attunement: boolean | string;
+  bonuses?: ItemBonuses;
+  /** The catalog option whose stats it copied. */
+  baseItemId?: string;
 }

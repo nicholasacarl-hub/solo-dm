@@ -14,6 +14,7 @@ import {
   type FeatureUses,
   type GameEvent,
   type HitDie,
+  type ImportedRef,
   type RollResult,
 } from '@/types';
 import { newId, nameKey, slugify } from '@/lib/id';
@@ -52,6 +53,14 @@ export interface LevelUpOptions {
   casterType?: CasterType;
   spellcastingAbility?: Ability;
   subclass?: string;
+  /** The SubclassOption id, stored on the class entry with `subclass` (structured imports). */
+  subclassId?: string;
+  /** Provenance of an imported subclass, stored on the class entry. */
+  subclassRef?: ImportedRef;
+  /** Provenance of an imported class: copied onto a new class entry. */
+  classRef?: ImportedRef;
+  /** A subclass that grants spellcasting (third caster): set on the existing class entry together with `subclass`. */
+  subclassCasting?: { casterType: CasterType; spellcastingAbility?: Ability };
   /**
    * 'average' = fixed value (die/2 + 1) + CON mod; 'roll' = roll the hit die + CON mod;
    * { fixed: n } = n is the hit-die result (e.g. rolled on physical dice) and the CON mod is added.

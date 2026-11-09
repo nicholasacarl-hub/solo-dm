@@ -18,7 +18,9 @@ const fireball: CompendiumEntry = {
   text: 'A bright streak flashes from you.',
 };
 
-vi.mock('@/data', () => ({
+// Structured imports: every new name of @/data, @/storage, the game store and @/dm (shared factories).
+vi.mock('@/data', async () => ({
+  ...(await import('@/ui/library/structure/testing/mocks')).structuredDataMock(),
   SRD_ATTRIBUTION:
     'This work includes material from the System Reference Document 5.2.1 ("SRD 5.2.1") by Wizards of the Coast LLC, available at https://www.dndbeyond.com/srd. The SRD 5.2.1 is licensed under the Creative Commons Attribution 4.0 International License, available at https://creativecommons.org/licenses/by/4.0/legalcode.',
   useRulesIndexState: vi.fn(),
@@ -26,7 +28,8 @@ vi.mock('@/data', () => ({
   importLibraryDocument: vi.fn(),
   loadSrdManifest: () => Promise.reject(new Error('offline')),
 }));
-vi.mock('@/storage', () => ({
+vi.mock('@/storage', async () => ({
+  ...(await import('@/ui/library/structure/testing/mocks')).structuredStorageMock(),
   useHomebrewList: vi.fn(),
   useCampaignList: () => [],
   useLibrarySources: () => [],
@@ -36,10 +39,14 @@ vi.mock('@/storage', () => ({
   setLibrarySourceEnabled: vi.fn(),
   deleteLibrarySource: vi.fn(),
 }));
-vi.mock('@/state/gameStore', () => ({
-  useGame: { getState: () => ({ campaignId: null }) },
-  queueCampaignNotice: vi.fn(),
-}));
+vi.mock('@/state/gameStore', async () => {
+  const restore = (await import('@/ui/library/structure/testing/mocks')).gameStoreRestoreMock();
+  return {
+    useGame: { getState: () => ({ campaignId: null, ...restore }) },
+    queueCampaignNotice: vi.fn(),
+  };
+});
+vi.mock('@/dm', async () => (await import('@/ui/library/structure/testing/mocks')).dmMock());
 
 const data = await import('@/data');
 const storage = await import('@/storage');

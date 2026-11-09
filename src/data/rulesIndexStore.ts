@@ -3,7 +3,7 @@
  * rebuilt after invalidateRulesIndex(). React components subscribe with useRulesIndex().
  */
 import { useEffect, useSyncExternalStore } from 'react';
-import type { CompendiumEntry } from '@/types';
+import type { CompendiumEntry, LibrarySource, StructuredRecord } from '@/types';
 import { getLibraryEntries, listHomebrew } from '@/storage';
 import { createRulesIndex } from './search';
 import { loadSrdCompendium } from './srd';
@@ -99,6 +99,23 @@ export function useRulesIndexState(): { index: RulesIndex | null; loading: boole
 /** The index, or null while it is first built. After invalidation the previous index is kept until the new one is ready. */
 export function useRulesIndex(): RulesIndex | null {
   return useRulesIndexState().index;
+}
+
+// ---------------------------------------------------------------------------
+// Structured imports (spec §5.1): one library snapshot per index version, shared by the index and the
+// builder data.
+// ---------------------------------------------------------------------------
+
+export interface LibrarySnapshot {
+  version: number;
+  sources: LibrarySource[];                          // enabled imports
+  entriesById: ReadonlyMap<string, CompendiumEntry>; // their entries
+  accepted: StructuredRecord[];                      // accepted, DATA_SCHEMAS-valid records of those sources
+}
+
+/** Read once per rules-index version (invalidateRulesIndex() starts a new one). CONTRACT (Day 0 stub). Owner: E1. */
+export async function getLibrarySnapshot(): Promise<LibrarySnapshot> {
+  throw new Error('data/rulesIndexStore: getLibrarySnapshot not implemented');
 }
 
 /** Tests only: forget the built index and listeners' state. */

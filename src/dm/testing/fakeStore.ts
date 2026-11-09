@@ -304,6 +304,10 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
         set({ pendingDmNotices: [] });
         return notices;
       },
+      // Structured imports: nothing to restore in the DM's tests.
+      async restoreImportedText() {
+        return null;
+      },
     };
   });
 }
