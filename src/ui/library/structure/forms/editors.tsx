@@ -20,6 +20,7 @@ import { ParentClassSelect, parentChoices } from './ParentClassSelect';
 import { getPath, isNamed } from './paths';
 import { LegacyFeatureEditor, RowsEditor } from './RowsEditor';
 import { TextSpanChip } from './TextSpanChip';
+import { TOUCH } from '../touch';
 
 const ABBR: Readonly<Record<Ability, string>> = { str: 'STR', dex: 'DEX', con: 'CON', int: 'INT', wis: 'WIS', cha: 'CHA' };
 
@@ -40,7 +41,11 @@ function ValueSegment<T>({ path, label, options, value, onChange, hint }: {
         {options.map((o, i) => (
           <label
             key={o.label}
-            className="flex min-h-11 cursor-pointer items-center rounded-[10px] px-3 text-sm font-medium text-muted transition-colors hover:text-text sm:min-h-9 has-[:checked]:bg-surface has-[:checked]:text-text has-[:checked]:shadow-sm has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring"
+            className={cn(
+              'flex min-h-9 cursor-pointer items-center rounded-[10px] px-3 text-sm font-medium text-muted transition-colors hover:text-text',
+              'has-[:checked]:bg-surface has-[:checked]:text-text has-[:checked]:shadow-sm has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring',
+              TOUCH,
+            )}
           >
             <input
               type="radio"
@@ -358,7 +363,8 @@ function AbilityIncreaseEditor() {
               onFocus={() => form.onFocusField('abilityIncrease')}
               onClick={() => toggle(o.value as Ability)}
               className={cn(
-                'min-h-11 rounded-lg border px-2.5 text-sm transition-colors sm:min-h-9',
+                'min-h-9 rounded-lg border px-2.5 text-sm transition-colors',
+                TOUCH,
                 pressed ? 'border-accent bg-accent-soft text-text' : 'border-border bg-surface text-muted hover:text-text',
               )}
             >

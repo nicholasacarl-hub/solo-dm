@@ -14,6 +14,7 @@ import { errorMessage } from '@/ui/shell/format';
 import { kindInfo } from '../kinds';
 import { KIND_LABELS } from './labels';
 import { structureAs } from './reviewActions';
+import { TOUCH } from './touch';
 import { bookPageSearch } from './useBookPageState';
 
 const PAGE = 100;
@@ -85,7 +86,7 @@ export function AllEntriesView({
       </p>
       <div className="relative max-w-md">
         <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" aria-hidden />
-        <Input type="search" aria-label="Search entries" placeholder="Search entries" value={q} className="pl-9" onChange={(e) => setQ(e.target.value)} />
+        <Input type="search" aria-label="Search entries" placeholder="Search entries" value={q} className={`pl-9 ${TOUCH}`} onChange={(e) => setQ(e.target.value)} />
       </div>
       <ul aria-label="All entries" className="flex flex-col divide-y divide-border rounded-2xl border border-border bg-surface">
         {shown.slice(0, limit).map((entry) => {
@@ -115,7 +116,7 @@ export function AllEntriesView({
                 placement="bottom-end"
                 items={STRUCTURED_KINDS.map((k) => ({ id: k, label: KIND_LABELS[k].title, onSelect: () => void structure(entry, k) }))}
                 trigger={(t) => (
-                  <Button {...t} size="sm" variant="ghost" loading={busy === entry.id} disabled={busy !== null}>
+                  <Button {...t} size="sm" variant="ghost" className={TOUCH} loading={busy === entry.id} disabled={busy !== null}>
                     Structure as…
                     <ChevronDown className="size-3.5" aria-hidden />
                     <span className="sr-only"> ({entry.name})</span>
@@ -127,7 +128,9 @@ export function AllEntriesView({
         })}
       </ul>
       {shown.length > limit && (
-        <Button onClick={() => setLimit((l) => l + PAGE)}>Show more ({shown.length - limit} left)</Button>
+        <Button className={TOUCH} onClick={() => setLimit((l) => l + PAGE)}>
+          Show more ({shown.length - limit} left)
+        </Button>
       )}
     </div>
   );

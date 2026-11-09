@@ -13,6 +13,7 @@ import type { LibrarySource } from '@/types';
 import { toast } from '@/ui/components/toast';
 import { Button, Dialog } from '@/ui/components/ui';
 import { errorMessage } from '@/ui/shell/format';
+import { TOUCH_FOOTER } from './touch';
 
 export function bookDataFileName(title: string): string {
   return `${slugify(title) || 'book'}.book-data.json`;
@@ -55,14 +56,14 @@ export function BookDataDialog({ open, source, onClose }: { open: boolean; sourc
       size="md"
       title="Download book data"
       footer={
-        <>
+        <div className={TOUCH_FOOTER}>
           <Button variant="ghost" disabled={busy} onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" loading={busy} icon={<Download className="size-4" aria-hidden />} onClick={() => void download()}>
             Download book data
           </Button>
-        </>
+        </div>
       }
     >
       <div className="flex flex-col gap-3 text-sm">

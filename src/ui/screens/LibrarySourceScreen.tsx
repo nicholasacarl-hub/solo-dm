@@ -30,6 +30,7 @@ import type { Availability } from '@/ui/library/structure/RecordDetail';
 import { rereadHere } from '@/ui/library/structure/reviewActions';
 import { ReviewWorkspace } from '@/ui/library/structure/ReviewWorkspace';
 import { StructureStatusCard } from '@/ui/library/structure/StructureStatusCard';
+import { TOUCH, TOUCH_BUTTONS } from '@/ui/library/structure/touch';
 import { UndoToast } from '@/ui/library/structure/UndoToast';
 import { useBookPageState } from '@/ui/library/structure/useBookPageState';
 
@@ -125,6 +126,11 @@ export function LibrarySourceScreen() {
   };
 
   const readWithClaude = (ids: string[], title: string, model?: ModelId) => setConsent({ kind: 'ids', ids, title, model });
+  const retry = (jobId: string, ids: string[]) => {
+    const first = records.find((r) => r.id === ids[0]);
+    const title = ids.length === 1 && first ? first.name : kindCount(first?.kind ?? 'spell', ids.length);
+    setConsent({ kind: 'ids', ids, title, retryJobId: jobId });
+  };
 
   if (sources === undefined) {
     return (
@@ -142,7 +148,11 @@ export function LibrarySourceScreen() {
         <EmptyState
           icon={<BookX className="size-8" aria-hidden />}
           title={seen.current ? 'This book was deleted.' : 'This book isn’t in this device’s Library.'}
-          action={<Button onClick={() => navigate('/library?tab=mine')}>Back to the Library</Button>}
+          action={
+            <Button className={TOUCH} onClick={() => navigate('/library?tab=mine')}>
+              Back to the Library
+            </Button>
+          }
         >
           {seen.current ? 'It was removed, maybe in another tab.' : 'Books you import stay on the device that imported them.'}
         </EmptyState>
@@ -181,7 +191,7 @@ export function LibrarySourceScreen() {
             {!source.enabled && (
               <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-border bg-surface-2 px-4 py-2.5 text-sm">
                 <p className="min-w-0 flex-1">This book is switched off: accepted entries aren't used anywhere until you switch it on.</p>
-                <Button size="sm" onClick={() => toggle(source, true)}>
+                <Button size="sm" className={TOUCH} onClick={() => toggle(source, true)}>
                   Switch it on
                 </Button>
               </div>
@@ -189,7 +199,7 @@ export function LibrarySourceScreen() {
             {recheck.length > 0 && (
               <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-info/30 bg-info-soft/40 px-4 py-2.5 text-sm">
                 <p className="min-w-0 flex-1">The offline reader improved: re-check {recheck.length} {recheck.length === 1 ? 'entry' : 'entries'} for free.</p>
-                <Button size="sm" icon={<RefreshCw className="size-4" aria-hidden />} onClick={() => void rereadHere(recheck.map((r) => r.id))}>
+                <Button size="sm" className={TOUCH} icon={<RefreshCw className="size-4" aria-hidden />} onClick={() => void rereadHere(recheck.map((r) => r.id))}>
                   Re-check
                 </Button>
               </div>
@@ -224,7 +234,7 @@ export function LibrarySourceScreen() {
               records={records}
               sources={sources}
               availability={availability}
-              onRetry={(jobId, ids) => setConsent({ kind: 'ids', ids, title: kindCount(records.find((r) => r.id === ids[0])?.kind ?? 'spell', ids.length), retryJobId: jobId })}
+              onRetry={retry}
               onReview={() => state.set({ view: 'review', filter: 'review' })}
             />
             {structured && unread === 0 && records.length > 0 && counts.review > 0 && !records.some((r) => r.origin === 'claude') && (jobs ?? []).every((j) => j.sourceId !== source.id) && (
@@ -236,7 +246,7 @@ export function LibrarySourceScreen() {
           <Tabs
             value={state.view}
             onChange={(view) => state.set({ view, recordId: null })}
-            className="mb-4"
+            className={`mb-4 ${TOUCH_BUTTONS}`}
             tabs={[
               { value: 'review', label: 'Review' },
               { value: 'entries', label: 'All entries' },
@@ -256,7 +266,7 @@ export function LibrarySourceScreen() {
               icon={<ScanSearch className="size-8" aria-hidden />}
               title="Not structured yet"
               action={
-                <Button variant="primary" loading={detect !== null} onClick={() => void runDetect()}>
+                <Button variant="primary" className={TOUCH} loading={detect !== null} onClick={() => void runDetect()}>
                   Structure this book
                 </Button>
               }
@@ -275,6 +285,7 @@ export function LibrarySourceScreen() {
               state={state}
               availability={availability}
               onReadWithClaude={readWithClaude}
+              onRetry={retry}
               onAllEntries={() => state.set({ view: 'entries' })}
             />
           )}

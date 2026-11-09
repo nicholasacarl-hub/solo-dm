@@ -301,8 +301,13 @@ function fillEquipment(draft: BuilderDraft, data: BuilderData): BuilderDraft {
         ? 0
         : null;
   const next = { ...draft, classEquipment, backgroundEquipment };
-  const { count, candidates } = masteryPlan(next, data);
-  if (!count) return { ...next, weaponMasteries: [] };
+  const plan = masteryPlan(next, data);
+  if (!plan.count) return { ...next, weaponMasteries: [] };
+  // The source filter narrows the picks too (a filter on the SRD never picks a book's weapon); a filter
+  // that would leave too few falls back to every candidate.
+  const shownCandidates = shown(plan.candidates, next);
+  const candidates = shownCandidates.length >= plan.count ? shownCandidates : plan.candidates;
+  const count = plan.count;
   const packed = new Set(
     [cls?.startingEquipment[classEquipment ?? -1], background?.equipment[backgroundEquipment ?? -1]]
       .flatMap((pkg) => pkg?.items ?? [])

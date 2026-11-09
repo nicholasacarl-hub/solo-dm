@@ -1,13 +1,20 @@
 /**
  * One feature on the sheet: name, source, limited-use pips, and its rules text on demand.
- * Features a transformation gave the hero carry the arcane accent.
+ * Features a transformation gave the hero carry the arcane accent. A feature from one of the player's
+ * books carries a book badge; on a device without that book (a save or GitHub copy leaves the text
+ * out) its body says so, with Open the Library and Look again (spec §7.5).
  */
-import { useId, useState } from 'react';
+import { useId, useState, type ReactNode } from 'react';
+import { Link, useInRouterContext } from 'react-router';
 import { ChevronDown, Dna, Minus, Plus } from 'lucide-react';
 import { cn } from '@/lib/cn';
+import { isImportedPlaceholder } from '@/lib/importedContent';
+import { useGame } from '@/state/gameStore';
 import type { Character, Feature } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
-import { Badge } from '@/ui/components/ui';
+import { toast } from '@/ui/components/toast';
+import { Badge, Button } from '@/ui/components/ui';
+import { BookBadge } from '@/ui/builder/BookBadges';
 import { featureUseChange } from './sheetChanges';
 import { Pips } from './SheetParts';
 import type { SheetChange } from './useSheetActions';
@@ -52,6 +59,60 @@ function UsesControl({ feature, editable, onEdit }: { feature: Feature; editable
   );
 }
 
+/** The book text was left out of this copy (an export, a GitHub save) and this device hasn't filled it back in. */
+export function textMissing(feature: Pick<Feature, 'description' | 'ref'>): boolean {
+  const ref = feature.ref;
+  if (!ref?.textCopied) return false;
+  const text = feature.description?.trim();
+  return !text || Boolean(ref.redacted) || isImportedPlaceholder(text);
+}
+
+/** A link to the Library: the router's when there is one (the app), else the hash URL. */
+function LibraryLink({ children }: { children: ReactNode }) {
+  const inRouter = useInRouterContext();
+  const className = 'inline-flex h-8 items-center rounded-lg border border-border px-3 text-sm font-medium hover:bg-surface-2';
+  return inRouter ? (
+    <Link to="/library" className={className}>
+      {children}
+    </Link>
+  ) : (
+    <a href="#/library" className={className}>
+      {children}
+    </a>
+  );
+}
+
+/** "This text is from …, which isn't in this device's Library." with Open the Library and Look again. */
+function MissingText({ title }: { title: string }) {
+  const restore = useGame((s) => s.restoreImportedText);
+  const [busy, setBusy] = useState(false);
+  const lookAgain = async () => {
+    setBusy(true);
+    try {
+      const report = await restore?.();
+      if (report && report.restored > 0) toast.success(`Filled in ${report.restored} ${report.restored === 1 ? 'passage' : 'passages'} from your Library.`);
+      else toast.info(`“${title}” still isn't in this device's Library.`);
+    } catch {
+      toast.error("Couldn't read your Library just now. Try again in a moment.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="text-sm text-muted">
+        This text is from “{title}”, which isn't in this device's Library. Import the book here and it comes back.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <LibraryLink>Open the Library</LibraryLink>
+        <Button size="sm" variant="ghost" loading={busy} onClick={() => void lookAgain()}>
+          Look again
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function FeatureItem({ feature, editable, onEdit }: { feature: Feature; editable: boolean; onEdit: OnEdit }) {
   const [open, setOpen] = useState(false);
   const bodyId = useId();
@@ -76,6 +137,12 @@ export function FeatureItem({ feature, editable, onEdit }: { feature: Feature; e
               {feature.name}
             </span>
             {feature.sourceName && <span className={cn('block text-xs', transformation ? 'text-arcane' : 'text-faint')}>{feature.sourceName}</span>}
+            {/* Under the name, so narrow panels keep the name on one line. */}
+            {feature.ref && (
+              <span className="mt-0.5 flex">
+                <BookBadge title={feature.ref.sourceTitle} />
+              </span>
+            )}
           </span>
         </button>
         {feature.homebrewId && <Badge tone="arcane">Homebrew</Badge>}
@@ -88,7 +155,13 @@ export function FeatureItem({ feature, editable, onEdit }: { feature: Feature; e
       </div>
       {open && (
         <div id={bodyId} className={cn('border-t px-3 py-2', transformation ? 'border-arcane/25' : 'border-border')}>
-          {feature.description ? <Markdown className="text-sm">{feature.description}</Markdown> : <p className="text-sm text-muted">No description.</p>}
+          {feature.ref && textMissing(feature) ? (
+            <MissingText title={feature.ref.sourceTitle} />
+          ) : feature.description ? (
+            <Markdown className="text-sm">{feature.description}</Markdown>
+          ) : (
+            <p className="text-sm text-muted">No description.</p>
+          )}
         </div>
       )}
     </li>

@@ -20,16 +20,18 @@ import {
 import {
   DEFAULT_SETTINGS,
   type AppSettings,
+  type BuilderData,
   type Campaign,
   type CampaignSettings,
   type Character,
+  type CompendiumEntry,
   type D20TestResult,
   type InteractionRequest,
   type InteractionResponse,
 } from '@/types';
 import { setDmDeps, type DmImages } from '../deps';
 import { DmSessionController } from '../session';
-import { createFakeRulesIndex, SAMPLE_RULES } from './fakeData';
+import { createFakeRulesIndex, loadBuilderData, SAMPLE_RULES } from './fakeData';
 import { autoRespond, createFakeGameStore, type FakeGameStore } from './fakeStore';
 import { FakeClient, type ScriptStep } from './fakeClient';
 
@@ -46,6 +48,13 @@ export interface HarnessOptions {
   libraryImports?: { id: string; name: string }[];
   /** Illustrations (default: no OpenAI key, so unavailable). */
   images?: Partial<DmImages>;
+  /**
+   * Merged builder data for level_up, inventory_add, features_add and AC (default: the Gloamwood fixture's
+   * EXPECTED_MERGED, the SRD Cleric and Fighter plus the invented book); null = it fails to load.
+   */
+  builderData?: BuilderData | null;
+  /** Entries of the fake rules index (default: SAMPLE_RULES). */
+  rules?: CompendiumEntry[];
 }
 
 /** What the images module says when no OpenAI key is set (the harness default). */
@@ -81,7 +90,16 @@ export function setupHarness(opts: HarnessOptions = {}): Harness {
   const settings: AppSettings = { ...DEFAULT_SETTINGS, apiKey: 'sk-ant-test', ...opts.settings };
   const invalidate = vi.fn();
   let ids = 0;
-  const index = createFakeRulesIndex(SAMPLE_RULES);
+  const index = createFakeRulesIndex(opts.rules ?? SAMPLE_RULES);
+  const builder = opts.builderData;
+  const builderData =
+    builder === null
+      ? async (): Promise<BuilderData> => {
+          throw new Error('builder data unavailable (test)');
+        }
+      : builder
+        ? async () => builder
+        : loadBuilderData;
   setDmDeps({
     store: () => store.getState(),
     settings: () => settings,
@@ -89,6 +107,7 @@ export function setupHarness(opts: HarnessOptions = {}): Harness {
     keyClient: () => ({ models: { list: async () => ({ data: [] }) } }),
     rulesIndex: async () => index,
     invalidateRulesIndex: invalidate,
+    builderData,
     libraryImports: async () => opts.libraryImports ?? [],
     images: {
       available: () => ({ ok: false, reason: NO_IMAGE_KEY }),

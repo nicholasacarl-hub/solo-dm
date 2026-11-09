@@ -1,6 +1,12 @@
 /**
  * Character tools: batched sheet changes, rests, leveling, and reading the full sheet.
  * Every change runs through the pure engine and lands in the store in one atomic update.
+ *
+ * Content from the player's books (structured imports, spec §5.5, §6.4, §6.6): level_up takes an
+ * imported class's or subclass's features (with their text and refs) from the merged builder data;
+ * inventory_add, spells_add and features_add link an exact name to the rules index or the builder data,
+ * so the sheet gets numbers and provenance (refs), never invented text. SRD classes keep today's
+ * DM-supplied features, and a failure to read the data leaves every tool exactly as it was.
  */
 import {
   abilityModifier,
@@ -35,19 +41,37 @@ import {
   useFeature,
   xpToNextLevel,
   type EngineResult,
+  type LevelUpOptions,
 } from '@/engine';
+import type { RulesIndex } from '@/data';
+import { inventoryFromEntry } from '@/data/options/inventory';
+import { gainedFeatures } from '@/data/options/leveling';
+import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
+import { classByName, classOptionFor, optionSourceLabel, subclassOptionFor } from '@/data/options/resolve';
+import { nameKey } from '@/lib/id';
+import { textFingerprint } from '@/lib/importedContent';
 import {
   ABILITY_NAMES,
   SKILL_NAMES,
+  type BuilderData,
+  type Campaign,
   type Character,
+  type ClassLevel,
+  type ClassOption,
+  type CompendiumEntry,
   type Currency,
+  type EquipmentOption,
+  type Feature,
   type GameEvent,
   type HitDie,
+  type ImportedRef,
   type InventoryItem,
+  type KnownSpell,
   type ProficiencyLevel,
   type RollResult,
   type Skill,
   type SpellSlotLevel,
+  type SubclassOption,
   type ToolActivityIcon,
 } from '@/types';
 import type { ToolInput } from './definitions';
@@ -70,6 +94,7 @@ import {
 import { DmCancelledError } from '../errors';
 import { truncate } from '../narration';
 import { refitHeroAfterSheetChange } from './map';
+import { findAllowedEntry } from './rules';
 
 // ---------------------------------------------------------------------------
 // update_character
@@ -121,18 +146,98 @@ function hpSection(hp: NonNullable<ToolInput<'update_character'>['hp']>, reason?
   };
 }
 
-function inventorySteps(input: ToolInput<'update_character'>): ((c: Character) => EngineResult)[] {
+// -- links to the rules index and builder data (structured imports) ----------
+
+/** What update_character found for the names it was given (resolved before the atomic update). */
+interface Links {
+  /** Per inventory_add entry: the linked item, or null (added as given). */
+  items: (Omit<InventoryItem, 'id'> | null)[];
+  /** Per spells_add entry: the spell entry its exact name resolves to, or null. */
+  spells: (CompendiumEntry | null)[];
+  /** Per features_add entry: the ref of the one imported feat with that name, or null. */
+  feats: (ImportedRef | null)[];
+  /** The merged equipment catalog, for Armor Class ([] when it couldn't load: the SRD armor table). */
+  catalog: readonly EquipmentOption[];
+}
+
+const NO_LINKS: Links = { items: [], spells: [], feats: [], catalog: [] };
+
+async function loadIndexOrNull(ctx: ToolContext): Promise<RulesIndex | null> {
+  try {
+    return await ctx.deps.rulesIndex();
+  } catch {
+    return null;
+  }
+}
+
+async function loadBuilderOrNull(ctx: ToolContext): Promise<BuilderData | null> {
+  try {
+    return await ctx.deps.builderData();
+  } catch {
+    return null;
+  }
+}
+
+/** The entry an exact name resolves to among the sources the DM may consult, or null. */
+function exactEntry(index: RulesIndex | null, campaign: Campaign | null, name: string, kind: 'spell' | 'item' | 'magic-item'): CompendiumEntry | null {
+  if (!index || !campaign) return null;
+  const entry = findAllowedEntry(index, name, { kind, campaign });
+  return entry && entry.kind === kind && nameKey(entry.name) === nameKey(name) ? entry : null;
+}
+
+/**
+ * An inventory_add item linked to the index (spec §6.6): the catalog option's or the entry's numbers
+ * (armor, bonuses, attunement) and ref. What the DM gave explicitly wins (category, magic, weight), and
+ * the DM's description is kept — for a book's item it is the DM's words about it, so the ref marks it
+ * copied and exports leave it out.
+ */
+function linkedItem(item: NonNullable<ToolInput<'update_character'>['inventory_add']>[number], entry: CompendiumEntry, catalog: readonly EquipmentOption[]): Omit<InventoryItem, 'id'> {
+  const linked: Omit<InventoryItem, 'id'> = { ...inventoryFromEntry(entry, item.quantity, catalog), ...defined({ category: item.category, magic: item.magic, weight: item.weight }) };
+  if (item.description) {
+    linked.description = item.description;
+    if (linked.ref) linked.ref = { ...linked.ref, textCopied: true, textHash: textFingerprint(item.description) };
+  }
+  return linked;
+}
+
+/** The ref of the one imported feat named like a features_add entry (the DM's description stays on this device). */
+function featRef(name: string, data: BuilderData | null): ImportedRef | null {
+  const key = nameKey(name);
+  const matches = (data?.feats ?? []).filter((f) => f.source && f.ref && nameKey(f.name) === key);
+  return matches.length === 1 ? (matches[0].ref ?? null) : null;
+}
+
+async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolContext): Promise<Links> {
+  const items = input.inventory_add ?? [];
+  const spells = input.spells_add ?? [];
+  const feats = input.features_add ?? [];
+  if (!items.length && !spells.length && !feats.length && !mayChangeArmorClass(input)) return NO_LINKS;
+  const campaign = ctx.deps.store().campaign;
+  const [data, index] = await Promise.all([loadBuilderOrNull(ctx), items.length || spells.length ? loadIndexOrNull(ctx) : Promise.resolve(null)]);
+  const catalog = data?.equipment ?? [];
+  return {
+    items: items.map((item) => {
+      const entry = exactEntry(index, campaign, item.name, 'magic-item') ?? exactEntry(index, campaign, item.name, 'item');
+      return entry ? linkedItem(item, entry, catalog) : null;
+    }),
+    spells: spells.map((spell) => exactEntry(index, campaign, spell.name, 'spell')),
+    feats: feats.map((f) => featRef(f.name, data)),
+    catalog,
+  };
+}
+
+function inventorySteps(input: ToolInput<'update_character'>, links: Links): ((c: Character) => EngineResult)[] {
   const steps: ((c: Character) => EngineResult)[] = [];
   for (const item of input.inventory_remove ?? []) steps.push((c) => removeItem(c, item.name, item.quantity));
-  for (const item of input.inventory_add ?? []) {
-    const add: Omit<InventoryItem, 'id'> = { name: item.name, quantity: item.quantity, ...defined({
+  (input.inventory_add ?? []).forEach((item, i) => {
+    const add: Omit<InventoryItem, 'id'> = links.items[i] ?? { name: item.name, quantity: item.quantity, ...defined({
       description: item.description,
       category: item.category,
       magic: item.magic,
       weight: item.weight,
     }) };
     steps.push((c) => addItem(c, add));
-  }
+  });
   for (const item of input.inventory_update ?? []) {
     const patch = defined({
       equipped: item.equipped,
@@ -145,7 +250,29 @@ function inventorySteps(input: ToolInput<'update_character'>): ((c: Character) =
   return steps;
 }
 
-function spellSteps(input: ToolInput<'update_character'>): ((c: Character) => EngineResult)[] {
+/**
+ * A spells_add spell. When its exact name resolves to a spell the DM may consult, it takes that entry's
+ * id (so the sheet's text and the map's area presets find it), its ritual and concentration flags, and
+ * for a book's spell a ref (nothing copied). Otherwise it is added as given, as before.
+ */
+function addedSpell(spell: NonNullable<ToolInput<'update_character'>['spells_add']>[number], entry: CompendiumEntry | null): Omit<KnownSpell, 'id'> & { id?: string } {
+  const base = { name: spell.name, level: spell.level, prepared: spell.prepared ?? true, source: spell.source ?? 'Granted in play' };
+  if (!entry) return { ...base, ...defined({ ritual: spell.ritual, concentration: spell.concentration, notes: spell.notes }) };
+  const flag = (value: unknown, given: boolean | undefined) => (typeof value === 'boolean' ? value : given);
+  const ritual = flag(entry.data?.ritual, spell.ritual);
+  const concentration = flag(entry.data?.concentration, spell.concentration);
+  const ref = spellEntryRef(entry);
+  return {
+    id: entry.id,
+    ...base,
+    ...(ritual ? { ritual } : {}),
+    ...(concentration ? { concentration } : {}),
+    ...defined({ notes: spell.notes }),
+    ...(ref ? { ref } : {}),
+  };
+}
+
+function spellSteps(input: ToolInput<'update_character'>, links: Links): ((c: Character) => EngineResult)[] {
   const steps: ((c: Character) => EngineResult)[] = [];
   for (const slot of input.spell_slots_spend ?? []) {
     steps.push((c) => spendSlot(c, slot.level as SpellSlotLevel, { pact: slot.pact }));
@@ -158,25 +285,20 @@ function spellSteps(input: ToolInput<'update_character'>): ((c: Character) => En
     steps.push((c) => setConcentration(c, spell));
   }
   for (const name of input.spells_remove ?? []) steps.push((c) => removeSpell(c, name));
-  for (const spell of input.spells_add ?? []) {
-    steps.push((c) =>
-      addSpell(c, {
-        name: spell.name,
-        level: spell.level,
-        prepared: spell.prepared ?? true,
-        source: spell.source ?? 'Granted in play',
-        ...defined({ ritual: spell.ritual, concentration: spell.concentration, notes: spell.notes }),
-      }),
-    );
-  }
+  (input.spells_add ?? []).forEach((spell, i) => {
+    const add = addedSpell(spell, links.spells[i] ?? null);
+    steps.push((c) => addSpell(c, add));
+  });
   return steps;
 }
 
-function featureSteps(input: ToolInput<'update_character'>): ((c: Character) => EngineResult)[] {
+function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: Character) => EngineResult)[] {
   const steps: ((c: Character) => EngineResult)[] = [];
   for (const f of input.features_use ?? []) steps.push((c) => useFeature(c, f.name, f.amount));
   for (const f of input.features_restore ?? []) steps.push((c) => restoreFeature(c, f.name, f.amount));
-  for (const f of input.features_add ?? []) {
+  (input.features_add ?? []).forEach((f, i) => {
+    // The DM's words about a book's feat: the ref lets exports leave them out and restore refill the book's text.
+    const ref = links.feats[i];
     steps.push((c) =>
       addFeature(c, {
         name: f.name,
@@ -184,9 +306,10 @@ function featureSteps(input: ToolInput<'update_character'>): ((c: Character) => 
         source: f.source,
         sourceName: 'Granted in play',
         ...(f.uses_max ? { uses: { max: f.uses_max, used: 0, recharge: f.recharge ?? 'long' } } : {}),
+        ...(ref ? { ref } : {}),
       }),
     );
-  }
+  });
   return steps;
 }
 
@@ -296,10 +419,10 @@ function mayChangeArmorClass(input: ToolInput<'update_character'>): boolean {
  * replaced only when it matched the computed value before (no hand-set AC like Mage Armor's);
  * otherwise it stays, with a note of what the armor and scores now give.
  */
-export function refreshArmorClass(before: Character, after: Character): EngineResult {
+export function refreshArmorClass(before: Character, after: Character, catalog: readonly EquipmentOption[] = []): EngineResult {
   if (after.armorClass !== before.armorClass) return { character: after, events: [] };
-  const was = computeArmorClass(before, []);
-  const now = computeArmorClass(after, []);
+  const was = computeArmorClass(before, catalog);
+  const now = computeArmorClass(after, catalog);
   if (now.ac === was.ac) return { character: after, events: [] };
   if (before.armorClass !== was.ac) {
     return {
@@ -315,16 +438,16 @@ export function refreshArmorClass(before: Character, after: Character): EngineRe
   return { character: { ...after, armorClass: now.ac, acFormula: now.formula }, events: [statEvent(`AC ${before.armorClass} → ${now.ac} (${now.formula})`)] };
 }
 
-function buildSections(input: ToolInput<'update_character'>): Section[] {
+function buildSections(input: ToolInput<'update_character'>, links: Links = NO_LINKS): Section[] {
   const sections: Section[] = [];
   const add = (icon: ToolActivityIcon, steps: ((c: Character) => EngineResult)[]) => {
     if (steps.length > 0) sections.push({ icon, apply: (c) => chain(c, steps) });
   };
   if (input.hp) sections.push(hpSection(input.hp, input.reason));
   add('condition', conditionSteps(input));
-  add('spell', spellSteps(input));
-  add('info', featureSteps(input));
-  add('item', inventorySteps(input));
+  add('spell', spellSteps(input, links));
+  add('info', featureSteps(input, links));
+  add('item', inventorySteps(input, links));
   if (input.currency_change) {
     const delta = defined(input.currency_change) as Partial<Currency>;
     add('coin', [(c) => changeCurrency(c, delta)]);
@@ -370,8 +493,9 @@ async function logSections(ctx: ToolContext, results: SectionResult[], reason?: 
 }
 
 export async function updateCharacterTool(input: ToolInput<'update_character'>, ctx: ToolContext): Promise<ToolOutcome> {
-  const sections = buildSections(input);
-  if (sections.length === 0) throw new ToolInputError('Nothing to change: include at least one section (hp, conditions_add, inventory_add, …).');
+  if (buildSections(input).length === 0) throw new ToolInputError('Nothing to change: include at least one section (hp, conditions_add, inventory_add, …).');
+  const links = await resolveLinks(input, ctx);
+  const sections = buildSections(input, links);
   let results: SectionResult[] = [];
   const checkAc = mayChangeArmorClass(input);
   const before = requireCharacter(ctx.deps.store());
@@ -384,7 +508,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
       current = r.character;
     }
     if (checkAc) {
-      const r = refreshArmorClass(start, current);
+      const r = refreshArmorClass(start, current, links.catalog);
       if (r.events.length) results.push({ section: { icon: 'info', apply: () => r }, before: current, after: r.character, events: r.events });
       current = r.character;
     }
@@ -516,6 +640,95 @@ function updatedUses(before: Character, after: Character): string[] {
   return lines;
 }
 
+/** What the merged builder data says about a level_up (spec §5.5); null without data or for a class it lacks. */
+interface DataLevel {
+  option: ClassOption;
+  existing?: ClassLevel;
+  classLevel: number;
+  /** The subclass the call names (resolved by name among the class's subclasses), or the hero's. */
+  sub?: SubclassOption;
+  /** The call chooses the subclass now (catch-up applies). */
+  subclassChosenNow: boolean;
+  /** Features taken from the data: an imported class's, and an imported subclass's (with catch-up). */
+  features: Omit<Feature, 'id'>[];
+  /** "Two classes are named Fighter (SRD 5.2.1, The Gloamwood Almanac); used the hero's own." */
+  tie: string | null;
+}
+
+const COUNT_WORDS = ['', 'One', 'Two', 'Three', 'Four', 'Five'];
+
+function tieNote(option: ClassOption, classes: readonly ClassOption[], own: boolean): string | null {
+  const named = classes.filter((o) => nameKey(o.name) === nameKey(option.name));
+  if (named.length < 2) return null;
+  const count = COUNT_WORDS[named.length] ?? String(named.length);
+  return `${count} classes are named ${option.name} (${named.map(optionSourceLabel).join(', ')}); used ${own ? "the hero's own" : `the one from ${optionSourceLabel(option)}`}.`;
+}
+
+function planFromData(c: Character, data: BuilderData, input: ToolInput<'level_up'>): DataLevel | null {
+  const key = nameKey(input.class_name);
+  const existing = c.classes.find((cl) => nameKey(cl.name) === key);
+  const option = existing ? classOptionFor(existing, data.classes) : classByName(data.classes, input.class_name, c).option;
+  if (!option) return null;
+  const classLevel = (existing?.level ?? 0) + 1;
+  const subclassChosenNow = Boolean(input.subclass) && nameKey(existing?.subclass ?? '') !== nameKey(input.subclass ?? '');
+  const sub = input.subclass ? subclassOptionFor({ subclass: input.subclass }, option) : existing ? subclassOptionFor(existing, option) : undefined;
+  const all = gainedFeatures(option, classLevel, sub, { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 }, { have: c.features, subclassChosenNow });
+  // SRD classes and subclasses keep today's DM-supplied features: only a book's come from the data.
+  const features = all.filter((f) => (f.source === 'subclass' ? Boolean(sub?.source) : Boolean(option.source)));
+  return { option, existing, classLevel, sub, subclassChosenNow, features, tie: tieNote(option, data.classes, Boolean(existing)) };
+}
+
+/** The DM's new_features as sheet features (as today), minus those the data adds with the book's text. */
+function dmFeatures(input: ToolInput<'level_up'>, level: number, plan: DataLevel | null): { features: Omit<Feature, 'id'>[]; replaced: string[] } {
+  const fromData = new Set((plan?.features ?? []).map((f) => nameKey(f.name)));
+  const all = (input.new_features ?? []).map((f) => ({
+    name: f.name,
+    description: f.description,
+    source: 'class' as const,
+    sourceName: `${input.class_name} ${level + 1}`,
+    ...(f.uses_max ? { uses: { max: f.uses_max, used: 0 as const, recharge: f.recharge ?? ('long' as const) } } : {}),
+  }));
+  return { features: all.filter((f) => !fromData.has(nameKey(f.name))), replaced: all.filter((f) => fromData.has(nameKey(f.name))).map((f) => f.name) };
+}
+
+/** levelUp's options from the data: the class by id, a new class's numbers and ref, the subclass by id with its ref and casting. */
+function dataLevelOptions(plan: DataLevel, data: BuilderData, input: ToolInput<'level_up'>): Partial<LevelUpOptions> {
+  const { option, existing, sub } = plan;
+  const chosen = input.subclass && sub ? sub : undefined;
+  const subclassRef = subclassRefOf(chosen);
+  const subclassCasting = subclassCastingOf(chosen);
+  const classRef = existing ? undefined : classRefOf(option);
+  return {
+    className: existing ? input.class_name : option.name,
+    classId: existing?.classId ?? option.id,
+    ...(existing
+      ? {}
+      : {
+          hitDie: (input.hit_die as HitDie | undefined) ?? option.hitDie,
+          casterType: input.caster_type ?? option.casterType,
+          ...defined({ spellcastingAbility: input.spellcasting_ability ?? option.spellcastingAbility }),
+        }),
+    ...(classRef ? { classRef } : {}),
+    ...(chosen ? { subclass: chosen.name, subclassId: chosen.id } : {}),
+    ...(subclassRef ? { subclassRef } : {}),
+    ...(subclassCasting ? { subclassCasting } : {}),
+    equipment: data.equipment,
+  };
+}
+
+/** The result's lines about the books: features added with their text (names only), ties, spells. */
+function bookLines(plan: DataLevel | null, replaced: string[], spells: { added: string[]; missing: string[] }): string[] {
+  if (!plan) return [];
+  const lines: string[] = [];
+  const fromBooks = plan.features.filter((f) => f.ref).map((f) => `- ${f.name} (${f.ref?.sourceTitle}) — its text is on the sheet`);
+  if (fromBooks.length) lines.push("Features from the player's books (added with their text):", ...fromBooks);
+  if (replaced.length) lines.push(`Used the book's text instead of your description for: ${replaced.join(', ')}.`);
+  if (plan.tie) lines.push(plan.tie);
+  if (spells.added.length && plan.sub) lines.push(`Always-prepared ${plan.sub.name} spells added: ${spells.added.join(', ')}.`);
+  if (spells.missing.length) lines.push(`Not in the rules you can consult: ${spells.missing.join(', ')} — add with update_character spells_add if they apply.`);
+  return lines;
+}
+
 export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext): Promise<ToolOutcome> {
   const store = ctx.deps.store();
   const campaign = requireCampaign(store);
@@ -528,8 +741,15 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
       return fail(`This is an XP campaign and the hero needs ${needed} more XP to reach level ${level + 1}. Award XP first, or keep playing.`);
     }
   }
-  const change = await mutateCharacter(ctx, (c) =>
-    levelUp(c, {
+  // Merged builder data (a failure → today's behavior exactly), and the index for an imported subclass's spells.
+  const data = await loadBuilderOrNull(ctx);
+  const plan = data ? planFromData(before, data, input) : null;
+  const index = plan?.sub?.source && plan.sub.alwaysPreparedSpells?.length ? await loadIndexOrNull(ctx) : null;
+  const findSpell = (name: string) => exactEntry(index, campaign, name, 'spell') ?? undefined;
+  const { features: extra, replaced } = dmFeatures(input, level, plan);
+  const spells = { added: [] as string[], missing: [] as string[] };
+  const change = await mutateCharacter(ctx, (c) => {
+    const r = levelUp(c, {
       className: input.class_name,
       hpMethod: input.hp_method ?? 'average',
       rng: ctx.deps.rng,
@@ -539,19 +759,21 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
         casterType: input.caster_type,
         spellcastingAbility: input.spellcasting_ability,
       }),
-      newFeatures: (input.new_features ?? []).map((f) => ({
-        name: f.name,
-        description: f.description,
-        source: 'class' as const,
-        sourceName: `${input.class_name} ${level + 1}`,
-        ...(f.uses_max ? { uses: { max: f.uses_max, used: 0, recharge: f.recharge ?? 'long' } } : {}),
-      })),
-    }),
-  );
-  const summary = `Level up! Level ${change.newLevel} (${input.class_name}) · HP +${change.hpGained} (max ${change.character.hp.max})`;
+      ...(plan && data ? dataLevelOptions(plan, data, input) : {}),
+      newFeatures: [...(plan?.features ?? []), ...extra],
+    });
+    if (r.character === c || !plan?.sub?.source) return r;
+    const toAdd = subclassSpellsToAdd(plan.sub, plan.classLevel, r.character.spellcasting?.spells ?? [], findSpell);
+    spells.added = toAdd.spells.map((sp) => sp.name);
+    spells.missing = toAdd.missing;
+    return { ...r, character: addSubclassSpells(r.character, toAdd.spells) };
+  });
+  const className = plan && !plan.existing ? plan.option.name : input.class_name;
+  const summary = `Level up! Level ${change.newLevel} (${className}) · HP +${change.hpGained} (max ${change.character.hp.max})`;
   const uses = updatedUses(before, change.character);
-  await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...change.reminders].join('\n') || undefined });
-  const lines = [summary, ...eventLines(change.events)];
+  const books = bookLines(plan, replaced, spells);
+  await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...books, ...change.reminders].join('\n') || undefined });
+  const lines = [summary, ...eventLines(change.events), ...books];
   if (uses.length) lines.push('Limited-use features that grew with the level (already on the sheet):', ...uses.map((u) => `- ${u}`));
   if (change.reminders.length) lines.push('Choices the player still needs to make:', ...change.reminders.map((r) => `- ${r}`));
   lines.push(`Status: ${characterStatusLine(change.character)}`);

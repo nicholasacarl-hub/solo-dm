@@ -79,7 +79,7 @@ function itemData(item: WireItem, format: ItemData['format']): { data: ItemData 
       ...(item.weaponType !== 'none' ? { weaponType: item.weaponType } : {}),
       ...(range ? { range } : {}),
       ...(damage ? { damage: damage[1], damageType: damage[2].toLowerCase() } : {}),
-      ...(properties.length ? { properties } : {}),
+      properties, // [] when it has none ("—"), as the SRD's weapons have
       ...(item.masteryText.trim() && !/^(?:—|–|-)$/.test(item.masteryText.trim()) ? { mastery: item.masteryText.replace(/[*_]/g, '').trim() } : {}),
     };
     if (!damage) return { data: null, warnings: w };

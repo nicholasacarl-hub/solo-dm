@@ -41,7 +41,8 @@ src/
   state/        Zustand stores: gameStore (the loaded campaign; write-through to storage),
                 settingsStore (browser-only settings and the API key).
   dm/           The AI DM: client, system prompt, tool definitions + handlers, the streaming agent
-                loop, session lifecycle (start / recap / end), the offline mock DM.
+                loop, session lifecycle (start / recap / end), the offline mock DM; structuring
+                (dm/extract: the job runner and its API; every request built in dm/libraryRequests.ts).
   ui/           React screens and components.
 public/srd/     Generated SRD 5.2.1 JSON (lazy-loaded at runtime).
 scripts/        build-srd.mjs converts the upstream SRD dataset into public/srd/.
@@ -266,7 +267,12 @@ Screens (hash routing, so GitHub Pages refreshes work):
   - Status: a slim activity bar ("The DM is thinking…", "Rolling for the goblins…").
   - Header: campaign name, session number, End session, context meter, cost estimate, settings.
 - `#/library` **Library** — Browse SRD (by kind, search), My imports (paste/upload, enable/disable,
-  delete), Homebrew (all campaigns; edit/retire), and the SRD attribution.
+  delete, structuring status), Homebrew (all campaigns; edit/retire), and About (the SRD attribution
+  and how your books stay private).
+- `#/library/source/:sourceId` **A book's page** — structure it (consent, progress, pause), review what
+  was found (list · fields · source text on wide screens; list → full-screen detail on phones), an
+  *All entries* view for anything detection missed (*Structure as…*), and the ⋯ menu (look again,
+  re-check for free, *Download book data*, delete). Its view, filters and selection live in the URL.
 - `#/settings` **Settings** — API key (test button, remember toggle, link to console.anthropic.com),
   model, effort, thinking display, cache TTL, session soft limit, illustrations (OpenAI key, when the
   DM may paint, model, quality, pictures stored on this device), theme, narration font & size, dice
@@ -291,13 +297,29 @@ is `src/test/structuredFixtures.ts` (invented content only).
 the book's fingerprint (FNV-1a over its entries in ordinal order). `detectStructure` then runs locally
 and for free: it segments the entries in reading order, detects candidates by their labels, parses
 what it can offline into the same wire object Claude returns, and normalizes it with one normalizer
-per kind. What the offline reader can't read waits as *Not read yet*. With the player's consent (the
-model, the kinds, three cost estimates and a spending limit), the runner sends one entry per request —
-streamed, structured-output JSON, adaptive thinking at effort `low`, one cached system block per kind,
-a warm-up request per kind before fanning out — and normalizes each answer the same way. **Claude
-labels, the app parses**: Claude returns short verbatim excerpts and paragraph spans, never rules text
-or computed numbers; app code parses, grounds and cross-checks every number. Extraction has its own
-ledger (`job.usage`) and never touches a DM session, transcript or `Campaign.usage`.
+per kind. What the offline reader can't read waits as *Not read yet* (the player can fill it in by hand).
+With the player's consent — the model (the Settings model and the cheaper ones, each with a price range
+and minutes), the kinds, and a spending limit — the runner sends one entry per request: streamed,
+structured-output JSON, adaptive thinking at effort `low`, one cached system block per kind, a warm-up
+request per kind before fanning out. Each answer is normalized the same way. **Claude labels, the app
+parses**: Claude returns short verbatim excerpts and paragraph spans, never rules text or computed
+numbers; app code parses, grounds and cross-checks every number. A request carries one entry's text and
+nothing else (no book title, character or campaign). Extraction has its own ledger (`job.usage`) and
+never touches a DM session, transcript or `Campaign.usage`.
+
+**Running a job** (`src/dm/extract/runner.ts`). One job runs at a time across all books (others wait,
+queued). Per kind, the first request's first stream event opens the lane (the kind's cache entry is then
+readable); then up to the job's concurrency (1–4, default 3) run at once. A 429 pauses every lane until
+`retry-after` and lowers the concurrency. Dispatch holds while a DM turn is running and while a phone's
+page is hidden; requests in flight finish. The spending limit is checked before every dispatch against
+what was spent, what is in flight and the next request. Pause is graceful (requests in flight finish and
+are paid for); Cancel aborts them. A reload leaves the job paused, and nothing resumes a paid job without
+the player, except that one paused offline continues when the connection returns in the same tab. The
+runner holds the Web Lock `solo-dm:extract-runner`, so another tab neither runs nor "recovers" its job.
+Each result is saved as it arrives. Requests set `maxRetries: 0` (the runner owns retries) under a
+120-second no-event watchdog, use server-side fallbacks when Settings allow, and retry a `max_tokens`
+stop once at double the limit; a refusal keeps whatever the offline reader found and can be retried on
+another model.
 
 **Storage** (Dexie version 3, `src/storage/structured.ts`): `libraryRecords` (one row per record, with
 the run state of the latest job that touched it) and `libraryJobs`. Neither is part of
@@ -316,13 +338,31 @@ construction. Without imports the index contents and the builder data are exactl
 
 **Review.** The book page (`#/library/source/:id`) lists what was found; nothing is used until the
 player accepts it. *Accept N confident* takes only clean reads and never classes or subclasses; a
-`block` warning disables Accept; every bulk action has an Undo; accepted records can move back to
-review. Accepting refreshes the index and the builder data once per batch and tells DMs with a session
-in progress (names and counts only).
+`block` warning disables Accept (with the reason); every bulk action has an Undo; accepted records can
+move back to review. The detail shows "What the app and the DM will use" (the stats line below) next to
+the source text with the excerpts highlighted; monster and magic-item details start collapsed (no
+spoilers). A subclass must be attached to a class (pre-selected: this book, then the SRD, then another
+book). Edits are checked with the same `DATA_SCHEMAS`; a re-run never overwrites an edited or accepted
+record (it offers the new reading as a diff). Accepting refreshes the index and the builder data once
+per batch and tells DMs with a session in progress (names and counts only). Switching a book off or
+deleting it says which characters use it ("Used by Ember (The Drowned Lantern)…") and tells their DMs;
+importing a book whose fingerprint is already in the Library warns that it looks like the same book.
 
-**Consumers.** Name lookups rank this campaign's homebrew, shared homebrew, **reviewed imports** (and a
-book's own rules text), the SRD, then **unreviewed imported entities** — so a thin unreviewed duplicate
-never shadows an SRD stat block (`search.ts` `sourcePriority`, mirrored by the DM's `findAllowedEntry`).
+**Consumers.** Accepted options join the builder data with a book badge (the SRD badge appears only on
+a name clash, and same-name options coexist); lookups are id-first (`src/data/options/resolve.ts`), and
+the engine never takes an imported class (`lib:` id) for an SRD class of the same name, so an imported
+"Fighter" never borrows the SRD Fighter's numbers. Review warns about feature names the engine treats
+specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
+adaptations, shown in review, on builder cards, in the DM's stats line and on the sheet. Level-up adds
+an imported class's or subclass's features with their text (catching up subclass features a book
+prints below the class's subclass level) and offers a feat at Ability Score Improvement, Epic Boon and
+Fighting Style levels, with "Decide with my DM" preselected. Items copy numbers, never text: armor
+stats, bonuses and attunement travel on the inventory item, so AC works in the DM's tools and on
+another device. Accepted spells join spell lists and area templates.
+
+Name lookups rank this campaign's homebrew, shared homebrew, **reviewed imports** (and a book's own
+rules text), the SRD, then **unreviewed imported entities** — so a thin unreviewed duplicate never
+shadows an SRD stat block (`search.ts` `sourcePriority`, mirrored by the DM's `findAllowedEntry`).
 The DM's lookups put a one-line "Reviewed stats: …" (plus any "Adapted for 2024" note) inside the
 imported-content wrapper and say "reviewed" in the heading; `get_entry` names other entries with the same
 name. `start_combat` takes AC, HP and initiative from the stat block (the SRD's or a reviewed import's)
@@ -369,8 +409,8 @@ Invariants, checked in CI (the definition of done):
 - **Unchanged without imports.** With an empty library, the builder data (the SRD object itself), the
   rules index contents, an SRD character's sheet text, the DM system prompt and the DM request bodies
   are byte-identical to before (`src/dm/requestBytes.test.ts` pins the request bytes).
-- **One deliberate `DM_TOOLS` change**, made once by E1 and reviewed with its cost; otherwise `DM_TOOLS`
-  equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
+- **One deliberate `DM_TOOLS` change** in this release (above), reviewed with its cost; otherwise
+  `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
 - **Privacy.** No marker sentence of the test book appears in any exported bundle (the e2e test). Every
   copy of book text onto a character carries an `ImportedRef`; exports replace that text with a
   placeholder, and a device that has the book fills it back in.
@@ -385,8 +425,9 @@ Invariants, checked in CI (the definition of done):
   imports `src/dm` (except `vision.ts` → the client and `libraryRequests`), nothing outside `src/ui`
   imports it, campaign exports and sync never import the pack module, the request leaves never import
   a barrel, the game store reaches `@/data` only dynamically, and the engine stays pure.
-- **No file moves** except E4's four helper moves from `src/ui/builder` to `src/data/options`, each
-  leaving a one-line re-export shim.
+- **No file moves** except the four builder helpers (`classFeatures`, `featureUses`, `leveling`,
+  `species`) that moved from `src/ui/builder` to `src/data/options`, each leaving a one-line re-export
+  shim, so `src/dm` never imports `src/ui`.
 - `npm run typecheck`, `npm test`, `npm run lint` and `npm run build` are green; no
   `dangerouslySetInnerHTML`; theme tokens only.
 

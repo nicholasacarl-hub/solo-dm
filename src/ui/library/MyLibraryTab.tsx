@@ -14,6 +14,7 @@ import { formatRelativeTime, plural } from '@/ui/shell/format';
 import { ImportDialog } from './ImportDialog';
 import { DeleteBookDialog, useBookSwitch } from './structure/bookControls';
 import { SourceRowStatus } from './structure/SourceRowStatus';
+import { TOUCH, TOUCH_SQUARE, TOUCH_SWITCH } from './structure/touch';
 import { manifestEntryCount, useSrdManifest } from './useSrdManifest';
 
 const FORMAT_LABELS: Record<NonNullable<LibrarySource['format']>, string> = {
@@ -153,13 +154,13 @@ function SourceRow({
         </div>
       </div>
       <div className="flex items-center gap-3 sm:shrink-0">
-        <ButtonLink to={book} size="sm" icon={<ListChecks className="size-4" aria-hidden />} aria-label={`Review ${source.title}`}>
+        <ButtonLink to={book} size="sm" className={TOUCH} icon={<ListChecks className="size-4" aria-hidden />} aria-label={`Review ${source.title}`}>
           Review
         </ButtonLink>
-        <div className="flex-1 sm:w-48 sm:flex-none">
+        <div className={`flex-1 sm:w-48 sm:flex-none ${TOUCH_SWITCH}`}>
           <Switch checked={source.enabled} onChange={onToggle} label="Use in rules search" />
         </div>
-        <IconButton label={`Delete ${source.title}`} onClick={onDelete}>
+        <IconButton label={`Delete ${source.title}`} className={TOUCH_SQUARE} onClick={onDelete}>
           <Trash2 className="size-4" aria-hidden />
         </IconButton>
       </div>

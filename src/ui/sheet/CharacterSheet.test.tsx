@@ -18,13 +18,15 @@ vi.mock('@/state/gameStore', async () => (await import('@/ui/builder/testing/fak
 vi.mock('@/data', async () => {
   const { builderFixture, spellFixture } = await import('@/ui/builder/testing/builderFixture');
   const spells = spellFixture();
+  const index = {
+    get: (id: string) => spells.find((s) => s.id === id),
+    findByName: (name: string) => spells.find((s) => s.name === name),
+  };
   return {
     loadBuilderData: async () => builderFixture(),
     useBuilderData: () => ({ data: builderFixture(), error: null, loading: false }),
-    getRulesIndex: async () => ({
-      get: (id: string) => spells.find((s) => s.id === id),
-      findByName: (name: string) => spells.find((s) => s.name === name),
-    }),
+    getRulesIndex: async () => index,
+    useRulesIndex: () => index,
   };
 });
 

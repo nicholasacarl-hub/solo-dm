@@ -4,9 +4,10 @@
  * the Library, and the next step. A JSON pack instead offers "Accept the N confident" and, for a
  * "Download book data" file, an unticked "Also accept the N you accepted on your other device".
  */
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ArrowRight, CopyCheck, Info } from 'lucide-react';
 import type { DetectionSummary, PackImport } from '@/data';
+import { cn } from '@/lib/cn';
 import { STRUCTURED_KINDS, type LibrarySource } from '@/types';
 import { toast } from '@/ui/components/toast';
 import { Button } from '@/ui/components/ui';
@@ -14,6 +15,7 @@ import { errorMessage, plural } from '@/ui/shell/format';
 import { isConfident } from './bookData';
 import { kindCount } from './labels';
 import { acceptRecords } from './reviewActions';
+import { TOUCH, TOUCH_BUTTONS } from './touch';
 
 /** "2 classes, 16 subclasses, 8 species, …" in STRUCTURED_KINDS order. */
 export function foundList(summary: Pick<DetectionSummary, 'byKind'>): string {
@@ -57,6 +59,13 @@ export function ImportDonePage({
   onOpenBook(): void;
 }) {
   const [alsoElsewhere, setAlsoElsewhere] = useState(false);
+  // The dialog's progress view (and the button that had focus) is gone: focus the summary, so it is read
+  // and Tab goes on to the actions.
+  const summaryRef = useRef<HTMLParagraphElement>(null);
+  const openRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    summaryRef.current?.focus({ preventScroll: true });
+  }, []);
   const [busy, setBusy] = useState(false);
   const [accepted, setAccepted] = useState<number | null>(null);
   const duplicate = duplicateOf ?? summary?.duplicateOf ?? null;
@@ -70,6 +79,8 @@ export function ImportDonePage({
       if (alsoElsewhere) for (const r of elsewhere) ids.add(r.id);
       const result = await acceptRecords([...ids]);
       setAccepted(result.accepted);
+      // The accept box goes: focus the next step.
+      openRef.current?.focus();
       toast.success(`Accepted ${result.accepted}.${result.skipped.length ? ` ${result.skipped.length} need a look first.` : ''}`);
     } catch (error) {
       toast.error(errorMessage(error, 'Could not accept them.'));
@@ -79,10 +90,10 @@ export function ImportDonePage({
   };
 
   return (
-    <div className="flex flex-col gap-4 py-2" aria-live="polite">
+    <div className={cn('flex flex-col gap-4 py-2', TOUCH_BUTTONS)}>
       {pack ? (
         <>
-          <p className="text-sm font-medium">
+          <p ref={summaryRef} tabIndex={-1} className="text-sm font-medium focus:outline-none">
             Imported {plural(pack.entries.length || source.entryCount, 'entry', 'entries')} and {plural(pack.records.length, 'structured entry', 'structured entries')} from “
             {source.title}”.
           </p>
@@ -103,7 +114,7 @@ export function ImportDonePage({
           {accepted === null && (confident.length > 0 || elsewhere.length > 0) && (
             <div className="flex flex-col gap-2 rounded-xl border border-border bg-surface p-3">
               {elsewhere.length > 0 && (
-                <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+                <label className={cn('flex cursor-pointer items-start gap-2.5 text-sm', TOUCH)}>
                   <input type="checkbox" checked={alsoElsewhere} onChange={(e) => setAlsoElsewhere(e.target.checked)} className="mt-0.5 size-4 accent-[var(--accent)]" />
                   <span>Also accept the {plural(elsewhere.length, 'entry', 'entries')} you accepted on your other device</span>
                 </label>
@@ -118,7 +129,9 @@ export function ImportDonePage({
         </>
       ) : summary ? (
         <>
-          <p className="text-sm font-medium">{detectionText(source, summary)}</p>
+          <p ref={summaryRef} tabIndex={-1} className="text-sm font-medium focus:outline-none">
+            {detectionText(source, summary)}
+          </p>
           {summary.leftOut > 0 && (
             <p className="text-xs text-muted">
               {plural(summary.leftOut, 'more was', 'more were')} left out: a book can hold 5,000 structured entries.
@@ -127,7 +140,7 @@ export function ImportDonePage({
         </>
       ) : (
         <>
-          <p className="text-sm font-medium">
+          <p ref={summaryRef} tabIndex={-1} className="text-sm font-medium focus:outline-none">
             Imported {plural(source.entryCount, 'entry', 'entries')} from “{source.title}”.
           </p>
           {detectError && (
@@ -148,7 +161,7 @@ export function ImportDonePage({
         <Button variant="ghost" onClick={onDone}>
           Done
         </Button>
-        <Button variant="primary" icon={<ArrowRight className="size-4" aria-hidden />} onClick={onOpenBook}>
+        <Button ref={openRef} variant="primary" icon={<ArrowRight className="size-4" aria-hidden />} onClick={onOpenBook}>
           {pack || (summary && summary.total === 0) ? 'Open the book' : 'Review and set up'}
         </Button>
       </div>

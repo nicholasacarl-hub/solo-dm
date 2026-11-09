@@ -15,7 +15,11 @@ Solo DM is an unofficial fan project, **compatible with fifth edition**. It is n
 
 ## Your own content
 
-Books and notes you import into Solo DM stay in your browser's storage on your device. They are never added to this repository. When the DM looks something up in an imported book, that passage is removed from exported save files and GitHub cloud saves; the DM's own narration may still paraphrase or quote what it read. Character features copied from imported books are also left out of exports and GitHub saves; a device that has the book fills them back in. Only import content you own.
+Books and notes you import into Solo DM stay in your browser's storage on your device. They are never added to this repository, and Solo DM has no server. Their text goes to Anthropic's API, with your own API key, only when you ask: when Claude structures a book's entries (one entry per request, after you've seen the cost), when it transcribes photographed pages, and when the DM looks rules up during play. The structured data the app reads from a book, and your review of it, stay on your device too.
+
+When the DM looks something up in an imported book, that passage is removed from exported save files and GitHub cloud saves. Character features copied from imported books are also left out of exports and GitHub saves (their names stay); a device that has the book fills them back in. What the DM writes in its own words — narration, journal entries, homebrew — may still paraphrase or quote what it read. The only file that holds a book's text is "Download book data", which you make yourself; keep it for yourself.
+
+Only import content you own.
 
 ## Fonts and icons
 

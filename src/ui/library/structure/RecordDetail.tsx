@@ -13,7 +13,7 @@ import { suggestParentClass, validateData } from '@/data';
 import { cn } from '@/lib/cn';
 import { useSettings } from '@/state/settingsStore';
 import { MODELS, type BuilderData, type CompendiumEntry, type LibrarySource, type ModelId, type StructuredKind, type StructuredRecord } from '@/types';
-import { Badge, Button, Dialog, IconButton, Segmented } from '@/ui/components/ui';
+import { Badge, Button, Dialog, IconButton } from '@/ui/components/ui';
 import { Menu, type MenuItem } from '@/ui/play/components/Menu';
 import { toast } from '@/ui/components/toast';
 import { errorMessage } from '@/ui/shell/format';
@@ -26,7 +26,9 @@ import { parentChoices } from './forms/ParentClassSelect';
 import { KIND_LABELS, OLDER_EDITION, RECORD_STATES, modelName, originLabel, recordState, recordStateLabel } from './labels';
 import { changeKind, keepFields, rereadHere, resolveProposal, saveRecordEdit, setRecordsStatus, acceptRecords } from './reviewActions';
 import { SourceTextPane } from './SourceTextPane';
+import { TOUCH, TOUCH_FOOTER, TOUCH_SQUARE } from './touch';
 import { showUndo } from './UndoToast';
+import { ViewToggle } from './ViewToggle';
 import { mergeWarnings } from './warnings';
 
 export type DetailLayout = 'wide' | 'mid' | 'phone';
@@ -111,6 +113,28 @@ export function RecordDetail(props: RecordDetailProps) {
   const [activeField, setActiveField] = useState<string | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ path: string; n: number } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const acceptRef = useRef<HTMLButtonElement>(null);
+  /**
+   * After an action whose button goes away or turns disabled (Save, Use new, Keep these fields, Show
+   * details…), focus would fall to the page body: once the action is done, it goes to Accept & next when
+   * that can be pressed, else to the heading.
+   */
+  const [refocus, setRefocusState] = useState<{ to: 'primary' | 'heading'; since: number } | null>(null);
+  const setRefocus = (to: 'primary' | 'heading') => setRefocusState({ to, since: record.updatedAt });
+  useEffect(() => {
+    if (!refocus || busy) return;
+    const active = document.activeElement;
+    const lost = !active || active === document.body || !active.isConnected || (active as HTMLButtonElement).disabled;
+    if (!lost) {
+      // The saved record (whose update removes the button) may still be on its way from storage.
+      if (record.updatedAt !== refocus.since) setRefocusState(null);
+      return;
+    }
+    setRefocusState(null);
+    const accept = acceptRef.current;
+    if (refocus.to === 'primary' && accept && !accept.disabled) accept.focus();
+    else headingRef.current?.focus({ preventScroll: true });
+  }, [refocus, busy, record.updatedAt]);
   const [confirmAccept, setConfirmAccept] = useState(false);
   const [kindChange, setKindChange] = useState<StructuredKind | null>(null);
 
@@ -199,6 +223,7 @@ export function RecordDetail(props: RecordDetailProps) {
     void run('save', async () => {
       await saveDraft();
       toast.success(accepted ? 'Saved. The change is in use now.' : 'Saved.');
+      setRefocus('primary');
     });
 
   const keepAsText = () =>
@@ -289,7 +314,7 @@ export function RecordDetail(props: RecordDetailProps) {
     <header className="flex flex-col gap-1.5">
       {layout === 'phone' && (
         <div className="flex items-center justify-between gap-2">
-          <Button variant="ghost" size="sm" className="-ml-2" icon={<ArrowLeft className="size-4" aria-hidden />} onClick={props.onBack}>
+          <Button variant="ghost" size="sm" className={cn('-ml-2', TOUCH)} icon={<ArrowLeft className="size-4" aria-hidden />} onClick={props.onBack}>
             List
           </Button>
           {position && <Pager position={position} onPrev={props.onPrev} onNext={props.onNext} />}
@@ -329,7 +354,12 @@ export function RecordDetail(props: RecordDetailProps) {
       onRead={(model) => props.onReadWithClaude(record, model)}
       onKeepAsText={keepAsText}
       onReread={rereadOffline}
-      onKeepFields={() => void run('keep', () => keepFields(record.id))}
+      onKeepFields={() =>
+        void run('keep', async () => {
+          await keepFields(record.id);
+          setRefocus('primary');
+        })
+      }
       jobModel={record.extraction?.requestedModel}
     />
   );
@@ -337,15 +367,25 @@ export function RecordDetail(props: RecordDetailProps) {
   const fields = (
     <div className="flex min-w-0 flex-col gap-4">
       {runNotices}
-      <SpoilerGuard key={record.sourceId} kind={record.kind} sourceId={record.sourceId}>
+      <SpoilerGuard key={record.sourceId} kind={record.kind} sourceId={record.sourceId} onShown={() => setRefocus('heading')}>
         <div className="flex min-w-0 flex-col gap-4">
           <DetailNotices kind={record.kind} warnings={warnings} modelNote={record.modelNote} onGoToField={goToField} onShowExcerpt={showExcerpt} />
           <AdaptationNotes notes={adaptations.map((a) => a.note)} />
           <ProposalDiff
             record={record}
             busy={busy !== null}
-            onUse={() => void run('use', () => resolveProposal(record.id, 'new'))}
-            onKeep={() => void run('mine', () => resolveProposal(record.id, 'mine'))}
+            onUse={() =>
+              void run('use', async () => {
+                await resolveProposal(record.id, 'new');
+                setRefocus('primary');
+              })
+            }
+            onKeep={() =>
+              void run('mine', async () => {
+                await resolveProposal(record.id, 'mine');
+                setRefocus('primary');
+              })
+            }
           />
           {draft && (
             <RecordForm
@@ -377,7 +417,7 @@ export function RecordDetail(props: RecordDetailProps) {
   );
 
   const sourcePane = (
-    <SpoilerGuard key={`${record.sourceId}-source`} kind={record.kind} sourceId={record.sourceId}>
+    <SpoilerGuard key={`${record.sourceId}-source`} kind={record.kind} sourceId={record.sourceId} onShown={() => setRefocus('heading')}>
       <SourceTextPane kind={record.kind} blocks={blocks} excerpts={record.excerpts} activeField={activeField} entriesById={entriesById} />
     </SpoilerGuard>
   );
@@ -439,6 +479,7 @@ export function RecordDetail(props: RecordDetailProps) {
         )}
         {!accepted && (
           <Button
+            ref={acceptRef}
             variant="primary"
             size={layout === 'phone' ? 'lg' : 'md'}
             disabled={blocked !== null || busy !== null}
@@ -463,14 +504,14 @@ export function RecordDetail(props: RecordDetailProps) {
         size="sm"
         title={`Accept with ${toCheck.length} ${toCheck.length === 1 ? 'thing' : 'things'} to check?`}
         footer={
-          <>
+          <div className={TOUCH_FOOTER}>
             <Button variant="ghost" onClick={() => setConfirmAccept(false)}>
               Check them
             </Button>
             <Button variant="primary" onClick={() => accept(true)}>
               Accept anyway
             </Button>
-          </>
+          </div>
         }
       >
         <ul className="flex list-disc flex-col gap-1 pl-4 text-sm">
@@ -486,7 +527,7 @@ export function RecordDetail(props: RecordDetailProps) {
         size="sm"
         title={kindChange ? `Read “${record.name}” as ${KIND_LABELS[kindChange].one === 'piece of gear' ? 'gear' : `a ${KIND_LABELS[kindChange].one}`}?` : ''}
         footer={
-          <>
+          <div className={TOUCH_FOOTER}>
             <Button variant="ghost" onClick={() => setKindChange(null)}>
               Cancel
             </Button>
@@ -505,7 +546,7 @@ export function RecordDetail(props: RecordDetailProps) {
             >
               Read it again
             </Button>
-          </>
+          </div>
         }
       >
         <p className="text-sm">
@@ -530,7 +571,8 @@ export function RecordDetail(props: RecordDetailProps) {
             {actions}
           </article>
         </div>
-        <aside aria-label="Source text" className={props.paneClassName}>
+        {/* The shortcuts work from the source text too (it sits outside the article on wide screens). */}
+        <aside aria-label="Source text" onKeyDown={onKeyDown} className={props.paneClassName}>
           {sourcePane}
         </aside>
         {dialogs}
@@ -540,13 +582,14 @@ export function RecordDetail(props: RecordDetailProps) {
   return (
     <article aria-labelledby="record-title" onKeyDown={onKeyDown} className="flex min-w-0 flex-col gap-4">
       {header}
-      <Segmented<'fields' | 'source'>
+      <ViewToggle<'fields' | 'source'>
+        label="View"
         className={layout === 'phone' ? 'grid w-full grid-cols-2' : 'self-start'}
         value={pane}
         onChange={setPane}
         options={[
-          { value: 'fields', label: 'Fields', title: 'Alt+1' },
-          { value: 'source', label: 'Source text', title: 'Alt+2' },
+          { value: 'fields', label: 'Fields', shortcut: 'Alt+1' },
+          { value: 'source', label: 'Source text', shortcut: 'Alt+2' },
         ]}
       />
       {pane === 'fields' ? fields : sourcePane}
@@ -562,10 +605,10 @@ function Pager({ position, onPrev, onNext }: { position: { index: number; total:
       <span className="tabular-nums" aria-live="off">
         {position.index + 1} of {position.total}
       </span>
-      <IconButton label="Previous" size="sm" disabled={position.index <= 0} aria-keyshortcuts="Alt+ArrowUp" onClick={onPrev}>
+      <IconButton label="Previous" size="sm" className={TOUCH_SQUARE} disabled={position.index <= 0} aria-keyshortcuts="Alt+ArrowUp" onClick={onPrev}>
         <ChevronLeft className="size-4" aria-hidden />
       </IconButton>
-      <IconButton label="Next" size="sm" disabled={position.index >= position.total - 1} aria-keyshortcuts="Alt+ArrowDown" onClick={onNext}>
+      <IconButton label="Next" size="sm" className={TOUCH_SQUARE} disabled={position.index >= position.total - 1} aria-keyshortcuts="Alt+ArrowDown" onClick={onNext}>
         <ChevronRight className="size-4" aria-hidden />
       </IconButton>
     </div>

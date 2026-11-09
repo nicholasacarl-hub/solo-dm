@@ -55,9 +55,18 @@ function bonuses(prose: string): Bonus {
       const noShield = /\b(?:no shield|not using a shield|aren't using a shield|using no shield|without a shield)\b/i.test(sentence);
       if (noArmor) out.condition = noShield ? 'no-armor-no-shield' : 'no-armor';
     }
-    if (/\bsaving throws\b/.test(targets) && !out.save) (out.save = n), (used = true);
-    if (/\battack\b/.test(targets) && !out.attack) (out.attack = n), (used = true);
-    if (/\bdamage\b/.test(targets) && !out.damage) (out.damage = n), (used = true);
+    if (/\bsaving throws\b/.test(targets) && !out.save) {
+      out.save = n;
+      used = true;
+    }
+    if (/\battack\b/.test(targets) && !out.attack) {
+      out.attack = n;
+      used = true;
+    }
+    if (/\bdamage\b/.test(targets) && !out.damage) {
+      out.damage = n;
+      used = true;
+    }
     if (used) texts.push(m[0].trim());
   }
   out.text = texts[0] ?? '';

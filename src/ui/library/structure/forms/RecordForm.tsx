@@ -18,6 +18,7 @@ import { Editor } from './editors';
 import { withDerived } from './draft';
 import { SUGGESTIONS, groupOfPath, groupsFor, pathsOf, type FieldSpec, type FormGroup } from './formSpecs';
 import { isNamed, setPath } from './paths';
+import { TOUCH, TOUCH_FORM } from '../touch';
 
 export interface RecordFormProps<K extends StructuredKind> {
   kind: K;
@@ -177,7 +178,7 @@ export function RecordForm<K extends StructuredKind>(props: RecordFormProps<K>) 
 
   return (
     <FormContext.Provider value={ctx}>
-      <div ref={rootRef}>
+      <div ref={rootRef} className={TOUCH_FORM}>
         <fieldset disabled={disabled} className="flex min-w-0 flex-col gap-5">
           <legend className="sr-only">Fields of {name || 'this entry'}</legend>
           <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_12rem]">
@@ -217,7 +218,11 @@ export function RecordForm<K extends StructuredKind>(props: RecordFormProps<K>) 
               {editions.map((e, i) => (
                 <label
                   key={e.value}
-                  className="flex min-h-9 cursor-pointer items-center rounded-[10px] px-3 text-sm font-medium text-muted transition-colors hover:text-text has-[:checked]:bg-surface has-[:checked]:text-text has-[:checked]:shadow-sm has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring"
+                  className={cn(
+                    'flex min-h-9 cursor-pointer items-center rounded-[10px] px-3 text-sm font-medium text-muted transition-colors hover:text-text',
+                    'has-[:checked]:bg-surface has-[:checked]:text-text has-[:checked]:shadow-sm has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring',
+                    TOUCH,
+                  )}
                 >
                   <input
                     type="radio"

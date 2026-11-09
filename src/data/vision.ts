@@ -24,6 +24,8 @@ export { TRANSCRIBE_SYSTEM_PROMPT, transcriptionRequest, type EncodedImage } fro
 
 /** transcribeImages refuses in demo mode (defense in depth: the import dialog refuses photos there first). */
 export const DEMO_PHOTO_MESSAGE = 'Demo mode makes no API calls. Turn it off in Settings to transcribe photos.';
+/** …and without an API key, before any client is created (the import dialog asks for a key first). */
+export const NO_KEY_PHOTO_MESSAGE = 'Transcribing photos needs your Anthropic API key. Add it in Settings first.';
 
 /** Claude's recommended maximum image edge; larger images are downscaled server-side anyway. */
 export const MAX_IMAGE_SIDE = 1568;
@@ -128,7 +130,9 @@ function friendlyError(err: unknown, photo: number): Error {
 /** Transcribe photos of book pages to Markdown, one Claude request per photo. */
 export async function transcribeImages(files: Blob[], opts: TranscribeOptions = {}): Promise<TranscriptionResult> {
   const { signal, onProgress } = opts;
-  if (getSettings().mockMode) throw new Error(DEMO_PHOTO_MESSAGE);
+  const settings = getSettings();
+  if (settings.mockMode) throw new Error(DEMO_PHOTO_MESSAGE);
+  if (!opts.client && !settings.apiKey.trim()) throw new Error(NO_KEY_PHOTO_MESSAGE);
   const encode = opts.encode ?? encodeImageForClaude;
   const client = opts.client ?? getAnthropicClient();
   const pages: string[] = [];

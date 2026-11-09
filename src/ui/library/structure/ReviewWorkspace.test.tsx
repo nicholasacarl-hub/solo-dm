@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { act, screen, waitFor, within } from '@testing-library/react';
+import { act, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { gloamwoodEntries, gloamwoodRecords } from '@/test/structuredFixtures';
 import type { RecordStatus, StructuredRecord } from '@/types';
@@ -20,11 +20,13 @@ vi.mock('@/state/gameStore', async () => {
 vi.mock('@/dm', async () => (await import('@/ui/library/structure/testing/mocks')).dmMock());
 
 const storage = await import('@/storage');
+const dm = await import('@/dm');
 const { setViewport } = await import('./testing/bookPage');
 const { LibrarySourceScreen } = await import('@/ui/screens/LibrarySourceScreen');
 const { useUndoToast } = await import('./UndoToast');
 const { resetReviewActionsForTests } = await import('./reviewActions');
 const { resetShownBooks } = await import('./detailParts');
+const { NameSearch } = await import('./ReviewWorkspace');
 
 autoCleanup();
 
@@ -126,6 +128,38 @@ describe('the review list', () => {
   });
 });
 
+describe('the name search', () => {
+  it('keeps every key typed while the URL catches up, and follows a change made elsewhere', async () => {
+    const user = userEvent.setup();
+    const onSearch = vi.fn();
+    const { rerender } = render(<NameSearch q="" onSearch={onSearch} />);
+    const box = screen.getByRole('searchbox', { name: 'Search names' });
+    await user.type(box, 'Ashen');
+    expect(box).toHaveValue('Ashen');
+    expect(onSearch).toHaveBeenLastCalledWith('Ashen');
+    rerender(<NameSearch q="As" onSearch={onSearch} />); // the router handing back an earlier key
+    expect(box).toHaveValue('Ashen');
+    rerender(<NameSearch q="Ashen" onSearch={onSearch} />);
+    expect(box).toHaveValue('Ashen');
+    rerender(<NameSearch q="Wick" onSearch={onSearch} />); // Back, or a link
+    expect(box).toHaveValue('Wick');
+  });
+});
+
+describe('reads that failed', () => {
+  it('"Retry N" on the Couldn\'t read chip opens the consent and retries them in their job', async () => {
+    const user = userEvent.setup();
+    replace('Ashen Choir', { jobId: 'job:fixture', runState: 'failed', runError: { code: 'invalid-output', message: 'x', retryable: true } });
+    replace('Cinder Mote', { jobId: 'job:fixture', runState: 'refused' });
+    renderPage('?f=failed');
+    await user.click(await screen.findByRole('button', { name: 'Retry 2' }));
+    const consent = await screen.findByRole('dialog', { name: 'Read 2 entries with Claude' });
+    await within(consent).findByRole('radio', { name: /Claude Opus 5\.5/ }); // the estimates are in
+    await user.click(within(consent).getByRole('button', { name: /^Start/ }));
+    await waitFor(() => expect(dm.retryRecords).toHaveBeenCalledWith('job:fixture', 'both', 'claude-opus-5-5'));
+  });
+});
+
 describe('the record detail', () => {
   it('disables Accept while a problem blocks it, and says why', async () => {
     replace('Ashen Choir', { warnings: [{ code: 'out-of-range', severity: 'block', field: 'areaText', message: 'The area is too large.' }] });
@@ -160,6 +194,47 @@ describe('the record detail', () => {
     await waitFor(() => expect(screen.getByText('Accepted Ashen Choir. Now: Cinder Mote, 1 of 1.')).toBeInTheDocument());
   });
 
+  it('accepting the last record of a filter says so and puts focus on that filter, not the page body', async () => {
+    const user = userEvent.setup();
+    open('Ashen Choir', '&q=Ashen');
+    const range = await screen.findByLabelText('Range');
+    await user.click(range);
+    await user.keyboard('{Control>}{Enter}{/Control}');
+    await waitFor(() => expect(screen.getByText('Accepted Ashen Choir. Nothing else in this list.')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: /^To review/ })).toHaveFocus());
+    expect(screen.queryByRole('heading', { level: 2, name: 'Ashen Choir' })).not.toBeInTheDocument();
+  });
+
+  it('Alt+↓ / ↑ step through the list from the source text too, and the pager names its shortcuts', async () => {
+    const user = userEvent.setup();
+    const { router } = open('Ashen Choir', '&k=spell&f=all');
+    const excerpts = await screen.findByRole('radio', { name: 'Excerpts' });
+    expect(screen.getByRole('button', { name: 'Next' })).toHaveAttribute('aria-keyshortcuts', 'Alt+ArrowDown');
+    expect(screen.getByRole('button', { name: 'Accept & next' })).toHaveAttribute('aria-keyshortcuts', 'Control+Enter Meta+Enter');
+    await user.click(excerpts);
+    await user.keyboard('{Alt>}{ArrowDown}{/Alt}');
+    await waitFor(() => expect(router.state.location.search).toContain(encodeURIComponent(byName('Cinder Mote').id)));
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Cinder Mote' })).toHaveFocus());
+    await user.keyboard('{Alt>}{ArrowUp}{/Alt}');
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Ashen Choir' })).toHaveFocus());
+  });
+
+  it('Alt+1 / Alt+2 switch between the fields and the source text on mid widths', async () => {
+    setViewport(1100);
+    const user = userEvent.setup();
+    open('Ashen Choir');
+    const fields = await screen.findByRole('radio', { name: 'Fields' });
+    expect(screen.getByRole('radio', { name: 'Source text' })).toHaveAttribute('aria-keyshortcuts', 'Alt+2');
+    await user.click(screen.getByLabelText('Range'));
+    await user.keyboard('{Alt>}2{/Alt}');
+    expect(screen.getByRole('radio', { name: 'Source text' })).toBeChecked();
+    expect(screen.queryByLabelText('Range')).not.toBeInTheDocument();
+    screen.getByRole('radio', { name: 'Source text' }).focus();
+    await user.keyboard('{Alt>}1{/Alt}');
+    expect(fields).toBeChecked();
+    expect(screen.getByLabelText('Range')).toBeInTheDocument();
+  });
+
   it('keeps monster stats behind "Show details" (remembered for the book)', async () => {
     const user = userEvent.setup();
     open('Glimmerwing Drake');
@@ -169,6 +244,8 @@ describe('the record detail', () => {
     expect(screen.getByLabelText('HP')).toHaveValue('52');
     expect(screen.queryByRole('button', { name: 'Show details' })).not.toBeInTheDocument(); // both panes open at once
     expect(window.sessionStorage.getItem('solo-dm:show-stats:gloam')).toBe('1');
+    // The button that had focus is gone: focus is on the record's heading, not the page body.
+    await waitFor(() => expect(screen.getByRole('heading', { level: 2, name: 'Glimmerwing Drake' })).toHaveFocus());
   });
 
   it('compares a newer reading and takes it', async () => {
@@ -178,7 +255,7 @@ describe('the record detail', () => {
       edited: true,
       proposal: { data: { ...choir.data!, range: 'Self (30-foot cone)' } as never, warnings: [], adaptations: [], excerpts: [], origin: 'claude', createdAt: 2 },
     });
-    open('Ashen Choir');
+    const { router } = open('Ashen Choir');
     const diff = await screen.findByRole('region', { name: 'A newer reading is waiting' });
     const row = within(diff).getByRole('row', { name: /Range/ });
     expect(within(row).getByText('Self (15-foot cone)')).toBeInTheDocument();
@@ -189,6 +266,13 @@ describe('the record detail', () => {
     expect(saved).toMatchObject({ edited: false, origin: 'claude' });
     expect((saved.data as { range: string }).range).toBe('Self (30-foot cone)');
     expect(saved.proposal).toBeUndefined();
+    // The stored record comes back without the proposal: its buttons go, and focus moves to Accept & next.
+    replace('Ashen Choir', { ...saved, proposal: undefined, updatedAt: saved.updatedAt + 1 });
+    // (useRecords is a plain mock: an unknown query parameter makes the page render again and read it.)
+    const { pathname, search } = router.state.location;
+    await act(() => router.navigate(`${pathname}${search}&refresh=1`, { replace: true }));
+    await waitFor(() => expect(screen.queryByRole('region', { name: 'A newer reading is waiting' })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Accept & next' })).toHaveFocus());
   });
 
   it('says when the text changed, and can keep the fields', async () => {
@@ -230,11 +314,14 @@ describe('on a phone', () => {
     await user.click(await screen.findByRole('link', { name: /Ashen Choir/ }));
     expect(await screen.findByRole('heading', { level: 2, name: 'Ashen Choir' })).toBeInTheDocument();
     expect(screen.queryByRole('group', { name: 'Show' })).not.toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: 'Fields' })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: 'Fields' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Fields' })).toHaveAttribute('aria-keyshortcuts', 'Alt+1');
     expect(screen.getByRole('button', { name: 'Accept' })).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'List' }));
     expect(await screen.findByRole('group', { name: 'Show' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 2, name: 'Ashen Choir' })).not.toBeInTheDocument();
+    // Focus comes back to the row it left from, not the page body.
+    await waitFor(() => expect(screen.getByRole('link', { name: /Ashen Choir/ })).toHaveFocus());
   });
 
   it('switches between the fields and the source text', async () => {

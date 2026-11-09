@@ -255,12 +255,16 @@ export function gfmTables(text: string): GfmTable[] {
 
 const plainCell = (cell: string) => cell.replace(/[*_`]/g, '').trim();
 
-/** A weapon or armor table header (spec §3.2): Damage + Properties, or Armor Class/AC + Strength/Stealth. */
+/**
+ * A weapon or armor table header (spec §3.2): Damage + Properties, or Armor Class/AC + Strength/Stealth.
+ * A shield table prints neither Strength nor Stealth, so Armor Class/AC under a first column naming
+ * shields counts too (the SRD's "Shield" table).
+ */
 export function gearTableKind(header: readonly string[]): 'weapons' | 'armor' | null {
   const cells = header.map((h) => plainCell(h).toLowerCase());
   const has = (re: RegExp) => cells.some((c) => re.test(c));
   if (has(/^damage\b/) && has(/^properties\b/)) return 'weapons';
-  if ((has(/^armor class\b/) || has(/^ac\b/)) && (has(/^strength\b/) || has(/^stealth\b/))) return 'armor';
+  if ((has(/^armor class\b/) || has(/^ac\b/)) && (has(/^strength\b/) || has(/^stealth\b/) || /^shields?\b/.test(cells[0] ?? ''))) return 'armor';
   return null;
 }
 
@@ -463,7 +467,7 @@ function itemCandidates(node: OutlineNode): Candidate[] {
   const out: Candidate[] = [];
   for (const { t, index, kind } of gear) {
     const base = gear.length === 1 ? node.title : `${node.title} (${plainCell(t.header[0]) || `table ${out.length + 1}`})`;
-    const reason = kind === 'weapons' ? 'A weapon table (Damage and Properties columns)' : 'An armor table (Armor Class and Strength or Stealth columns)';
+    const reason = kind === 'weapons' ? 'A weapon table (Damage and Properties columns)' : 'An armor table (an Armor Class column with Strength, Stealth or shields)';
     for (let first = 0; first < Math.max(1, t.rows.length); first += max) {
       const rows = Math.min(max, t.rows.length - first);
       const name = t.rows.length > max ? `${base} (rows ${first + 1}–${first + rows})` : base;
@@ -686,7 +690,11 @@ export function markCandidate(entries: readonly CompendiumEntry[], entryIds: rea
     const seen = new Set<Chain>();
     chains = [];
     for (const node of nodes) {
-      for (const n of walk(node)) if (n.chain && !seen.has(n.chain)) (seen.add(n.chain), chains.push(n.chain));
+      for (const n of walk(node)) {
+        if (!n.chain || seen.has(n.chain)) continue;
+        seen.add(n.chain);
+        chains.push(n.chain);
+      }
     }
   } else chains = nodes.map((n) => n.chain as Chain);
   const titled = kind === 'subclass' ? SUBCLASS_TITLE.exec(first.title) : null;

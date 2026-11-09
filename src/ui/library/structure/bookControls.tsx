@@ -14,6 +14,7 @@ import { Popover } from '@/ui/play/components/Popover';
 import { errorMessage, plural } from '@/ui/shell/format';
 import { refreshRulesIndex } from '../kinds';
 import { PRIVACY_PROMISES } from './labels';
+import { TOUCH, TOUCH_FOOTER } from './touch';
 import { bookGoneNotice, restoreLoadedCharacter, tellDmsInSession } from './reviewActions';
 
 type User = { campaignId: string; campaignName: string; characterName: string };
@@ -91,7 +92,7 @@ export function useBookSwitch(): { toggle(source: LibrarySource, enabled: boolea
       size="sm"
       title="Switch this book off?"
       footer={
-        <>
+        <div className={TOUCH_FOOTER}>
           <Button variant="ghost" disabled={busy} onClick={() => setPending(null)}>
             Cancel
           </Button>
@@ -110,7 +111,7 @@ export function useBookSwitch(): { toggle(source: LibrarySource, enabled: boolea
           >
             Switch off
           </Button>
-        </>
+        </div>
       }
     >
       {pending && (
@@ -151,14 +152,14 @@ export function DeleteBookDialog({ source, onClose, onDeleted }: { source: Libra
       size="sm"
       title="Delete this import?"
       footer={
-        <>
+        <div className={TOUCH_FOOTER}>
           <Button variant="ghost" disabled={deleting} onClick={onClose}>
             Cancel
           </Button>
           <Button variant="danger" loading={deleting} onClick={() => void confirm()}>
             Delete
           </Button>
-        </>
+        </div>
       }
     >
       {source && (
@@ -182,7 +183,7 @@ export function PrivacyPopover() {
       placement="bottom-end"
       className="w-[min(22rem,calc(100vw-2rem))]"
       trigger={(t) => (
-        <button {...t} type="button" className="inline-flex min-h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-info hover:bg-surface-2">
+        <button {...t} type="button" className={`inline-flex min-h-8 items-center gap-1 rounded-lg px-2 text-xs font-medium text-info hover:bg-surface-2 ${TOUCH}`}>
           <ShieldCheck className="size-3.5" aria-hidden />
           Privacy
         </button>

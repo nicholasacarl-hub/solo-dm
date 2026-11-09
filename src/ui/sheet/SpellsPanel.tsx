@@ -11,6 +11,7 @@ import { useGame } from '@/state/gameStore';
 import { ABILITY_NAMES, type Character, type CompendiumEntry, type KnownSpell, type SpellSlotLevel } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
 import { Badge, Dialog, EmptyState, Spinner } from '@/ui/components/ui';
+import { BookBadge } from '@/ui/builder/BookBadges';
 import { concentrationChange, preparedChange, slotChange } from './sheetChanges';
 import { Pips, SheetSection, StatTile } from './SheetParts';
 import type { SheetChange } from './useSheetActions';
@@ -19,8 +20,11 @@ const SLOT_LEVELS: SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 type EntryState = { status: 'loading' } | { status: 'ready'; entry: CompendiumEntry | null } | { status: 'error'; message: string };
 
-/** Look a spell up in the rules index (by id, then by name) and show its text. */
-export function RulesEntryDialog({ spell, onClose }: { spell: Pick<KnownSpell, 'id' | 'name'> | null; onClose: () => void }) {
+/**
+ * Look a spell up in the rules index (by id, then by name) and show its text. Nothing is copied onto
+ * the sheet: a spell from a book that isn't on this device says so.
+ */
+export function RulesEntryDialog({ spell, onClose }: { spell: (Pick<KnownSpell, 'id' | 'name'> & Partial<Pick<KnownSpell, 'ref'>>) | null; onClose: () => void }) {
   const campaignId = useGame((s) => s.campaignId);
   const [state, setState] = useState<EntryState>({ status: 'loading' });
   useEffect(() => {
@@ -57,6 +61,8 @@ export function RulesEntryDialog({ spell, onClose }: { spell: Pick<KnownSpell, '
       {state.status === 'ready' &&
         (state.entry ? (
           <Markdown>{state.entry.text}</Markdown>
+        ) : spell?.ref ? (
+          <p className="text-sm text-muted">From “{spell.ref.sourceTitle}”, which isn't on this device.</p>
         ) : (
           <p className="text-sm text-muted">No rules text found for {spell?.name}. Ask the DM, or add it from your Library.</p>
         ))}
@@ -123,6 +129,7 @@ function SpellRow({
       {spell.concentration && <Badge tone="arcane" className="px-1.5">C</Badge>}
       {spell.ritual && <Badge className="px-1.5">R</Badge>}
       {spell.alwaysPrepared && <Badge tone="arcane">Always</Badge>}
+      {spell.ref && <BookBadge title={spell.ref.sourceTitle} />}
       <span className="ml-auto truncate text-xs text-faint">{spell.source}</span>
       {editable && spell.concentration && (
         <button

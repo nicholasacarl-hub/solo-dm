@@ -1,10 +1,13 @@
 /**
  * Area-template presets (D64): the hero's prepared spells whose compendium text names an area — parsed with
  * parseAreaText (the text is the source of truth: only a few SRD spells carry `data.area`, and Lightning Bolt's
- * stored size is its width), `data.area` only as a fallback — plus the Custom sizes. Pure.
+ * stored size is its width), `data.area` only as a fallback — plus the Custom sizes. A spell the player
+ * reviewed from their own book (structured imports, spec §6.4) is the exception: its `data.area` is the
+ * player's checked reading, so it comes first. Pure.
  */
 import { parseAreaText } from '@/engine';
 import type { RulesIndex } from '@/data';
+import { isReviewedImport } from '@/data/structured/materialize';
 import type { AreaShape, Character, CompendiumEntry } from '@/types';
 
 export type TemplateShape = Exclude<AreaShape, 'squares'>;
@@ -51,20 +54,47 @@ function isSelfRange(range: unknown): boolean {
 
 const SHAPES = new Set<string>(TEMPLATE_SHAPES);
 
-/** `data.area` ({ shape, size }) when the text names no area. */
-function storedArea(entry: CompendiumEntry): { shape: TemplateShape; sizeFt: number } | null {
-  const area = entry.data?.area as { shape?: unknown; size?: unknown } | undefined;
-  if (!area || typeof area.shape !== 'string' || typeof area.size !== 'number') return null;
+interface StoredArea {
+  shape: TemplateShape;
+  sizeFt: number;
+  widthFt?: number;
+  heightFt?: number;
+}
+
+/** A stored length in feet, on the 5-foot grid; undefined when absent or not a usable number. */
+function feet(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 5 ? Math.round(value / 5) * 5 : undefined;
+}
+
+/** `data.area` ({ shape, size, widthFt?, heightFt? }: a reviewed import's, or the SRD's when the text names no area). */
+function storedArea(entry: CompendiumEntry): StoredArea | null {
+  const area = entry.data?.area as { shape?: unknown; size?: unknown; widthFt?: unknown; heightFt?: unknown } | undefined;
+  if (!area || typeof area.shape !== 'string') return null;
   const shape = area.shape.toLowerCase();
-  if (!SHAPES.has(shape) || area.size < 5) return null;
-  return { shape: shape as TemplateShape, sizeFt: Math.round(area.size / 5) * 5 };
+  const sizeFt = feet(area.size);
+  if (!SHAPES.has(shape) || sizeFt === undefined) return null;
+  const widthFt = feet(area.widthFt);
+  const heightFt = feet(area.heightFt);
+  return { shape: shape as TemplateShape, sizeFt, ...(widthFt ? { widthFt } : {}), ...(heightFt ? { heightFt } : {}) };
+}
+
+/** The text's area (parseAreaText), when it names one with a size. */
+function textArea(entry: CompendiumEntry): StoredArea | null {
+  const parsed = parseAreaText(entry.text);
+  if (!parsed || parsed.shape === 'squares' || !parsed.sizeFt) return null;
+  return {
+    shape: parsed.shape as TemplateShape,
+    sizeFt: parsed.sizeFt,
+    ...('widthFt' in parsed && parsed.widthFt ? { widthFt: parsed.widthFt } : {}),
+    ...('heightFt' in parsed && parsed.heightFt ? { heightFt: parsed.heightFt } : {}),
+  };
 }
 
 /** The preset a spell entry describes, or null when it has no area. */
 export function presetFromEntry(entry: CompendiumEntry, label = entry.name): AreaPreset | null {
-  const parsed = parseAreaText(entry.text);
-  const area = parsed && parsed.shape !== 'squares' && parsed.sizeFt ? parsed : storedArea(entry);
-  if (!area || area.shape === 'squares' || !area.sizeFt) return null;
+  // A reviewed import's fields first (the player's correction wins); else the text, else the stored area.
+  const area = (isReviewedImport(entry) ? storedArea(entry) : null) ?? textArea(entry) ?? storedArea(entry);
+  if (!area) return null;
   const shape = area.shape as TemplateShape;
   const range = entry.data?.range;
   const fromSelf = shape === 'cone' || shape === 'line' || shape === 'emanation' || (shape === 'cube' && isSelfRange(range));
@@ -73,14 +103,17 @@ export function presetFromEntry(entry: CompendiumEntry, label = entry.name): Are
     label,
     shape,
     sizeFt: area.sizeFt,
-    ...('widthFt' in area && area.widthFt ? { widthFt: area.widthFt } : {}),
-    ...('heightFt' in area && area.heightFt ? { heightFt: area.heightFt } : {}),
+    ...(area.widthFt ? { widthFt: area.widthFt } : {}),
+    ...(area.heightFt ? { heightFt: area.heightFt } : {}),
     ...(fromSelf ? {} : rangeFeet(range) !== undefined ? { rangeFt: rangeFeet(range) } : {}),
     fromSelf,
   };
 }
 
-/** "Your spells": prepared spells (and cantrips) with an area, in sheet order; [] while the rules index loads. */
+/**
+ * "Your spells": prepared spells (and cantrips) with an area, in sheet order; [] while the rules index loads.
+ * A spell whose id the index doesn't know (the DM added it, or another device made the id) is found by name.
+ */
 export function spellPresets(character: Character, index: RulesIndex | null): AreaPreset[] {
   if (!index) return [];
   const out: AreaPreset[] = [];
@@ -89,7 +122,7 @@ export function spellPresets(character: Character, index: RulesIndex | null): Ar
     if (!spell.prepared && spell.level > 0) continue;
     if (seen.has(spell.id)) continue;
     seen.add(spell.id);
-    const entry = index.get(spell.id);
+    const entry = index.get(spell.id) ?? index.findByName(spell.name, { kind: 'spell', campaignId: character.campaignId });
     const preset = entry ? presetFromEntry(entry, spell.name) : null;
     if (preset) out.push(preset);
   }

@@ -114,3 +114,41 @@ describe('area presets from spell text (D64)', () => {
     expect(customPreset('emanation', 2).sizeFt).toBe(5);
   });
 });
+
+describe('area presets for spells from the player’s books (structured imports, spec §6.4)', () => {
+  /** Ashen Choir as the rules index materializes it once the player accepts it (invented Gloamwood fixture). */
+  const reviewed = (area: Record<string, unknown>, text = 'Ash rises from your hands. Each creature in a 15-foot Cone makes a Dexterity saving throw.'): CompendiumEntry => ({
+    id: 'lib:gloam:40',
+    sourceId: 'gloam',
+    sourceName: 'The Gloamwood Almanac',
+    kind: 'spell',
+    name: 'Ashen Choir',
+    text,
+    data: { recordId: 'rec:gloam:spell:ashen-choir', range: 'Self (15-foot cone)', area },
+  });
+
+  it("uses a reviewed import's checked area first: the player's correction wins over the text", () => {
+    expect(presetFromEntry(reviewed({ shape: 'cone', size: 20 }))).toMatchObject({ shape: 'cone', sizeFt: 20, fromSelf: true });
+    // A line keeps its width and a cylinder its height.
+    expect(presetFromEntry(reviewed({ shape: 'line', size: 60, widthFt: 10 }))).toMatchObject({ shape: 'line', sizeFt: 60, widthFt: 10 });
+    expect(presetFromEntry(reviewed({ shape: 'cylinder', size: 10, heightFt: 40 }))).toMatchObject({ shape: 'cylinder', sizeFt: 10, heightFt: 40 });
+    // Without a usable stored area the text still answers.
+    expect(presetFromEntry(reviewed({ shape: 'blob', size: 20 }))).toMatchObject({ shape: 'cone', sizeFt: 15 });
+  });
+
+  it('keeps the text first for SRD and unreviewed entries', () => {
+    const unreviewed = { ...reviewed({ shape: 'cone', size: 20 }), data: { range: 'Self', area: { shape: 'cone', size: 20 } } };
+    expect(presetFromEntry(unreviewed)).toMatchObject({ shape: 'cone', sizeFt: 15 });
+  });
+
+  it('finds a spell by name when its id is not in the index (added by the DM, or made on another device)', () => {
+    const entry = reviewed({ shape: 'cone', size: 15 });
+    const index: RulesIndex = {
+      ...mockIndex([entry]),
+      get: () => undefined,
+      findByName: (name, opts) => (name === 'Ashen Choir' && opts?.kind === 'spell' && opts.campaignId === 'camp-1' ? entry : undefined),
+    };
+    const hero = caster([{ id: 'dm-made-id', name: 'Ashen Choir', level: 2, prepared: true }]);
+    expect(spellPresets(hero, index)).toEqual([{ id: 'lib:gloam:40', label: 'Ashen Choir', shape: 'cone', sizeFt: 15, fromSelf: true }]);
+  });
+});

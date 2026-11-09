@@ -18,3 +18,14 @@ createRoot(document.getElementById('root')!).render(
     <App />
   </StrictMode>,
 );
+
+// Once, after the first render: structuring jobs a closed page left unfinished are paused (spec §3.10),
+// never resumed by themselves. It only acts when this tab can take the runner's Web Lock, so it leaves
+// alone a job another open tab is running. No API call is made.
+const afterFirstRender = (work: () => void) =>
+  typeof window.requestIdleCallback === 'function' ? window.requestIdleCallback(work, { timeout: 5000 }) : window.setTimeout(work, 1000);
+afterFirstRender(() => {
+  import('@/dm/extract')
+    .then((extract) => extract.recoverJobsOnStartup())
+    .catch((err: unknown) => console.warn('Could not check for interrupted structuring jobs.', err));
+});

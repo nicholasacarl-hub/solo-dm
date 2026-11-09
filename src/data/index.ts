@@ -118,7 +118,7 @@ export { guessKind } from './chunk';
 // ---------------------------------------------------------------------------
 // Structured imports (spec §2–§7): records beside entries, read on this device (and, with the player's
 // key and consent, by Claude), reviewed, then used by the index, the builder, combat and the DM.
-// CONTRACT (Day 0): final names; several are stubs until their owner lands them (grep "not implemented").
+// CONTRACT (Day 0): these names are final; change them only with every caller.
 // ---------------------------------------------------------------------------
 
 /** Detection: segment → parse offline → normalize → records (local and free). */

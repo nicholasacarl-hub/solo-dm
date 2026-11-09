@@ -56,7 +56,8 @@ export interface DmDeps {
   rulesIndex: () => Promise<RulesIndex>;
   invalidateRulesIndex: () => void;
   /**
-   * Builder data for level_up, inventory_add and AC (merged: SRD + accepted imported options, once E4 lands it).
+   * Builder data for level_up, inventory_add, features_add and AC: merged, the SRD plus the accepted
+   * options of the player's switched-on books (loadBuilderData, cached per rules-index version).
    * Callers treat a failure as "no data" and keep today's behavior.
    */
   builderData: () => Promise<BuilderData>;

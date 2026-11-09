@@ -18,6 +18,7 @@ import { currentJob, jobProgress, raisedBudget, remainingUsd, reviewCounts } fro
 import { aboutUsd, usd } from './ConsentDialog';
 import { KIND_LABELS, modelName } from './labels';
 import type { Availability } from './RecordDetail';
+import { TOUCH, TOUCH_BUTTONS, TOUCH_FOOTER, TOUCH_SQUARE } from './touch';
 
 const ANNOUNCE_MS = 15_000;
 const ANNOUNCE_EVERY = 25;
@@ -28,6 +29,7 @@ function Card({ tone = 'neutral', children, className }: { tone?: 'neutral' | 'w
       aria-label="Structuring"
       className={cn(
         'rounded-2xl border px-4 py-3',
+        TOUCH_BUTTONS,
         tone === 'warn' ? 'border-gold/40 bg-gold-soft/40' : tone === 'done' ? 'border-success/30 bg-success-soft/40' : 'border-border bg-surface',
         className,
       )}
@@ -146,7 +148,7 @@ export function JobProgress({
 
 function ModelPicker({ value, onChange, exclude }: { value: ModelId; onChange(m: ModelId): void; exclude?: ModelId }) {
   return (
-    <Select aria-label="Model" value={value} className="h-8 w-auto text-sm" onChange={(e) => onChange(e.target.value)}>
+    <Select aria-label="Model" value={value} className={cn('h-8 w-auto text-sm', TOUCH)} onChange={(e) => onChange(e.target.value)}>
       {MODELS.filter((m) => m.id !== exclude).map((m) => (
         <option key={m.id} value={m.id}>
           {m.label}
@@ -369,6 +371,8 @@ export function DoneCard({
     } catch {
       // Storage blocked: hide it for now.
     }
+    // The card (and its focused button) goes: focus the page's main content, not the page body.
+    document.getElementById('main')?.focus({ preventScroll: true });
     setHidden(true);
   };
   return (
@@ -391,7 +395,7 @@ export function DoneCard({
             Open the character builder
           </Link>
         )}
-        <button type="button" aria-label="Hide this" onClick={dismiss} className="grid size-8 place-items-center rounded-lg text-faint hover:text-text">
+        <button type="button" aria-label="Hide this" onClick={dismiss} className={cn('grid size-8 place-items-center rounded-lg text-faint hover:text-text', TOUCH_SQUARE)}>
           <X className="size-4" aria-hidden />
         </button>
       </div>
@@ -447,7 +451,7 @@ export function StructureStatusCard({
         size="sm"
         title="Stop now?"
         footer={
-          <>
+          <div className={TOUCH_FOOTER}>
             <Button variant="ghost" onClick={() => setConfirmCancel(null)}>
               Keep reading
             </Button>
@@ -460,7 +464,7 @@ export function StructureStatusCard({
             >
               Stop
             </Button>
-          </>
+          </div>
         }
       >
         <p className="text-sm">

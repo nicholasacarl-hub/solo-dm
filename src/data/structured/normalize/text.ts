@@ -36,8 +36,8 @@ import type { NormalizeContext, Normalized } from './index';
 export function groundingForm(text: string): string {
   return text
     .normalize('NFKC')
-    .replace(/­/g, '')
-    .replace(/[   ]/g, ' ')
+    .replace(/\u00ad/g, '')
+    .replace(/[\u00a0\u2007\u202f]/g, ' ')
     .replace(/^[ \t]{0,3}#{1,6}[ \t]+/gm, '')
     .replace(/[*_`]/g, '')
     .replace(/[‘’‚‛′]/g, "'")

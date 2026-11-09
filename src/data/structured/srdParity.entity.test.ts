@@ -1,8 +1,9 @@
 /**
  * SRD parity for the entity kinds (spec §3.9, §8.2): every SRD 5.2.1 spell, monster and magic item
  * (CC-BY-4.0, public/srd/compendium.json) goes through segment → parseOffline → normalize, in SRD-style
- * Markdown and as a PDF text layer, and is compared with the data the build script shipped. Prints the
- * worst fields on failure.
+ * Markdown and as a PDF text layer, and is compared with the data the build script shipped; so do the
+ * SRD's weapon, armor and shield tables, against the equipment catalog (public/srd/builder.json).
+ * Prints the worst fields on failure.
  *
  * The PDF dialect is flatten()'s output, except that a monster's ability table is first printed the way
  * a PDF text layer shows the 2024 stat block grid ("Str 21 +5 +5 Dex 9 −1 +3 …"): flatten() drops a
@@ -10,14 +11,16 @@
  * "Score 21 9 15 …" row (the fixture's flattened Glimmerwing Drake goes to Claude because of it).
  */
 import { describe, expect, it } from 'vitest';
+import builderRaw from '../../../public/srd/builder.json?raw';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import { guessKind } from '@/data/chunk';
 import { nameKey } from '@/lib/id';
-import type { CompendiumEntry, StructuredKind } from '@/types';
-import { normalize } from './normalize';
+import type { BuilderData, CompendiumEntry, StructuredKind } from '@/types';
+import { normalize, normalizeItemRows } from './normalize';
 import { parseOffline } from './parse';
 import { flatten } from './parse/flatten';
 import { segment } from './segment';
+import type { Wire } from './wire';
 
 const SRD = (JSON.parse(compendiumRaw) as CompendiumEntry[]).filter((e) => ['spell', 'monster', 'magic-item'].includes(e.kind));
 const CHAPTER: Partial<Record<StructuredKind, string>> = { spell: 'Spells', monster: 'Monsters', 'magic-item': 'Magic Items' };
@@ -148,5 +151,63 @@ describe('SRD parity (entity kinds)', () => {
     const report = `${kind}/${dialect}: ${m.agreeing}/${m.total} agree (${(m.rate * 100).toFixed(1)}%), ${m.read} read\n${m.worst.join('\n')}\n${m.info.join('\n')}`;
     expect(m.total, report).toBeGreaterThan(0);
     expect(m.rate, report).toBeGreaterThanOrEqual(target);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gear (§3.9: GFM tables ≥ 95%; a PDF text layer loses its tables, so those wait for Claude)
+// ---------------------------------------------------------------------------
+
+const GEAR_TABLES = (JSON.parse(compendiumRaw) as CompendiumEntry[]).filter((e) => e.id === 'srd:rule:weapons' || e.id === 'srd:rule:armor');
+const CATALOG = (JSON.parse(builderRaw) as BuilderData).equipment.filter((o) => o.category === 'weapon' || o.category === 'armor' || o.category === 'shield');
+const GEAR_FIELDS = [
+  'category', 'costGp', 'weight', 'weaponCategory', 'weaponType', 'range', 'damage', 'damageType', 'properties', 'mastery',
+  'armorClass', 'dexCap', 'strengthRequirement', 'stealthDisadvantage', 'armorType', 'description',
+] as const;
+
+function measureGear(dialect: Dialect): Omit<Measure, 'info'> {
+  const entries = GEAR_TABLES.map((e, i) => ({
+    ...e,
+    id: `lib:srd-parity:${i + 1}`,
+    sourceId: 'srd-parity',
+    sourceName: 'Parity',
+    text: dialect === 'markdown' ? e.text : flatten(e.text),
+  }));
+  const entriesById = new Map(entries.map((e) => [e.id, e]));
+  const read = new Map<string, Data>();
+  for (const c of segment(entries, CTX).candidates) {
+    if (c.kind !== 'item') continue;
+    const { wire, missing } = parseOffline(c);
+    const rows = normalizeItemRows(wire as Wire<'item'>, { blocks: c.blocks, entriesById, origin: 'parser', spellLists: [], missing });
+    for (const row of rows) if (row.data) read.set(nameKey(row.name), row.data as unknown as Data);
+  }
+  const misses = new Map<string, string[]>();
+  let agreeing = 0;
+  for (const shipped of CATALOG) {
+    const ours = read.get(nameKey(shipped.name));
+    if (!ours) {
+      misses.set('(not read)', [...(misses.get('(not read)') ?? []), shipped.name]);
+      continue;
+    }
+    const theirs = shipped as unknown as Data;
+    const wrong = GEAR_FIELDS.filter((field) => !same(ours[field], theirs[field]));
+    for (const field of wrong) misses.set(field, [...(misses.get(field) ?? []), `${shipped.name}: ${JSON.stringify(ours[field])} vs ${JSON.stringify(theirs[field])}`]);
+    if (!wrong.length) agreeing += 1;
+  }
+  const worst = [...misses.entries()].sort((a, b) => b[1].length - a[1].length).map(([f, list]) => `${f} (${list.length}): ${list.slice(0, 4).join(' | ')}`);
+  return { rate: agreeing / CATALOG.length, total: CATALOG.length, read: read.size, agreeing, worst };
+}
+
+describe('SRD parity (gear tables)', () => {
+  it('reads the SRD weapon, armor and shield tables in Markdown as the shipped catalog has them, at least 95% of rows', () => {
+    const m = measureGear('markdown');
+    const report = `gear/markdown: ${m.agreeing}/${m.total} agree (${(m.rate * 100).toFixed(1)}%), ${m.read} read\n${m.worst.join('\n')}`;
+    expect(m.total, report).toBe(51);
+    expect(m.rate, report).toBeGreaterThanOrEqual(0.95);
+  });
+
+  it('reads no gear offline from a PDF text layer, whose tables are lost: those wait for Claude', () => {
+    const m = measureGear('pdf');
+    expect(m.read, m.worst.join('\n')).toBe(0);
   });
 });

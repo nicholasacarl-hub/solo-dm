@@ -268,6 +268,8 @@ describe('the import dialog', () => {
       ),
     ).toBeInTheDocument();
     expect(data.detectStructure).toHaveBeenCalledWith('gloam', expect.anything());
+    // The progress view's button is gone: focus is on the summary, inside the dialog.
+    await waitFor(() => expect(within(done).getByText(/^Imported 52 entries from/)).toHaveFocus());
     await user.click(within(done).getByRole('button', { name: 'Review and set up' }));
     expect(router.state.location.pathname).toBe('/library/source/gloam');
     expect(router.state.location.search).toBe('?setup=1');

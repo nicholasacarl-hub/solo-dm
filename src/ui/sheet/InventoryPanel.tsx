@@ -1,14 +1,22 @@
 /**
  * Inventory tab: items (quantity, equip, attune, remove), adding items, and the coin purse.
- * Equipping armor or a shield recomputes AC with the builder's equipment catalog.
+ * Equipping armor or a shield recomputes AC with the builder's equipment catalog (merged: the SRD plus
+ * the player's books, so accepting a book's armor updates AC without a reload). Items from a book carry
+ * their numbers (armor, bonuses, attunement) and show the book's text live from the rules index.
  */
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import { Coins, Minus, Plus, Shield, Sparkles, Trash2 } from 'lucide-react';
-import { loadBuilderData } from '@/data';
+import { useBuilderData, useRulesIndex } from '@/data';
+import { describeBonuses } from '@/data/options/describe';
+import { linkInventoryItem } from '@/data/options/inventory';
 import { newId } from '@/lib/id';
 import { cn } from '@/lib/cn';
-import type { Character, Currency, EquipmentOption, InventoryItem, ItemCategory } from '@/types';
+import { isImportedPlaceholder } from '@/lib/importedContent';
+import { useGame } from '@/state/gameStore';
+import type { Character, CompendiumEntry, Currency, EquipmentOption, InventoryItem, ItemCategory } from '@/types';
+import { Markdown } from '@/ui/components/Markdown';
 import { Badge, Button, Input, Select } from '@/ui/components/ui';
+import { BookBadge } from '@/ui/builder/BookBadges';
 import {
   MAX_ATTUNED,
   addItemChange,
@@ -23,24 +31,41 @@ import type { SheetChange } from './useSheetActions';
 
 type Edit = (change: (c: Character) => SheetChange) => void;
 
-/** The builder's equipment catalog (for AC), loaded lazily; null until loaded or if unavailable. */
+/**
+ * The builder's equipment catalog (for AC), following the library (D28): null until it loads or if it is
+ * unavailable — equipping still works then, and AC falls back to the SRD armor table.
+ */
 function useEquipmentCatalog(): EquipmentOption[] | null {
-  const [catalog, setCatalog] = useState<EquipmentOption[] | null>(null);
-  useEffect(() => {
-    let alive = true;
-    (async () => {
-      try {
-        const data = await loadBuilderData();
-        if (alive) setCatalog(data.equipment);
-      } catch {
-        // Without the catalog, equipping still works; AC just isn't recalculated.
-      }
-    })();
-    return () => {
-      alive = false;
-    };
-  }, []);
-  return catalog;
+  return useBuilderData().data?.equipment ?? null;
+}
+
+/** Whether the Attune button shows: an explicit flag (imported items) wins over today's heuristic. */
+export function attunable(item: InventoryItem): boolean {
+  return item.requiresAttunement ?? Boolean(item.magic || item.category === 'magic-item' || item.attuned);
+}
+
+/** "Requires attunement (by a Wizard)": who may attune is shown, never enforced. */
+function attunementLine(item: InventoryItem): string | null {
+  if (!item.requiresAttunement) return null;
+  return `Requires attunement${item.attunementBy ? ` (by ${item.attunementBy})` : ''}`;
+}
+
+/** The bonuses on the item, with a reminder for the ones the app doesn't add (attack and damage). */
+function bonusLines(item: InventoryItem): string[] {
+  const bonuses = item.bonuses;
+  if (!bonuses) return [];
+  const applied = describeBonuses({ ...bonuses, attack: undefined, damage: undefined });
+  const rolls = describeBonuses({ attack: bonuses.attack, damage: bonuses.damage }).map((t) => `${t} — add it to your rolls`);
+  return [...applied, ...rolls];
+}
+
+/** The index entry an item's text comes from: its book's (by ref) or an index-only magic item's. */
+function itemEntry(item: InventoryItem, index: ReturnType<typeof useRulesIndex>): CompendiumEntry | undefined {
+  if (!index) return undefined;
+  const id = item.ref?.entryId ?? item.compendiumId;
+  const entry = id ? index.get(id) : undefined;
+  if (item.ref) return entry;
+  return entry?.kind === 'magic-item' ? entry : undefined;
 }
 
 const CATEGORY_LABELS: Record<ItemCategory, string> = {
@@ -57,6 +82,29 @@ const CATEGORY_LABELS: Record<ItemCategory, string> = {
 
 const EQUIPPABLE: ItemCategory[] = ['weapon', 'armor', 'shield', 'magic-item'];
 
+/** The item's text: what the player or DM wrote, and (book items, index-only magic items) the entry's text, live. */
+function ItemDetails({ item }: { item: InventoryItem }) {
+  const index = useRulesIndex();
+  const entry = itemEntry(item, index);
+  const own = item.description && !isImportedPlaceholder(item.description) && !item.ref?.redacted ? item.description : '';
+  const missing = item.ref && !entry && index ? `From “${item.ref.sourceTitle}”, which isn't on this device.` : null;
+  const lines = [attunementLine(item), ...bonusLines(item)].filter((l): l is string => Boolean(l));
+  if (!own && !entry && !missing && !lines.length) return null;
+  return (
+    <div className="flex flex-col gap-1 text-xs text-muted">
+      {lines.length > 0 && <p>{lines.join(' · ')}</p>}
+      {missing && <p>{missing}</p>}
+      {(own || entry) && (
+        <details>
+          <summary className="cursor-pointer text-faint hover:text-text">Details</summary>
+          {own && <p className="mt-1 whitespace-pre-line">{own}</p>}
+          {entry && <Markdown className="mt-1 text-sm text-text">{entry.text}</Markdown>}
+        </details>
+      )}
+    </div>
+  );
+}
+
 function ItemRow({ item, editable, onEdit, catalog }: { item: InventoryItem; editable: boolean; onEdit: Edit; catalog: EquipmentOption[] | null }) {
   const [confirming, setConfirming] = useState(false);
   useEffect(() => {
@@ -64,8 +112,9 @@ function ItemRow({ item, editable, onEdit, catalog }: { item: InventoryItem; edi
     const id = window.setTimeout(() => setConfirming(false), 3000);
     return () => window.clearTimeout(id);
   }, [confirming]);
-  const equippable = EQUIPPABLE.includes(item.category ?? 'gear') || item.equipped;
-  const attunable = item.magic || item.category === 'magic-item' || item.attuned;
+  // Items with armor numbers or bonuses of their own (a book's magic cloak) can be worn whatever their category.
+  const equippable = EQUIPPABLE.includes(item.category ?? 'gear') || item.equipped || Boolean(item.armor || item.bonuses);
+  const canAttune = attunable(item);
   const weight = item.weight ? `${+(item.weight * item.quantity).toFixed(2)} lb.` : null;
   return (
     <li className="flex flex-col gap-1 py-2">
@@ -76,7 +125,10 @@ function ItemRow({ item, editable, onEdit, catalog }: { item: InventoryItem; edi
             {item.equipped && <Badge tone="accent">Equipped</Badge>}
             {item.attuned && <Badge tone="arcane">Attuned</Badge>}
           </div>
-          <span className="text-xs text-faint">{[item.category ? CATEGORY_LABELS[item.category] : null, weight].filter(Boolean).join(' · ')}</span>
+          <span className="flex flex-wrap items-center gap-1.5 text-xs text-faint">
+            {[item.category ? CATEGORY_LABELS[item.category] : null, weight].filter(Boolean).join(' · ')}
+            {item.ref && <BookBadge title={item.ref.sourceTitle} />}
+          </span>
         </div>
         {editable ? (
           <div className="flex shrink-0 items-center rounded-lg border border-border" role="group" aria-label={`${item.name} quantity`}>
@@ -118,7 +170,7 @@ function ItemRow({ item, editable, onEdit, catalog }: { item: InventoryItem; edi
             <Shield className="size-4" aria-hidden />
           </button>
         )}
-        {editable && attunable && (
+        {editable && canAttune && (
           <button
             type="button"
             aria-pressed={Boolean(item.attuned)}
@@ -145,17 +197,19 @@ function ItemRow({ item, editable, onEdit, catalog }: { item: InventoryItem; edi
           </button>
         )}
       </div>
-      {item.description && (
-        <details className="text-xs text-muted">
-          <summary className="cursor-pointer text-faint hover:text-text">Details</summary>
-          <p className="mt-1 whitespace-pre-line">{item.description}</p>
-        </details>
-      )}
+      <ItemDetails item={item} />
     </li>
   );
 }
 
-function AddItemForm({ onEdit }: { onEdit: Edit }) {
+/**
+ * Add an item. An exact name that matches a catalog option (the SRD's or a book's) or a magic item in the
+ * rules index is linked: its numbers (armor, bonuses, attunement) come with it. Anything else is added
+ * as typed, as before.
+ */
+function AddItemForm({ onEdit, catalog }: { onEdit: Edit; catalog: EquipmentOption[] | null }) {
+  const index = useRulesIndex();
+  const campaignId = useGame((s) => s.campaignId);
   const [name, setName] = useState('');
   const [quantity, setQuantity] = useState('1');
   const [category, setCategory] = useState<ItemCategory>('gear');
@@ -167,7 +221,11 @@ function AddItemForm({ onEdit }: { onEdit: Edit }) {
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (!valid) return;
-    const item: InventoryItem = { id: newId(), name: name.trim(), quantity: qty, category, ...(category === 'magic-item' ? { magic: true } : {}) };
+    const findEntry = (n: string) => index?.findByName(n, { kind: 'magic-item', campaignId }) ?? index?.findByName(n, { kind: 'item', campaignId });
+    const linked = linkInventoryItem(name.trim(), qty, catalog ?? [], index ? findEntry : undefined);
+    const item: InventoryItem = linked
+      ? { id: newId(), ...linked }
+      : { id: newId(), name: name.trim(), quantity: qty, category, ...(category === 'magic-item' ? { magic: true } : {}) };
     onEdit((c) => addItemChange(c, item));
     setName('');
     setQuantity('1');
@@ -287,7 +345,7 @@ export function InventoryPanel({ character: c, editable, onEdit }: { character: 
             ))}
           </ul>
         )}
-        {editable && <AddItemForm onEdit={onEdit} />}
+        {editable && <AddItemForm onEdit={onEdit} catalog={catalog} />}
       </SheetSection>
     </div>
   );

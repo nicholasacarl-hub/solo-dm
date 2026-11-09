@@ -11,9 +11,10 @@ import builderRaw from '../../../public/srd/builder.json?raw';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import {
   buildLibraryLookup,
+  candidatesForRecords,
+  detectionContext,
   detectStructure,
   exportPack,
-  findFeat,
   gainedFeatures,
   getRulesIndex,
   importLibraryDocument,
@@ -22,22 +23,34 @@ import {
   parsePack,
   type PackFileV1,
 } from '@/data';
+import {
+  applyFeatChoice,
+  featChoices,
+  featChoiceTrigger,
+  subclassRefOf,
+  type FeatChoice,
+  type FeatPick,
+} from '@/data/options/levelUpChoices';
 import { rulesIndexVersion, resetRulesIndex } from '@/data/rulesIndexStore';
 import { resetSrdCache, loadSrdBuilderData } from '@/data/srd';
 import { estimateModels, retryRecords, startJob } from '@/dm';
-import { buildExtractionRequest } from '@/dm/libraryRequests';
+import { usageDelta } from '@/dm/cost';
+import { buildExtractionRequest, EXTRACT_MAX_TOKENS, EXTRACT_MAX_TOKENS_CAP } from '@/dm/libraryRequests';
+import { requestBlocks } from '@/dm/extract/blocks';
+import type { ExtractionClient } from '@/dm/extract/call';
 import { setExtractionDeps, resetExtractionDeps } from '@/dm/extract/deps';
-import { FakeExtractionClient } from '@/dm/testing/fakeExtractionClient';
+import { FakeExtractionClient, type RecordedExtractionRequest } from '@/dm/testing/fakeExtractionClient';
 import { deps as dmDeps } from '@/dm/deps';
 import type { ToolContext } from '@/dm/tools/context';
 import { runTool } from '@/dm/tools/handlers';
-import { changeAbilityScore, addFeature, characterSheetText, levelUp, proficiencyBonus } from '@/engine';
+import { characterSheetText, levelUp, proficiencyBonus } from '@/engine';
 import { importedPlaceholder } from '@/lib/importedContent';
 import { useGame, whenPersisted } from '@/state/gameStore';
 import {
   createCampaign,
   exportCampaignBundleWithReport,
   getJob,
+  getSourceEntries,
   importCampaignBundle,
   listRecords,
   parseCampaignBundle,
@@ -46,6 +59,7 @@ import {
 import { serializeBundle } from '@/storage/backup';
 import { db } from '@/storage/db';
 import { decideSync } from '@/storage/githubSync';
+import { loadTargetState, saveTargetState, syncTargetKey } from '@/storage/syncState';
 import { resetDatabase } from '@/storage/testData';
 import {
   acceptConfident,
@@ -54,17 +68,22 @@ import {
   saveRecordEdit,
   setParentClass,
 } from '@/ui/library/structure/reviewActions';
+import { parentChoices, suggestedParent } from '@/ui/library/structure/forms/ParentClassSelect';
 import { buildCharacter, emptyDraft, firstIncompleteStep, type BuilderContext, type BuilderDraft } from '@/ui/builder/logic';
 import { sampleSettings } from '@/test/fixtures';
-import { GLOAMWOOD_MARKERS, GLOAMWOOD_MIXED, GLOAMWOOD_TITLE, TEXT } from '@/test/structuredFixtures';
+import { GLOAMWOOD_CANDIDATES, GLOAMWOOD_MARKERS, GLOAMWOOD_MIXED, GLOAMWOOD_TITLE, TEXT } from '@/test/structuredFixtures';
 import {
   DEFAULT_SETTINGS,
   type BuilderData,
   type Campaign,
   type Character,
   type ExtractionJob,
+  type ModelId,
   type MonsterData,
   type StructuredRecord,
+  type SubclassData,
+  type SubclassOption,
+  type UsageTotals,
 } from '@/types';
 
 const SETTINGS = { ...DEFAULT_SETTINGS, apiKey: 'sk-ant-test', mockMode: false, model: 'claude-opus-5-5' as const, useFallbacks: true };
@@ -73,6 +92,8 @@ const SETTINGS = { ...DEFAULT_SETTINGS, apiKey: 'sk-ant-test', mockMode: false, 
 const run: {
   sourceId: string;
   fake: FakeExtractionClient;
+  /** Each answer's usage as the call path prices it (usageDelta), in the order the answers were read. */
+  priced: UsageTotals[];
   firstJob?: ExtractionJob;
   builder?: BuilderData;
   bookData?: PackFileV1;
@@ -81,7 +102,7 @@ const run: {
   character?: Character;
   bundleText?: string;
   originals: Map<string, string>;
-} = { sourceId: '', fake: new FakeExtractionClient({ sleep: async () => undefined }), originals: new Map() };
+} = { sourceId: '', fake: new FakeExtractionClient({ sleep: async () => undefined }), priced: [], originals: new Map() };
 
 const records = () => listRecords(run.sourceId);
 const recordNamed = async (name: string) => {
@@ -101,6 +122,78 @@ const waitForJob = (id: string) =>
 /** Wait for the review actions' debounced refresh (500 ms) to land. */
 const settleRefresh = () => new Promise((resolve) => setTimeout(resolve, 650));
 
+/** The fake Anthropic client, with every answer's usage priced as runExtraction prices it (for the job's bill). */
+const client: ExtractionClient = {
+  beta: {
+    messages: {
+      stream(params, options) {
+        const stream = run.fake.beta.messages.stream(params, options);
+        return {
+          [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
+          abort: () => stream.abort(),
+          finalMessage: async () => {
+            const message = await stream.finalMessage();
+            run.priced.push(usageDelta(message.usage, message.model || params.model, '5m', params.model));
+            return message;
+          },
+        };
+      },
+    },
+  },
+};
+
+const sumUsage = (list: readonly UsageTotals[]): UsageTotals =>
+  list.reduce(
+    (a, b) => ({
+      requests: a.requests + b.requests,
+      inputTokens: a.inputTokens + b.inputTokens,
+      outputTokens: a.outputTokens + b.outputTokens,
+      cacheReadTokens: a.cacheReadTokens + b.cacheReadTokens,
+      cacheWriteTokens: a.cacheWriteTokens + b.cacheWriteTokens,
+      estimatedCostUsd: a.estimatedCostUsd + b.estimatedCostUsd,
+    }),
+    { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, estimatedCostUsd: 0 },
+  );
+
+/** The job's bill equals what its answers cost (tokens exactly; dollars up to float rounding). */
+function expectBilled(job: ExtractionJob, answers: readonly UsageTotals[]): void {
+  const { estimatedCostUsd, ...tokens } = sumUsage(answers);
+  const { estimatedCostUsd: billed, ...billedTokens } = job.usage;
+  expect(billedTokens).toEqual(tokens);
+  expect(billed).toBeGreaterThan(0);
+  expect(billed).toBeCloseTo(estimatedCostUsd, 9);
+}
+
+/**
+ * Every request a job sent is exactly what the audited builder makes from its record's own blocks
+ * (rule 4): no other entry, no title, no character or campaign; a retry after max_tokens doubles it.
+ */
+async function expectAuditedRequests(job: ExtractionJob, requests: readonly RecordedExtractionRequest[], model: ModelId): Promise<void> {
+  const jobRecords = (await records()).filter((r) => r.jobId === job.id);
+  const [entries, context] = await Promise.all([getSourceEntries(run.sourceId), detectionContext()]);
+  const { candidates } = candidatesForRecords(jobRecords, entries, context.segment);
+  const byTitle = new Map<string, { record: StructuredRecord; blocks: ReturnType<typeof requestBlocks>['blocks'] }>();
+  for (const record of jobRecords) {
+    const candidate = candidates.get(record.id);
+    if (!candidate) continue;
+    const { blocks } = requestBlocks({ ...candidate, key: record.candidateKey });
+    byTitle.set(blocks[0].title, { record, blocks });
+  }
+  const attempts = new Map<string, number>();
+  for (const r of requests) {
+    const planned = byTitle.get(r.title ?? '');
+    expect(planned, r.title ?? 'a request without a block').toBeDefined();
+    if (!planned) continue;
+    const attempt = attempts.get(r.title ?? '') ?? 0;
+    attempts.set(r.title ?? '', attempt + 1);
+    const { kind } = planned.record;
+    const maxTokens = attempt > 0 ? { maxTokens: Math.min(2 * EXTRACT_MAX_TOKENS[kind], EXTRACT_MAX_TOKENS_CAP) } : {};
+    expect(r.params, r.title ?? '').toEqual(buildExtractionRequest({ kind, model, useFallbacks: true, blocks: planned.blocks, ...maxTokens }));
+    expect(JSON.stringify(r.params)).not.toContain(GLOAMWOOD_TITLE);
+    expect(r.options.maxRetries).toBe(0);
+  }
+}
+
 beforeAll(async () => {
   await resetDatabase();
   resetSrdCache();
@@ -109,7 +202,7 @@ beforeAll(async () => {
     'fetch',
     vi.fn(async (url: string) => new Response(String(url).endsWith('compendium.json') ? compendiumRaw : builderRaw, { status: 200 })),
   );
-  setExtractionDeps({ client: () => run.fake, settings: () => SETTINGS, sleep: async () => undefined, locks: null, dmBusy: () => false, pageHidden: () => false, online: () => true, keepSaves: () => undefined });
+  setExtractionDeps({ client: () => client, settings: () => SETTINGS, sleep: async () => undefined, locks: null, dmBusy: () => false, pageHidden: () => false, online: () => true, keepSaves: () => undefined });
 });
 
 afterAll(async () => {
@@ -131,7 +224,12 @@ describe('structured imports end to end (spec §8.4)', { timeout: 30_000 }, () =
 
   it('2. detects every candidate, reads the Markdown entries offline and leaves the flattened ones for Claude', async () => {
     const summary = await detectStructure(run.sourceId);
-    expect(summary.total).toBeGreaterThanOrEqual(22);
+    // Counts by kind equal the fixture's (a gear table counts once, through its row).
+    const expected = new Map<string, number>();
+    for (const c of GLOAMWOOD_CANDIDATES) expected.set(c.kind, (expected.get(c.kind) ?? 0) + 1);
+    for (const [kind, found] of expected) expect(summary.byKind[kind as StructuredRecord['kind']]?.found, kind).toBe(found);
+    expect(summary.total).toBe(GLOAMWOOD_CANDIDATES.length);
+    expect(summary.leftOut).toBe(0);
     const all = await records();
     const byName = new Map(all.map((r) => [r.name, r]));
     for (const name of ['Ashen Choir', 'Cinder Mote', "Moth's Grace", 'Lantern Bearer', 'Hooked Reach', 'Lamplighter', 'Ferry Hand', 'Ember Warden', 'Bramble Hound', 'Hookstaff']) {
@@ -159,20 +257,13 @@ describe('structured imports end to end (spec §8.4)', { timeout: 30_000 }, () =
     const done = await waitForJob(job.id);
     run.firstJob = done;
 
-    const reqs = run.fake.requests;
+    const reqs = [...run.fake.requests];
     // The three flattened entries, plus the Goblin Warrior (no ability scores printed: it stays unreadable).
     expect(reqs.map((r) => r.title).sort()).toEqual(['Glimmerwing Drake', 'Glimmerwing Drake', 'Goblin Warrior', 'Mothkin', 'Wickwright']);
-    for (const r of reqs) {
-      // Everything but the user message is the kind's fixed request (rule 4, one audited builder).
-      const expected = buildExtractionRequest({ kind: r.kind ?? 'monster', model: 'claude-opus-5-5', useFallbacks: true, blocks: [] });
-      const { messages, max_tokens: _m, ...rest } = r.params;
-      const { messages: _e, max_tokens: _x, ...expectedRest } = expected;
-      expect(rest).toEqual(expectedRest);
-      expect(messages).toHaveLength(1);
-      expect(JSON.stringify(r.params)).not.toContain(GLOAMWOOD_TITLE);
-      expect(r.options.maxRetries).toBe(0);
-    }
+    // Every body is the audited builder's output for its record's own blocks (rule 4); the drake's retry doubles max_tokens.
+    await expectAuditedRequests(done, reqs, 'claude-opus-5-5');
     const drake = reqs.filter((r) => r.title === 'Glimmerwing Drake');
+    expect(drake.map((r) => r.step)).toEqual(['max_tokens', 'answer']);
     expect(drake[1].params.max_tokens).toBe(12000);
     // Per kind, no second request starts before the first one's first event (the warm-up opens the lane).
     for (const kind of new Set(reqs.map((r) => r.kind))) {
@@ -181,19 +272,21 @@ describe('structured imports end to end (spec §8.4)', { timeout: 30_000 }, () =
     }
     expect(done.counts.refused).toBe(1);
     expect((await recordNamed('Mothkin')).runState).toBe('refused');
-    // The job's bill is the sum of what each record's requests cost.
-    const billed = (await records()).filter((r) => r.jobId === job.id && r.extraction).reduce((sum, r) => sum + (r.extraction?.usage.estimatedCostUsd ?? 0), 0);
-    expect(done.usage.estimatedCostUsd).toBeGreaterThan(0);
-    expect(done.usage.estimatedCostUsd).toBeGreaterThanOrEqual(billed - 1e-9);
+    // The bill is every answer's usage priced by usageDelta, the truncated and refused ones included.
+    expect(run.priced).toHaveLength(reqs.length);
+    expectBilled(done, run.priced);
 
     const before = run.fake.requests.length;
+    const pricedBefore = run.priced.length;
     const retryId = await retryRecords(job.id, 'refused', 'claude-sonnet-5-5');
     expect(retryId).not.toBe(job.id);
-    await waitForJob(retryId);
+    const retryJob = await waitForJob(retryId);
     const retry = run.fake.requests.slice(before);
     expect(retry.map((r) => r.title)).toEqual(['Mothkin']);
     expect(retry[0].params.model).toBe('claude-sonnet-5-5');
     expect(retry[0].params).toMatchObject({ fallbacks: 'default' });
+    await expectAuditedRequests(retryJob, retry, 'claude-sonnet-5-5');
+    expectBilled(retryJob, run.priced.slice(pricedBefore));
     expect((await recordNamed('Mothkin')).data).not.toBeNull();
   });
 
@@ -217,12 +310,19 @@ describe('structured imports end to end (spec §8.4)', { timeout: 30_000 }, () =
     const fixed = await saveRecordEdit(drake, { ...(drake.data as MonsterData), hp: 52 });
     expect((fixed.data as MonsterData).hp).toBe(52);
 
+    // "Attaches to" as the review pre-selects it: the SRD Fighter for Ember Warden, this book's Wickwright (still
+    // waiting for review) for Order of the Long Wick.
+    const book = await records();
+    const builder = await loadBuilderData();
+    const parentOf = (r: StructuredRecord) => suggestedParent((r.data as SubclassData).parentClass, r.sourceId, parentChoices(builder, r.sourceId, book));
     const ember = await recordNamed('Ember Warden');
-    await setParentClass(ember.id, ember.parentClassId ?? 'srd:class:fighter');
-    expect((await recordNamed('Ember Warden')).parentClassId).toBe('srd:class:fighter');
     const wick = await recordNamed('Wickwright');
     const order = await recordNamed('Order of the Long Wick');
-    await setParentClass(order.id, wick.publicId);
+    expect(parentOf(ember)).toMatchObject({ id: 'srd:class:fighter', reason: 'srd' });
+    expect(parentOf(order)).toMatchObject({ id: wick.publicId, reason: 'same-book' });
+    await setParentClass(ember.id, parentOf(ember).id as string);
+    await setParentClass(order.id, parentOf(order).id as string);
+    expect((await recordNamed('Ember Warden')).parentClassId).toBe('srd:class:fighter');
     const names = ['Glimmerwing Drake', 'Ember Warden', 'Wickwright', 'Order of the Long Wick', 'Mothkin'];
     const chosen = await Promise.all(names.map((n) => recordNamed(n)));
     const result = await acceptRecords(chosen.map((r) => r.id));
@@ -294,13 +394,15 @@ describe('structured imports end to end (spec §8.4)', { timeout: 30_000 }, () =
     expect(firstIncompleteStep(draft, ctx)).toBeNull();
     const campaign = await createCampaign({ name: 'The Lamp Road', premise: '', settings: { ...sampleSettings(), playerRollMode: 'auto' } });
     const built = buildCharacter(draft, ctx, { campaignId: campaign.id });
-    for (const name of ['Dusk Sight', 'Ashwing', "Moth's Grace"]) {
+    // Dusk Sight, the Ashwing lineage and Moth's Grace (resolved from the same book) carry the full text and refs.
+    const bookFingerprint = (await db.library.get(run.sourceId))?.fingerprint;
+    for (const [name, marker] of [['Dusk Sight', GLOAMWOOD_MARKERS[2]], ['Ashwing', GLOAMWOOD_MARKERS[3]], ["Moth's Grace", GLOAMWOOD_MARKERS[4]]] as const) {
       const f = built.features.find((x) => x.name === name);
-      expect(f?.ref, name).toMatchObject({ textCopied: true, sourceTitle: GLOAMWOOD_TITLE, bookFingerprint: expect.any(String), at: expect.any(Object) });
+      expect(f?.description, name).toContain(marker);
+      expect(f?.ref, name).toMatchObject({ textCopied: true, sourceId: run.sourceId, sourceTitle: GLOAMWOOD_TITLE, bookFingerprint, at: expect.any(Object) });
     }
     // Every feature with book text (the species' other traits too) must come back on another device (step 11).
     for (const f of built.features.filter((x) => x.ref?.textCopied)) run.originals.set(f.name, f.description ?? '');
-    expect(built.features.find((x) => x.name === 'Dusk Sight')?.description).toContain(GLOAMWOOD_MARKERS[2]);
     expect(built.speciesRef).toMatchObject({ kind: 'species', entryName: 'Mothkin' });
     expect(built.backgroundRef).toMatchObject({ kind: 'background', entryName: 'Lamplighter' });
     const hookstaff = built.inventory.find((i) => i.name === 'Hookstaff');
@@ -312,44 +414,66 @@ describe('structured imports end to end (spec §8.4)', { timeout: 30_000 }, () =
     run.campaign = useGame.getState().campaign ?? undefined;
   });
 
-  it('8. levels up into Ember Warden (book features with refs), then takes Lantern Bearer', async () => {
+  it('8. levels up into Ember Warden (book features with refs), then takes Lantern Bearer from the feat panel', async () => {
     const data = run.builder as BuilderData;
     const fighter = data.classes.find((c) => c.id === 'srd:class:fighter');
     const ember = fighter?.subclasses.find((s) => s.name === 'Ember Warden');
     if (!fighter || !ember) throw new Error('no Fighter or Ember Warden');
-    const up = (c: Character, level: number, sub?: typeof ember) => {
-      const gained = gainedFeatures(fighter, level, sub, { scores: c.abilityScores, characterLevel: level }, { have: c.features, subclassChosenNow: Boolean(sub) });
-      return levelUp(c, {
+    /**
+     * The level-up dialog's logic (LevelUpDialog.tsx): gainedFeatures → levelUp (with the subclass's ref) →
+     * the feat panel's choice, "Decide with my DM" unless the player picks something.
+     */
+    const up = (c: Character, sub?: SubclassOption, choose?: (picks: FeatPick[]) => FeatChoice) => {
+      const classLevel = c.classes[0].level + 1;
+      const gained = gainedFeatures(fighter, classLevel, sub, { scores: c.abilityScores, characterLevel: classLevel }, { have: c.features, subclassChosenNow: Boolean(sub) });
+      const subclassRef = subclassRefOf(sub);
+      const leveled = levelUp(c, {
         className: 'Fighter',
         classId: 'srd:class:fighter',
         hpMethod: 'average',
         newFeatures: gained,
         equipment: data.equipment,
         ...(sub ? { subclass: sub.name, subclassId: sub.id } : {}),
+        ...(subclassRef ? { subclassRef } : {}),
       }).character;
+      const trigger = featChoiceTrigger(gained);
+      if (!trigger) return leveled;
+      const before = new Set(c.features.map((f) => f.id));
+      const addedIds = new Set(leveled.features.filter((f) => !before.has(f.id)).map((f) => f.id));
+      const picks = featChoices(trigger.kind, data.feats, { cls: fighter, characterLevel: classLevel, have: c.features });
+      const choice = choose?.(picks) ?? { kind: 'dm' };
+      return applyFeatChoice(leveled, trigger, choice, { className: 'Fighter', classLevel, addedIds, equipment: data.equipment }).character;
     };
     const game = useGame.getState();
-    await game.updateCharacter((c) => up(c, 2));
-    await game.updateCharacter((c) => up(c, 3, ember));
+    await game.updateCharacter((c) => up(c));
+    await game.updateCharacter((c) => up(c, ember));
     const at3 = useGame.getState().character as Character;
     expect(at3.classes[0]).toMatchObject({ level: 3, subclass: 'Ember Warden', subclassId: ember.id });
+    expect(at3.classes[0].subclassRef).toMatchObject({ kind: 'subclass', entryId: ember.id, entryName: 'Ember Warden', textCopied: false });
     const ward = at3.features.find((f) => f.name === 'Ember Ward');
     expect(ward?.ref).toMatchObject({ textCopied: true, kind: 'subclass', part: 'Ember Ward' });
     expect(ward?.uses).toMatchObject({ max: proficiencyBonus(3), recharge: 'long' });
     expect(at3.features.find((f) => f.name === 'Kindled Strikes')?.ref).toBeDefined();
     for (const name of ['Ember Ward', 'Kindled Strikes']) run.originals.set(name, at3.features.find((f) => f.name === name)?.description ?? '');
 
-    const bearer = findFeat(data.feats, 'Lantern Bearer', run.sourceId);
-    if (!bearer) throw new Error('no Lantern Bearer');
-    await game.updateCharacter((c) => {
-      const leveled = up(c, 4);
-      const wiser = changeAbilityScore(leveled, 'wis', 1).character;
-      return addFeature(wiser, { name: bearer.name, source: 'feat', sourceName: GLOAMWOOD_TITLE, description: bearer.description ?? '', ...(bearer.ref ? { ref: bearer.ref } : {}) }).character;
-    });
+    // Fighter 4 offers the feat panel (Ability Score Improvement); the player takes the book's Lantern Bearer (+1 Wis).
+    let offered: FeatPick | undefined;
+    await game.updateCharacter((c) =>
+      up(c, undefined, (picks) => {
+        offered = picks.find((p) => p.name === 'Lantern Bearer');
+        if (!offered) throw new Error('the feat panel does not offer Lantern Bearer');
+        return { kind: 'feat', pick: offered, ability: 'wis' };
+      }),
+    );
+    expect(offered).toMatchObject({ sourceLabel: GLOAMWOOD_TITLE, minLevel: 4, meetsLevel: true, increase: { abilities: ['wis', 'cha'], amount: 1 } });
     const at4 = useGame.getState().character as Character;
+    expect(at4.classes[0].level).toBe(4);
     expect(at4.abilityScores.wis).toBe(at3.abilityScores.wis + 1);
-    expect(at4.features.find((f) => f.name === 'Lantern Bearer')?.ref).toMatchObject({ kind: 'feat', textCopied: true });
-    run.originals.set('Lantern Bearer', at4.features.find((f) => f.name === 'Lantern Bearer')?.description ?? '');
+    const bearer = at4.features.find((f) => f.name === 'Lantern Bearer');
+    expect(bearer?.ref).toMatchObject({ kind: 'feat', entryName: 'Lantern Bearer', textCopied: true });
+    // The feat takes the place of the level's Ability Score Improvement feature.
+    expect(at4.features.some((f) => f.name === 'Ability Score Improvement')).toBe(false);
+    run.originals.set('Lantern Bearer', bearer?.description ?? '');
   });
 
   it('9. fights the drake with its reviewed numbers; the DM sees the stats line wrapped', async () => {
@@ -395,14 +519,30 @@ describe('structured imports end to end (spec §8.4)', { timeout: 30_000 }, () =
     const text = serializeBundle(bundle);
     run.bundleText = text;
     for (const marker of GLOAMWOOD_MARKERS) expect(text, marker).not.toContain(marker);
-    expect(text).toContain(JSON.stringify(importedPlaceholder(GLOAMWOOD_TITLE)).slice(1, -1));
+    const placeholder = importedPlaceholder(GLOAMWOOD_TITLE);
+    expect(text).toContain(JSON.stringify(placeholder).slice(1, -1));
     expect(text).toContain('Ember Ward');
     expect(text).toContain('Mothkin');
+    expect(bundle.format).toBe('solo-dm-campaign');
     expect(bundle.version).toBe(1);
-    expect(Object.keys(bundle)).not.toContain('records');
+    for (const packField of ['entries', 'records', 'bookFingerprint']) expect(Object.keys(bundle)).not.toContain(packField);
     expect(bundle.character?.features.filter((f) => f.ref?.textCopied).every((f) => f.ref?.redacted === true)).toBe(true);
+    // The frozen system prompt keeps the names; its wrapped feature text became the placeholder.
+    const prompt = bundle.sessions.find((s) => s.id === 'sess-e2e')?.systemPrompt ?? '';
+    expect(prompt).toContain('**Ember Ward**');
+    expect(prompt).toContain(placeholder);
+    // The DM's level_up input that echoed Ember Ward's text was replaced in the copy.
+    const levelUpInput = bundle.transcript
+      .flatMap((m) => (m.param.role === 'assistant' && Array.isArray(m.param.content) ? m.param.content : []))
+      .find((b) => b.type === 'tool_use' && b.name === 'level_up');
+    expect(levelUpInput).toMatchObject({ input: { new_features: [{ name: 'Ember Ward', description: placeholder }] } });
     expect(report.books).toEqual([GLOAMWOOD_TITLE]);
     expect(report.passages).toBeGreaterThanOrEqual(5);
+    // Rule 1: the stored transcript and character still hold the text (only the export copy changed).
+    const stored = await db.transcript.where('sessionId').equals('sess-e2e').toArray();
+    expect(JSON.stringify(stored)).toContain(GLOAMWOOD_MARKERS[0]);
+    const character = await db.characters.get(run.campaign?.characterId as string);
+    expect(character?.features.find((f) => f.name === 'Ember Ward')?.description).toContain(GLOAMWOOD_MARKERS[0]);
   });
 
   it('11. on another device the sheet shows placeholders; importing the same book back restores the text silently', async () => {
@@ -420,6 +560,9 @@ describe('structured imports end to end (spec §8.4)', { timeout: 30_000 }, () =
     expect(missing?.missing.length).toBeGreaterThanOrEqual(5);
 
     const before = { character: (await db.characters.get(pulled.id))?.updatedAt, campaign: (await db.campaigns.get(campaign.id))?.updatedAt };
+    // What a GitHub pull records once it has written the campaign.
+    const target = syncTargetKey('player', 'saves', 'main', 'solo-dm');
+    saveTargetState(target, { campaigns: { [campaign.id]: { remoteSha: 'sha-1', localUpdatedAt: before.campaign as number, syncedAt: 1 } }, remoteMeta: {} });
     const again = await importLibraryDocument({ title: GLOAMWOOD_TITLE, format: 'markdown', text: GLOAMWOOD_MIXED });
     expect(again.id).not.toBe(run.sourceId);
     invalidateRulesIndex();
@@ -432,8 +575,8 @@ describe('structured imports end to end (spec §8.4)', { timeout: 30_000 }, () =
     expect(restored.updatedAt).toBe(before.character);
     const campaignRow = await db.campaigns.get(campaign.id);
     expect(campaignRow?.updatedAt).toBe(before.campaign);
-    // GitHub sync sees nothing to push.
-    const last = { remoteSha: 'sha-1', localUpdatedAt: before.campaign as number, syncedAt: 1 };
+    // GitHub sync sees nothing to push: with the stored entry, neither side changed.
+    const last = loadTargetState(target).campaigns[campaign.id];
     expect(decideSync(campaignRow, { sha: 'sha-1', updatedAt: bundle.campaign.updatedAt }, last)).toBe('skip');
   });
 

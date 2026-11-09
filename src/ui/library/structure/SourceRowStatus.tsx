@@ -15,6 +15,7 @@ import { Button } from '@/ui/components/ui';
 import { errorMessage } from '@/ui/shell/format';
 import { currentJob, jobProgress } from './bookData';
 import { refreshRulesIndex } from '../kinds';
+import { TOUCH_BUTTONS } from './touch';
 
 const PAUSED: Readonly<Record<PauseReason, string>> = {
   player: 'you paused it',
@@ -121,7 +122,7 @@ export function SourceRowStatus({ source, jobs }: { source: LibrarySource; jobs:
   }
   return (
     <div className="mt-1 flex flex-col gap-0.5 text-xs text-muted">
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">{line}</div>
+      <div className={`flex flex-wrap items-center gap-x-2 gap-y-1 ${TOUCH_BUTTONS}`}>{line}</div>
       {!source.enabled && <p>Switched off: accepted entries aren't used</p>}
     </div>
   );

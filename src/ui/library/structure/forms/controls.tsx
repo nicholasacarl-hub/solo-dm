@@ -10,6 +10,7 @@ import { Input, Select } from '@/ui/components/ui';
 import { TagInput } from '@/ui/components/TagInput';
 import { fieldId, issueId, useRecordForm } from './context';
 import { getPath, isNamed } from './paths';
+import { TOUCH } from '../touch';
 
 export interface Option {
   value: string;
@@ -337,7 +338,8 @@ export function ChipsField({
               onFocus={() => form.onFocusField(path)}
               onClick={() => toggle(o.value)}
               className={cn(
-                'min-h-11 rounded-lg border px-2.5 text-sm transition-colors sm:min-h-9',
+                'min-h-9 rounded-lg border px-2.5 text-sm transition-colors',
+                TOUCH,
                 pressed ? 'border-accent bg-accent-soft text-text' : 'border-border bg-surface text-muted hover:text-text',
               )}
             >
@@ -362,7 +364,8 @@ export function SegmentField({ path, label, options, hint }: { path: string; lab
           <label
             key={o.value}
             className={cn(
-              'flex min-h-11 cursor-pointer items-center rounded-[10px] px-3 text-sm font-medium text-muted transition-colors hover:text-text sm:min-h-9',
+              'flex min-h-9 cursor-pointer items-center rounded-[10px] px-3 text-sm font-medium text-muted transition-colors hover:text-text',
+              TOUCH,
               'has-[:checked]:bg-surface has-[:checked]:text-text has-[:checked]:shadow-sm has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-ring',
             )}
           >

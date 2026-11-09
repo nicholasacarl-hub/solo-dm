@@ -1,23 +1,54 @@
 /**
- * Manual level-up from the sheet (the DM can also level the character with its level_up tool).
- * Choose the class (or multiclass, with the 2024 13+ primary-ability prerequisite), the HP method,
- * and a subclass at level 3; see the features gained; apply through the engine's levelUp, then
- * re-read every feature's uses at the new level (Rage, Lay on Hands, Breath Weapon…).
+ * Manual level-up from the sheet (the DM can also level the character with its level_up tool), from the
+ * merged builder data (spec §5.4): the SRD plus the classes, subclasses and feats of the player's books.
+ * Choose the class (or multiclass, with the 2024 13+ primary-ability prerequisite), the HP method, a
+ * subclass at its level (chosen by id; a subclass chosen late catches up its earlier features), and —
+ * at Ability Score Improvement, Epic Boon and Fighting Style levels — a choice whose default, "Decide
+ * with my DM", keeps today's level-up. Applied through the engine's levelUp, then every feature's uses
+ * are re-read at the new level (Rage, Lay on Hands, Breath Weapon…).
  */
 import { useId, useState, type ReactNode } from 'react';
 import { ArrowBigUpDash, Check, TriangleAlert } from 'lucide-react';
-import { XP_THRESHOLDS, abilityModifier, characterLevel, levelUp, proficiencyBonus, type LevelUpOptions, type LevelUpResult } from '@/engine';
-import { useBuilderData } from '@/data';
+import { XP_THRESHOLDS, abilityModifier, characterLevel, levelUp, type LevelUpOptions, type LevelUpResult } from '@/engine';
+import { useBuilderData, useRulesIndex } from '@/data';
+import { featureUseChanges, gainedFeatures, refreshFeatureUses } from '@/data/options/leveling';
+import {
+  addSubclassSpells,
+  applyFeatChoice,
+  caughtUpFeatures,
+  classRefOf,
+  dropChoiceReminder,
+  featChoiceNotice,
+  featChoices,
+  featChoiceTrigger,
+  subclassCastingOf,
+  subclassRefOf,
+  subclassSpellsToAdd,
+  type FeatChoice,
+  type FeatChoiceTrigger,
+  type FeatPick,
+  type SubclassSpells,
+} from '@/data/options/levelUpChoices';
+import { classOptionFor, primaryRuleOf, subclassOptionFor } from '@/data/options/resolve';
 import { nameKey } from '@/lib/id';
-import { cn } from '@/lib/cn';
 import { useGame } from '@/state/gameStore';
-import { ABILITY_NAMES, type Ability, type Character, type ClassFeatureDef, type ClassOption, type Feature } from '@/types';
+import {
+  ABILITY_NAMES,
+  type Ability,
+  type BuilderData,
+  type Character,
+  type ClassFeatureDef,
+  type ClassLevel,
+  type ClassOption,
+  type Feature,
+  type HitDie,
+  type SubclassOption,
+} from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
 import { Badge, Button, Dialog, EmptyState, Input, Segmented, Select, Spinner } from '@/ui/components/ui';
+import { BookBadge, OlderEditionBadge, OlderEditionNotes } from '@/ui/builder/BookBadges';
 import { RadioCards } from '@/ui/builder/BuilderParts';
-import { featuresAtLevel, subclassFeaturesAtLevel } from '@/ui/builder/classFeatures';
-import { inferFeatureUses } from '@/ui/builder/featureUses';
-import { classOptionFor, featureUseChanges, refreshFeatureUses } from '@/ui/builder/leveling';
+import { FeatChoicePanel, featChoiceReady, featPanelTitle } from './FeatChoicePanel';
 import { useSheetEdit } from './useSheetActions';
 
 export interface LevelUpDialogProps {
@@ -38,53 +69,12 @@ export function LevelUpDialog({ open, onClose }: LevelUpDialogProps) {
 // Pure helpers
 // ---------------------------------------------------------------------------
 
-/** 2024 multiclassing: Fighter needs STR *or* DEX 13; every other class needs all its primary abilities at 13. */
-export function meetsPrimary(cls: Pick<ClassOption, 'name' | 'primaryAbilities'>, scores: Character['abilityScores']): boolean {
+/** 2024 multiclassing: 13+ in the class's primary abilities — any one of them ("Strength or Dexterity") or all. */
+export function meetsPrimary(cls: Pick<ClassOption, 'id' | 'primaryAbilities' | 'primaryAbilityRule'>, scores: Character['abilityScores']): boolean {
   if (!cls.primaryAbilities.length) return true;
   const ok = (a: Ability) => scores[a] >= 13;
-  return nameKey(cls.name) === 'fighter' ? cls.primaryAbilities.some(ok) : cls.primaryAbilities.every(ok);
+  return primaryRuleOf(cls) === 'any' ? cls.primaryAbilities.some(ok) : cls.primaryAbilities.every(ok);
 }
-
-/** The features gained at a class level, as sheet features (placeholder "Subclass feature" rows skipped). */
-export function gainedFeatures(
-  cls: ClassOption,
-  classLevel: number,
-  subclassName: string | undefined,
-  ctx: { scores: Character['abilityScores']; characterLevel: number },
-): Omit<Feature, 'id'>[] {
-  const usesCtx = { level: classLevel, proficiencyBonus: proficiencyBonus(ctx.characterLevel), scores: ctx.scores, cls };
-  const sub = cls.subclasses.find((s) => s.name === subclassName);
-  const toFeature = (def: ClassFeatureDef, source: Feature['source'], label: string): Omit<Feature, 'id'> => {
-    const uses = inferFeatureUses(def.name, def.description, usesCtx);
-    return { name: def.name, source, sourceName: `${label} ${classLevel}`, description: def.description, ...(uses ? { uses } : {}) };
-  };
-  return [
-    ...featuresAtLevel(cls, classLevel)
-      .filter((d) => !/^subclass feature$/i.test(d.name.trim()))
-      .map((d) => toFeature(d, 'class', cls.name)),
-    ...subclassFeaturesAtLevel(sub, classLevel).map((d) => toFeature(d, 'subclass', sub!.name)),
-  ];
-}
-
-function levelUpNotice(
-  r: LevelUpResult,
-  className: string,
-  classLevel: number,
-  subclass: string | undefined,
-  added: string[],
-  uses: string[],
-): string {
-  const parts = [`Player leveled up to ${className} ${classLevel} (character level ${r.newLevel}): +${r.hpGained} HP (max ${r.character.hp.max})`];
-  if (subclass) parts.push(`subclass ${subclass}`);
-  if (added.length) parts.push(`new features: ${added.join(', ')}`);
-  if (uses.length) parts.push(`feature uses now: ${uses.join(', ')}`);
-  if (r.reminders.length) parts.push(`still to choose: ${r.reminders.join(' ')}`);
-  return parts.join('; ');
-}
-
-// ---------------------------------------------------------------------------
-// Form
-// ---------------------------------------------------------------------------
 
 type Choice = { kind: 'existing'; index: number } | { kind: 'new'; classId: string };
 
@@ -92,9 +82,106 @@ function choiceKey(choice: Choice): string {
   return choice.kind === 'existing' ? `existing:${choice.index}` : `new:${choice.classId}`;
 }
 
+/** What this level-up brings, from the builder data: the class, its subclass, features, spells and choice. */
+interface LevelPlan {
+  existing?: ClassLevel;
+  option?: ClassOption;
+  className: string;
+  classLevel: number;
+  hitDie: HitDie;
+  /** The class reaches its subclass level without a subclass: one must be chosen now. */
+  needsSubclass: boolean;
+  /** The subclass chosen now, or the one the class already has. */
+  sub?: SubclassOption;
+  features: Omit<Feature, 'id'>[];
+  caughtUp: ClassFeatureDef[];
+  trigger: FeatChoiceTrigger | null;
+  spells: SubclassSpells;
+}
+
+function planLevel(
+  c: Character,
+  classes: readonly ClassOption[],
+  choice: Choice,
+  subclassId: string,
+  findSpell: Parameters<typeof subclassSpellsToAdd>[3],
+): LevelPlan {
+  const existing = choice.kind === 'existing' ? c.classes[choice.index] : undefined;
+  const option = existing ? classOptionFor(existing, classes) : classes.find((o) => choice.kind === 'new' && o.id === choice.classId);
+  const classLevel = (existing?.level ?? 0) + 1;
+  const needsSubclass = Boolean(option && classLevel >= option.subclassLevel && !existing?.subclass && option.subclasses.length);
+  const sub = needsSubclass ? option?.subclasses.find((s) => s.id === subclassId) : existing ? subclassOptionFor(existing, option) : undefined;
+  const ctx = { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 };
+  const features = option ? gainedFeatures(option, classLevel, sub, ctx, { have: c.features, subclassChosenNow: needsSubclass }) : [];
+  return {
+    existing,
+    option,
+    className: existing?.name ?? option?.name ?? '',
+    classLevel,
+    hitDie: existing?.hitDie ?? option?.hitDie ?? 8,
+    needsSubclass,
+    sub,
+    features,
+    caughtUp: needsSubclass ? caughtUpFeatures(sub, classLevel, c.features) : [],
+    trigger: featChoiceTrigger(features),
+    spells: subclassSpellsToAdd(sub, classLevel, c.spellcasting?.spells ?? [], findSpell),
+  };
+}
+
+/** The engine call for the plan: an existing class by its own id; a new one with its numbers and ref. */
+function levelUpOptions(plan: LevelPlan, data: BuilderData | null, hpMethod: LevelUpOptions['hpMethod']): LevelUpOptions {
+  const { existing, option } = plan;
+  const chosen = plan.needsSubclass ? plan.sub : undefined;
+  const subclassRef = subclassRefOf(chosen);
+  const subclassCasting = subclassCastingOf(chosen);
+  const classRef = existing ? undefined : classRefOf(option);
+  return {
+    className: plan.className,
+    ...(existing ? { classId: existing.classId } : option ? { classId: option.id, hitDie: option.hitDie, casterType: option.casterType } : {}),
+    ...(!existing && option?.spellcastingAbility ? { spellcastingAbility: option.spellcastingAbility } : {}),
+    ...(classRef ? { classRef } : {}),
+    ...(chosen ? { subclass: chosen.name, subclassId: chosen.id } : {}),
+    ...(subclassRef ? { subclassRef } : {}),
+    ...(subclassCasting ? { subclassCasting } : {}),
+    hpMethod,
+    newFeatures: plan.features,
+    // Lets level-up recompute AC (Unarmored Defense, Draconic Resilience...) against real armor stats.
+    ...(data ? { equipment: data.equipment } : {}),
+  };
+}
+
+interface NoticeParts {
+  className: string;
+  classLevel: number;
+  newLevel: number;
+  hpGained: number;
+  hpMax: number;
+  subclass?: string;
+  added: string[];
+  /** "chose: +2 Strength", "always prepared: Faerie Fire, Sleep". */
+  extras: string[];
+  uses: string[];
+  reminders: string[];
+}
+
+/** The DM notice (names only). With "Decide with my DM" and no subclass spells it is exactly what it always was. */
+function levelUpNotice(n: NoticeParts): string {
+  const parts = [`Player leveled up to ${n.className} ${n.classLevel} (character level ${n.newLevel}): +${n.hpGained} HP (max ${n.hpMax})`];
+  if (n.subclass) parts.push(`subclass ${n.subclass}`);
+  if (n.added.length) parts.push(`new features: ${n.added.join(', ')}`);
+  parts.push(...n.extras);
+  if (n.uses.length) parts.push(`feature uses now: ${n.uses.join(', ')}`);
+  if (n.reminders.length) parts.push(`still to choose: ${n.reminders.join(' ')}`);
+  return parts.join('; ');
+}
+
+// ---------------------------------------------------------------------------
+// Parts
+// ---------------------------------------------------------------------------
+
 function Prereq({ cls, scores }: { cls: ClassOption; scores: Character['abilityScores'] }) {
   const met = meetsPrimary(cls, scores);
-  const joiner = nameKey(cls.name) === 'fighter' ? ' or ' : ' and ';
+  const joiner = primaryRuleOf(cls) === 'any' ? ' or ' : ' and ';
   const text = cls.primaryAbilities.map((a) => `${ABILITY_NAMES[a]} ${scores[a]}`).join(joiner);
   return (
     <li className="flex items-center gap-2 text-sm">
@@ -116,7 +203,29 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Summary({ result, uses, onClose }: { result: LevelUpResult; uses: string[]; onClose: () => void }) {
+/** "Wickwright · The Gloamwood Almanac (d8)"; SRD classes keep "Fighter (d10)". */
+function multiclassLabel(o: ClassOption): string {
+  return o.source ? `${o.name} · ${o.source.title} (d${o.hitDie})` : `${o.name} (d${o.hitDie})`;
+}
+
+/** The player's choice in the summary: "You raised Strength by 2.", "You took Lantern Bearer (+1 Wisdom)." */
+function choiceSummary(choice: FeatChoice): string | null {
+  switch (choice.kind) {
+    case 'dm':
+      return null;
+    case 'plus-two':
+      return `You raised ${ABILITY_NAMES[choice.ability]} by 2.`;
+    case 'plus-one-one':
+      return `You raised ${ABILITY_NAMES[choice.abilities[0]]} and ${ABILITY_NAMES[choice.abilities[1]]} by 1.`;
+    case 'feat': {
+      const inc = choice.pick.increase;
+      const ability = inc && (inc.abilities.length === 1 ? inc.abilities[0] : choice.ability);
+      return `You took ${choice.pick.name}${inc && ability ? ` (+${inc.amount} ${ABILITY_NAMES[ability]})` : ''}.`;
+    }
+  }
+}
+
+function Summary({ result, uses, choice, onClose }: { result: LevelUpResult; uses: string[]; choice: string | null; onClose: () => void }) {
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3 rounded-xl bg-gold-soft px-4 py-3">
@@ -128,6 +237,7 @@ function Summary({ result, uses, onClose }: { result: LevelUpResult; uses: strin
           </p>
         </div>
       </div>
+      {choice && <p className="text-sm">{choice}</p>}
       {uses.length > 0 && (
         <Section title="Feature uses">
           <ul className="list-disc pl-5 text-sm">
@@ -156,23 +266,203 @@ function Summary({ result, uses, onClose }: { result: LevelUpResult; uses: strin
   );
 }
 
+function ClassSection({
+  character,
+  classes,
+  choice,
+  onChoice,
+  allowAnyway,
+  onAllowAnyway,
+  prereqClasses,
+  prereqMet,
+  option,
+}: {
+  character: Character;
+  classes: readonly ClassOption[];
+  choice: Choice;
+  onChoice: (next: Choice) => void;
+  allowAnyway: boolean;
+  onAllowAnyway: (value: boolean) => void;
+  prereqClasses: ClassOption[];
+  prereqMet: boolean;
+  option?: ClassOption;
+}) {
+  const multiId = useId();
+  const held = character.classes.map((cl) => classOptionFor(cl, classes)?.id).filter(Boolean);
+  const heldNames = new Map(character.classes.map((cl) => [nameKey(cl.name), cl.name]));
+  const notHeld = classes.filter((o) => !held.includes(o.id));
+  // D29: two "Fighter" entries couldn't be told apart (the DM levels a class by name).
+  const multiclassOptions = notHeld.filter((o) => !heldNames.has(nameKey(o.name)));
+  const hidden = notHeld.filter((o) => heldNames.has(nameKey(o.name)));
+  const existingOptions = character.classes.map((cl, index) => ({
+    value: choiceKey({ kind: 'existing', index }),
+    title: `${cl.name} ${cl.level} → ${cl.level + 1}`,
+    meta: (
+      <>
+        <span>{cl.subclass ?? `d${cl.hitDie} hit die`}</span>
+        {cl.ref && <BookBadge title={cl.ref.sourceTitle} />}
+      </>
+    ),
+  }));
+  const multiclassing = choice.kind === 'new';
+  return (
+    <Section title="Class">
+      <RadioCards
+        label="Class to gain a level in"
+        value={choice.kind === 'existing' ? choiceKey(choice) : null}
+        onChange={(key) => onChoice({ kind: 'existing', index: Number(key.split(':')[1]) })}
+        options={existingOptions}
+      />
+      {multiclassOptions.length > 0 && (
+        <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
+          <label htmlFor={multiId} className="text-sm text-muted">
+            Or multiclass into
+          </label>
+          <Select
+            id={multiId}
+            value={choice.kind === 'new' ? choice.classId : ''}
+            onChange={(e) => (e.target.value ? onChoice({ kind: 'new', classId: e.target.value }) : onChoice({ kind: 'existing', index: 0 }))}
+            className="h-9 sm:w-72"
+          >
+            <option value="">Choose a new class…</option>
+            {multiclassOptions.map((o) => (
+              <option key={o.id} value={o.id}>
+                {multiclassLabel(o)}
+              </option>
+            ))}
+          </Select>
+        </div>
+      )}
+      {hidden.map((o) => (
+        <p key={o.id} className="text-xs text-muted">
+          {o.name} ({o.source?.title ?? 'SRD 5.2.1'}) isn't offered: your hero already has {heldNames.get(nameKey(o.name))}.
+        </p>
+      ))}
+      {multiclassing && option && (
+        <div className="flex flex-col gap-2 rounded-xl border border-border p-3">
+          <p className="text-sm font-medium">Multiclassing prerequisites (13+ in each primary ability)</p>
+          <ul className="flex flex-col gap-1">
+            {prereqClasses.map((c) => (
+              <Prereq key={c.id} cls={c} scores={character.abilityScores} />
+            ))}
+          </ul>
+          {!prereqMet && (
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={allowAnyway} onChange={(e) => onAllowAnyway(e.target.checked)} className="size-4 accent-[var(--accent)]" />
+              My DM allows it anyway
+            </label>
+          )}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+function SubclassSection({ option, value, onChange }: { option: ClassOption; value: string; onChange: (id: string) => void }) {
+  const notes = option.subclasses.find((s) => s.id === value)?.source?.adaptations.map((a) => a.note) ?? [];
+  return (
+    <Section title={`${option.name} subclass`}>
+      <RadioCards
+        label="Subclass"
+        value={value || null}
+        onChange={onChange}
+        columns="sm:grid-cols-1"
+        options={option.subclasses.map((s) => ({
+          value: s.id,
+          title: s.name,
+          meta: s.source ? (
+            <>
+              <BookBadge title={s.source.title} />
+              <OlderEditionBadge notes={s.source.adaptations.map((a) => a.note)} />
+            </>
+          ) : undefined,
+          description: s.summary,
+        }))}
+      />
+      <OlderEditionNotes notes={notes} />
+    </Section>
+  );
+}
+
+function FeatureList({ features }: { features: Omit<Feature, 'id'>[] }) {
+  return (
+    <ul className="flex flex-col gap-1.5">
+      {features.map((f) => (
+        <li key={`${f.source}-${f.name}`} className="rounded-xl border border-border bg-surface-2">
+          <details>
+            <summary className="flex cursor-pointer flex-col gap-1 px-3 py-2 text-sm font-medium">
+              <span>{f.name}</span>
+              {/* Under the name, so a phone keeps the name on one line. */}
+              {(f.ref || f.source === 'subclass') && (
+                <span className="flex flex-wrap items-center gap-1">
+                  {f.ref && <BookBadge title={f.ref.sourceTitle} />}
+                  {f.source === 'subclass' && <Badge tone="arcane">Subclass</Badge>}
+                </span>
+              )}
+            </summary>
+            <div className="border-t border-border px-3 py-2">
+              <Markdown className="text-sm">{f.description || 'No description.'}</Markdown>
+            </div>
+          </details>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function GainedSection({ plan, bookMissing }: { plan: LevelPlan; bookMissing: string | null }) {
+  const { features, option, sub } = plan;
+  const fromSubclass = plan.needsSubclass && sub ? features.filter((f) => f.source === 'subclass').map((f) => f.name) : [];
+  const caughtUp = plan.caughtUp.map((d) => `${d.name} (level ${d.level})`);
+  return (
+    <Section title={`New at ${plan.className || 'this'} level ${plan.classLevel}`}>
+      {fromSubclass.length > 0 && sub && (
+        <p className="text-sm">
+          From choosing {sub.name}: {fromSubclass.join(', ')}
+          {caughtUp.length > 0 && <span className="text-muted"> — caught up from earlier levels: {caughtUp.join(', ')}</span>}
+        </p>
+      )}
+      {features.length ? (
+        <FeatureList features={features} />
+      ) : (
+        <p className="text-sm text-muted">{option ? 'No new features listed at this level.' : (bookMissing ?? 'Feature details are unavailable; the DM will fill you in.')}</p>
+      )}
+      {plan.spells.spells.length > 0 && sub && (
+        <p className="text-sm">
+          Always prepared from {sub.name}: {plan.spells.spells.map((s) => s.name).join(', ')}
+        </p>
+      )}
+      {plan.spells.missing.length > 0 && (
+        <p className="text-xs text-muted">Not in your rules yet: {plan.spells.missing.join(', ')} — your DM can add {plan.spells.missing.length === 1 ? 'it' : 'them'}.</p>
+      )}
+    </Section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Form
+// ---------------------------------------------------------------------------
+
 function LevelUpForm({ onClose }: { onClose: () => void }) {
   const character = useGame((s) => s.character);
+  const campaignId = useGame((s) => s.campaignId);
   const rollMode = useGame((s) => s.campaign?.settings.playerRollMode ?? 'prompt');
   const milestone = useGame((s) => s.campaign?.settings.milestoneLeveling ?? true);
   const builder = useBuilderData();
+  const index = useRulesIndex();
   const edit = useSheetEdit();
   const [choice, setChoice] = useState<Choice>({ kind: 'existing', index: 0 });
   const [hpMethod, setHpMethod] = useState<'average' | 'roll'>('average');
   const [hpFace, setHpFace] = useState('');
-  const [subclass, setSubclass] = useState('');
+  const [subclassId, setSubclassId] = useState('');
   const [allowAnyway, setAllowAnyway] = useState(false);
+  const [featChoice, setFeatChoice] = useState<FeatChoice>({ kind: 'dm' });
+  const [featAllowed, setFeatAllowed] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ level: LevelUpResult; uses: string[] } | null>(null);
+  const [result, setResult] = useState<{ level: LevelUpResult; uses: string[]; choice: string | null } | null>(null);
   const faceId = useId();
-  const multiId = useId();
 
-  if (result) return <Summary result={result.level} uses={result.uses} onClose={onClose} />;
+  if (result) return <Summary result={result.level} uses={result.uses} choice={result.choice} onClose={onClose} />;
   if (!character) return <EmptyState title="No character loaded" />;
   const level = characterLevel(character);
   if (level >= 20) return <EmptyState title="Level 20 — the summit">There are no more levels to gain; ask the DM about Epic Boons.</EmptyState>;
@@ -185,133 +475,113 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
   }
 
   const classes = builder.data?.classes ?? [];
-  const existing = choice.kind === 'existing' ? character.classes[choice.index] : undefined;
-  const option = existing ? classOptionFor(existing, classes) : classes.find((c) => choice.kind === 'new' && c.id === choice.classId);
-  const className = existing?.name ?? option?.name ?? '';
-  const classLevel = (existing?.level ?? 0) + 1;
-  const hitDie = existing?.hitDie ?? option?.hitDie ?? 8;
+  const findSpell = (name: string) => index?.findByName(name, { kind: 'spell', campaignId });
+  const plan = planLevel(character, classes, choice, subclassId, findSpell);
+  const { existing, option, className, classLevel, hitDie } = plan;
   const conMod = abilityModifier(character.abilityScores.con);
   const average = Math.max(1, hitDie / 2 + 1 + conMod);
   const physical = rollMode === 'physical';
   const face = Number(hpFace);
   const faceValid = Number.isInteger(face) && face >= 1 && face <= hitDie;
+  const bookMissing = !option && existing?.ref ? `Class data for ${existing.name} comes from “${existing.ref.sourceTitle}”, which isn't on this device; your DM can fill in its features.` : null;
 
   const multiclassing = choice.kind === 'new';
   const prereqClasses = multiclassing
     ? [option, ...character.classes.map((cl) => classOptionFor(cl, classes))].filter((c): c is ClassOption => Boolean(c))
     : [];
   const prereqMet = prereqClasses.every((c) => meetsPrimary(c, character.abilityScores));
-
-  const needsSubclass = Boolean(option && classLevel >= option.subclassLevel && !existing?.subclass && option.subclasses.length);
-  const subclassName = needsSubclass ? subclass : existing?.subclass;
-  const features = option ? gainedFeatures(option, classLevel, subclassName, { scores: character.abilityScores, characterLevel: level + 1 }) : [];
+  const picks: FeatPick[] = plan.trigger
+    ? featChoices(plan.trigger.kind, builder.data?.feats ?? [], { cls: option, characterLevel: level + 1, have: character.features })
+    : [];
   const xpNeeded = XP_THRESHOLDS[level];
   const shortOnXp = !milestone && character.xp < xpNeeded;
 
   const canApply =
     Boolean(className) &&
     (!multiclassing || prereqMet || allowAnyway) &&
-    (!needsSubclass || Boolean(subclass)) &&
+    (!plan.needsSubclass || Boolean(plan.sub)) &&
+    (!plan.trigger || featChoiceReady(featChoice, featAllowed)) &&
     !(hpMethod === 'roll' && physical && !faceValid) &&
     !busy;
 
   const apply = async () => {
     if (!canApply) return;
     setBusy(true);
-    const opts: LevelUpOptions = {
-      className,
-      ...(option ? { classId: option.id, hitDie: option.hitDie, casterType: option.casterType } : {}),
-      ...(option?.spellcastingAbility ? { spellcastingAbility: option.spellcastingAbility } : {}),
-      ...(needsSubclass && subclass ? { subclass } : {}),
-      hpMethod: hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll',
-      newFeatures: features,
-      // Lets level-up recompute AC (Unarmored Defense, Draconic Resilience...) against real armor stats.
-      ...(builder.data ? { equipment: builder.data.equipment } : {}),
-    };
-    const outcome: { result: LevelUpResult | null; uses: string[] } = { result: null, uses: [] };
+    const opts = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll');
+    const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null } = { result: null, uses: [], choice: null };
     const saved = await edit((c) => {
       const r = levelUp(c, opts);
       if (r.character === c) {
         return { character: c, notice: null, warning: r.events.find((e) => e.type === 'warning')?.message ?? 'Could not level up.' };
       }
+      const before = new Set(c.features.map((f) => f.id));
+      const addedIds = new Set(r.character.features.filter((f) => !before.has(f.id)).map((f) => f.id));
+      let next = addSubclassSpells(r.character, plan.spells.spells);
+      const warnings: string[] = [];
+      if (plan.trigger) {
+        const applied = applyFeatChoice(next, plan.trigger, featChoice, { className, classLevel, addedIds, equipment: builder.data?.equipment });
+        next = applied.character;
+        warnings.push(...applied.warnings);
+      }
       // Existing features grow too: Rage, Second Wind, Lay on Hands, Breath Weapon, Draconic Flight at 5…
-      const refreshed = refreshFeatureUses(r.character, builder.data);
+      const refreshed = refreshFeatureUses(next, builder.data);
       const uses = featureUseChanges(c, refreshed);
-      outcome.result = { ...r, character: refreshed };
+      const chose = featChoiceNotice(featChoice);
+      const reminders = plan.trigger ? dropChoiceReminder(r.reminders, plan.trigger.kind, featChoice) : r.reminders;
+      const added = featChoice.kind === 'dm' ? plan.features.map((f) => f.name) : refreshed.features.filter((f) => !before.has(f.id)).map((f) => f.name);
+      const spells = plan.spells.spells.map((s) => s.name);
+      const hpGained = refreshed.hp.max - c.hp.max;
+      outcome.result = { ...r, character: refreshed, hpGained, reminders };
       outcome.uses = uses;
+      outcome.choice = choiceSummary(featChoice);
       return {
         character: refreshed,
-        notice: levelUpNotice(r, className, classLevel, needsSubclass ? subclass : undefined, features.map((f) => f.name), uses),
+        notice: levelUpNotice({
+          className,
+          classLevel,
+          newLevel: r.newLevel,
+          hpGained,
+          hpMax: refreshed.hp.max,
+          ...(plan.needsSubclass && plan.sub ? { subclass: plan.sub.name } : {}),
+          added,
+          extras: [...(chose ? [chose] : []), ...(spells.length ? [`always prepared: ${spells.join(', ')}`] : [])],
+          uses,
+          reminders,
+        }),
+        warning: warnings.join(' ') || null,
       };
     });
     setBusy(false);
-    if (saved && outcome.result) setResult({ level: { ...outcome.result, character: saved }, uses: outcome.uses });
+    if (saved && outcome.result) setResult({ level: { ...outcome.result, character: saved }, uses: outcome.uses, choice: outcome.choice });
   };
 
-  const existingOptions = character.classes.map((cl, index) => ({
-    value: choiceKey({ kind: 'existing', index }),
-    title: `${cl.name} ${cl.level} → ${cl.level + 1}`,
-    meta: <span>{cl.subclass ?? `d${cl.hitDie} hit die`}</span>,
-  }));
-  const multiclassOptions = classes.filter((o) => !character.classes.some((cl) => classOptionFor(cl, classes)?.id === o.id));
   const selectChoice = (next: Choice) => {
     setChoice(next);
-    setSubclass('');
+    setSubclassId('');
     setAllowAnyway(false);
+    setFeatChoice({ kind: 'dm' });
+    setFeatAllowed(false);
   };
 
   return (
     <div className="flex flex-col gap-5">
       {builder.error && <p className="text-sm text-danger">Class data couldn't load ({builder.error}); you can still level your current class.</p>}
-      <Section title="Class">
-        <RadioCards
-          label="Class to gain a level in"
-          value={choice.kind === 'existing' ? choiceKey(choice) : null}
-          onChange={(key) => selectChoice({ kind: 'existing', index: Number(key.split(':')[1]) })}
-          options={existingOptions}
-        />
-        {multiclassOptions.length > 0 && (
-          <div className="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3">
-            <label htmlFor={multiId} className="text-sm text-muted">
-              Or multiclass into
-            </label>
-            <Select
-              id={multiId}
-              value={choice.kind === 'new' ? choice.classId : ''}
-              onChange={(e) => (e.target.value ? selectChoice({ kind: 'new', classId: e.target.value }) : selectChoice({ kind: 'existing', index: 0 }))}
-              className="h-9 sm:w-64"
-            >
-              <option value="">Choose a new class…</option>
-              {multiclassOptions.map((o) => (
-                <option key={o.id} value={o.id}>
-                  {o.name} (d{o.hitDie})
-                </option>
-              ))}
-            </Select>
-          </div>
-        )}
-        {multiclassing && option && (
-          <div className="flex flex-col gap-2 rounded-xl border border-border p-3">
-            <p className="text-sm font-medium">Multiclassing prerequisites (13+ in each primary ability)</p>
-            <ul className="flex flex-col gap-1">
-              {prereqClasses.map((c) => (
-                <Prereq key={c.id} cls={c} scores={character.abilityScores} />
-              ))}
-            </ul>
-            {!prereqMet && (
-              <label className="flex items-center gap-2 text-sm">
-                <input type="checkbox" checked={allowAnyway} onChange={(e) => setAllowAnyway(e.target.checked)} className="size-4 accent-[var(--accent)]" />
-                My DM allows it anyway
-              </label>
-            )}
-          </div>
-        )}
-        {shortOnXp && (
-          <p className="text-sm text-gold">
-            You have {character.xp.toLocaleString()} XP; level {level + 1} needs {xpNeeded.toLocaleString()} XP. Level up only if your DM agrees.
-          </p>
-        )}
-      </Section>
+      <ClassSection
+        character={character}
+        classes={classes}
+        choice={choice}
+        onChoice={selectChoice}
+        allowAnyway={allowAnyway}
+        onAllowAnyway={setAllowAnyway}
+        prereqClasses={prereqClasses}
+        prereqMet={prereqMet}
+        option={option}
+      />
+      {shortOnXp && (
+        <p className="text-sm text-gold">
+          You have {character.xp.toLocaleString()} XP; level {level + 1} needs {xpNeeded.toLocaleString()} XP. Level up only if your DM agrees.
+        </p>
+      )}
 
       <Section title="Hit points">
         <Segmented
@@ -334,47 +604,27 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
         <p className="text-xs text-muted">At least 1 HP per level. Features such as Dwarven Toughness are added automatically.</p>
       </Section>
 
-      {needsSubclass && option && (
-        <Section title={`${option.name} subclass`}>
-          <div role="radiogroup" aria-label="Subclass" className="flex flex-col gap-2">
-            {option.subclasses.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                role="radio"
-                aria-checked={subclass === s.name}
-                onClick={() => setSubclass(s.name)}
-                className={cn('rounded-xl border px-3 py-2 text-left', subclass === s.name ? 'border-accent bg-accent-soft' : 'border-border hover:bg-surface-2')}
-              >
-                <span className="font-medium">{s.name}</span>
-                {s.summary && <span className="block text-xs text-muted">{s.summary}</span>}
-              </button>
-            ))}
-          </div>
+      {plan.needsSubclass && option && <SubclassSection option={option} value={subclassId} onChange={setSubclassId} />}
+
+      {plan.trigger && (
+        <Section title={featPanelTitle(plan.trigger)}>
+          <FeatChoicePanel
+            trigger={plan.trigger}
+            picks={picks}
+            choice={featChoice}
+            onChoice={(next) => {
+              // "My DM allows it" belongs to one feat: picking another clears it.
+              if (next.kind !== 'feat' || featChoice.kind !== 'feat' || next.pick.id !== featChoice.pick.id) setFeatAllowed(false);
+              setFeatChoice(next);
+            }}
+            scores={character.abilityScores}
+            dmAllows={featAllowed}
+            onDmAllows={setFeatAllowed}
+          />
         </Section>
       )}
 
-      <Section title={`New at ${className || 'this'} level ${classLevel}`}>
-        {features.length ? (
-          <ul className="flex flex-col gap-1.5">
-            {features.map((f) => (
-              <li key={`${f.source}-${f.name}`} className="rounded-xl border border-border bg-surface-2">
-                <details>
-                  <summary className="flex cursor-pointer items-center justify-between gap-2 px-3 py-2 text-sm font-medium">
-                    <span>{f.name}</span>
-                    {f.source === 'subclass' && <Badge tone="arcane">Subclass</Badge>}
-                  </summary>
-                  <div className="border-t border-border px-3 py-2">
-                    <Markdown className="text-sm">{f.description || 'No description.'}</Markdown>
-                  </div>
-                </details>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-sm text-muted">{option ? 'No new features listed at this level.' : 'Feature details are unavailable; the DM will fill you in.'}</p>
-        )}
-      </Section>
+      <GainedSection plan={plan} bookMissing={bookMissing} />
 
       <div className="flex justify-end gap-2 border-t border-border pt-3">
         <Button variant="ghost" onClick={onClose}>

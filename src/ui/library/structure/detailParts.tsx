@@ -12,6 +12,7 @@ import type { CompendiumEntry, LibrarySource, RecordWarning, StructuredDataByKin
 import { Button } from '@/ui/components/ui';
 import { dataPathsFor } from './forms/fieldMap';
 import { labelForPath } from './forms/formSpecs';
+import { TOUCH, TOUCH_BUTTONS } from './touch';
 import { bySeverity } from './warnings';
 
 // ---------------------------------------------------------------------------
@@ -32,7 +33,7 @@ export function Notice({ tone, icon, children, actions }: { tone: 'block' | 'war
     <div className={cn('flex flex-wrap items-start gap-x-2.5 gap-y-1.5 rounded-xl border px-3 py-2 text-sm', TONES[tone])}>
       <span className={cn('mt-0.5 shrink-0', ICON_TONES[tone])}>{icon ?? <Icon className="size-4" aria-hidden />}</span>
       <div className="min-w-0 flex-1 [overflow-wrap:anywhere]">{children}</div>
-      {actions && <div className="flex flex-wrap gap-1.5">{actions}</div>}
+      {actions && <div className={cn('flex flex-wrap gap-1.5', TOUCH_BUTTONS)}>{actions}</div>}
     </div>
   );
 }
@@ -139,7 +140,18 @@ const useShownBooks = create<{ shown: Readonly<Record<string, true>>; show(sourc
 }));
 
 /** Monsters and magic items start behind "Show details" (remembered for this book in this tab). */
-export function SpoilerGuard({ kind, sourceId, children }: { kind: StructuredKind; sourceId: string; children: ReactNode }) {
+export function SpoilerGuard({
+  kind,
+  sourceId,
+  children,
+  onShown,
+}: {
+  kind: StructuredKind;
+  sourceId: string;
+  children: ReactNode;
+  /** The details are showing: the button that had focus is gone. */
+  onShown?(): void;
+}) {
   const shownHere = useShownBooks((s) => s.shown[sourceId] === true);
   const show = useShownBooks((s) => s.show);
   const shown = !isGuarded(kind) || shownHere || readShown(sourceId);
@@ -151,10 +163,12 @@ export function SpoilerGuard({ kind, sourceId, children }: { kind: StructuredKin
         Stats can spoil surprises. You can accept confident {kind === 'monster' ? 'monsters' : 'magic items'} without opening them.
       </p>
       <Button
+        className={TOUCH}
         icon={<Eye className="size-4" aria-hidden />}
         onClick={() => {
           rememberShown(sourceId);
           show(sourceId);
+          onShown?.();
         }}
       >
         Show details
@@ -282,7 +296,7 @@ export function ProposalDiff({ record, onUse, onKeep, busy }: { record: Structur
           {rows.length > 30 && <p className="mt-1 text-xs text-muted">…and {rows.length - 30} more.</p>}
         </div>
       )}
-      <div className="mt-2 flex flex-wrap gap-2">
+      <div className={cn('mt-2 flex flex-wrap gap-2', TOUCH_BUTTONS)}>
         <Button size="sm" variant="primary" disabled={busy} onClick={onUse}>
           Use new
         </Button>

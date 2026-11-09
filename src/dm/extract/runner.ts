@@ -1,14 +1,23 @@
 /**
  * The job runner (spec §3.10): one running job app-wide, per-kind cache lanes with a warm-up request,
  * modest concurrency with 429 back-off, a spending limit that counts in-flight requests, holds while
- * the DM replies or a phone's page is hidden, the Web Lock against a second tab, graceful pause and
- * immediate cancel. Progress is published as a RunnerSnapshot for useRunner().
+ * the DM replies or a phone's page is hidden, graceful pause and immediate cancel. Progress is
+ * published as a RunnerSnapshot for useRunner().
  *
  * Per request: re-read the record, build its blocks (§3.6), persist runState 'running', runExtraction,
  * handle the outcome, then write the record (with its extraction usage) and the job (usage, counts) —
  * about three small writes; no large row is rewritten. Typed SDK errors only, never message matching.
- * Nothing here touches a DM session, transcript, system prompt or Campaign.usage: extraction keeps its
- * own ledger (job.usage, record.extraction.usage).
+ * Demo mode and the key are checked again before every request (extractionAvailability), so the client
+ * is never called once either says no. Nothing here touches a DM session, transcript, system prompt
+ * or Campaign.usage: extraction keeps its own ledger (job.usage, record.extraction.usage).
+ *
+ * Tabs (D11): only the tab holding the Web Lock `solo-dm:extract-runner` runs structuring. It keeps the
+ * lock from one job to the next and lets it go when nothing is left. A job started or resumed in a tab
+ * that can't take the lock pauses 'other-tab' and runs once the lock comes free, in whichever tab takes
+ * it next. Pause and cancel from a tab that doesn't run the job reach the one that does over a
+ * BroadcastChannel. A tab that newly takes the lock pauses ('reload') what a closed page left behind.
+ * Nothing paid is resumed without the player, except a job paused offline, on the `online` event in
+ * the same tab (D12).
  *
  * Owner: E2.
  */
@@ -43,6 +52,7 @@ import {
 import { MissingApiKeyError } from '../client';
 import { isAbortError } from '../errors';
 import { EXTRACT_MAX_TOKENS, EXTRACT_MAX_TOKENS_CAP } from '../libraryRequests';
+import { extractionAvailability } from './availability';
 import { requestBlocks } from './blocks';
 import { IdleTimeoutError, runExtraction, type ExtractionClient, type ExtractionOutcome } from './call';
 import { extractionDeps } from './deps';
@@ -71,6 +81,8 @@ export const IDLE_RUNNER: RunnerSnapshot = Object.freeze({
 
 /** The Web Lock the running tab holds (navigator.locks; as campaignLock.ts). */
 export const RUNNER_LOCK = 'solo-dm:extract-runner';
+/** Pause and cancel requests for the tab that holds the runner lock. */
+export const CONTROL_CHANNEL = 'solo-dm:extract-control';
 /** A kind's cache lane goes cold this long after its last request started (the 5-minute cache, with margin). */
 export const LANE_COLD_MS = 270_000;
 /** How often a held dispatch (DM busy, page hidden) looks again. */
@@ -121,6 +133,9 @@ interface Flight {
   startedAt: number;
 }
 
+/** A held runner lock. `exclusive`: a real Web Lock (false where the browser has none: then nothing is exclusive). */
+export interface RunnerLock { release(): void; exclusive: boolean }
+
 /** Wakes the dispatch loop when something changes (a request settles, a lane warms, a pause or cancel). */
 class Notifier {
   private resolve: () => void = () => undefined;
@@ -145,7 +160,7 @@ class Notifier {
 interface Run {
   job: ExtractionJob;
   client: ExtractionClient;
-  release: () => void;
+  lock: RunnerLock;
   /** Queued record ids in queue order. */
   queue: string[];
   records: Map<string, StructuredRecord>;
@@ -168,6 +183,10 @@ interface Run {
   hold: RunnerSnapshot['hold'];
   stop: null | { reason: PauseReason; message?: string };
   cancelled: boolean;
+  /** endRun has begun (a pause and a cancel can race to it: the first one wins). */
+  ending: boolean;
+  /** Forgotten by resetRunner (tests): it writes nothing more and hands its lock to no one. */
+  disposed: boolean;
   notifier: Notifier;
   ended: Promise<void>;
   end: () => void;
@@ -175,9 +194,13 @@ interface Run {
 
 let current: Run | null = null;
 let kicking: Promise<void> | null = null;
+/** Bumped by resetRunner: a kick begun before it starts nothing. */
+let generation = 0;
 let snapshot: RunnerSnapshot = IDLE_RUNNER;
 const listeners = new Set<() => void>();
 const offlineWaiters = new Map<string, () => void>();
+/** Jobs this page started or resumed: never mistaken for ones a closed page left behind. */
+const ownJobs = new Set<string>();
 
 function publish(): void {
   const run = current;
@@ -228,28 +251,53 @@ export const runnerSnapshot = (): RunnerSnapshot => snapshot;
 /** The job running in this tab, if any. */
 export const activeJobId = (): string | null => current?.job.id ?? null;
 
+/** jobs.ts: a job this page started or resumed (startup and lock recovery leave it alone). */
+export function claimJob(id: string): void {
+  ownJobs.add(id);
+}
+
 // ---------------------------------------------------------------------------
-// The Web Lock and the beforeunload guard
+// The Web Lock, the wait for another tab, and the beforeunload guard
 // ---------------------------------------------------------------------------
 
-/** Take the runner lock if no other tab holds it; null when it is held elsewhere. Without Web Locks it is always granted. */
-export async function acquireRunnerLock(): Promise<{ release: () => void } | null> {
+const NO_LOCKS: RunnerLock = { release: () => undefined, exclusive: false };
+
+/** Request the runner lock: now or not at all (ifAvailable), or waiting until it comes free (abortable). */
+function requestLock(mode: { ifAvailable: true } | { signal: AbortSignal }): Promise<RunnerLock | null> {
   const locks = extractionDeps().locks;
-  if (!locks) return { release: () => undefined };
+  if (!locks) return Promise.resolve(NO_LOCKS);
   return new Promise((resolve) => {
     let release: () => void = () => undefined;
     const held = new Promise<void>((r) => (release = r));
     locks
-      .request(RUNNER_LOCK, { ifAvailable: true }, async (lock) => {
+      .request(RUNNER_LOCK, mode, async (lock) => {
         if (!lock) {
           resolve(null);
           return;
         }
-        resolve({ release });
+        resolve({ release, exclusive: true });
         await held;
       })
       .catch(() => resolve(null));
   });
+}
+
+/** Take the runner lock if no other tab holds it; null when one does. Without Web Locks it is always granted (as campaignLock.ts). */
+export const acquireRunnerLock = (): Promise<RunnerLock | null> => requestLock({ ifAvailable: true });
+
+let lockWait: AbortController | null = null;
+
+/** Another tab holds the lock: wait for it, then run what is waiting here (after pausing what a closed page left behind). */
+function awaitRunnerLock(): void {
+  if (lockWait || !extractionDeps().locks) return;
+  const wait = new AbortController();
+  lockWait = wait;
+  void requestLock({ signal: wait.signal })
+    .then((lock) => {
+      if (lockWait === wait) lockWait = null;
+      if (lock) return kickRunner({ lock, recover: lock.exclusive });
+    })
+    .catch((err: unknown) => console.warn('Structuring could not take over from another tab.', err));
 }
 
 const beforeUnload = (event: Event) => {
@@ -276,8 +324,13 @@ async function saveJob(job: ExtractionJob): Promise<void> {
 
 /** The job's records by run state, counted from storage. */
 async function countsOf(job: ExtractionJob): Promise<Record<RunState, number>> {
+  return recount((await listRecords(job.sourceId)).filter((r) => r.jobId === job.id), (s) => s);
+}
+
+/** A job's records counted by run state, with `change` applied to each state first. */
+function recount(records: readonly StructuredRecord[], change: (state: RunState) => RunState): Record<RunState, number> {
   const counts = emptyCounts();
-  for (const r of await listRecords(job.sourceId)) if (r.jobId === job.id && r.runState) counts[r.runState] += 1;
+  for (const r of records) if (r.runState) counts[change(r.runState)] += 1;
   return counts;
 }
 
@@ -288,61 +341,179 @@ function move(run: Run, from: RunState | undefined, to: RunState): void {
 
 const warningOf = (code: RecordWarning['code'], severity: RecordWarning['severity'], message: string): RecordWarning => ({ code, severity, message });
 
+function withoutPause(job: ExtractionJob): ExtractionJob {
+  const next = { ...job };
+  delete next.pauseReason;
+  delete next.pauseMessage;
+  return next;
+}
+
+const pausedJob = (job: ExtractionJob, reason: PauseReason, message?: string): ExtractionJob => ({
+  ...withoutPause(job),
+  status: 'paused',
+  pauseReason: reason,
+  ...(message ? { pauseMessage: message } : {}),
+});
+
+/** Waiting to run: queued, or held up by another tab (it runs once the lock comes free). */
+const isRunnable = (job: ExtractionJob): boolean => job.status === 'queued' || (job.status === 'paused' && job.pauseReason === 'other-tab');
+
+/** Runnable jobs, oldest first. */
+async function runnableJobs(): Promise<ExtractionJob[]> {
+  return (await listJobs({ status: ['queued', 'paused'] })).filter(isRunnable);
+}
+
+/** Pause a job no tab runs: its records left 'running' are queued again and counted as interrupted (their cost is unknown). */
+async function pauseStored(job: ExtractionJob, reason: PauseReason, message?: string): Promise<void> {
+  const now = extractionDeps().now();
+  const records = (await listRecords(job.sourceId)).filter((r) => r.jobId === job.id);
+  const running = records.filter((r) => r.runState === 'running');
+  if (running.length) await putRecords(running.map((r) => ({ ...r, runState: 'queued' as const, updatedAt: now })));
+  await saveJob({
+    ...pausedJob(job, reason, message),
+    counts: recount(records, (s) => (s === 'running' ? 'queued' : s)),
+    interrupted: job.interrupted + running.length,
+  });
+}
+
+/** Cancel a job no tab runs: its open records are skipped; those left 'running' count as interrupted. */
+async function cancelStored(job: ExtractionJob): Promise<void> {
+  if (job.status === 'cancelled' || job.status === 'done') return;
+  const now = extractionDeps().now();
+  const records = (await listRecords(job.sourceId)).filter((r) => r.jobId === job.id);
+  const open = records.filter((r) => r.runState === 'queued' || r.runState === 'running');
+  if (open.length) await putRecords(open.map((r) => ({ ...r, runState: 'skipped' as const, updatedAt: now })));
+  await saveJob({
+    ...withoutPause(job),
+    status: 'cancelled',
+    counts: recount(records, (s) => (s === 'queued' || s === 'running' ? 'skipped' : s)),
+    interrupted: job.interrupted + open.filter((r) => r.runState === 'running').length,
+    finishedAt: now,
+  });
+}
+
+/**
+ * With the runner lock newly taken and nothing running here, pause ('reload', never resumed by itself)
+ * what a closed page left behind: a job left running or pausing (its in-flight records are queued again
+ * and counted as interrupted), or queued behind one. At startup also jobs paused offline (that page's
+ * `online` listener is gone) or held up by another tab (that tab is gone too). Jobs this page started
+ * or resumed are left alone.
+ */
+export async function recoverOrphans(opts: { atStartup: boolean }): Promise<void> {
+  for (const job of await listJobs({ status: ['running', 'pausing', 'queued', 'paused'] })) {
+    if (ownJobs.has(job.id) || job.id === current?.job.id) continue;
+    const left = job.status === 'running' || job.status === 'pausing' || job.status === 'queued';
+    const stale = opts.atStartup && job.status === 'paused' && (job.pauseReason === 'offline' || job.pauseReason === 'other-tab');
+    if (left || stale) await pauseStored(job, 'reload', PAUSE_TEXT.reload);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Starting and ending a run
 // ---------------------------------------------------------------------------
 
-/** Start the oldest queued job when nothing runs in this tab (a paused job holds no slot). */
-export function kickRunner(): Promise<void> {
-  if (current) return Promise.resolve();
-  if (kicking) return kicking;
-  kicking = (async () => {
-    try {
-      const queued = (await listJobs({ status: ['queued'] })).sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
-      const next = queued[0];
-      if (!next || current) return;
-      const lock = await acquireRunnerLock();
-      if (!lock) {
-        await saveJob({ ...next, status: 'paused', pauseReason: 'other-tab', pauseMessage: PAUSE_TEXT['other-tab'] });
-        return;
-      }
-      await startRun(next, lock.release);
-    } finally {
-      kicking = null;
-    }
-  })();
-  return kicking;
+interface Kick {
+  /** The job this call is for: when another tab holds the lock, it is the one held up ('other-tab'). */
+  jobId?: string;
+  /** The lock, when this tab holds it already (handed over by a run that ended, or granted after waiting). */
+  lock?: RunnerLock;
+  /** The lock was just granted after waiting: first pause what a closed page left behind. */
+  recover?: boolean;
 }
 
-async function startRun(job: ExtractionJob, release: () => void): Promise<void> {
-  const deps = extractionDeps();
-  const settings = deps.settings();
-  let client: ExtractionClient | null = null;
+/** Start the next runnable job (oldest first) when nothing runs in this tab. */
+export function kickRunner(opts: Kick = {}): Promise<void> {
+  if (current || kicking) {
+    opts.lock?.release();
+    return kicking ?? Promise.resolve();
+  }
+  const kick: Promise<void> = startNext(opts, generation).finally(() => {
+    if (kicking === kick) kicking = null;
+  });
+  kicking = kick;
+  return kick;
+}
+
+async function startNext({ jobId, lock, recover }: Kick, gen: number): Promise<void> {
+  let held = lock ?? null;
+  let fresh = Boolean(recover && held);
   try {
-    // Settings may have changed while the job waited: never call the client in demo mode or without a key.
-    if (!settings.mockMode && settings.apiKey.trim()) client = deps.client();
-  } catch {
-    client = null;
+    for (;;) {
+      if (gen !== generation || current) return;
+      if (held && fresh) {
+        // Newly ours: no other tab runs anything, so whatever is still marked as running was left behind.
+        fresh = false;
+        await recoverOrphans({ atStartup: false });
+        continue;
+      }
+      const next = (await runnableJobs())[0];
+      if (!next || gen !== generation) return;
+      if (!held) {
+        held = await acquireRunnerLock();
+        if (!held) {
+          await holdUp(jobId);
+          return;
+        }
+        fresh = held.exclusive;
+        continue;
+      }
+      if (await startRun(next, held, gen)) {
+        held = null; // the run holds it now
+        return;
+      }
+    }
+  } finally {
+    held?.release();
+  }
+}
+
+/** Another tab holds the lock: the job this call was for is held up ('other-tab') and runs once the lock comes free. */
+async function holdUp(jobId: string | undefined): Promise<void> {
+  const job = jobId ? await getJob(jobId) : undefined;
+  if (job?.status === 'queued') await saveJob(pausedJob(job, 'other-tab', PAUSE_TEXT['other-tab']));
+  awaitRunnerLock();
+}
+
+/**
+ * Start a job with the runner lock held. False when it can't run here: it is no longer waiting, or demo
+ * mode or a missing key stops it (then it is paused 'auth' with the reason; the client is never called).
+ */
+async function startRun(waiting: ExtractionJob, lock: RunnerLock, gen: number): Promise<boolean> {
+  const deps = extractionDeps();
+  const job = await getJob(waiting.id);
+  if (!job || !isRunnable(job)) return false;
+  // Settings may have changed while the job waited: never call the client in demo mode or without a key.
+  const available = extractionAvailability(deps.settings());
+  let client: ExtractionClient | null = null;
+  if (available.ok) {
+    try {
+      client = deps.client();
+    } catch {
+      client = null;
+    }
   }
   if (!client) {
-    release();
-    await saveJob({ ...job, status: 'paused', pauseReason: 'auth', pauseMessage: describeExtractionError(new MissingApiKeyError()).text });
-    return;
+    await saveJob(pausedJob(job, 'auth', available.ok ? describeExtractionError(new MissingApiKeyError()).text : available.message));
+    return false;
   }
-  const records = await listRecords(job.sourceId);
+  const records = (await listRecords(job.sourceId)).filter((r) => r.jobId === job.id);
   const queued = records
-    .filter((r) => r.jobId === job.id && (r.runState === 'queued' || r.runState === 'running'))
+    .filter((r) => r.runState === 'queued' || r.runState === 'running')
     .sort((a, b) => (KIND_ORDER.get(a.kind) ?? 99) - (KIND_ORDER.get(b.kind) ?? 99));
   const [entries, context] = await Promise.all([getSourceEntries(job.sourceId), detectionContext()]);
   const { candidates, spellLists } = candidatesForRecords(queued, entries, context.segment);
+  // Records left 'running' by an interrupted page are queued again.
+  const stuck = queued.filter((r) => r.runState === 'running').map((r) => ({ ...r, runState: 'queued' as const }));
+  if (stuck.length) await putRecords(stuck);
+  if (gen !== generation) return false;
   let end: () => void = () => undefined;
   const ended = new Promise<void>((r) => (end = r));
   const run: Run = {
-    job: { ...job, status: 'running', startedAt: job.startedAt ?? deps.now() },
+    job: { ...withoutPause(job), status: 'running', startedAt: job.startedAt ?? deps.now(), counts: recount(records, (s) => (s === 'running' ? 'queued' : s)) },
     client,
-    release,
+    lock,
     queue: queued.map((r) => r.id),
-    records: new Map(queued.map((r) => [r.id, r])),
+    records: new Map([...queued, ...stuck].map((r) => [r.id, r])),
     candidates,
     reading: { sourceId: job.sourceId, entriesById: new Map(entries.map((e) => [e.id, e])), spellLists, notices: context.notices },
     flights: new Map(),
@@ -362,40 +533,39 @@ async function startRun(job: ExtractionJob, release: () => void): Promise<void> 
     hold: null,
     stop: null,
     cancelled: false,
+    ending: false,
+    disposed: false,
     notifier: new Notifier(),
     ended,
     end,
   };
-  // Records left 'running' by an interrupted page are queued again.
-  const stuck = queued.filter((r) => r.runState === 'running').map((r) => ({ ...r, runState: 'queued' as const }));
-  if (stuck.length) {
-    await putRecords(stuck);
-    for (const r of stuck) run.records.set(r.id, r);
-  }
-  run.job.counts = await countsOf(run.job);
-  current = run;
   await saveJob(run.job);
+  if (gen !== generation) return false;
+  current = run;
+  controlChannel();
   publish();
   void drive(run);
+  return true;
 }
 
+/** End this tab's run (once: the first caller wins) and hand the lock to the next runnable job, or let it go. */
 async function endRun(run: Run, patch: Partial<ExtractionJob>): Promise<void> {
-  const now = extractionDeps().now();
-  run.job = { ...run.job, ...patch, updatedAt: now };
-  if (run.job.status !== 'paused') {
-    delete run.job.pauseReason;
-    delete run.job.pauseMessage;
-  }
+  if (run.ending) return run.ended;
+  run.ending = true;
+  run.job = { ...run.job, ...patch, updatedAt: extractionDeps().now() };
+  if (run.job.status !== 'paused') run.job = withoutPause(run.job);
   try {
-    await saveJob(run.job);
+    if (!run.disposed) await saveJob(run.job);
   } finally {
-    run.release();
     if (current === run) current = null;
     guardUnload(false);
     publish();
     run.end();
-    if (run.job.status === 'paused' && run.job.pauseReason === 'offline') waitForOnline(run.job.id);
-    void kickRunner();
+    if (run.disposed) run.lock.release();
+    else {
+      if (run.job.status === 'paused' && run.job.pauseReason === 'offline') waitForOnline(run.job.id);
+      void kickRunner({ lock: run.lock }).catch((err: unknown) => console.error('Structuring could not start the next job.', err));
+    }
   }
 }
 
@@ -414,14 +584,13 @@ function waitForOnline(jobId: string): void {
   globalThis.addEventListener('online', onOnline);
 }
 
-/** A paused (or finished) job becomes queued again and starts when nothing else runs. */
+/** A paused (or finished) job becomes queued again and starts when nothing else runs (the player asked, or it went offline here). */
 export async function requeueJob(job: ExtractionJob, patch: Partial<ExtractionJob> = {}): Promise<void> {
-  const next: ExtractionJob = { ...job, ...patch, status: 'queued', counts: await countsOf(job) };
-  delete next.pauseReason;
-  delete next.pauseMessage;
+  const next: ExtractionJob = { ...withoutPause(job), ...patch, status: 'queued', counts: await countsOf(job) };
   delete next.finishedAt;
+  claimJob(job.id);
   await saveJob(next);
-  await kickRunner();
+  await kickRunner({ jobId: job.id });
 }
 
 // ---------------------------------------------------------------------------
@@ -464,7 +633,7 @@ async function drive(run: Run): Promise<void> {
   const waitChange = (ms?: number) => run.notifier.wait(ms);
   try {
     for (;;) {
-      if (run.cancelled) return;
+      if (run.cancelled || run.disposed) return;
       if (run.stop) {
         if (run.flights.size === 0) {
           await endRun(run, { status: 'paused', pauseReason: run.stop.reason, ...(run.stop.message ? { pauseMessage: run.stop.message } : {}) });
@@ -508,6 +677,12 @@ async function drive(run: Run): Promise<void> {
         await waitChange(next.waitMs);
         continue;
       }
+      // Demo mode switched on, or the key removed, since the job started: no new request.
+      const available = extractionAvailability(deps.settings());
+      if (!available.ok) {
+        run.stop = { reason: 'auth', message: available.message };
+        continue;
+      }
       const record = run.records.get(next.id) as StructuredRecord;
       if (overBudget(run, record.kind)) {
         run.stop = { reason: 'budget', message: `Paused at your $${run.job.budgetUsd} limit.` };
@@ -549,7 +724,7 @@ function dispatch(run: Run, id: string, warmup: boolean): void {
     run.flights.delete(id);
     run.settled.delete(task);
     if (flight.warmup && lane.state === 'warming') lane.state = 'cold';
-    guardUnload(run.flights.size > 0);
+    guardUnload(current !== null && current.flights.size > 0);
     publish();
     run.notifier.wake();
   });
@@ -567,6 +742,7 @@ async function request(run: Run, queued: StructuredRecord, flight: Flight): Prom
     }
     const record = stored;
     run.records.set(record.id, record);
+    if (run.disposed) return;
     await putRecords([{ ...record, jobId: run.job.id, runState: 'running', updatedAt: deps.now() }]);
     const candidate = run.candidates.get(record.id);
     if (!candidate) {
@@ -613,6 +789,7 @@ interface Finish {
 
 /** Write a request's result: the record's run state (on its latest stored version) and the job. */
 async function finish(run: Run, record: StructuredRecord, flight: Flight, f: Finish): Promise<void> {
+  if (run.disposed) return;
   const deps = extractionDeps();
   const now = deps.now();
   const [latest] = await getRecords([record.id]);
@@ -807,20 +984,21 @@ async function handleError(run: Run, record: StructuredRecord, flight: Flight, e
 }
 
 // ---------------------------------------------------------------------------
-// Control (the job API in jobs.ts calls these)
+// Control: here, in another tab, or of a job no tab runs (the job API in jobs.ts calls these)
 // ---------------------------------------------------------------------------
 
 /** Graceful pause of this tab's running job: no new dispatch; in-flight requests finish and are paid for. */
 export async function pauseRunning(jobId: string): Promise<boolean> {
   const run = current;
   if (!run || run.job.id !== jobId) return false;
-  if (!run.stop) {
-    run.stop = { reason: 'player' };
+  if (run.ending) return true; // it is stopping already
+  run.stop ??= { reason: 'player' };
+  if (run.job.status === 'running') {
     run.job = { ...run.job, status: 'pausing' };
     await saveJob(run.job);
-    publish();
-    run.notifier.wake();
   }
+  publish();
+  run.notifier.wake();
   return true;
 }
 
@@ -828,6 +1006,11 @@ export async function pauseRunning(jobId: string): Promise<boolean> {
 export async function cancelRunning(jobId: string): Promise<boolean> {
   const run = current;
   if (!run || run.job.id !== jobId) return false;
+  if (run.ending) {
+    // It is ending on its own (done, or paused): the stored job is cancelled instead.
+    await run.ended;
+    return false;
+  }
   run.cancelled = true;
   for (const flight of run.flights.values()) flight.controller.abort();
   run.notifier.wake();
@@ -842,7 +1025,89 @@ export async function cancelRunning(jobId: string): Promise<boolean> {
   return true;
 }
 
-/** Tests: wait until this tab's runner is idle (the current run ended). */
+/** With the lock held here (or by no tab): pause the job, gracefully if it runs here. */
+async function pauseHere(jobId: string): Promise<void> {
+  if (await pauseRunning(jobId)) return;
+  const job = await getJob(jobId);
+  if (job && (job.status === 'running' || job.status === 'pausing' || isRunnable(job))) await pauseStored(job, 'player');
+}
+
+/** With the lock held here (or by no tab): cancel the job, at once if it runs here. */
+async function cancelHere(jobId: string): Promise<void> {
+  if (await cancelRunning(jobId)) return;
+  const job = await getJob(jobId);
+  if (job) await cancelStored(job);
+}
+
+interface Control { type: 'pause' | 'cancel'; jobId: string }
+let channel: BroadcastChannel | null = null;
+
+/** The control channel; the tab that runs structuring answers what arrives on it. */
+function controlChannel(): BroadcastChannel | null {
+  if (channel || typeof BroadcastChannel !== 'function') return channel;
+  try {
+    channel = new BroadcastChannel(CONTROL_CHANNEL);
+  } catch {
+    return null;
+  }
+  channel.onmessage = (event: MessageEvent<unknown>) => {
+    const msg = event.data as Partial<Control> | null;
+    if (!msg || typeof msg.jobId !== 'string' || (msg.type !== 'pause' && msg.type !== 'cancel')) return;
+    const { type, jobId } = msg;
+    void (async () => {
+      await settledStart();
+      // Only the tab running structuring answers: it holds the lock, so no other tab runs the job.
+      if (!current) return;
+      await (type === 'pause' ? pauseHere(jobId) : cancelHere(jobId));
+    })().catch((err: unknown) => console.warn('Structuring could not act on a request from another tab.', err));
+  };
+  return channel;
+}
+
+/** Wait out a job this tab is starting right now, so `current` says what runs here. */
+async function settledStart(): Promise<void> {
+  while (kicking) await kicking.catch(() => undefined);
+}
+
+/**
+ * A job marked as running that this tab doesn't run: the tab holding the runner lock is asked to act
+ * on it; when no tab holds the lock, no one runs the job (a closed page left it) and it changes here.
+ */
+async function elsewhere(msg: Control, here: () => Promise<void>): Promise<void> {
+  if (current) return here(); // this tab holds the lock: no other tab runs anything
+  const lock = await acquireRunnerLock();
+  if (!lock) {
+    controlChannel()?.postMessage(msg);
+    return;
+  }
+  try {
+    await here();
+  } finally {
+    lock.release();
+  }
+}
+
+/** pauseJob: graceful here; a job waiting (queued, or held up by another tab) pauses at once; one another tab runs is paused by that tab. */
+export async function pauseAnywhere(jobId: string): Promise<void> {
+  await settledStart();
+  if (await pauseRunning(jobId)) return;
+  const job = await getJob(jobId);
+  if (!job) return;
+  if (isRunnable(job)) await pauseStored(job, 'player');
+  else if (job.status === 'running' || job.status === 'pausing') await elsewhere({ type: 'pause', jobId }, () => pauseHere(jobId));
+}
+
+/** cancelJob: immediate here; a job another tab runs is cancelled by that tab; any other unfinished job is cancelled at once. */
+export async function cancelAnywhere(jobId: string): Promise<void> {
+  await settledStart();
+  if (await cancelRunning(jobId)) return;
+  const job = await getJob(jobId);
+  if (!job || job.status === 'cancelled' || job.status === 'done') return;
+  if (job.status === 'running' || job.status === 'pausing') await elsewhere({ type: 'cancel', jobId }, () => cancelHere(jobId));
+  else await cancelStored(job);
+}
+
+/** Tests: wait until this tab's runner is idle (the current run ended and no next job is starting). */
 export async function runnerIdle(): Promise<void> {
   while (current || kicking) {
     if (kicking) await kicking;
@@ -850,15 +1115,23 @@ export async function runnerIdle(): Promise<void> {
   }
 }
 
-/** Tests: forget all runner state (aborting anything in flight). */
+/** Tests: forget all runner state (aborting anything in flight; nothing more is written for it). */
 export function resetRunner(): void {
+  generation += 1;
   if (current) {
+    current.disposed = true;
     current.cancelled = true;
     for (const f of current.flights.values()) f.controller.abort();
-    current.release();
+    current.lock.release();
+    current.notifier.wake();
   }
   current = null;
   kicking = null;
+  lockWait?.abort();
+  lockWait = null;
+  channel?.close();
+  channel = null;
+  ownJobs.clear();
   for (const [, listener] of offlineWaiters) globalThis.removeEventListener?.('online', listener);
   offlineWaiters.clear();
   guardUnload(false);

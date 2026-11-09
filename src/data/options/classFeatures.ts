@@ -151,7 +151,9 @@ export function classChoiceFeatures(cls: ClassOption | undefined): { feature: Cl
 
 /**
  * The fighting styles a Fighting Style feature prints itself (older books list them inside the feature):
- * its bold run-in options, with their text. SRD 5.2.1's feature points at the Fighting Style feats instead.
+ * its bold run-in options, with their text. SRD 5.2.1's Fighter feature points at the Fighting Style
+ * feats instead; its Paladin and Ranger features add one option "below" (Blessed Warrior, Druidic
+ * Warrior), which counts too.
  */
 export function inlineFightingStyles(def: ClassFeatureDef | undefined): FeatureOption[] {
   if (!def || !isFightingStyle(def)) return [];
@@ -159,7 +161,8 @@ export function inlineFightingStyles(def: ClassFeatureDef | undefined): FeatureO
     const found = runIn(line);
     return found ? [{ name: found.label, description: found.rest }] : [];
   });
-  return options.length >= 2 ? options : [];
+  const offered = options.length >= 2 || (options.length === 1 && /\boptions? below\b/i.test(def.description));
+  return offered ? options : [];
 }
 
 export interface OptionGrants {

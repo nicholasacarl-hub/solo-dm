@@ -9,6 +9,7 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import { Info, Sparkles } from 'lucide-react';
 import { useNavigate } from 'react-router';
 import { estimateModels, retryRecords, startJob, type JobChoices } from '@/dm';
+import { cn } from '@/lib/cn';
 import { useSettings } from '@/state/settingsStore';
 import { structuringSpendUsd } from '@/storage';
 import { MODELS, type CostEstimate, type ExtractionJob, type LibrarySource, type ModelId, type StructuredKind, type StructuredRecord, STRUCTURED_KINDS } from '@/types';
@@ -19,6 +20,7 @@ import { errorMessage } from '@/ui/shell/format';
 import { defaultBudget, isBeingRead } from './bookData';
 import { KIND_LABELS, PRIVACY_PROMISES, modelName } from './labels';
 import type { Availability } from './RecordDetail';
+import { TOUCH, TOUCH_FORM } from './touch';
 
 export type ConsentScope =
   | { kind: 'all' }
@@ -77,7 +79,7 @@ function KindChoice({
         {STRUCTURED_KINDS.map((k) => {
           const n = counts[k] ?? 0;
           return (
-            <label key={k} className="flex min-h-10 cursor-pointer items-center gap-2 text-sm has-[:disabled]:cursor-not-allowed has-[:disabled]:text-faint">
+            <label key={k} className={cn('flex min-h-10 cursor-pointer items-center gap-2 text-sm has-[:disabled]:cursor-not-allowed has-[:disabled]:text-faint', TOUCH)}>
               <input
                 type="checkbox"
                 disabled={n === 0}
@@ -168,7 +170,7 @@ function BudgetField({ value, suggested, onChange }: { value: number | null; sug
             onBlur={() => setTyping(null)}
           />
         </div>
-        <label className="flex min-h-10 cursor-pointer items-center gap-2 text-sm">
+        <label className={cn('flex min-h-10 cursor-pointer items-center gap-2 text-sm', TOUCH)}>
           <input type="checkbox" checked={value === null} onChange={(e) => onChange(e.target.checked ? null : suggested)} className="size-4 accent-[var(--accent)]" />
           No limit
         </label>
@@ -339,7 +341,7 @@ function ConsentBody({
   const total = scope.kind === 'ids' ? scope.ids.length : misses.filter((r) => kinds.includes(r.kind)).length + (alsoReread ? here.length : 0);
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className={cn('flex flex-col gap-5', TOUCH_FORM)}>
       {!availability.ok && (
         <div role="note" className="rounded-xl border border-gold/40 bg-gold-soft/60 px-3 py-2.5 text-sm">
           {availability.reason === 'demo' ? (
@@ -368,7 +370,7 @@ function ConsentBody({
         <ModelChoice estimates={shown} settingsModel={settingsModel} value={chosen?.model ?? model} onChange={setModel} />
       )}
       {scope.kind === 'all' && here.length > 0 && (
-        <label className="flex cursor-pointer items-start gap-2.5 text-sm">
+        <label className={cn('flex cursor-pointer items-start gap-2.5 text-sm max-sm:items-center pointer-coarse:items-center', TOUCH)}>
           <input type="checkbox" checked={alsoReread} onChange={(e) => setAlsoReread(e.target.checked)} className="mt-0.5 size-4 accent-[var(--accent)]" />
           <span>
             Also have Claude re-read the {here.length} {here.length === 1 ? 'entry' : 'entries'} read on this device
@@ -380,7 +382,7 @@ function ConsentBody({
         <BudgetField value={limit} suggested={suggested} onChange={(v) => setBudget(v)} />
       )}
       <details className="text-sm">
-        <summary className="cursor-pointer font-medium text-muted">Advanced</summary>
+        <summary className="cursor-pointer font-medium text-muted max-sm:py-3 pointer-coarse:py-3">Advanced</summary>
         <div className="mt-2 flex items-center gap-2">
           <label htmlFor="consent-concurrency" className="text-sm">
             Requests at once

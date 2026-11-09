@@ -9,11 +9,11 @@ import { CircleCheck, TriangleAlert } from 'lucide-react';
 import type { CandidateBlock } from '@/data';
 import { cn } from '@/lib/cn';
 import type { CompendiumEntry, Excerpt, StructuredKind } from '@/types';
-import { Segmented } from '@/ui/components/ui';
 import { Markdown } from '@/ui/components/Markdown';
 import { highlightsIn, plainParagraph, slicesOf, unplacedExcerpts } from './excerpts';
 import { dataPathsFor, wireFieldsFor } from './forms/fieldMap';
 import { labelForPath } from './forms/formSpecs';
+import { ViewToggle } from './ViewToggle';
 
 type Mode = 'excerpts' | 'formatted';
 
@@ -46,14 +46,16 @@ export function SourceTextPane({
   useEffect(() => {
     if (!activeField || mode !== 'excerpts') return;
     const mark = rootRef.current?.querySelector<HTMLElement>('mark[data-active="true"]');
-    mark?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+    const still = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    mark?.scrollIntoView?.({ block: 'center', behavior: still ? 'auto' : 'smooth' });
   }, [activeField, mode]);
 
   return (
     <div ref={rootRef} className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="font-display text-xs font-semibold tracking-[0.14em] text-muted uppercase">Source text</h3>
-        <Segmented<Mode>
+        <ViewToggle<Mode>
+          label="Show the text as"
           size="sm"
           value={mode}
           onChange={setMode}

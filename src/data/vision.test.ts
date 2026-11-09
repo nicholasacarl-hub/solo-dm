@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { APIUserAbortError, AuthenticationError } from '@anthropic-ai/sdk';
 import type { BetaMessage, MessageCreateParamsNonStreaming } from '@anthropic-ai/sdk/resources/beta/messages/messages';
+import { getAnthropicClient } from '@/dm/client';
 import { useSettings } from '@/state/settingsStore';
-import { DEMO_PHOTO_MESSAGE, TRANSCRIBE_SYSTEM_PROMPT, transcribeImages, type EncodedImage, type TranscriptionClient } from './vision';
+import { DEMO_PHOTO_MESSAGE, NO_KEY_PHOTO_MESSAGE, TRANSCRIBE_SYSTEM_PROMPT, transcribeImages, type EncodedImage, type TranscriptionClient } from './vision';
+
+// The real client factory, watched: the demo and no-key gates must never reach it.
+vi.mock('@/dm/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/dm/client')>();
+  return { ...actual, getAnthropicClient: vi.fn(actual.getAnthropicClient) };
+});
 
 type Reply = { text?: string; stop_reason?: BetaMessage['stop_reason']; category?: string };
 
@@ -138,6 +145,17 @@ describe('transcribeImages', () => {
     await expect(transcribeImages(photos(1), { client, encode })).rejects.toThrow(DEMO_PHOTO_MESSAGE);
     expect(DEMO_PHOTO_MESSAGE).toBe('Demo mode makes no API calls. Turn it off in Settings to transcribe photos.');
     expect(calls).toHaveLength(0);
+    expect(encode).not.toHaveBeenCalled();
+  });
+
+  it('never creates a client in demo mode or without an API key (spec §3.13)', async () => {
+    vi.mocked(getAnthropicClient).mockClear();
+    useSettings.getState().update({ mockMode: true, apiKey: 'sk-ant-test' });
+    await expect(transcribeImages(photos(1), { encode })).rejects.toThrow(DEMO_PHOTO_MESSAGE);
+    useSettings.getState().update({ mockMode: false, apiKey: '  ' });
+    await expect(transcribeImages(photos(1), { encode })).rejects.toThrow(NO_KEY_PHOTO_MESSAGE);
+    expect(NO_KEY_PHOTO_MESSAGE).toBe('Transcribing photos needs your Anthropic API key. Add it in Settings first.');
+    expect(getAnthropicClient).not.toHaveBeenCalled();
     expect(encode).not.toHaveBeenCalled();
   });
 });

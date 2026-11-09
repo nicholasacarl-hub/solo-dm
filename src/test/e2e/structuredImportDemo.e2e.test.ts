@@ -1,12 +1,17 @@
 /**
  * Demo mode end to end (spec §8.4, §3.13): detection, offline reading, review and the builder work; nothing
  * reaches Claude — starting a job refuses before anything is created and the client factory is never
- * called; photo transcription is refused with the demo message.
+ * called; what the offline reader can't read is "Not read yet" and can be filled in by hand; photo
+ * transcription is refused with the demo message.
+ *
+ * The mixed dialect (src/test/structuredFixtures.ts): the Wickwright chapter, the drake and Mothkin are
+ * flattened the way PDFs are, so they wait for Claude, while the Markdown entries are read on the device.
  */
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import builderRaw from '../../../public/srd/builder.json?raw';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import { detectStructure, importLibraryDocument, loadBuilderData } from '@/data';
+import { NEEDS_CLAUDE_MESSAGE } from '@/data/structured/detect';
 import { resetRulesIndex } from '@/data/rulesIndexStore';
 import { resetSrdCache } from '@/data/srd';
 import { ExtractionUnavailableError, startJob } from '@/dm';
@@ -14,8 +19,8 @@ import { resetExtractionDeps, setExtractionDeps } from '@/dm/extract/deps';
 import { useSettings } from '@/state/settingsStore';
 import { listJobs, listRecords } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
-import { GLOAMWOOD_MD, GLOAMWOOD_TITLE } from '@/test/structuredFixtures';
-import { acceptConfident, resetReviewActionsForTests } from '@/ui/library/structure/reviewActions';
+import { expectedData, GLOAMWOOD_MIXED, GLOAMWOOD_TITLE } from '@/test/structuredFixtures';
+import { acceptConfident, acceptRecords, resetReviewActionsForTests, saveRecordEdit } from '@/ui/library/structure/reviewActions';
 import { DEFAULT_SETTINGS } from '@/types';
 
 const clientFactory = vi.fn(() => {
@@ -23,6 +28,9 @@ const clientFactory = vi.fn(() => {
 });
 
 let sourceId = '';
+
+/** Wait for the review actions' debounced refresh (500 ms) to land. */
+const settleRefresh = () => new Promise((resolve) => setTimeout(resolve, 650));
 
 beforeAll(async () => {
   await resetDatabase();
@@ -45,14 +53,19 @@ afterAll(() => {
 
 describe('structured imports in demo mode (spec §8.4)', { timeout: 30_000 }, () => {
   it('imports and detects, reading what it can on this device', async () => {
-    const source = await importLibraryDocument({ title: GLOAMWOOD_TITLE, format: 'markdown', text: GLOAMWOOD_MD });
+    const source = await importLibraryDocument({ title: GLOAMWOOD_TITLE, format: 'markdown', text: GLOAMWOOD_MIXED });
     sourceId = source.id;
     await detectStructure(sourceId);
     const records = await listRecords(sourceId);
     expect(records.find((r) => r.name === 'Ashen Choir')?.data).not.toBeNull();
     // What would need Claude is "Not read yet", with a way to fill it in by hand.
     const unread = records.filter((r) => r.data === null && r.span !== 'table');
-    for (const r of unread) expect(r.warnings.find((w) => w.code === 'needs-claude')?.severity, r.name).toBe('block');
+    expect(unread.map((r) => r.name)).toEqual(expect.arrayContaining(['Wickwright', 'Glimmerwing Drake', 'Mothkin']));
+    for (const r of unread) {
+      const warning = r.warnings.find((w) => w.code === 'needs-claude');
+      expect(warning, r.name).toMatchObject({ severity: 'block', message: NEEDS_CLAUDE_MESSAGE });
+    }
+    expect(NEEDS_CLAUDE_MESSAGE).toMatch(/^Not read yet: fill it in by hand/);
   });
 
   it('refuses to start a job before creating anything, and never creates the client', async () => {
@@ -65,9 +78,23 @@ describe('structured imports in demo mode (spec §8.4)', { timeout: 30_000 }, ()
   it('lets the player review offline records into the builder', async () => {
     const { accepted } = await acceptConfident(sourceId);
     expect(accepted).toBeGreaterThan(0);
-    await new Promise((resolve) => setTimeout(resolve, 650));
+    await settleRefresh();
     const builder = await loadBuilderData();
     expect(builder.feats.find((f) => f.name === "Moth's Grace")?.source?.title).toBe(GLOAMWOOD_TITLE);
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('lets the player fill in what was not read ("Fill in yourself") and use it, with no API call', async () => {
+    const wick = (await listRecords(sourceId)).find((r) => r.name === 'Wickwright');
+    if (!wick) throw new Error('no Wickwright record');
+    expect(wick.data).toBeNull();
+    const filled = await saveRecordEdit(wick, expectedData(sourceId).Wickwright);
+    expect(filled.warnings.some((w) => w.severity === 'block')).toBe(false);
+    const { accepted, skipped } = await acceptRecords([wick.id]);
+    expect({ accepted, skipped }).toEqual({ accepted: 1, skipped: [] });
+    await settleRefresh();
+    const builder = await loadBuilderData();
+    expect(builder.classes.find((c) => c.name === 'Wickwright')?.source?.title).toBe(GLOAMWOOD_TITLE);
     expect(clientFactory).not.toHaveBeenCalled();
   });
 

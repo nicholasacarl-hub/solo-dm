@@ -6,7 +6,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router';
-import { CheckCheck, ChevronDown, FileText, ListChecks, Search, Tags, TriangleAlert, X } from 'lucide-react';
+import { CheckCheck, ChevronDown, FileText, ListChecks, Search, Sparkles, Tags, TriangleAlert, X } from 'lucide-react';
 import { cn } from '@/lib/cn';
 import type { BuilderData, CompendiumEntry, LibrarySource, ModelId, StructuredKind, StructuredRecord } from '@/types';
 import { Badge, Button, Dialog, EmptyState, Input, Select } from '@/ui/components/ui';
@@ -19,6 +19,7 @@ import { filterRecords, isConfident, kindCounts, matchesFilter, reviewCounts, ty
 import { KIND_LABELS, REVIEW_FILTERS, RECORD_STATES, fieldsToCheck, kindCount, recordState, recordStateLabel, type ReviewFilter } from './labels';
 import { RecordDetail, type Availability, type DetailLayout } from './RecordDetail';
 import { acceptConfident, acceptRecords, rereadHere, setRecordsStatus, setSpellClasses } from './reviewActions';
+import { TOUCH, TOUCH_BUTTONS, TOUCH_FOOTER, TOUCH_FORM } from './touch';
 import { showUndo } from './UndoToast';
 import { bookPageSearch, type BookPageControls } from './useBookPageState';
 
@@ -37,6 +38,8 @@ export interface ReviewWorkspaceProps {
   availability: Availability;
   /** Open the consent for these records ("Re-read with Claude", "Try again"). */
   onReadWithClaude(ids: string[], title: string, model?: ModelId): void;
+  /** Open the consent to retry these failed or declined reads in their job ("Retry N"). */
+  onRetry(jobId: string, ids: string[]): void;
   onAllEntries(): void;
 }
 
@@ -46,7 +49,7 @@ function useLayout(): DetailLayout {
   return wide ? 'wide' : mid ? 'mid' : 'phone';
 }
 
-export function ReviewWorkspace({ source, records, entriesById, builder, state, availability, onReadWithClaude, onAllEntries }: ReviewWorkspaceProps) {
+export function ReviewWorkspace({ source, records, entriesById, builder, state, availability, onReadWithClaude, onRetry, onAllEntries }: ReviewWorkspaceProps) {
   const layout = useLayout();
   const navigate = useNavigate();
   const location = useLocation();
@@ -54,6 +57,9 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
   const [announcement, setAnnouncement] = useState('');
   const [limit, setLimit] = useState(PAGE);
   const enabled = source.enabled;
+  const rootRef = useRef<HTMLDivElement>(null);
+  /** Where focus goes once the open record closes (its heading, which had focus, is gone then). */
+  const focusAfterClose = useRef<{ to: 'filter' } | { to: 'row'; id: string } | null>(null);
 
   const counts = useMemo(() => reviewCounts(records, enabled), [records, enabled]);
   const list = useMemo(() => filterRecords(records, state, enabled), [records, state, enabled]);
@@ -67,6 +73,20 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
   };
 
   const openRecord = (id: string | null, mode: 'push' | 'replace' = 'replace') => state.set({ recordId: id }, mode);
+
+  /** The active filter chip: where focus lands when what had it is gone (it says what is left). */
+  const filterChip = () => rootRef.current?.querySelector<HTMLElement>('[data-filter-chip][aria-pressed="true"]') ?? null;
+
+  // The record closed (Back, or nothing left after Accept & next): put focus on the list, not the page body.
+  useEffect(() => {
+    const target = focusAfterClose.current;
+    if (!target || state.recordId !== null) return;
+    focusAfterClose.current = null;
+    const root = rootRef.current;
+    const row = target.to === 'row' ? root?.querySelector<HTMLElement>(`a[data-record-id="${CSS.escape(target.id)}"]`) : null;
+    (row ?? filterChip())?.focus();
+  }, [state.recordId]);
+
   const step = (by: 1 | -1) => {
     if (index < 0) return;
     const next = list[index + by];
@@ -84,12 +104,15 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
       openRecord(next.id);
       announce(`${verb} ${record.name}. Now: ${next.name}, ${after.indexOf(next) + 1} of ${after.length}.`);
     } else {
+      // The active filter chip says what is left ("To review 0").
+      focusAfterClose.current = { to: 'filter' };
       openRecord(null);
       announce(`${verb} ${record.name}. Nothing else in this list.`);
     }
   };
 
   const back = () => {
+    if (state.recordId) focusAfterClose.current = { to: 'row', id: state.recordId };
     if (location.key !== 'default') navigate(-1);
     else openRecord(null);
   };
@@ -105,11 +128,16 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
         sourceId={source.id}
         compact={layout !== 'phone'}
       />
+      {state.filter === 'failed' && <RetryButton records={list} onRetry={onRetry} onReadWithClaude={onReadWithClaude} />}
       {records.length === 0 ? (
         <EmptyState
           icon={<FileText className="size-8" aria-hidden />}
           title="Nothing here to structure"
-          action={<Button onClick={onAllEntries}>All entries</Button>}
+          action={
+            <Button className={TOUCH} onClick={onAllEntries}>
+              All entries
+            </Button>
+          }
         >
           Nothing here looks like a spell, monster, item, feat, species, background, class or subclass. The DM can still look up all of it.
           Know better? Use All entries › Structure as…
@@ -136,7 +164,7 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
         />
       )}
       {list.length > limit && (
-        <Button className="w-full" onClick={() => setLimit((l) => l + PAGE)}>
+        <Button className={cn('w-full', TOUCH)} onClick={() => setLimit((l) => l + PAGE)}>
           Show more ({list.length - limit} left)
         </Button>
       )}
@@ -151,10 +179,11 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
           onClear={() => setSelection(new Set())}
           onDone={() => setSelection(null)}
           onReadWithClaude={(ids) => onReadWithClaude(ids, kindCount(state.kind ?? 'spell', ids.length).replace(/^\d+ /, `${ids.length} `))}
+          returnFocus={filterChip}
           sticky={layout === 'phone'}
         />
       )}
-      {selection === null && layout === 'phone' && <AcceptConfidentButton records={list} sourceId={source.id} kind={state.kind} sticky />}
+      {selection === null && layout === 'phone' && <AcceptConfidentButton records={list} sourceId={source.id} kind={state.kind} returnFocus={filterChip} sticky />}
     </div>
   );
 
@@ -178,7 +207,14 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
       paneClassName={layout === 'wide' ? PANE : undefined}
     />
   ) : state.recordId ? (
-    <EmptyState title="That entry isn't in this book any more" action={<Button onClick={() => openRecord(null)}>Back to the list</Button>}>
+    <EmptyState
+      title="That entry isn't in this book any more"
+      action={
+        <Button className={TOUCH} onClick={() => openRecord(null)}>
+          Back to the list
+        </Button>
+      }
+    >
       It may have been read again as another kind.
     </EmptyState>
   ) : (
@@ -195,7 +231,7 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
 
   if (layout === 'phone') {
     return (
-      <div className="flex min-w-0 flex-col gap-3">
+      <div ref={rootRef} className="flex min-w-0 flex-col gap-3">
         {state.recordId ? detail : listPane}
         {live}
       </div>
@@ -204,18 +240,48 @@ export function ReviewWorkspace({ source, records, entriesById, builder, state, 
 
   const pane = PANE;
   return (
-    <div className={cn('grid items-start gap-4', layout === 'wide' ? 'grid-cols-[18rem_minmax(0,1fr)_minmax(0,1fr)]' : 'grid-cols-[16rem_minmax(0,1fr)]')}>
+    <div ref={rootRef} className={cn('grid items-start gap-4', layout === 'wide' ? 'grid-cols-[18rem_minmax(0,1fr)_minmax(0,1fr)]' : 'grid-cols-[16rem_minmax(0,1fr)]')}>
       <div className={cn(pane, 'p-3 pb-0')}>
         {listPane}
         {selection === null && (
           <div className="sticky bottom-0 -mx-3 border-t border-border bg-surface px-3 py-3">
-            <AcceptConfidentButton records={list} sourceId={source.id} kind={state.kind} />
+            <AcceptConfidentButton records={list} sourceId={source.id} kind={state.kind} returnFocus={filterChip} />
           </div>
         )}
       </div>
       {layout === 'wide' && open ? detail : <div className={cn(pane, layout === 'wide' && 'col-span-2', 'pb-0')}>{detail}</div>}
       {live}
     </div>
+  );
+}
+
+/**
+ * "Retry N" on the Couldn't read chip (spec §4.6): the consent for those reads. Reads from one job retry
+ * in it (same model requeues, another model starts a scoped job); reads from several jobs become one
+ * new scoped job.
+ */
+function RetryButton({
+  records,
+  onRetry,
+  onReadWithClaude,
+}: {
+  records: readonly StructuredRecord[];
+  onRetry(jobId: string, ids: string[]): void;
+  onReadWithClaude(ids: string[], title: string): void;
+}) {
+  const failed = records.filter((r) => r.runState === 'failed' || r.runState === 'refused');
+  if (failed.length === 0) return null;
+  const ids = failed.map((r) => r.id);
+  const jobs = new Set(failed.map((r) => r.jobId));
+  const [jobId] = jobs;
+  const retry = () => {
+    if (jobs.size === 1 && jobId) onRetry(jobId, ids);
+    else onReadWithClaude(ids, failed.length === 1 ? failed[0].name : `${failed.length} entries`);
+  };
+  return (
+    <Button className={TOUCH} icon={<Sparkles className="size-4" aria-hidden />} onClick={retry}>
+      Retry {failed.length}
+    </Button>
   );
 }
 
@@ -262,7 +328,6 @@ export function ReviewToolbar({
   compact: boolean;
 }) {
   const kinds = useMemo(() => kindCounts(records), [records]);
-  const searchRef = useRef<HTMLInputElement>(null);
   const chips = CHIP_ORDER.filter((f) => f === 'review' || f === 'all' || f === state.filter || counts[f] > 0);
   return (
     <div className="flex flex-col gap-2">
@@ -271,10 +336,12 @@ export function ReviewToolbar({
           <button
             key={f}
             type="button"
+            data-filter-chip
             aria-pressed={state.filter === f}
             onClick={() => state.set({ filter: f })}
             className={cn(
-              'inline-flex min-h-11 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm whitespace-nowrap transition-colors sm:min-h-9',
+              'inline-flex min-h-9 shrink-0 items-center gap-1.5 rounded-full border px-3 text-sm whitespace-nowrap transition-colors',
+              TOUCH,
               state.filter === f ? 'border-accent bg-accent-soft text-text' : 'border-border bg-surface text-muted hover:text-text',
             )}
           >
@@ -287,7 +354,7 @@ export function ReviewToolbar({
         <Select
           aria-label="Kind"
           value={state.kind ?? ''}
-          className="h-9 min-w-0 flex-1"
+          className={cn('h-9 min-w-0 flex-1', TOUCH)}
           onChange={(e) => state.set({ kind: (e.target.value || null) as StructuredKind | null })}
         >
           <option value="">All kinds</option>
@@ -297,22 +364,45 @@ export function ReviewToolbar({
             </option>
           ))}
         </Select>
-        <Button size="sm" variant={selecting ? 'primary' : 'secondary'} aria-pressed={selecting} onClick={() => onSelecting(!selecting)}>
+        <Button size="sm" className={TOUCH} variant={selecting ? 'primary' : 'secondary'} aria-pressed={selecting} onClick={() => onSelecting(!selecting)}>
           {selecting ? 'Done' : 'Select'}
         </Button>
       </div>
-      <div className="relative">
-        <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" aria-hidden />
-        <Input
-          ref={searchRef}
-          type="search"
-          aria-label="Search names"
-          placeholder="Search names"
-          value={state.q}
-          className="h-9 pl-9"
-          onChange={(e) => state.set({ q: e.target.value })}
-        />
-      </div>
+      <NameSearch q={state.q} onSearch={(q) => state.set({ q })} />
+    </div>
+  );
+}
+
+/**
+ * The name search. Its text is its own state: ?q= reaches the page a render later (the router updates
+ * in a transition), so an input bound to the URL would drop keys typed in between. The URL's value
+ * replaces the text only when it changed elsewhere (Back, a link), never when it echoes this field.
+ */
+export function NameSearch({ q, onSearch }: { q: string; onSearch(q: string): void }) {
+  const [text, setText] = useState(q);
+  /** Values this field wrote to the URL, which the router may still hand back one by one. */
+  const echoes = useRef(new Set<string>());
+  useEffect(() => {
+    if (echoes.current.has(q)) return;
+    echoes.current.clear();
+    setText(q);
+  }, [q]);
+  return (
+    <div className="relative">
+      <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-faint" aria-hidden />
+      <Input
+        type="search"
+        aria-label="Search names"
+        placeholder="Search names"
+        value={text}
+        className={cn('h-9 pl-9', TOUCH)}
+        onChange={(e) => {
+          const next = e.target.value;
+          setText(next);
+          echoes.current.add(next);
+          onSearch(next);
+        }}
+      />
     </div>
   );
 }
@@ -385,6 +475,7 @@ export function RecordRow({
       )}
       <Link
         to={{ search: bookPageSearch(params, { recordId: record.id }) }}
+        data-record-id={record.id}
         aria-current={selected ? 'true' : undefined}
         className={cn(
           'flex min-h-14 min-w-0 flex-1 flex-col justify-center rounded-xl px-3 py-2 transition-colors',
@@ -426,6 +517,7 @@ export function BulkBar({
   onClear,
   onDone,
   onReadWithClaude,
+  returnFocus,
   sticky,
 }: {
   ids: string[];
@@ -437,10 +529,13 @@ export function BulkBar({
   onClear(): void;
   onDone(): void;
   onReadWithClaude(ids: string[]): void;
+  /** Where focus goes after Undo (this bar closes when the action is done). */
+  returnFocus?: () => HTMLElement | null;
   sticky?: boolean;
 }) {
   const [busy, setBusy] = useState<string | null>(null);
   const [classesOpen, setClassesOpen] = useState(false);
+  const acceptRef = useRef<HTMLButtonElement>(null);
   const chosen = records.filter((r) => ids.includes(r.id));
   const allSpells = chosen.length > 0 && chosen.every((r) => r.kind === 'spell');
   const run = async (label: string, work: () => Promise<void>) => {
@@ -462,13 +557,13 @@ export function BulkBar({
         toast.info(`Nothing was accepted.${skippedText}`);
         return;
       }
-      showUndo(`Accepted ${result.accepted}. ${IN_USE_TAIL}${skippedText}`, result.undo, { focus: true });
+      showUndo(`Accepted ${result.accepted}. ${IN_USE_TAIL}${skippedText}`, result.undo, { focus: true, returnFocus });
       onDone();
     });
   const keepAsText = () =>
     run('text', async () => {
       const result = await setRecordsStatus(ids, 'rejected');
-      showUndo(`Kept ${ids.length} as text. The DM can still read them.`, result.undo, { focus: true });
+      showUndo(`Kept ${ids.length} as text. The DM can still read them.`, result.undo, { focus: true, returnFocus });
       onDone();
     });
   const none = ids.length === 0;
@@ -476,18 +571,38 @@ export function BulkBar({
     <div
       role="region"
       aria-label="Selected entries"
-      className={cn('flex flex-col gap-2 rounded-xl border border-border bg-surface-2 p-2.5 shadow-card', sticky && 'sticky bottom-[env(safe-area-inset-bottom)] z-20')}
+      className={cn(
+        'flex flex-col gap-2 rounded-xl border border-border bg-surface-2 p-2.5 shadow-card',
+        TOUCH_BUTTONS,
+        sticky && 'sticky bottom-[env(safe-area-inset-bottom)] z-20',
+      )}
     >
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <span className="font-medium">{ids.length} selected</span>
         {ids.length > 0 && ids.length < total && (
-          <Button size="sm" variant="ghost" onClick={onSelectAll}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              onSelectAll();
+              // This button goes once all are selected: focus moves on to what comes next.
+              acceptRef.current?.focus();
+            }}
+          >
             Select all {total} in this filter
           </Button>
         )}
       </div>
       <div className="flex flex-wrap gap-1.5">
-        <Button size="sm" variant="primary" disabled={none || busy !== null} loading={busy === 'accept'} icon={<CheckCheck className="size-4" aria-hidden />} onClick={() => void accept()}>
+        <Button
+          ref={acceptRef}
+          size="sm"
+          variant="primary"
+          disabled={none || busy !== null}
+          loading={busy === 'accept'}
+          icon={<CheckCheck className="size-4" aria-hidden />}
+          onClick={() => void accept()}
+        >
           Accept
         </Button>
         <Button size="sm" disabled={none || busy !== null} loading={busy === 'text'} onClick={() => void keepAsText()}>
@@ -527,7 +642,7 @@ export function BulkBar({
             Set classes…
           </Button>
         )}
-        <Button size="sm" variant="ghost" disabled={none} icon={<X className="size-4" aria-hidden />} onClick={onClear}>
+        <Button size="sm" variant="ghost" icon={<X className="size-4" aria-hidden />} onClick={onClear}>
           Clear
         </Button>
       </div>
@@ -564,17 +679,17 @@ function SetClassesDialog({ open, ids, onClose, records }: { open: boolean; ids:
       title={`Set the classes of ${ids.length} ${ids.length === 1 ? 'spell' : 'spells'}`}
       description="The spell lists they appear on. This replaces what was read."
       footer={
-        <>
+        <div className={TOUCH_FOOTER}>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" loading={busy} disabled={classes.length === 0} onClick={() => void save()}>
             Set classes
           </Button>
-        </>
+        </div>
       }
     >
-      <TagInput label="Classes" value={classes} onChange={setClasses} suggestions={suggestions} placeholder="Wizard" />
+      <TagInput label="Classes" className={TOUCH_FORM} value={classes} onChange={setClasses} suggestions={suggestions} placeholder="Wizard" />
     </Dialog>
   );
 }
@@ -583,11 +698,14 @@ export function AcceptConfidentButton({
   records,
   sourceId,
   kind,
+  returnFocus,
   sticky,
 }: {
   records: readonly StructuredRecord[];
   sourceId: string;
   kind: StructuredKind | null;
+  /** Where focus goes after Undo when this button is disabled by then (nothing confident left). */
+  returnFocus?: () => HTMLElement | null;
   sticky?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -601,7 +719,7 @@ export function AcceptConfidentButton({
     try {
       const result = await acceptConfident(sourceId, kind ? { kind } : {});
       setOpen(false);
-      if (result.accepted > 0) showUndo(`Accepted ${result.accepted}. ${IN_USE_TAIL}`, result.undo, { focus: true });
+      if (result.accepted > 0) showUndo(`Accepted ${result.accepted}. ${IN_USE_TAIL}`, result.undo, { focus: true, returnFocus });
       else toast.info('Nothing was accepted: those entries changed since.');
     } catch (error) {
       toast.error(errorMessage(error, 'Could not accept them.'));
@@ -630,14 +748,14 @@ export function AcceptConfidentButton({
         size="sm"
         title={`Accept ${n} ${n === 1 ? 'entry' : 'entries'} that ${n === 1 ? 'was' : 'were'} read cleanly?`}
         footer={
-          <>
+          <div className={TOUCH_FOOTER}>
             <Button variant="ghost" disabled={busy} onClick={() => setOpen(false)}>
               Not now
             </Button>
             <Button variant="primary" loading={busy} onClick={() => void accept()}>
               Accept {n}
             </Button>
-          </>
+          </div>
         }
       >
         <p className="text-sm">They'll be used by the builder, combat and spell lists. You can edit or undo any of them later.</p>

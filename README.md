@@ -31,11 +31,26 @@ Solo DM runs entirely in your browser. Claude narrates, plays every NPC, and mak
 An **Anthropic API key** from [console.anthropic.com](https://console.anthropic.com/settings/keys). API usage is billed by Anthropic and is separate from any Claude.ai subscription. Your key is stored only in your browser. It's sent only to Anthropic's API, never to this site or anyone else.
 
 - **Model**: Claude Opus 5.5 is the default (the best storytelling and rules judgment). Sonnet 5.5 costs half as much, and Haiku 5.5 much less.
-- **Cost**: the app shows an estimated cost per session.
+- **Cost**: the app shows an estimated cost per session. Structuring an imported book with Claude is optional and also billed to your key; the app shows the estimate before it sends anything (see [Your books](#your-books)).
 - **Caching**: prompt caching keeps long sessions affordable. Each session re-reads your campaign context at a steep discount.
 - **Tip**: give the key a monthly spend limit in the Console.
 
 **Optional, for illustrations:** an **OpenAI API key** from [platform.openai.com](https://platform.openai.com/api-keys), entered in **Settings → Illustrations**. OpenAI bills it separately, usually a few cents a picture at medium quality. Like your Anthropic key, it's stored only in your browser and sent only to OpenAI's API.
+
+## Your books
+
+Import a book you own and the Library can **structure** it: find its spells, monsters, magic items, gear, feats, species, backgrounds, classes and subclasses, and turn them into options the character builder, level-up, combat, the battle map, spell lists and your inventory can use. Each book gets its own page in the Library where you review what was found.
+
+- **Free first.** The app reads what it can on your device, at no cost: clean Markdown is mostly read this way. Flattened PDF pages and unusual layouts usually need Claude.
+- **Claude reads the rest, only when you ask.** Before anything is sent you see the estimate for the model in your Settings and for the cheaper ones (a price range and how long it takes), pick one, and set a spending limit (the high estimate by default, or none). The limit is checked before every request, and you can pause or cancel at any time; a paused book waits for you (only a pause caused by losing your connection picks up again by itself). As a rough guide, a long PDF costs a few dollars with Opus 5.5, about half that with Sonnet 5.5 and a few cents with Haiku 5.5 (the cheapest, so check its readings more closely). It's billed to your own Anthropic key, and the consent screen shows what you've spent on structuring so far.
+- **What leaves your device.** Each entry's text, one at a time, to Anthropic's API with your key — not the book's title, your characters or your campaigns. Structuring waits while the DM is replying, so play keeps its speed. In demo mode nothing is sent; detection, offline reading, review and packs still work.
+- **Moving a book.** Import the same file on your other device and your characters' copied text comes back there, even before you structure it again. Or use **Download book data** on the book's page: a file with the book's text and your review decisions, so the other device doesn't have to structure it again. It contains the whole book, so keep it for yourself. The pack format is documented in [docs/PACKS.md](docs/PACKS.md).
+
+The app makes three promises about your books (also in **Library → About**):
+
+1. **Your book stays on this device.** Solo DM has no server. Your book's text goes to Anthropic, with your own API key, only when you ask: when Claude structures entries (after you've seen the cost), when it transcribes photos, and when the DM looks rules up during play. If illustrations are on, the names of options you use (a species, a class) appear in picture prompts sent to OpenAI; their text never does.
+2. **Nothing changes your game until you've checked it.** Structured entries wait for your review. The builder, combat, the battle map, spell lists and inventory use them only after you accept them, and you can move any of them back. *Accept confident* takes only clean readings; classes and subclasses always get a look first. (As before, the DM can search all of a book's text, and spells the importer recognized on its own keep appearing in spell lists, marked “not reviewed”.)
+3. **Your campaign saves never carry your book's text.** Anything copied from a book onto your character remembers where it came from. Save files and GitHub backups keep the names and leave the text out; a device that has the book fills it back in. The only file that holds a book's text is **Download book data**, which you make yourself.
 
 ## How it works
 
@@ -44,6 +59,7 @@ You type → Claude (streaming, with tools) → tools run in the app → state u
 ```
 
 - **Sessions**: a campaign is played in sessions. Within a session, the conversation with Claude is *append-only*: the system prompt is frozen, and new state arrives as a short `<game_state>` block with each of your messages. Ending a session asks the DM for a recap and private notes. Those become the "chronicle" that starts the next session.
+- **Books**: the app structures an import on your device first and, when you ask, has Claude read what it couldn't (or anything you pick), one entry per request. The structured data sits beside the book's text and reaches the builder, combat and the DM only once you accept it. See [Structured imports](docs/DESIGN.md#structured-imports).
 - **Tools**: the DM acts through 25 tools. It can roll dice, ask you to roll, update your sheet, transform your hero, run combat on a battle map, look up rules, write homebrew, keep the journal and quests, set the scene, ask for an illustration, and consult the oracle. See [docs/DESIGN.md](docs/DESIGN.md).
 
 ## Run it locally
