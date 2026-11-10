@@ -8,7 +8,7 @@ import { bookFingerprint } from '@/lib/importedContent';
 import { getRecords, listLibrarySources, listRecords, putRecords, saveLibrarySource } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
 import { EXPECTED_DATA, GLOAMWOOD_CANDIDATES, GLOAMWOOD_SOURCE_ID, gloamwoodEntries, gloamwoodEntryId, gloamwoodSource } from '@/test/structuredFixtures';
-import { SRD_SOURCE_ID, type CompendiumEntry, type StructuredRecord } from '@/types';
+import { PARSER_VERSION, SRD_SOURCE_ID, type CompendiumEntry, type StructuredRecord } from '@/types';
 import { createRulesIndex } from '../search';
 import { applyReading, detectStructure, mergeReadings, readOffline, rereadOffline, structureEntryAs, type Reading } from './detect';
 import { noticeIndex } from './notices';
@@ -75,6 +75,21 @@ describe('detectStructure', () => {
       expect(r.warnings, name).toContainEqual(expect.objectContaining({ code: 'needs-claude', severity: 'block' }));
     }
     expect(records.some((r) => r.entryIds.includes(gloamwoodEntryId('The Long Dusk')))).toBe(false);
+  });
+
+  it('U7: remembers a book it found nothing in (an empty structure on the source), and a re-run keeps it', async () => {
+    const road = (n: number, name: string, text: string): CompendiumEntry => ({ id: `lib:road:${n}`, sourceId: 'road', sourceName: 'Road notes', kind: 'rule', name, text, path: ['Road notes', name] });
+    await saveLibrarySource({ id: 'road', title: 'Road notes', kind: 'import', enabled: true, entryCount: 2, createdAt: 1, updatedAt: 1 }, [
+      road(1, 'The Old Road', 'The road bends past the mill and the ford. Travellers rest at the inn.'),
+      road(2, 'The Ford', 'In spring the water rises and the ferryman charges double.'),
+    ]);
+    expect(await detectStructure('road')).toMatchObject({ total: 0, readyOffline: 0, needClaude: 0, leftOut: 0 });
+    expect(await listRecords('road')).toEqual([]);
+    const structureOf = async () => (await listLibrarySources()).find((s) => s.id === 'road')?.structure;
+    const remembered = await structureOf();
+    expect(remembered).toEqual({ detectedAt: expect.any(Number), parserVersion: PARSER_VERSION, counts: {}, needsClaude: 0 });
+    await detectStructure('road');
+    expect(await structureOf()).toEqual(remembered);
   });
 
   it('stores the fingerprint of an older import, and names another copy of the same book', async () => {

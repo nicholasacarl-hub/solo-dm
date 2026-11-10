@@ -170,6 +170,15 @@ describe('jobRecords', () => {
     expect(jobRecords(mixed, { claudeFor: 'selection', recordIds: [byName('Dusk Domain').id, byName('Mothkin').id] }).map((r) => r.name)).toEqual(['Mothkin', 'Dusk Domain']);
   });
 
+  it('S3: a reading Claude returned without data is no miss: "misses" and "all" never pay for it again, a selection still reaches it', () => {
+    expect(missesOf(records).map((r) => r.name)).toEqual(['Goblin Warrior']);
+    const incomplete = records.map((r) => (r.name === 'Goblin Warrior' ? { ...r, origin: 'claude' as const, runState: 'done' as const } : r));
+    expect(missesOf(incomplete)).toEqual([]);
+    expect(jobRecords(incomplete, { claudeFor: 'misses' })).toEqual([]);
+    expect(jobRecords(incomplete, { claudeFor: 'all' }).map((r) => r.name)).not.toContain('Goblin Warrior');
+    expect(jobRecords(incomplete, { claudeFor: 'selection', recordIds: [byName('Goblin Warrior').id] }).map((r) => r.name)).toEqual(['Goblin Warrior']);
+  });
+
   it('takes a selection, a row standing for its table', () => {
     const picked = jobRecords(records, { claudeFor: 'selection', recordIds: [byName('Hookstaff').id, byName('Mothkin').id] });
     expect(picked.map((r) => r.name)).toEqual(['Mothkin', 'Gloamwood Arms']);

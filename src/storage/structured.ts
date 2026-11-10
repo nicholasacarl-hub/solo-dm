@@ -6,8 +6,10 @@
  * Counts: `LibrarySource.structure` is kept by every record write here (putRecords, setRecordStatus,
  * deleteRecords, saveLibrarySourceWithRecords) from the old and new rows, in the same transaction. A
  * record counts once under its kind and status; `needsClaude` counts the records still without data
- * that weren't kept as text. A gear-table record whose rows exist counts nowhere (its rows stand for
- * it and it is hidden from review), so the library row never shows it twice.
+ * that weren't kept as text and that Claude hasn't read (a reading it returned without data needs a fix,
+ * not another read). A gear-table record whose rows exist counts nowhere (its rows stand for
+ * it and it is hidden from review), so the library row never shows it twice. A detection that found
+ * nothing stores an empty structure (markSourceStructured).
  */
 import { liveQuery } from 'dexie';
 import { useCallback, useEffect, useState } from 'react';
@@ -276,14 +278,29 @@ export async function saveLibrarySourceWithRecords(source: LibrarySource, entrie
 
 interface Contribution { kind: StructuredKind; status: RecordStatus; unread: boolean }
 
-/** What one record adds to its source's counts (a table whose rows exist adds nothing). */
+/**
+ * What one record adds to its source's counts (a table whose rows exist adds nothing). A reading Claude
+ * returned without data isn't "not read yet": it needs a fix (spec §4.3), so it counts as one to review.
+ */
 function contribution(r: StructuredRecord | undefined, tableHasRows: boolean): Contribution | null {
   if (!r) return null;
   if (r.span === 'table' && tableHasRows) return null;
-  return { kind: r.kind, status: r.status, unread: r.data === null && r.status !== 'rejected' };
+  return { kind: r.kind, status: r.status, unread: r.data === null && r.status !== 'rejected' && r.origin !== 'claude' };
 }
 
 const emptyStructure = (now: number): SourceStructure => ({ detectedAt: now, parserVersion: PARSER_VERSION, counts: {}, needsClaude: 0 });
+
+/**
+ * Detection ran and found nothing (spec §4.7 "nothing detected"): a source with no structure gets an empty
+ * one, so the book page and its library row remember that after a reload. A structure the source has stays
+ * as it is, and a source no longer in the library is left alone. db.library.update only (updatedAt included).
+ */
+export async function markSourceStructured(sourceId: string): Promise<void> {
+  await db.transaction('rw', db.library, async () => {
+    const source = await db.library.get(sourceId);
+    if (source && !source.structure) await db.library.update(sourceId, { structure: emptyStructure(Date.now()) });
+  });
+}
 
 function addTo(structure: SourceStructure, c: Contribution | null, sign: 1 | -1): void {
   if (!c) return;

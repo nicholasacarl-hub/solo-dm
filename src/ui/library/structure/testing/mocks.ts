@@ -55,7 +55,7 @@ export const STRUCTURED_DATA_EXPORTS = [
 export const STRUCTURED_STORAGE_EXPORTS = [
   'getSourceEntries', 'listRecords', 'useRecords', 'getRecords', 'putRecords', 'setRecordStatus', 'deleteRecords',
   'getAcceptedRecords', 'listJobRecords', 'putJob', 'getJob', 'listJobs', 'useJobs', 'structuringSpendUsd',
-  'setSourceFingerprint', 'findSourcesByFingerprint', 'charactersUsingSource', 'saveLibrarySourceWithRecords',
+  'setSourceFingerprint', 'markSourceStructured', 'findSourcesByFingerprint', 'charactersUsingSource', 'saveLibrarySourceWithRecords',
   'redactCopiedImports', 'exportCampaignBundleWithReport', 'downloadCampaign',
 ] as const;
 export const STRUCTURED_DM_EXPORTS = [
@@ -167,6 +167,7 @@ export function structuredStorageMock() {
     useJobs: vi.fn(() => jobs),
     structuringSpendUsd: vi.fn(async () => 4.12),
     setSourceFingerprint: vi.fn(async () => undefined),
+    markSourceStructured: vi.fn(async () => undefined),
     findSourcesByFingerprint: vi.fn(async () => [] as import('@/types').LibrarySource[]),
     charactersUsingSource: vi.fn(async () => [] as { campaignId: string; campaignName: string; characterName: string }[]),
     saveLibrarySourceWithRecords: vi.fn(async () => undefined),

@@ -49,6 +49,7 @@ import { inventoryFromEntry } from '@/data/options/inventory';
 import { gainedFeatures } from '@/data/options/leveling';
 import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
 import { classByName, classOptionFor, optionSourceLabel, subclassOptionFor } from '@/data/options/resolve';
+import { matchByName } from '@/engine/util';
 import { nameKey } from '@/lib/id';
 import { textFingerprint } from '@/lib/importedContent';
 import {
@@ -246,9 +247,25 @@ function inventorySteps(input: ToolInput<'update_character'>, links: Links): ((c
       quantity: item.quantity,
       description: item.description,
     });
-    steps.push((c) => updateItem(c, item.name, patch));
+    steps.push((c) => updateItem(c, item.name, itemUpdatePatch(c, item.name, patch)));
   }
   return steps;
+}
+
+type ItemPatch = Partial<Omit<InventoryItem, 'id'>>;
+
+/**
+ * An inventory_update patch. A description the DM gives an item from a book is its words about that entry
+ * (spec §7.1), as with inventory_add (linkedItem): the ref marks them copied, so exports leave them out on the
+ * sheet's word alone, even once the transcript no longer holds the call that wrote them. A `redacted` left by
+ * a pulled save goes: the words are new. The item is found by name as updateItem finds it.
+ */
+function itemUpdatePatch(c: Character, name: string, patch: ItemPatch): ItemPatch {
+  if (!patch.description) return patch;
+  const ref = matchByName(c.inventory, name, (i) => i.name).match?.ref;
+  if (!ref) return patch;
+  const { redacted: _left, ...kept } = ref;
+  return { ...patch, ref: { ...kept, textCopied: true, textHash: textFingerprint(patch.description) } };
 }
 
 /**

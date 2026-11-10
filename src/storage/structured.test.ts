@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
-import type { CompendiumEntry, LibrarySource, StructuredRecord } from '@/types';
+import { PARSER_VERSION, type CompendiumEntry, type LibrarySource, type StructuredRecord } from '@/types';
 import {
   charactersUsingSource,
   deleteLibrarySource,
@@ -14,6 +14,7 @@ import {
   listJobs,
   listLibrarySources,
   listRecords,
+  markSourceStructured,
   putJob,
   putRecords,
   saveLibrarySource,
@@ -121,6 +122,23 @@ describe('putRecords and the source counts', () => {
     await putRecords([{ ...spell, status: 'accepted' }]);
     expect((await structureOf())?.counts.spell).toEqual({ pending: 0, accepted: 1, rejected: 0 });
     expect((await getRecords([spell.id]))[0]?.status).toBe('accepted');
+  });
+
+  it('S3: a reading Claude returned without data no longer counts as "not read yet": it is one to review (it needs a fix)', async () => {
+    await seedBook();
+    const records = gloamwoodRecords();
+    await putRecords(records);
+    expect(await structureOf()).toMatchObject({ counts: { monster: { pending: 3, accepted: 0, rejected: 0 } }, needsClaude: 1 });
+    const goblin = records.find((r) => r.name === 'Goblin Warrior') as StructuredRecord;
+    expect(goblin).toMatchObject({ origin: 'parser', data: null });
+    // Claude read it but couldn't complete it: still pending, no longer waiting for a (paid) read.
+    const readByClaude = { ...goblin, origin: 'claude' as const, runState: 'done' as const };
+    await putRecords([readByClaude]);
+    expect(await structureOf()).toMatchObject({ counts: { monster: { pending: 3, accepted: 0, rejected: 0 } }, needsClaude: 0 });
+    // Counted whole (a pack, or a source's first write), it agrees.
+    const copy = gloamwoodRecords('copy').map((r) => (r.name === 'Goblin Warrior' ? { ...r, origin: 'claude' as const } : r));
+    await saveLibrarySourceWithRecords(gloamwoodSource('copy'), gloamwoodEntries('copy'), copy);
+    expect((await structureOf('copy'))?.needsClaude).toBe(0);
   });
 
   it('writes records of a source that is no longer in the library without counts', async () => {
@@ -300,6 +318,28 @@ describe('fingerprints', () => {
     expect((await findSourcesByFingerprint('aaaa')).map((s) => s.id)).toEqual(['gloam', 'copy']);
     expect(await findSourcesByFingerprint('')).toEqual([]);
     await expect(setSourceFingerprint('missing', 'x')).rejects.toThrow(/no longer exists/);
+  });
+});
+
+describe('markSourceStructured', () => {
+  it('U7: stores an empty structure on a source detection found nothing in, and leaves a structure it has alone', async () => {
+    await seedBook();
+    const before = await db.library.get('gloam');
+    await markSourceStructured('gloam');
+    const marked = await db.library.get('gloam');
+    expect(marked?.structure).toEqual({ detectedAt: expect.any(Number), parserVersion: PARSER_VERSION, counts: {}, needsClaude: 0 });
+    expect({ ...marked, structure: undefined }).toEqual({ ...before, structure: undefined });
+
+    // Records written later count from the empty structure; marking again changes nothing.
+    await putRecords(gloamwoodRecords());
+    const counted = await structureOf();
+    expect(counted).toMatchObject({ counts: { monster: { pending: 3, accepted: 0, rejected: 0 } }, needsClaude: 1 });
+    await markSourceStructured('gloam');
+    expect(await structureOf()).toEqual(counted);
+
+    // A source no longer in the library stays gone.
+    await expect(markSourceStructured('missing')).resolves.toBeUndefined();
+    expect(await db.library.get('missing')).toBeUndefined();
   });
 });
 

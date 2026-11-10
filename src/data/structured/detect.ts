@@ -19,6 +19,7 @@ import {
   getSourceEntries,
   listLibrarySources,
   listRecords,
+  markSourceStructured,
   putRecords,
   setSourceFingerprint,
 } from '@/storage';
@@ -397,6 +398,8 @@ export async function detectStructure(sourceId: string, opts?: { onProgress?(don
     return next ? [next] : [];
   });
   await putRecords([...merged.writes, ...stale]);
+  // Nothing found: the source remembers that detection ran (an empty structure), so "nothing detected" outlasts this page (§4.7).
+  if (merged.records.length === 0) await markSourceStructured(sourceId);
 
   let fingerprint = source.fingerprint;
   if (!fingerprint) {

@@ -17,7 +17,7 @@ import type { ToolContext } from '@/dm/tools/context';
 import { runTool } from '@/dm/tools/handlers';
 import { characterSheetText } from '@/engine/summary';
 import { nameKey } from '@/lib/id';
-import { importedPlaceholder } from '@/lib/importedContent';
+import { importedPlaceholder, textFingerprint } from '@/lib/importedContent';
 import { exportCampaignBundleWithReport, serializeBundle } from '@/storage/backup';
 import { writeCampaignData } from '@/storage/campaignData';
 import { db } from '@/storage/db';
@@ -97,6 +97,54 @@ describe('P2: the DM’s inventory_update words about a book item, through the t
     // Rule 1: the stored campaign keeps the DM's words; only the export copy leaves them out.
     expect(JSON.stringify(await db.characters.get(character.id))).toContain(RESTATED);
     expect(JSON.stringify(await db.transcript.get('use-1'))).toContain(RESTATED);
+  });
+
+  it('P2: the sheet’s ref marks the words copied, so they leave saves even once the transcript no longer holds the call', async () => {
+    const h = setupHarness({
+      withSession: true,
+      rules: [...SAMPLE_RULES, lantern],
+      campaignSettings: { enabledSources: ['srd-5.2.1', GLOAMWOOD_SOURCE_ID] },
+      character: { ...sampleCharacter(), inventory: [] },
+    });
+    const g = campaignGraph('p2-trimmed');
+    const sessionId = g.sessions[g.sessions.length - 1].id;
+    const calls = await dmCalls(toolContext(), sessionId, [
+      { inventory_add: [{ name: 'Lantern of Hollow Light', quantity: 1 }] },
+      { inventory_update: [{ name: 'Lantern', description: RESTATED }] },
+    ]);
+    const played = h.s().character as Character;
+    const item = played.inventory.find((i) => i.name === 'Lantern of Hollow Light');
+    expect(item).toMatchObject({ description: RESTATED, ref: { entryId: lantern.id, textCopied: true, textHash: textFingerprint(RESTATED) } });
+
+    // The inventory_update call (its tool_use and result) is trimmed from the end; the sheet keeps the words.
+    const character = { ...played, id: g.campaign.characterId as string, campaignId: g.campaign.id };
+    await writeCampaignData({ ...g, character, transcript: [...g.transcript, ...calls.slice(0, 2)] });
+    const { bundle, report } = await exportCampaignBundleWithReport(g.campaign.id);
+    expect(serializeBundle(bundle)).not.toContain(RESTATED);
+    expect(bundle.character?.inventory.find((i) => i.name === 'Lantern of Hollow Light')).toMatchObject({
+      description: importedPlaceholder(GLOAMWOOD_TITLE),
+      ref: { textCopied: true, redacted: true },
+    });
+    expect(report).toEqual({ books: [GLOAMWOOD_TITLE], passages: 1 });
+    expect(JSON.stringify(await db.characters.get(character.id))).toContain(RESTATED);
+  });
+
+  it('P2: words the DM writes over a pulled placeholder are copied text again, no longer marked left out', async () => {
+    const g = campaignGraph('p2-pulled');
+    // Device A described the lantern; device B pulled the save (placeholder, ref.redacted).
+    const a = setupHarness({ withSession: true, rules: [...SAMPLE_RULES, lantern], campaignSettings: { enabledSources: ['srd-5.2.1', GLOAMWOOD_SOURCE_ID] }, character: { ...sampleCharacter(), inventory: [] } });
+    await dmCalls(toolContext(), 'sess-a', [{ inventory_add: [{ name: 'Lantern of Hollow Light', quantity: 1, description: RESTATED }] }]);
+    const pulled = redactCopiedImports({ ...g, character: a.s().character as Character }).data.character as Character;
+    expect(pulled.inventory[0]).toMatchObject({ description: importedPlaceholder(GLOAMWOOD_TITLE), ref: { redacted: true } });
+
+    const RULING = 'DM ruling: the lantern lights only while its bearer whispers.';
+    const b = setupHarness({ withSession: true, character: pulled });
+    await dmCalls(toolContext(), 'sess-b', [{ inventory_update: [{ name: 'Lantern of Hollow Light', description: RULING }] }]);
+    const ruled = (b.s().character as Character).inventory[0];
+    expect(ruled).toMatchObject({ description: RULING, ref: { entryId: lantern.id, textCopied: true, textHash: textFingerprint(RULING) } });
+    expect(ruled.ref?.redacted).toBeUndefined();
+    const { data } = redactCopiedImports({ ...g, character: b.s().character as Character });
+    expect(JSON.stringify(data.character)).not.toContain(RULING);
   });
 });
 

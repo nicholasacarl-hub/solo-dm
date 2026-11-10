@@ -83,11 +83,14 @@ const CATEGORY_LABELS: Record<ItemCategory, string> = {
 
 const EQUIPPABLE: ItemCategory[] = ['weapon', 'armor', 'shield', 'magic-item'];
 
-/** The item's text: what the player or DM wrote, and (book items, index-only magic items) the entry's text, live. */
+/**
+ * The item's text: what the player or DM wrote, and (book items, index-only magic items) the entry's text, live.
+ * Words written over a pulled placeholder show as written, even where a stale `ref.redacted` is still stored.
+ */
 function ItemDetails({ item }: { item: InventoryItem }) {
   const index = useRulesIndex();
   const entry = itemEntry(item, index);
-  const own = item.description && !isImportedPlaceholder(item.description) && !item.ref?.redacted ? item.description : '';
+  const own = item.description && !isImportedPlaceholder(item.description) ? item.description : '';
   // A book's item whose entry the index doesn't have: say where its text is (switched off, or not on this device).
   const bookRef = item.ref && !entry && index ? item.ref : null;
   const lines = [attunementLine(item), ...bonusLines(item)].filter((l): l is string => Boolean(l));

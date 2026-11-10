@@ -18,6 +18,7 @@ import type { Character, CompendiumEntry, EquipmentOption, Feature, InventoryIte
 import { installDialogPolyfill, resetFakeGame } from '@/ui/builder/testing/fakeGameStore';
 import { autoCleanup } from '@/ui/shell/testUtils';
 import { CharacterSheet } from './CharacterSheet';
+import { textMissing } from './FeatureItem';
 
 const mocks = vi.hoisted(() => ({ entries: [] as CompendiumEntry[] }));
 
@@ -114,6 +115,20 @@ describe('features from the player’s books', () => {
     expect(restore).toHaveBeenCalledTimes(1);
   });
 
+  it('P3: a ruling stored over a pulled placeholder before the fix (ref.redacted still set) shows as written, not as missing', async () => {
+    const user = userEvent.setup();
+    const RULING = 'DM ruling: once per turn, add 1d4 fire damage.';
+    start({ features: [emberWard(RULING, true)] });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Features/ }));
+    await user.click(screen.getByRole('button', { name: /Ember Ward/ }));
+    expect(screen.getByText(RULING)).toBeInTheDocument();
+    expect(screen.queryByText(/isn't in this device's Library/)).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Look again' })).toBeNull();
+    expect(textMissing({ description: RULING, ref: { ...importedRef(), redacted: true } })).toBe(false);
+    expect(textMissing({ description: importedPlaceholder(GLOAMWOOD_TITLE), ref: { ...importedRef(), redacted: true } })).toBe(true);
+  });
+
   it('notes once that features come from the player’s books, until dismissed', async () => {
     const user = userEvent.setup();
     start({ features: [emberWard(TEXT.emberWard.join('\n\n')), { id: 'f2', name: 'Kindled Strikes', source: 'subclass', description: 'x', ref: importedRef({ part: 'Kindled Strikes' }) }] });
@@ -170,6 +185,24 @@ describe('items from the player’s books (SRD 5.2.1 Attunement)', () => {
     // An item that says it doesn't need attunement has no Attune button.
     expect(within(row('Gloam Lamp')).queryByRole('button', { name: /Attune/ })).toBeNull();
     expect(within(row('Ember Blade')).getByText('+1 to attack and damage rolls — add it to your rolls')).toBeInTheDocument();
+  });
+
+  it('P3: an item’s own words over a pulled placeholder show under Details despite a stale ref.redacted; the placeholder never does', async () => {
+    const user = userEvent.setup();
+    const RULING = 'DM ruling: the lantern lights only while its bearer whispers.';
+    const pulledRef = { ...importedRef(), entryId: LANTERN.id, kind: 'magic-item' as const, entryName: LANTERN.name, textCopied: true, redacted: true as const };
+    const lantern = item({ name: 'Lantern of Hollow Light', magic: true, compendiumId: LANTERN.id, description: RULING, ref: pulledRef });
+    const cloak = item({ name: 'Mothsilk Cloak', magic: true, compendiumId: CLOAK_ENTRY.id, description: importedPlaceholder(GLOAMWOOD_TITLE), ref: { ...pulledRef, entryId: CLOAK_ENTRY.id, entryName: CLOAK_ENTRY.name } });
+    start({ inventory: [lantern, cloak] });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Inventory/ }));
+    const row = (name: string) => screen.getByText(name).closest('li') as HTMLElement;
+    await user.click(within(row('Lantern of Hollow Light')).getByText('Details'));
+    expect(within(row('Lantern of Hollow Light')).getByText(RULING)).toBeInTheDocument();
+    expect(within(row('Lantern of Hollow Light')).getByText('This lantern burns without oil.')).toBeInTheDocument();
+    await user.click(within(row('Mothsilk Cloak')).getByText('Details'));
+    expect(within(row('Mothsilk Cloak')).getByText('Woven from the silk of a thousand moths.')).toBeInTheDocument();
+    expect(row('Mothsilk Cloak').textContent).not.toContain('was left out of this copy');
   });
 
   it('links an added item by its exact name to the catalog or the rules index; other names stay as typed', async () => {

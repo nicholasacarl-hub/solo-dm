@@ -51,6 +51,16 @@ export function redactCopiedImports(data: CampaignData): { data: CampaignData; r
     const item = matchByName(inventory, name, (i) => i.name).match;
     return item?.ref ? item : undefined;
   };
+  /**
+   * For the transcript copy: the book a DM tool entry's words came from. A name that now fits several items
+   * ("Lantern" after the hero picks up a "Lantern Hook") counts as the book item's when any of them is one:
+   * when unsure, the words stay out of the copy.
+   */
+  const bookItemTitle = (name: string): string | undefined => {
+    const found = matchByName(inventory, name, (i) => i.name);
+    const options = found.match ? [found.match] : found.candidates;
+    return options.find((i) => i.ref)?.ref?.sourceTitle;
+  };
   /** Per book item id: the descriptions the DM's tool calls gave it. */
   const dmWords = new Map<string, Set<string>>();
   for (const echo of itemEchoes(data.transcript)) {
@@ -77,7 +87,7 @@ export function redactCopiedImports(data: CampaignData): { data: CampaignData; r
     redactOne(i, Boolean(i.ref?.textCopied || (i.description && dmWords.get(i.id)?.has(i.description.trim()))));
 
   const character = data.character ? redactCharacter(data.character, redactFeature, redactItem) : data.character;
-  const titleOf = (kind: EchoKind, name: string) => (kind === 'feature' ? redactedFeatures.get(nameKey(name)) : bookItem(name)?.ref?.sourceTitle);
+  const titleOf = (kind: EchoKind, name: string) => (kind === 'feature' ? redactedFeatures.get(nameKey(name)) : bookItemTitle(name));
   const echoesToFind = redactedFeatures.size > 0 || inventory.some((i) => i.ref);
   const transcript = echoesToFind ? data.transcript.map((m) => redactToolInputs(m, titleOf, leftOut)) : data.transcript;
 

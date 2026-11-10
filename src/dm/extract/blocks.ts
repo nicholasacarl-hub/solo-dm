@@ -174,10 +174,13 @@ function readTables(records: readonly StructuredRecord[]): Set<string> {
 /** A record Claude can read: not a row (its table is), not from a newer app version. */
 const readable = (r: StructuredRecord) => r.span !== 'row' && r.schemaVersion <= STRUCTURED_SCHEMA_VERSION;
 
-/** Records still needing Claude: no data, not kept as text, and not a gear table whose rows exist. */
+/**
+ * Records still needing Claude: no data, not kept as text, not a gear table whose rows exist, and not a
+ * reading Claude returned without data (it needs a fix, not a second paid read; only a selection re-reads it).
+ */
 export function missesOf(records: readonly StructuredRecord[]): StructuredRecord[] {
   const tables = readTables(records);
-  return records.filter((r) => readable(r) && r.data === null && r.status !== 'rejected' && !(r.span === 'table' && tables.has(r.id)));
+  return records.filter((r) => readable(r) && r.data === null && r.origin !== 'claude' && r.status !== 'rejected' && !(r.span === 'table' && tables.has(r.id)));
 }
 
 /** A reading made on this device by the offline reader: what "Also re-read the entries read on this device" sends. */

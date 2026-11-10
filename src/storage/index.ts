@@ -289,6 +289,8 @@ export const useJobs: (sourceId?: string) => ExtractionJob[] | undefined = struc
 /** Lifetime spend on structuring (sum of job usage, books still in the library). */
 export const structuringSpendUsd: () => Promise<number> = structured.structuringSpendUsd;
 export const setSourceFingerprint: (sourceId: string, fingerprint: string) => Promise<void> = structured.setSourceFingerprint;
+/** Detection found nothing: a source without a structure gets an empty one, so "nothing detected" is remembered. */
+export const markSourceStructured: (sourceId: string) => Promise<void> = structured.markSourceStructured;
 export const findSourcesByFingerprint: (fingerprint: string) => Promise<LibrarySource[]> = structured.findSourcesByFingerprint;
 /** Characters with a ref into this source (for "Used by …" on switch-off / delete). */
 export const charactersUsingSource: (

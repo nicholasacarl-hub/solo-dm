@@ -8,7 +8,7 @@ import { useId, useState, type ReactNode } from 'react';
 import { Link, useInRouterContext } from 'react-router';
 import { ChevronDown, Dna, Minus, Plus } from 'lucide-react';
 import { cn } from '@/lib/cn';
-import { isImportedPlaceholder } from '@/lib/importedContent';
+import { copiedTextMissing } from '@/lib/importedContent';
 import { useGame } from '@/state/gameStore';
 import type { Character, Feature } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
@@ -59,12 +59,13 @@ function UsesControl({ feature, editable, onEdit }: { feature: Feature; editable
   );
 }
 
-/** The book text was left out of this copy (an export, a GitHub save) and this device hasn't filled it back in. */
+/**
+ * The book text was left out of this copy (an export, a GitHub save) and this device hasn't filled it back in.
+ * Text written there since (the DM's ruling over a pulled placeholder) shows as written, even where a character
+ * stored before that was fixed still carries a stale `ref.redacted`.
+ */
 export function textMissing(feature: Pick<Feature, 'description' | 'ref'>): boolean {
-  const ref = feature.ref;
-  if (!ref?.textCopied) return false;
-  const text = feature.description?.trim();
-  return !text || Boolean(ref.redacted) || isImportedPlaceholder(text);
+  return copiedTextMissing(feature);
 }
 
 /** A link to the Library: the router's when there is one (the app), else the hash URL. */

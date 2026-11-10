@@ -15,15 +15,13 @@ vibe-coding session.
 
 ## Rules depth
 
-- **Structured imports**: have Claude convert pasted stat blocks, spells and items from the player's
-  books into structured entries (with a review step), so imported monsters and spells work with the
-  combat tracker and spell list as well as SRD ones.
 - **Spell effects**: concentration tracking on combatants, durations that tick down by round, and
   spell-based AC (Mage Armor, Shield of Faith).
 - **Class extras**: Unarmored Movement, lineage spells gained at levels 3 and 5, and replacing
   "Action Surge (two uses)" / "Indomitable" entries in place at Fighter 13 and 17.
-- **Level-up choices**: guided ASI/feat, subclass and spell selection in the level-up dialog, using the
-  class tables already in `public/srd/builder.json`.
+- **Level-up spell picks**: choosing new spells in the level-up dialog (ASI/feat, Epic Boon and Fighting
+  Style choices and subclass catch-up are in), plus multiclass proficiency gains and features that pick
+  more than one option.
 
 ## Memory and cost
 
@@ -51,3 +49,19 @@ The first battle map deliberately leaves these out (each has a documented stand-
 - **Light and vision**: darkvision, dim light and fog of war on the map.
 - **Background art** for maps and **hex grids**.
 - **Companions the player moves** (today the DM moves allies).
+
+## Structured imports follow-ups
+
+The first version of structured imports deliberately leaves these out:
+
+- **Cheaper bulk reading**: the Message Batches API (half price, asynchronous), several entries per request, and an
+  exact token count before a job starts.
+- **Finding what detection missed**: a Claude pass over entries the offline detector didn't recognize (today,
+  "Structure as…" on the book page).
+- **Editing a book's text** in the app, and re-importing a new copy of a book while keeping review decisions.
+- **Per-campaign book selection** (today every switched-on book applies to every campaign).
+- **Item mechanics**: a magic weapon's +N on attacks, charges, spell attack and save DC bonuses from items, and
+  enforcing attunement limits.
+- **Monster detail**: structured actions and legendary actions, and senses on the battle map (the DM reads them from
+  the text today).
+

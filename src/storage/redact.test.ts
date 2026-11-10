@@ -235,4 +235,14 @@ describe('P2: the DM’s inventory_update words about a book item leave exports'
     expect(data.character?.inventory.find((i) => i.id === 'i-hook')).toEqual(hookstaff);
     expect(report.passages).toBe(3);
   });
+
+  it('P2: a name that later fits two items ("Lantern" with a plain Lantern Hook picked up) still leaves the DM’s words out of the transcript copy', () => {
+    const hook: InventoryItem = { ...lantern, id: 'i-lantern-hook', name: 'Lantern Hook', description: 'A plain iron hook.', ref: undefined };
+    const { data } = redactCopiedImports(
+      withItems([linkedLantern(), hook], [toolUse('upd', 'update_character', { inventory_update: [{ name: 'Lantern', description: RESTATED }] })]),
+    );
+    expect(JSON.stringify(data.transcript)).not.toContain(RESTATED);
+    expect(inputOf(data, 'upd')).toEqual({ inventory_update: [{ name: 'Lantern', description: placeholder }] });
+    expect(data.character?.inventory.find((i) => i.id === 'i-lantern-hook')?.description).toBe('A plain iron hook.');
+  });
 });
