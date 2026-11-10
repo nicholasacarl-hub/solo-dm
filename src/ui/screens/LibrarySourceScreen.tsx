@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useShallow } from 'zustand/react/shallow';
 import { BookX, LoaderCircle, RefreshCw, ScanSearch, TriangleAlert } from 'lucide-react';
-import { detectStructure, getBuilderProblems, useBuilderData, type DetectionSummary } from '@/data';
+import { getBuilderProblems, useBuilderData } from '@/data';
 import { extractionAvailability, useRunner } from '@/dm';
 import { getSettings, useSettings } from '@/state/settingsStore';
 import { getSourceEntries, useJobs, useLibrarySources, useRecords } from '@/storage';
@@ -22,19 +22,20 @@ import { Page, useDocumentTitle } from '@/ui/shell/Page';
 import { AllEntriesView } from '@/ui/library/structure/AllEntriesView';
 import { BookDataDialog } from '@/ui/library/structure/BookDataDialog';
 import { DeleteBookDialog, useBookSwitch } from '@/ui/library/structure/bookControls';
-import { reviewable, reviewCounts } from '@/ui/library/structure/bookData';
+import { lookThroughMessage, reviewable, reviewCounts } from '@/ui/library/structure/bookData';
 import { BookHeader } from '@/ui/library/structure/BookHeader';
 import { ConsentDialog, needsClaude, type ConsentScope } from '@/ui/library/structure/ConsentDialog';
 import { kindCount } from '@/ui/library/structure/labels';
 import type { Availability } from '@/ui/library/structure/RecordDetail';
-import { rereadHere } from '@/ui/library/structure/reviewActions';
+import { lookThroughBook } from '@/ui/library/structure/reviewActions';
 import { ReviewWorkspace } from '@/ui/library/structure/ReviewWorkspace';
 import { StructureAnnouncer, StructureStatusCard } from '@/ui/library/structure/StructureStatusCard';
 import { TOUCH, TOUCH_BUTTONS } from '@/ui/library/structure/touch';
-import { UndoToast } from '@/ui/library/structure/UndoToast';
+import { showUndo, UndoToast } from '@/ui/library/structure/UndoToast';
 import { useBookPageState } from '@/ui/library/structure/useBookPageState';
 
-function useSourceEntries(sourceId: string, entryCount: number | undefined): CompendiumEntry[] | null {
+/** The book's entries; read again when `revision` changes (a re-check corrected their kinds). */
+function useSourceEntries(sourceId: string, entryCount: number | undefined, revision: number): CompendiumEntry[] | null {
   const [entries, setEntries] = useState<CompendiumEntry[] | null>(null);
   useEffect(() => {
     if (entryCount === undefined) return;
@@ -49,7 +50,7 @@ function useSourceEntries(sourceId: string, entryCount: number | undefined): Com
     return () => {
       alive = false;
     };
-  }, [sourceId, entryCount]);
+  }, [sourceId, entryCount, revision]);
   return entries;
 }
 
@@ -73,7 +74,8 @@ export function LibrarySourceScreen() {
   const stored = useRecords(source ? sourceId : undefined);
   const jobs = useJobs();
   const runner = useRunner();
-  const entries = useSourceEntries(sourceId, source?.entryCount);
+  const [entriesRevision, setEntriesRevision] = useState(0);
+  const entries = useSourceEntries(sourceId, source?.entryCount, entriesRevision);
   const { data: builder } = useBuilderData();
   const availability = useAvailability();
   const phone = !useMediaQuery('(min-width: 1024px)', true);
@@ -107,17 +109,17 @@ export function LibrarySourceScreen() {
     set({ setup: false });
   }, [setup, ready, unread, set]);
 
+  // "Look for entries again" and "Re-check" (after the offline reader improved) are the same look through the book.
   const runDetect = async () => {
-    if (!source) return;
+    if (!source || detect) return;
     setDetect({ done: 0, total: 1 });
     try {
-      const summary: DetectionSummary = await detectStructure(source.id, { onProgress: (done, total) => setDetect({ done, total }) });
+      const { summary, movedBack, undo } = await lookThroughBook(source.id, { onProgress: (done, total) => setDetect({ done, total }) });
       setNothingFound(summary.total === 0);
-      toast.success(
-        summary.total === 0
-          ? 'Nothing here looks like something the app can use. All entries › Structure as… marks it by hand.'
-          : `Found ${summary.total}: ${summary.readyOffline} read on this device${summary.needClaude ? `, ${summary.needClaude} need Claude` : ''}.`,
-      );
+      if (summary.rekinded > 0) setEntriesRevision((n) => n + 1);
+      const message = lookThroughMessage(summary, movedBack);
+      if (undo) showUndo(message, undo);
+      else toast.success(message);
     } catch (error) {
       toast.error(errorMessage(error, 'Could not look through the book.'));
     } finally {
@@ -178,12 +180,7 @@ export function LibrarySourceScreen() {
             onToggle={(enabled) => toggle(source, enabled)}
             onRead={() => setConsent({ kind: 'all' })}
             onDetect={() => void runDetect()}
-            onRecheck={() =>
-              void rereadHere(recheck.map((r) => r.id)).then(
-                () => toast.success(`Re-checked ${recheck.length} on this device.`),
-                (error: unknown) => toast.error(errorMessage(error, 'Could not re-check them.')),
-              )
-            }
+            onRecheck={() => void runDetect()}
             onDownloadBookData={() => setBookData(true)}
             onDelete={() => setDeleting(true)}
           />
@@ -199,7 +196,7 @@ export function LibrarySourceScreen() {
             {recheck.length > 0 && (
               <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-info/30 bg-info-soft/40 px-4 py-2.5 text-sm">
                 <p className="min-w-0 flex-1">The offline reader improved: re-check {recheck.length} {recheck.length === 1 ? 'entry' : 'entries'} for free.</p>
-                <Button size="sm" className={TOUCH} icon={<RefreshCw className="size-4" aria-hidden />} onClick={() => void rereadHere(recheck.map((r) => r.id))}>
+                <Button size="sm" className={TOUCH} icon={<RefreshCw className="size-4" aria-hidden />} disabled={detect !== null} onClick={() => void runDetect()}>
                   Re-check
                 </Button>
               </div>

@@ -10,8 +10,13 @@ import type { CreatureSpeeds } from './map';
 import type { ModelId } from './settings';
 
 export const STRUCTURED_SCHEMA_VERSION = 1;
-/** Bump when offline parsing rules change: the book page offers "re-check N entries for free". */
-export const PARSER_VERSION = 1;
+/**
+ * Bump when offline parsing or detection rules change: the book page offers "re-check N entries for
+ * free", which looks through the book again (detect.ts settles what an older version misread).
+ * History: 1 = the first reader; 2 = a bare "Prerequisite:" line makes a feat only under a heading that
+ * names feats (stronghold rooms and class options print one too).
+ */
+export const PARSER_VERSION = 2;
 /** Bump with any change to a system prompt or wire schema. */
 export const EXTRACT_PROMPT_VERSION = 1;
 

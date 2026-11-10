@@ -21,7 +21,9 @@ vi.mock('@/state/gameStore', async () => {
 vi.mock('@/dm', async () => (await import('@/ui/library/structure/testing/mocks')).dmMock());
 
 const storage = await import('@/storage');
+const data = await import('@/data');
 const dm = await import('@/dm');
+const { gloamwoodDetection } = await import('./testing/mocks');
 const { setViewport } = await import('./testing/bookPage');
 const { LibrarySourceScreen } = await import('@/ui/screens/LibrarySourceScreen');
 const { useUndoToast } = await import('./UndoToast');
@@ -160,6 +162,24 @@ describe('the review list', () => {
     await user.click(within(bar).getByRole('button', { name: 'Accept' }));
     await waitFor(() => expect(storage.setRecordStatus).toHaveBeenCalledWith([byName('Ashen Choir').id], 'accepted'));
     expect(await screen.findByText(/Accepted 1\..*1 needs a fix first\./)).toBeInTheDocument();
+  });
+});
+
+describe('after the offline reader improved', () => {
+  it('"Re-check" looks through the book again, says what changed, and can undo moving accepted entries back to review', async () => {
+    const user = userEvent.setup();
+    replace("Moth's Grace", { parserVersion: 1, status: 'accepted' });
+    replace('Lantern Bearer', { parserVersion: 1 });
+    const grace = byName("Moth's Grace");
+    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), removed: { feat: 1 }, doubted: [{ id: grace.id, kind: 'feat', status: 'accepted' }] });
+    renderPage();
+    const banner = (await screen.findByText('The offline reader improved: re-check 2 entries for free.')).parentElement as HTMLElement;
+    await user.click(within(banner).getByRole('button', { name: 'Re-check' }));
+    await waitFor(() => expect(data.detectStructure).toHaveBeenCalledWith('gloam', expect.objectContaining({ onProgress: expect.any(Function) })));
+    expect(storage.setRecordStatus).toHaveBeenCalledWith([grace.id], 'pending');
+    expect(await screen.findByText(/Removed 1 feat an earlier version of the reader found by mistake \(you hadn't reviewed them\)\. 1 entry you had accepted doesn't look like a feat: it's back in To review, with a note\./)).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    await waitFor(() => expect(storage.setRecordStatus).toHaveBeenLastCalledWith([grace.id], 'accepted'));
   });
 });
 

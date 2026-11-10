@@ -20,6 +20,7 @@ const storage = await import('@/storage');
 const data = await import('@/data');
 const { queueCampaignNotice } = await import('@/state/gameStore');
 const actions = await import('./reviewActions');
+const { gloamwoodDetection } = await import('@/ui/library/structure/testing/mocks');
 
 let stored: StructuredRecord[];
 const byName = (name: string) => stored.find((r) => r.name === name) as StructuredRecord;
@@ -221,5 +222,41 @@ describe('edits', () => {
     expect((byName('Ashen Choir').data as { classes: string[] }).classes).toEqual(['Wizard']);
     expect((byName('Cinder Mote').data as { classes: string[] }).classes).toEqual(['Wizard']);
     expect(byName('Hookstaff').edited).toBe(false);
+  });
+});
+
+describe('looking through the book again', () => {
+
+  it('moves the accepted entries the improved reader no longer finds back to review, with Undo', async () => {
+    const grace = byName("Moth's Grace");
+    const bearer = byName('Lantern Bearer');
+    stored = stored.map((r) => (r.id === grace.id ? { ...r, status: 'accepted' } : r));
+    vi.mocked(data.detectStructure).mockResolvedValueOnce({
+      ...gloamwoodDetection(),
+      rekinded: 2,
+      removed: { feat: 1 },
+      doubted: [{ id: grace.id, kind: 'feat', status: 'accepted' }, { id: bearer.id, kind: 'feat', status: 'pending' }],
+    });
+    const result = await actions.lookThroughBook('gloam');
+    expect(result.movedBack).toBe(1);
+    expect(storage.setRecordStatus).toHaveBeenCalledWith([grace.id], 'pending');
+    expect(byName("Moth's Grace").status).toBe('pending');
+    await vi.advanceTimersByTimeAsync(600);
+    expect(data.invalidateRulesIndex).toHaveBeenCalledTimes(1);
+    await result.undo?.();
+    expect(byName("Moth's Grace").status).toBe('accepted');
+  });
+
+  it('refreshes the index only when entry kinds changed, and offers no Undo when nothing moved', async () => {
+    vi.mocked(data.detectStructure).mockResolvedValueOnce(gloamwoodDetection());
+    const quiet = await actions.lookThroughBook('gloam');
+    expect(quiet.movedBack).toBe(0);
+    expect(quiet.undo).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(600);
+    expect(data.invalidateRulesIndex).not.toHaveBeenCalled();
+    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), rekinded: 3 });
+    await actions.lookThroughBook('gloam');
+    await vi.advanceTimersByTimeAsync(600);
+    expect(data.invalidateRulesIndex).toHaveBeenCalledTimes(1);
   });
 });

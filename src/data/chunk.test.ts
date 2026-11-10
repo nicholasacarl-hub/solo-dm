@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { chunkDocument, guessKind, inferPlainTextHeadings, splitIntoChunks, TARGET_CHUNK_CHARS } from './chunk';
+import { chunkDocument, guessKind, inferPlainTextHeadings, splitIntoChunks, staleFeatKinds, TARGET_CHUNK_CHARS } from './chunk';
+import type { CompendiumEntry } from '@/types';
 
 const opts = { sourceId: 'import-abc', sourceName: 'My Notes' };
 
@@ -177,16 +178,123 @@ describe('guessKind', () => {
     expect(guessKind('Potion of Healing', 'Potion, common\nYou regain 2d4 + 2 Hit Points.')).toBe('magic-item');
   });
 
-  it('recognizes feats by their category line or prerequisite', () => {
+  it('recognizes feats by their category line, or by a Prerequisite line under a heading that names feats', () => {
     expect(guessKind('Alert', '_Origin Feat_\n\nYou gain the following benefits.')).toBe('feat');
     expect(guessKind('Grappler', '_General Feat (Prerequisite: Level 4+, Strength or Dexterity 13+)_\n\nBenefits.')).toBe('feat');
-    expect(guessKind('Sharpshooter', 'Prerequisite: Level 4+\nYou can shoot far.')).toBe('feat');
     expect(guessKind('Lucky (Origin Feat)', 'You have inexplicable luck.')).toBe('feat');
+    const older = '_Prerequisite: Wisdom 13 or higher_\n\nYou can walk the lamp roads at night without a light.';
+    expect(guessKind('Night Walker', older, ['Feats'])).toBe('feat');
+    expect(guessKind('Night Walker', older, ['Chapter 6: Character Options', 'Feats'])).toBe('feat');
+    expect(guessKind('Night Walker', older, ['Racial Feats'])).toBe('feat');
+    expect(guessKind('Night Walker', older, ['**Feat Descriptions**'])).toBe('feat');
+  });
+
+  it("doesn't take other things that print a Prerequisite line for feats", () => {
+    // An invented stronghold room: a type line, then Prerequisite and other labelled lines.
+    const room = '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\n_Room: Snug_\n\n_Keepers: 1_\n\nThe keeper raises glowworms in jars of moss.';
+    expect(guessKind('Glowworm Gallery', room, ['Lamplight Holdings', 'Holding Rooms'])).toBe('rule');
+    expect(guessKind('Glowworm Gallery', room)).toBe('rule');
+    // An invented class option that only prints a prerequisite.
+    const charm = '_Prerequisite: Level 5+ Wickwright_\n\nYour wick’s flame sheds bright light 10 feet farther.';
+    expect(guessKind('Bright Ember', charm, ['Wickwright', 'Wick Charm Options'])).toBe('rule');
+    expect(guessKind('Bright Ember', charm, ['Wickwright', 'Class Features'])).toBe('rule'); // "Features" isn't "Feats"
+    expect(guessKind('Sharpshooter', 'Prerequisite: Level 4+\nYou can shoot far.')).toBe('rule');
   });
 
   it('defaults to rule, even for prose that mentions feats or rarity', () => {
     expect(guessKind('Feats', 'A feat represents a talent or an area of expertise.')).toBe('rule');
     expect(guessKind('Magic Item Rarity', 'Each magic item has a rarity: common, uncommon, rare, very rare or legendary.')).toBe('rule');
     expect(guessKind('Opportunity Attacks', 'You can make an Opportunity Attack when a creature leaves your reach.')).toBe('rule');
+  });
+});
+
+// An invented book: stronghold rooms and a class option print Prerequisite lines; only the Feats section holds feats.
+const HOLDINGS = `# Lamplight Holdings
+
+## Holding Rooms
+
+### Glowworm Gallery
+
+_Level 5 Holding Room_
+
+_Prerequisite: None_
+
+_Room: Snug_
+
+_Keepers: 1_
+
+The keeper raises glowworms in jars of moss and sells their light by the hour.
+
+#### Gallery Tasks
+
+Brew. The keeper fills a jar with light that lasts one night.
+
+### Moth Archive
+
+_Level 9 Holding Room_
+
+_Prerequisite: Proficiency with a lantern-maker's tools_
+
+Moths copy every map left on the archive's tables.
+
+## Wick Charm Options
+
+### Bright Ember
+
+_Prerequisite: Level 5+ Wickwright_
+
+Your wick's flame sheds bright light 10 feet farther.
+
+## Feats
+
+### Night Walker
+
+_Prerequisite: Wisdom 13 or higher_
+
+You can walk the lamp roads at night without a light.
+`;
+
+describe('feats and Prerequisite lines in a whole book', () => {
+  it('keeps stronghold rooms and class options as rules, with their subsections as entries of their own', () => {
+    const entries = chunkDocument(HOLDINGS, opts);
+    const kinds = Object.fromEntries(entries.map((e) => [e.name, e.kind]));
+    expect(kinds).toEqual({ 'Glowworm Gallery': 'rule', 'Gallery Tasks': 'rule', 'Moth Archive': 'rule', 'Bright Ember': 'rule', 'Night Walker': 'feat' });
+    expect(entries.find((e) => e.name === 'Night Walker')?.summary).toBe('Prerequisite: Wisdom 13 or higher');
+    expect(entries.find((e) => e.name === 'Glowworm Gallery')?.summary).toBe('Lamplight Holdings › Holding Rooms');
+  });
+});
+
+describe('staleFeatKinds', () => {
+  const entry = (n: number, name: string, kind: CompendiumEntry['kind'], text: string, path: string[], summary?: string): CompendiumEntry => ({
+    id: `lib:hold:${n}`, sourceId: 'hold', sourceName: 'Lamplight Holdings', kind, name, text, path, ...(summary ? { summary } : {}),
+  });
+  const room = '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\nThe keeper raises glowworms.\n\n### Gallery Tasks\n\nBrew.';
+
+  it("corrects what an older import stored as feats, with the summary of the kind it is now", () => {
+    const fixes = staleFeatKinds([
+      entry(1, 'Glowworm Gallery', 'feat', room, ['Lamplight Holdings', 'Holding Rooms', 'Glowworm Gallery'], 'Prerequisite: None'),
+      entry(2, 'Bright Ember', 'feat', '_Prerequisite: Level 5+ Wickwright_\n\nYour flame burns brighter.', ['Bright Ember']),
+      entry(3, 'Night Walker', 'feat', '_Prerequisite: Wisdom 13 or higher_\n\nYou walk at night.', ['Lamplight Holdings', 'Feats', 'Night Walker']),
+      entry(4, 'Lantern Bearer', 'feat', '_General Feat (Prerequisite: Level 4+)_\n\nYou carry the light.', ['Lantern Bearer']),
+      entry(5, 'Lamp Oil', 'rule', 'Prerequisite: none. Lamp oil burns for six hours.', ['Lamp Oil']),
+    ]);
+    expect(fixes).toEqual([
+      { id: 'lib:hold:1', kind: 'rule', summary: 'Lamplight Holdings › Holding Rooms' },
+      { id: 'lib:hold:2', kind: 'rule' },
+    ]);
+  });
+
+  it('reads only what the entry printed before its subsections, and takes a long entry’s parts along', () => {
+    const long = 'x'.repeat(50);
+    const path = ['Lamplight Holdings', 'Holding Rooms'];
+    const fixes = staleFeatKinds([
+      // Its subsection would read as a spell; the import read only the room's own text.
+      entry(1, 'Moth Archive', 'feat', `_Level 9 Holding Room_\n\n_Prerequisite: None_\n\n${long}\n\n### Archive Charm\n\nCasting Time: Action`, [...path, 'Moth Archive']),
+      entry(2, 'Moth Archive (part 2)', 'feat', long, [...path, 'Moth Archive (part 2)']),
+      entry(3, 'Moth Archive (part 3)', 'feat', long, [...path, 'Moth Archive (part 3)']),
+      entry(4, 'Night Walker', 'feat', '_Prerequisite: Wisdom 13 or higher_\n\nYou walk at night.', ['Feats', 'Night Walker']),
+      entry(5, 'Night Walker (part 2)', 'feat', long, ['Feats', 'Night Walker (part 2)']),
+    ]);
+    expect(fixes.map((f) => [f.id, f.kind])).toEqual([['lib:hold:1', 'rule'], ['lib:hold:2', 'rule'], ['lib:hold:3', 'rule']]);
   });
 });

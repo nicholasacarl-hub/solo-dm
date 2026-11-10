@@ -8,7 +8,7 @@
  * reaches the DM. Nothing here ever throws after the records are written: a failed refresh, restore
  * or notice must not undo a saved decision.
  */
-import { DATA_SCHEMAS, rereadOffline, structureEntryAs, validateData } from '@/data';
+import { DATA_SCHEMAS, detectStructure, rereadOffline, structureEntryAs, validateData, type DetectionSummary } from '@/data';
 import { useGame, queueCampaignNotice } from '@/state/gameStore';
 import { deleteRecords, getRecords, getSourceEntries, listCampaigns, listLibrarySources, listRecords, putRecords, setRecordStatus } from '@/storage';
 import type {
@@ -313,6 +313,26 @@ export async function changeKind(record: StructuredRecord, kind: StructuredKind)
 /** "Structure as…" from All entries. */
 export async function structureAs(sourceId: string, entryIds: string[], kind: StructuredKind): Promise<StructuredRecord> {
   return structureEntryAs(sourceId, entryIds, kind);
+}
+
+/**
+ * "Look for entries again" and "Re-check" (spec §4.7, §3.10): detection, then the entries the player had
+ * accepted that the improved reader no longer finds go back to review (Undo accepts them again). The
+ * index refreshes when entry kinds were corrected or something left it.
+ */
+export async function lookThroughBook(
+  sourceId: string,
+  opts?: { onProgress?(done: number, total: number): void },
+): Promise<{ summary: DetectionSummary; movedBack: number; undo?: () => Promise<void> }> {
+  const summary = await detectStructure(sourceId, opts);
+  const accepted = summary.doubted.filter((d) => d.status === 'accepted').map((d) => d.id);
+  if (accepted.length === 0) {
+    if (summary.rekinded > 0) scheduleRefresh();
+    return { summary, movedBack: 0 };
+  }
+  // Schedules the refresh itself.
+  const moved = await setRecordsStatus(accepted, 'pending');
+  return { summary, movedBack: accepted.length, undo: moved.undo };
 }
 
 /** "On this device (free)". */

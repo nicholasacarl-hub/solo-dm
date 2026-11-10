@@ -15,6 +15,7 @@ import type {
   Clock,
   CombatState,
   CompendiumEntry,
+  ContentKind,
   ExtractionJob,
   GithubSyncSettings,
   HomebrewEntry,
@@ -146,6 +147,9 @@ export const STRUCTURING_BUSY_ERROR: string = library.STRUCTURING_BUSY_ERROR;
 export const setLibrarySourceEnabled: (id: string, enabled: boolean) => Promise<void> = library.setLibrarySourceEnabled;
 /** Entries for the given sources (all enabled imported sources when omitted). */
 export const getLibraryEntries: (sourceIds?: string[]) => Promise<CompendiumEntry[]> = library.getLibraryEntries;
+/** Correct some imported entries' kinds (and their summaries): detection's fix for kinds an older import guessed wrongly. */
+export const updateEntryKinds: (changes: readonly { id: string; kind: ContentKind; summary?: string }[]) => Promise<void> =
+  library.updateEntryKinds;
 
 // ---------------------------------------------------------------------------
 // Backups (export / import save files)
@@ -277,6 +281,8 @@ export const putRecords: (records: StructuredRecord[]) => Promise<void> = struct
 export const setRecordStatus: (ids: string[], status: RecordStatus) => Promise<{ id: string; status: RecordStatus }[]> =
   structured.setRecordStatus;
 export const deleteRecords: (ids: string[]) => Promise<void> = structured.deleteRecords;
+/** Writes and deletes in one transaction; keeps the source's counts right. */
+export const commitRecords: (puts: readonly StructuredRecord[], deleteIds: readonly string[]) => Promise<void> = structured.commitRecords;
 /** Accepted records of enabled import sources (or of the given sources). */
 export const getAcceptedRecords: (sourceIds?: string[]) => Promise<StructuredRecord[]> = structured.getAcceptedRecords;
 /** Records of a job in a run state, in queue order (STRUCTURED_KINDS, then reading order). */

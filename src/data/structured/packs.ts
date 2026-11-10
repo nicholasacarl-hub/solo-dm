@@ -213,7 +213,7 @@ class PackContext {
         id,
         sourceId: this.sourceId,
         sourceName: this.sourceName,
-        kind: e.kind ?? guessKind(e.name, e.text),
+        kind: e.kind ?? guessKind(e.name, e.text, e.path?.slice(0, -1)),
         name: e.name,
         ...(e.summary ? { summary: e.summary } : {}),
         text: e.text,

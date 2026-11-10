@@ -148,6 +148,15 @@ export async function deleteRecords(ids: string[]): Promise<void> {
   await db.transaction('rw', db.libraryRecords, db.library, () => writeCounted([], unique));
 }
 
+/** Writes and deletes in one transaction (a detection re-run: new readings, notes, and the misreadings it drops); counts kept. */
+export async function commitRecords(puts: readonly StructuredRecord[], deleteIds: readonly string[]): Promise<void> {
+  const latest = new Map<string, StructuredRecord>();
+  for (const r of puts) latest.set(r.id, r);
+  const deletes = [...new Set(deleteIds)].filter((id) => !latest.has(id));
+  if (latest.size === 0 && deletes.length === 0) return;
+  await db.transaction('rw', db.libraryRecords, db.library, () => writeCounted([...latest.values()], deletes));
+}
+
 /** Accepted records of enabled import sources (or of the given sources), by source and reading order. */
 export async function getAcceptedRecords(sourceIds?: string[]): Promise<StructuredRecord[]> {
   const ids = sourceIds ?? (await enabledImportIds());

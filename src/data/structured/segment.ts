@@ -208,18 +208,11 @@ const SUBCLASS_TITLE = /^(.+?) Subclass:\s*(.+)$/i;
 const SUBCLASS_NAME = /^(?:Path|College|Circle|Oath|Way|School) of\b|\s(?:Domain|Archetype|Patron|Origin|Tradition)$/i;
 const SUBCLASS_GROUP = /(?:Subclasses|Archetypes|Domains|Paths|Colleges|Circles|Oaths|Traditions|Patrons|Origins)$/i;
 const CLASS_OWN_SECTION = /\b(?:Class Features|Features|Traits|Spell List|Spells)$/i;
-const FEATS_HEADING = /Feats$/i;
-const FEAT_CATEGORY_LINE = /^(?:(?:Origin|General|Fighting Style|Epic Boon)[ \t]+)?Feat\b(?:[ \t]*\(.*\))?$|^Prerequisites?:/i;
 const GEAR_PATH = /\b(?:Equipment|Gear|Tools|Packs)\b/i;
 const SPELL_LIST_TITLE = /^(.+?) (?:Spells|Spell List)$/i;
 const LEVEL_TITLE = /^Level \d{1,2}:/i;
 
 const countMatches = (re: RegExp, text: string) => [...text.matchAll(new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`))].length;
-const firstLine = (text: string) =>
-  text
-    .split('\n')
-    .map((l) => l.replace(/^\s*(?:[-*+]\s+|>\s*)/, '').replace(/[*_`]/g, '').trim())
-    .find(Boolean) ?? '';
 
 // ---------------------------------------------------------------------------
 // GFM tables (gear)
@@ -358,21 +351,21 @@ const ENTITY_REASON: Record<string, string> = {
   monster: 'Has Armor Class, Hit Points and Challenge lines',
   spell: 'Has a spell level and school line, or a Casting Time line',
   'magic-item': 'Has a magic item category and rarity line',
-  feat: 'Has a feat category or Prerequisite line',
+  feat: 'Has a feat category line, or a Prerequisite line under a Feats heading',
 };
 
-/** An entity kind for a node with entries: stored kind, guessKind, or a feat under a "… Feats" heading. */
+/**
+ * An entity kind for a node with entries: its stored kind, else what guessKind reads with the headings
+ * above it (a bare Prerequisite line makes a feat only under a heading that names feats). Detection
+ * corrects the stored kinds an older guessKind got wrong before it segments (detect.ts).
+ */
 function entityKind(node: OutlineNode): { kind: StructuredKind; reason: string } | null {
   if (!node.chain) return null;
   const first = node.chain.entries[0];
   if (ENTITY_KINDS.has(first.kind as StructuredKind)) return { kind: first.kind as StructuredKind, reason: ENTITY_REASON[first.kind] };
-  const text = ownText(node);
-  const guessed = guessKind(node.title, text);
-  if (ENTITY_KINDS.has(guessed as StructuredKind)) return { kind: guessed as StructuredKind, reason: ENTITY_REASON[guessed] };
-  if (ancestorsOf(node).some((a) => FEATS_HEADING.test(a.title)) && FEAT_CATEGORY_LINE.test(firstLine(text))) {
-    return { kind: 'feat', reason: 'Listed under a Feats heading, with a feat category or Prerequisite line' };
-  }
-  return null;
+  const ancestors = ancestorsOf(node).map((a) => a.title).reverse();
+  const guessed = guessKind(node.title, ownText(node), ancestors);
+  return ENTITY_KINDS.has(guessed as StructuredKind) ? { kind: guessed as StructuredKind, reason: ENTITY_REASON[guessed] } : null;
 }
 
 /** §3.2 class rule, plus: when the Hit Point Die names its class ("D8 per Wickwright level"), that is this node. */

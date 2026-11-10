@@ -35,11 +35,22 @@ const ITEM_LINE = new RegExp(
   `\\b(?:Wondrous Item|Weapon|Armor|Ring|Rod|Staff|Wand|Potion|Scroll|Shield)\\b[^\\n]{0,80}?${RARITY.source}`,
   'i',
 );
-/** "Origin Feat", "General Feat (Prerequisite: Level 4+)" or "Prerequisite: ..." as a line of its own. */
-const FEAT_LINE = /^(?:(?:Origin|General|Fighting Style|Epic Boon)\s+)?Feat\b(?:\s*\(.*\))?$|^Prerequisites?:/i;
+/** "Origin Feat" or "General Feat (Prerequisite: Level 4+)" as a line of its own. */
+const FEAT_CATEGORY_LINE = /^(?:(?:Origin|General|Fighting Style|Epic Boon)\s+)?Feat\b(?:\s*\(.*\))?$/i;
+/** "Prerequisite: ..." as a line of its own. */
+const PREREQUISITE_LINE = /^Prerequisites?:/i;
+/** Either of them: the line a feat's summary comes from. */
+const FEAT_LINE = new RegExp(`${FEAT_CATEGORY_LINE.source}|${PREREQUISITE_LINE.source}`, 'i');
 /** "Alert (Origin Feat)" or "Feat: Alert". */
 const FEAT_NAME = /\((?:(?:Origin|General|Fighting Style|Epic Boon)\s+)?Feat\)$|^Feat:/i;
+/** A heading that names feats: "Feats", "Racial Feats", "Feat Descriptions", "Chapter 5: Feats" (not "Features"). */
+const FEATS_HEADING = /\bFeats?\b/i;
 const SIZE_LINE = /^(?:Tiny|Small|Medium|Large|Huge|Gargantuan)\b/i;
+
+/** Whether one of the headings above an entry names feats (where older books print feats with only a Prerequisite line). */
+export function underFeatsHeading(ancestors: readonly string[]): boolean {
+  return ancestors.some((title) => FEATS_HEADING.test(stripInlineMarkdown(title)));
+}
 
 /** Headings that are part of a stat block, never entries of their own. */
 const STAT_BLOCK_SECTIONS = new Set(
@@ -58,16 +69,23 @@ function leadingLines(text: string, n: number): string[] {
 
 /**
  * Guess what a piece of rules text is: a spell ("Casting Time" or "Level 3 Evocation"), a monster
- * (AC, HP and CR/Challenge), a magic item (an item category with a rarity), a feat ("Origin Feat",
- * a prerequisite), or otherwise a rule.
+ * (AC, HP and CR/Challenge), a magic item (an item category with a rarity), a feat, or otherwise a rule.
+ *
+ * A feat has a category line ("Origin Feat", "General Feat (Prerequisite: Level 4+)") or a name that
+ * says so ("Alert (Origin Feat)"). Older books print some feats with only a "Prerequisite:" line, but
+ * books print other things that way too (class options such as invocations, stronghold rooms, item
+ * infusions), so a bare Prerequisite line only counts under a heading that names feats (`ancestors`:
+ * the headings above the entry, outermost first).
  */
-export function guessKind(name: string, text: string): ContentKind {
+export function guessKind(name: string, text: string, ancestors: readonly string[] = []): ContentKind {
   const head = text.slice(0, 2000);
-  const top = leadingLines(text, 2).join('\n');
+  const lines = leadingLines(text, 2);
+  const top = lines.join('\n');
   if (CASTING_TIME.test(head.slice(0, 800)) || SPELL_LINE.test(top)) return 'spell';
   if (ARMOR_CLASS.test(head) && HIT_POINTS.test(head) && CHALLENGE.test(head)) return 'monster';
   if (ITEM_LINE.test(top)) return 'magic-item';
-  if (FEAT_NAME.test(name.trim()) || leadingLines(text, 2).some((l) => FEAT_LINE.test(l))) return 'feat';
+  if (FEAT_NAME.test(name.trim()) || lines.some((l) => FEAT_CATEGORY_LINE.test(l))) return 'feat';
+  if (lines.some((l) => PREREQUISITE_LINE.test(l)) && underFeatsHeading(ancestors)) return 'feat';
   return 'rule';
 }
 
@@ -264,7 +282,7 @@ class EntryBuilder {
   constructor(private readonly opts: ChunkOptions) {}
 
   /** Add an entry (split into numbered parts when too long). */
-  add(name: string, text: string, ancestors: string[], kind = guessKind(name, text)): void {
+  add(name: string, text: string, ancestors: string[], kind = guessKind(name, text, ancestors)): void {
     const max = kind === 'rule' ? MAX_RULE_CHARS : MAX_ENTITY_CHARS;
     const parts = text.length > max ? splitIntoChunks(text) : [text];
     parts.forEach((part, i) => {
@@ -291,7 +309,7 @@ class EntryBuilder {
 function addSection(node: Section, ancestors: string[], out: EntryBuilder): void {
   const title = stripInlineMarkdown(node.title) || 'Untitled';
   const body = bodyOf(node);
-  const kind = guessKind(title, body);
+  const kind = guessKind(title, body, ancestors);
   if (kind !== 'rule') {
     out.add(title, renderSection(node), ancestors, kind);
     return;
@@ -326,4 +344,51 @@ export function chunkDocument(text: string, opts: ChunkOptions): CompendiumEntry
   if (preamble) out.add(opts.sourceName, preamble, []);
   for (const child of root.children) addSection(child, [], out);
   return out.entries;
+}
+
+// ---------------------------------------------------------------------------
+// Kinds an older version guessed
+// ---------------------------------------------------------------------------
+
+const PART_NAME = /^(.*) \(part (\d+)\)$/;
+
+/** An entity entry's own text: what its stored text holds before its first subsection (renderSection re-levels those to ### and deeper). */
+const ownBody = (text: string) => text.split(/\n(?=#{3,6}[ \t])/)[0];
+
+/** A corrected kind for a stored entry, with the summary that kind gives (none = no summary). */
+export interface KindCorrection {
+  id: string;
+  kind: ContentKind;
+  summary?: string;
+}
+
+/**
+ * Corrections for kinds an older version of guessKind stored (kinds are guessed once, at import): an
+ * entry stored as a feat that today's rules don't read as one (a bare Prerequisite line outside a heading
+ * that names feats) gets the kind and summary guessKind gives now. A long entry's "(part N)"
+ * continuations follow their first part. Pure; `entries` in reading order, all from one source.
+ */
+export function staleFeatKinds(entries: readonly CompendiumEntry[]): KindCorrection[] {
+  const out: KindCorrection[] = [];
+  let head: { name: string; parent: string; kind: ContentKind | null } | null = null;
+  const correction = (entry: CompendiumEntry, kind: ContentKind): KindCorrection => {
+    const summary = summarize(kind, entry.text, entry.path);
+    return { id: entry.id, kind, ...(summary ? { summary } : {}) };
+  };
+  for (const entry of entries) {
+    const ancestors = (entry.path ?? []).slice(0, -1);
+    const parent = ancestors.join('\u0000');
+    const part = PART_NAME.exec(entry.name);
+    if (part && head && part[1] === head.name && parent === head.parent) {
+      if (head.kind && entry.kind === 'feat') out.push(correction(entry, head.kind));
+      continue;
+    }
+    head = { name: entry.name, parent, kind: null };
+    if (entry.kind !== 'feat') continue;
+    const kind = guessKind(entry.name, ownBody(entry.text), ancestors);
+    if (kind === 'feat') continue;
+    head.kind = kind;
+    out.push(correction(entry, kind));
+  }
+  return out;
 }

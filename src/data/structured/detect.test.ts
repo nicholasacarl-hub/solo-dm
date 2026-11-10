@@ -5,12 +5,12 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { bookFingerprint } from '@/lib/importedContent';
-import { getRecords, listLibrarySources, listRecords, putRecords, saveLibrarySource } from '@/storage';
+import { getRecords, getSourceEntries, listLibrarySources, listRecords, putRecords, saveLibrarySource } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
 import { EXPECTED_DATA, GLOAMWOOD_CANDIDATES, GLOAMWOOD_SOURCE_ID, gloamwoodEntries, gloamwoodEntryId, gloamwoodSource } from '@/test/structuredFixtures';
-import { PARSER_VERSION, SRD_SOURCE_ID, type CompendiumEntry, type StructuredRecord } from '@/types';
+import { PARSER_VERSION, SRD_SOURCE_ID, type CompendiumEntry, type LibrarySource, type StructuredRecord } from '@/types';
 import { createRulesIndex } from '../search';
-import { applyReading, detectStructure, mergeReadings, readOffline, rereadOffline, structureEntryAs, type Reading } from './detect';
+import { applyReading, detectStructure, doubtMessage, mergeReadings, readOffline, rereadOffline, settleUnmatched, structureEntryAs, type Reading } from './detect';
 import { noticeIndex } from './notices';
 import { segment } from './segment';
 
@@ -57,7 +57,7 @@ describe('detectStructure', () => {
     const drake = byName(records, 'Glimmerwing Drake')!;
     expect(drake).toMatchObject({
       id: 'rec:gloam:monster:glimmerwing-drake', publicId: gloamwoodEntryId('Glimmerwing Drake'), span: 'entry', status: 'pending',
-      origin: 'parser', confidence: 'high', edited: false, parserVersion: 1, candidateKey: `monster:glimmerwing-drake:${gloamwoodEntryId('Glimmerwing Drake')}`,
+      origin: 'parser', confidence: 'high', edited: false, parserVersion: PARSER_VERSION, candidateKey: `monster:glimmerwing-drake:${gloamwoodEntryId('Glimmerwing Drake')}`,
     });
     const table = byName(records, 'Gloamwood Arms')!;
     expect(table).toMatchObject({ id: 'rec:gloam:item:gloamwood-arms', span: 'table', data: null, warnings: [] });
@@ -200,5 +200,140 @@ describe('mergeReadings and applyReading (pure)', () => {
   it('never overwrites a record a newer app version wrote', () => {
     const [first] = mergeReadings(SOURCE, [], readings, { explicit: false, now: 1 }).writes;
     expect(applyReading({ ...first, schemaVersion: 99, data: null }, first, { explicit: true, now: 2 })).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// After the offline reader improved (PARSER_VERSION 2): an invented book whose stronghold rooms and class
+// option print Prerequisite lines, imported and read by version 1, which took all of them for feats.
+// ---------------------------------------------------------------------------
+
+describe('after the offline reader improved', () => {
+  const HOLD = 'hold';
+  const BOOK = 'Lamplight Holdings';
+  const entry = (n: number, name: string, kind: CompendiumEntry['kind'], text: string, section: string, summary?: string): CompendiumEntry => ({
+    id: `lib:${HOLD}:${n}`, sourceId: HOLD, sourceName: BOOK, kind, name, text, path: [BOOK, section, name], ...(summary ? { summary } : {}),
+  });
+  /** The entries as version 1 stored them (a room took its subsection along, as a feat would). */
+  const OLD_ENTRIES = [
+    entry(1, 'Glowworm Gallery', 'feat', '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\n_Room: Snug_\n\nThe keeper raises glowworms in jars of moss.\n\n### Gallery Tasks\n\nBrew. The keeper fills a jar with light.', 'Holding Rooms', 'Prerequisite: None'),
+    entry(2, 'Moth Archive', 'feat', "_Level 9 Holding Room_\n\n_Prerequisite: Proficiency with a lantern-maker's tools_\n\nMoths copy every map left on the tables.", 'Holding Rooms', "Prerequisite: Proficiency with a lantern-maker's tools"),
+    entry(3, 'Bright Ember', 'feat', "_Prerequisite: Level 5+ Wickwright_\n\nYour wick's flame sheds bright light 10 feet farther.", 'Wick Charm Options', 'Prerequisite: Level 5+ Wickwright'),
+    entry(4, 'Night Walker', 'feat', '_Prerequisite: Wisdom 13 or higher_\n\nYou can walk the lamp roads at night without a light.', 'Feats', 'Prerequisite: Wisdom 13 or higher'),
+    entry(5, 'Lamp Oil', 'rule', 'Lamp oil burns for six hours in a hooded lantern.', 'Supplies'),
+  ];
+  const source = (format: LibrarySource['format']): LibrarySource => ({ id: HOLD, title: BOOK, kind: 'import', format, enabled: true, entryCount: OLD_ENTRIES.length, createdAt: 1, updatedAt: 1 });
+
+  /** What version 1 wrote: a feat record per Prerequisite entry (read offline, version 1). */
+  async function importedByVersion1(format: LibrarySource['format'] = 'pdf'): Promise<StructuredRecord[]> {
+    await saveLibrarySource(source(format), OLD_ENTRIES);
+    const ctx = { sourceId: HOLD, entriesById: new Map(OLD_ENTRIES.map((e) => [e.id, e])), spellLists: [], notices: null };
+    const { candidates } = segment(OLD_ENTRIES, { knownSpellNames: new Set(), knownClassNames: new Set() });
+    const readings = candidates.flatMap((c) => readOffline(c, ctx));
+    const records = mergeReadings(HOLD, [], readings, { explicit: false, now: 1 }).writes.map((r) => ({ ...r, parserVersion: 1 }));
+    expect(records.map((r) => [r.name, r.kind])).toEqual([['Glowworm Gallery', 'feat'], ['Moth Archive', 'feat'], ['Bright Ember', 'feat'], ['Night Walker', 'feat']]);
+    await putRecords(records);
+    return records;
+  }
+  const named = (records: StructuredRecord[], name: string) => records.find((r) => r.name === name);
+
+  it('corrects the stored kinds, drops what nobody reviewed, and keeps what the player reviewed with a note', async () => {
+    const v1 = await importedByVersion1();
+    await putRecords([
+      { ...named(v1, 'Moth Archive')!, status: 'rejected' },
+      { ...named(v1, 'Bright Ember')!, status: 'accepted' },
+    ]);
+    const summary = await detectStructure(HOLD);
+
+    const kinds = Object.fromEntries((await getSourceEntries(HOLD)).map((e) => [e.name, [e.kind, e.summary]]));
+    expect(kinds).toEqual({
+      'Glowworm Gallery': ['rule', `${BOOK} › Holding Rooms`],
+      'Moth Archive': ['rule', `${BOOK} › Holding Rooms`],
+      'Bright Ember': ['rule', `${BOOK} › Wick Charm Options`],
+      'Night Walker': ['feat', 'Prerequisite: Wisdom 13 or higher'],
+      'Lamp Oil': ['rule', undefined],
+    });
+
+    const after = await listRecords(HOLD);
+    expect(named(after, 'Glowworm Gallery')).toBeUndefined();
+    // The player's decisions stand: rejected stays untouched, accepted stays accepted with a note.
+    expect(named(after, 'Moth Archive')).toMatchObject({ status: 'rejected', parserVersion: 1, updatedAt: 1 });
+    const ember = named(after, 'Bright Ember')!;
+    expect(ember).toMatchObject({ status: 'accepted', parserVersion: PARSER_VERSION, confidence: 'medium' });
+    expect(ember.warnings).toContainEqual({ code: 'not-this-kind', severity: 'warn', field: 'kind', message: doubtMessage('feat') });
+    // A real older-style feat under a Feats heading is still a feat, read by today's reader.
+    expect(named(after, 'Night Walker')).toMatchObject({ kind: 'feat', status: 'pending', parserVersion: PARSER_VERSION, data: { category: 'general', prerequisite: 'Wisdom 13 or higher' } });
+
+    expect(summary).toMatchObject({ rekinded: 3, removed: { feat: 1 }, doubted: [{ id: ember.id, kind: 'feat', status: 'accepted' }], total: 1 });
+    const counts = (await listLibrarySources()).find((s) => s.id === HOLD)?.structure?.counts;
+    expect(counts?.feat).toEqual({ pending: 1, accepted: 1, rejected: 1 });
+    // Nothing is left for "Re-check" (the book page offers it for parser records of an older version that aren't rejected).
+    expect(after.filter((r) => r.origin === 'parser' && (r.parserVersion ?? 0) < PARSER_VERSION && r.status !== 'rejected')).toEqual([]);
+  });
+
+  it('changes nothing the second time', async () => {
+    await importedByVersion1();
+    await detectStructure(HOLD);
+    const before = await listRecords(HOLD);
+    const again = await detectStructure(HOLD);
+    expect(again).toMatchObject({ rekinded: 0, removed: {}, doubted: [] });
+    expect(await listRecords(HOLD)).toEqual(before);
+  });
+
+  it("keeps a JSON file's kinds (they are the file's, not a guess)", async () => {
+    await importedByVersion1('json');
+    const summary = await detectStructure(HOLD);
+    expect(summary.rekinded).toBe(0);
+    expect((await getSourceEntries(HOLD)).filter((e) => e.kind === 'feat')).toHaveLength(4);
+    expect((await listRecords(HOLD)).map((r) => [r.name, r.parserVersion])).toEqual([
+      ['Glowworm Gallery', PARSER_VERSION], ['Moth Archive', PARSER_VERSION], ['Bright Ember', PARSER_VERSION], ['Night Walker', PARSER_VERSION],
+    ]);
+  });
+
+  it('stamps a reviewed record today’s reader still finds, so the re-check is done for it', () => {
+    const entries = gloamwoodEntries(SOURCE);
+    const ctx = { sourceId: SOURCE, entriesById: new Map(entries.map((e) => [e.id, e])), spellLists: [], notices: null };
+    const { candidates } = segment(entries, { knownSpellNames: new Set(), knownClassNames: new Set() });
+    const reading = candidates.filter((c) => c.kind === 'spell').flatMap((c) => readOffline(c, ctx));
+    const [fresh] = mergeReadings(SOURCE, [], reading, { explicit: false, now: 1 }).writes;
+    const accepted: StructuredRecord = { ...fresh, status: 'accepted', parserVersion: 1 };
+    expect(applyReading(accepted, fresh, { explicit: false, now: 2 })).toEqual({ ...accepted, parserVersion: PARSER_VERSION, updatedAt: 2 });
+    expect(applyReading({ ...accepted, origin: 'claude' }, fresh, { explicit: false, now: 2 })).toBeNull();
+  });
+});
+
+describe('settleUnmatched (pure)', () => {
+  const base = (id: string, patch: Partial<StructuredRecord> = {}): StructuredRecord => ({
+    id, publicId: id, sourceId: 'hold', kind: 'feat', name: id, schemaVersion: 1, entryIds: [`lib:hold:${id}`], span: 'entry', candidateKey: id,
+    status: 'pending', confidence: 'high', origin: 'parser', data: null, warnings: [], adaptations: [], excerpts: [], edited: false,
+    textHash: 'h', parserVersion: 1, createdAt: 1, updatedAt: 1, ...patch,
+  });
+
+  it('drops what nobody reviewed and notes what the player did; leaves everything else alone', () => {
+    const records = [
+      base('unreviewed'),
+      base('edited', { edited: true }),
+      base('accepted', { status: 'accepted' }),
+      base('rejected', { status: 'rejected' }),
+      base('by-claude', { origin: 'claude', parserVersion: undefined }),
+      base('from-pack', { origin: 'pack' }),
+      base('being-read', { runState: 'queued' }),
+      base('current', { parserVersion: PARSER_VERSION }),
+    ];
+    const settled = settleUnmatched(records, records, 5);
+    expect([...settled.remove]).toEqual(['unreviewed']);
+    expect(settled.doubted.map((r) => r.id)).toEqual(['edited', 'accepted']);
+    expect([...settled.changed.keys()]).toEqual(['edited', 'accepted']);
+    expect(settled.changed.get('accepted')).toMatchObject({ status: 'accepted', confidence: 'medium', parserVersion: PARSER_VERSION, updatedAt: 5 });
+  });
+
+  it('keeps a table while a row of it stays, stamped so it leaves the re-check', () => {
+    const table = base('table', { kind: 'item', span: 'table' });
+    const kept = base('row-kept', { kind: 'item', span: 'row', rowIndex: 0, tableRecordId: 'table', status: 'accepted' });
+    const dropped = base('row-dropped', { kind: 'item', span: 'row', rowIndex: 1, tableRecordId: 'table' });
+    const settled = settleUnmatched([table, kept, dropped], [table, kept, dropped], 5);
+    expect([...settled.remove]).toEqual(['row-dropped']);
+    expect(settled.changed.get('table')).toMatchObject({ parserVersion: PARSER_VERSION, warnings: [] });
+    expect(settleUnmatched([table, dropped], [table, dropped], 5).remove).toEqual(new Set(['table', 'row-dropped']));
   });
 });

@@ -85,6 +85,9 @@ export function gloamwoodDetection(): DetectionSummary {
     readyOffline: all.reduce((n, k) => n + k.readyOffline, 0),
     needClaude: all.reduce((n, k) => n + k.needClaude, 0),
     leftOut: 0,
+    rekinded: 0,
+    removed: {},
+    doubted: [],
   };
 }
 

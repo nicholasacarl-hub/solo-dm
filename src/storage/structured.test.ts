@@ -86,7 +86,7 @@ describe('putRecords and the source counts', () => {
     });
     // The Goblin Warrior has no data (its ability scores aren't printed).
     expect(structure?.needsClaude).toBe(1);
-    expect(structure?.parserVersion).toBe(1);
+    expect(structure?.parserVersion).toBe(PARSER_VERSION);
 
     const drake = records.find((r) => r.name === 'Glimmerwing Drake') as StructuredRecord;
     await putRecords([{ ...drake, status: 'accepted' }]);

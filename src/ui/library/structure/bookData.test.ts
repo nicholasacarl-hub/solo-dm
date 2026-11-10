@@ -12,6 +12,7 @@ import {
   hiddenTableIds,
   isConfident,
   jobProgress,
+  lookThroughMessage,
   matchesFilter,
   raisedBudget,
   remainingUsd,
@@ -153,5 +154,34 @@ describe('jobs', () => {
     expect(currentJob([old, paused, other], 'gloam')).toEqual({ live: paused, last: null });
     expect(currentJob([old, other], 'gloam')).toEqual({ live: null, last: old });
     expect(currentJob(undefined, 'gloam')).toEqual({ live: null, last: null });
+  });
+});
+
+describe('looking through the book again', () => {
+  const found = { total: 22, readyOffline: 20, needClaude: 2, removed: {}, doubted: [] };
+  const doubt = (id: string, status: StructuredRecord['status'], kind: StructuredRecord['kind'] = 'feat') => ({ id, kind, status });
+
+  it('says what it found', () => {
+    expect(lookThroughMessage(found, 0)).toBe('Found 22: 20 read on this device, 2 need Claude.');
+    expect(lookThroughMessage({ ...found, total: 0, readyOffline: 0, needClaude: 0 }, 0)).toBe(
+      'Nothing here looks like something the app can use. All entries › Structure as… marks it by hand.',
+    );
+  });
+
+  it("names what an earlier version found by mistake and nobody had reviewed", () => {
+    expect(lookThroughMessage({ ...found, removed: { feat: 17, spell: 1 } }, 0)).toBe(
+      "Found 22: 20 read on this device, 2 need Claude. Removed 17 feats and 1 spell an earlier version of the reader found by mistake (you hadn't reviewed them).",
+    );
+  });
+
+  it('says where the reviewed ones went', () => {
+    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted'), doubt('b', 'accepted')] }, 2)).toBe(
+      "Found 22: 20 read on this device, 2 need Claude. 2 entries you had accepted don't look like feats: they're back in To review, with a note.",
+    );
+    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted')] }, 1)).toMatch(/ 1 entry you had accepted doesn't look like a feat: it's back in To review, with a note\.$/);
+    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'pending')] }, 0)).toMatch(/ 1 entry you had edited doesn't look like a feat: it has a note in To review\.$/);
+    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted'), doubt('b', 'pending', 'spell')] }, 1)).toMatch(
+      / 2 entries you had reviewed may have been misread: they're in To review, with a note\.$/,
+    );
   });
 });

@@ -7,13 +7,18 @@
  * Re-runs never destroy work: a pending, unedited record read on this device is replaced; an edited or
  * accepted one gets a `proposal` when the new reading differs; a rejected or pack record is left alone
  * (unless the player explicitly re-reads it); a reading by Claude is never replaced by an offline one; a
- * record whose text changed gets `stale-text`; nothing is deleted.
+ * record whose text changed gets `stale-text`. The one deletion: after the offline reader improved
+ * (PARSER_VERSION rose), a record an older version made that it no longer finds is dropped when nobody
+ * reviewed it, and kept with a note when the player did (settleUnmatched). Before segmenting, detection
+ * corrects the entry kinds an older chunker guessed wrongly (staleFeatKinds).
  *
  * Owner: E2.
  */
 import { nameKey, slugify } from '@/lib/id';
 import { bookFingerprint, textFingerprint } from '@/lib/importedContent';
+import { staleFeatKinds } from '../chunk';
 import {
+  commitRecords,
   findSourcesByFingerprint,
   getRecords,
   getSourceEntries,
@@ -22,11 +27,13 @@ import {
   markSourceStructured,
   putRecords,
   setSourceFingerprint,
+  updateEntryKinds,
 } from '@/storage';
 import {
   PARSER_VERSION,
   STRUCTURED_SCHEMA_VERSION,
   type CompendiumEntry,
+  type LibrarySource,
   type RecordOrigin,
   type RecordSpan,
   type RecordWarning,
@@ -40,7 +47,7 @@ import { warning } from './normalize/text';
 import { nameNotices, noticeIndex, type NoticeIndex } from './notices';
 import { parseOffline } from './parse';
 import { STRUCTURED_LIMITS } from './schemas';
-import { candidateFor, candidateKey, markCandidate, segment, type Candidate, type SegmentContext, type SpellListHint } from './segment';
+import { candidateFor, candidateKey, markCandidate, readingOrder, segment, type Candidate, type SegmentContext, type SpellListHint } from './segment';
 import type { Wire } from './wire';
 
 export interface DetectionSummary {
@@ -48,6 +55,12 @@ export interface DetectionSummary {
   total: number; readyOffline: number; needClaude: number;
   leftOut: number;                                   // over the 5,000-record limit
   duplicateOf?: { id: string; title: string };       // another source with the same fingerprint
+  /** Entries whose kind an older import guessed wrongly, corrected (a feat that was only a Prerequisite line). */
+  rekinded: number;
+  /** Records an older offline reader made that this one doesn't find, dropped because nobody had reviewed them. */
+  removed: Partial<Record<StructuredKind, number>>;
+  /** Records like those that the player had reviewed (accepted or edited): kept with a note, for the player to decide. */
+  doubted: { id: string; kind: StructuredKind; status: StructuredRecord['status'] }[];
 }
 
 /** The warning a record gets when this device couldn't read it (spec §3.13). */
@@ -206,6 +219,10 @@ export function applyReading(existing: StructuredRecord, fresh: StructuredRecord
       updatedAt: now,
     };
   }
+  // The current offline reader has looked at it (any difference waits in the proposal): "Re-check" is done for it.
+  if (existing.origin === 'parser' && fresh.origin === 'parser' && fresh.parserVersion !== undefined && (existing.parserVersion ?? 0) < fresh.parserVersion) {
+    next = { ...(next ?? existing), parserVersion: fresh.parserVersion, updatedAt: now };
+  }
   if (changedText) next = withStale(next ?? existing, now) ?? next;
   return next;
 }
@@ -316,6 +333,67 @@ export function mergeReadings(
 }
 
 // ---------------------------------------------------------------------------
+// After the offline reader improved (pure)
+// ---------------------------------------------------------------------------
+
+const NOUN: Readonly<Record<StructuredKind, string>> = {
+  monster: 'a monster', spell: 'a spell', 'magic-item': 'a magic item', item: 'a piece of gear', feat: 'a feat', background: 'a background',
+  species: 'a species', class: 'a class', subclass: 'a subclass',
+};
+
+/** The note on a reviewed record the improved reader doesn't find any more. */
+export function doubtMessage(kind: StructuredKind): string {
+  return `An earlier version of the offline reader took this for ${NOUN[kind]}; the current one doesn't. If it isn't one, keep it as text. If it is, accept it.`;
+}
+
+const BEING_READ = new Set(['queued', 'running']);
+
+/** A reviewed record the improved reader doesn't find: a note (a `warn`, so it can still be accepted), checked by today's reader. */
+function doubted(record: StructuredRecord, now: number): StructuredRecord {
+  const message = doubtMessage(record.kind);
+  const warnings = record.warnings.some((w) => w.code === 'not-this-kind' && w.message === message)
+    ? record.warnings
+    : [...record.warnings, warning('not-this-kind', 'warn', message, 'kind')];
+  return { ...record, warnings, confidence: record.confidence === 'low' ? 'low' : 'medium', parserVersion: PARSER_VERSION, updatedAt: now };
+}
+
+export interface Settled {
+  /** Records to delete: nobody reviewed them. */
+  remove: Set<string>;
+  /** Records to write: reviewed ones with a note, and tables kept for their rows, stamped with today's version. */
+  changed: Map<string, StructuredRecord>;
+  /** The reviewed ones (also in `changed`). */
+  doubted: StructuredRecord[];
+}
+
+/**
+ * Stored records today's detection didn't find again (`unmatched`), among a source's records (`all`):
+ * a record an older version of the offline reader made (PARSER_VERSION rose) was a misreading. When
+ * nobody reviewed it (pending, unedited) it goes; when the player did (accepted or edited) it stays with
+ * a note, so the player decides. A table stays while a row of it does. Rejected records, records Claude,
+ * a pack or the player made, records being read and records today's reader made are left as they are.
+ */
+export function settleUnmatched(all: readonly StructuredRecord[], unmatched: readonly StructuredRecord[], now: number): Settled {
+  const older = unmatched.filter(
+    (r) => r.origin === 'parser' && (r.parserVersion ?? 0) < PARSER_VERSION && r.status !== 'rejected' && !BEING_READ.has(r.runState ?? ''),
+  );
+  const reviewed = (r: StructuredRecord) => r.edited || r.status === 'accepted';
+  const remove = new Set(older.filter((r) => !reviewed(r)).map((r) => r.id));
+  for (const r of all) if (r.tableRecordId && !remove.has(r.id)) remove.delete(r.tableRecordId);
+  const changed = new Map<string, StructuredRecord>();
+  const doubts: StructuredRecord[] = [];
+  for (const r of older) {
+    if (remove.has(r.id)) continue;
+    if (reviewed(r)) {
+      const next = doubted(r, now);
+      changed.set(r.id, next);
+      doubts.push(next);
+    } else changed.set(r.id, { ...r, parserVersion: PARSER_VERSION, updatedAt: now });
+  }
+  return { remove, changed, doubted: doubts };
+}
+
+// ---------------------------------------------------------------------------
 // I/O
 // ---------------------------------------------------------------------------
 
@@ -349,7 +427,32 @@ function currentHash(record: StructuredRecord, entriesById: ReadonlyMap<string, 
   return textFingerprint(texts.join('\n\n'));
 }
 
-function summarize(records: readonly (StructuredRecord | undefined)[], leftOut: number): Omit<DetectionSummary, 'duplicateOf'> {
+/**
+ * The source's entries with the kinds an older chunker guessed wrongly corrected, in storage too (the
+ * rules index and the Library show the stored kind). Imported text only: a JSON file's kinds are the file's.
+ */
+async function correctStaleKinds(source: LibrarySource, entries: readonly CompendiumEntry[]): Promise<{ entries: CompendiumEntry[]; rekinded: number }> {
+  if (source.kind !== 'import' || source.format === 'json') return { entries: [...entries], rekinded: 0 };
+  const fixes = staleFeatKinds(readingOrder(entries));
+  if (fixes.length === 0) return { entries: [...entries], rekinded: 0 };
+  await updateEntryKinds(fixes);
+  const byId = new Map(fixes.map((f) => [f.id, f]));
+  const corrected = entries.map((e) => {
+    const fix = byId.get(e.id);
+    if (!fix) return e;
+    const { summary: _old, ...rest } = e;
+    return { ...rest, kind: fix.kind, ...(fix.summary ? { summary: fix.summary } : {}) };
+  });
+  return { entries: corrected, rekinded: fixes.length };
+}
+
+const countByKind = (records: readonly StructuredRecord[]): Partial<Record<StructuredKind, number>> => {
+  const out: Partial<Record<StructuredKind, number>> = {};
+  for (const r of records) out[r.kind] = (out[r.kind] ?? 0) + 1;
+  return out;
+};
+
+function summarize(records: readonly (StructuredRecord | undefined)[], leftOut: number): Omit<DetectionSummary, 'duplicateOf' | 'rekinded' | 'removed' | 'doubted'> {
   const byKind: DetectionSummary['byKind'] = {};
   const withRows = new Set(records.flatMap((r) => (r?.tableRecordId ? [r.tableRecordId] : [])));
   for (const r of records) {
@@ -370,11 +473,15 @@ function summarize(records: readonly (StructuredRecord | undefined)[], leftOut: 
   };
 }
 
-/** Local and free (~1–3 s for 300 pages); yields every 50 candidates. */
+/**
+ * Local and free (~1–3 s for 300 pages); yields every 50 candidates. Callers refresh the rules index
+ * afterwards: corrected entry kinds change what it holds.
+ */
 export async function detectStructure(sourceId: string, opts?: { onProgress?(done: number, total: number): void }): Promise<DetectionSummary> {
-  const [entries, sources, existing, context] = await Promise.all([getSourceEntries(sourceId), listLibrarySources(), listRecords(sourceId), detectionContext()]);
+  const [stored, sources, existing, context] = await Promise.all([getSourceEntries(sourceId), listLibrarySources(), listRecords(sourceId), detectionContext()]);
   const source = sources.find((s) => s.id === sourceId);
   if (!source) throw new Error('This book is no longer in the library.');
+  const { entries, rekinded } = await correctStaleKinds(source, stored);
   const entriesById = new Map(entries.map((e) => [e.id, e]));
   const { candidates, spellLists } = segment(entries, context.segment);
   const ctx: ReadingContext = { sourceId, entriesById, spellLists, notices: context.notices };
@@ -390,14 +497,16 @@ export async function detectStructure(sourceId: string, opts?: { onProgress?(don
   const now = Date.now();
   const merged = mergeReadings(sourceId, existing, readings, { explicit: false, now, limit: STRUCTURED_LIMITS.recordsPerSource });
   const leftOut = merged.records.filter((r) => r === undefined).length;
-  const stale = merged.unmatched.flatMap((r) => {
-    if (r.origin === 'pack' || r.origin === 'manual' || r.span === 'row') return [];
-    const hash = currentHash(r, entriesById);
-    if (hash === r.textHash) return [];
-    const next = withStale(r, now);
-    return next ? [next] : [];
+  const settled = settleUnmatched(existing, merged.unmatched, now);
+  const unmatchedWrites = merged.unmatched.flatMap((r) => {
+    if (settled.remove.has(r.id)) return [];
+    const base = settled.changed.get(r.id) ?? r;
+    const textChanged = r.origin !== 'pack' && r.origin !== 'manual' && r.span !== 'row' && currentHash(r, entriesById) !== r.textHash;
+    const next = textChanged ? (withStale(base, now) ?? base) : base;
+    return next === r ? [] : [next];
   });
-  await putRecords([...merged.writes, ...stale]);
+  const removed = existing.filter((r) => settled.remove.has(r.id));
+  await commitRecords([...merged.writes, ...unmatchedWrites], [...settled.remove]);
   // Nothing found: the source remembers that detection ran (an empty structure), so "nothing detected" outlasts this page (§4.7).
   if (merged.records.length === 0) await markSourceStructured(sourceId);
 
@@ -407,7 +516,13 @@ export async function detectStructure(sourceId: string, opts?: { onProgress?(don
     await setSourceFingerprint(sourceId, fingerprint);
   }
   const duplicate = (await findSourcesByFingerprint(fingerprint)).find((s) => s.id !== sourceId);
-  return { ...summarize(merged.records, leftOut), ...(duplicate ? { duplicateOf: { id: duplicate.id, title: duplicate.title } } : {}) };
+  return {
+    ...summarize(merged.records, leftOut),
+    rekinded,
+    removed: countByKind(removed),
+    doubted: settled.doubted.map((r) => ({ id: r.id, kind: r.kind, status: r.status })),
+    ...(duplicate ? { duplicateOf: { id: duplicate.id, title: duplicate.title } } : {}),
+  };
 }
 
 /** "All entries › Structure as…": a candidate the player marked (reason 'Marked by you'), read offline if possible. */

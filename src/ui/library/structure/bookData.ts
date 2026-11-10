@@ -3,7 +3,7 @@
  * the review filters and their counts, the "Accept N confident" rule, and a job's progress numbers.
  * Everything here is synchronous and side-effect free, so the list, the chips and the cards agree.
  */
-import { splitParagraphs, type CandidateBlock } from '@/data';
+import { splitParagraphs, type CandidateBlock, type DetectionSummary } from '@/data';
 import {
   STRUCTURED_KINDS,
   STRUCTURED_SCHEMA_VERSION,
@@ -13,7 +13,7 @@ import {
   type StructuredKind,
   type StructuredRecord,
 } from '@/types';
-import { readButIncomplete, recordState, type RecordState, type ReviewFilter } from './labels';
+import { KIND_LABELS, kindCount, readButIncomplete, recordState, type RecordState, type ReviewFilter } from './labels';
 
 // ---------------------------------------------------------------------------
 // Order
@@ -281,4 +281,39 @@ export function raisedBudget(job: Pick<ExtractionJob, 'counts' | 'estimate' | 'u
 /** The default spending limit: the high estimate rounded up, at least $1 (spec D13). */
 export function defaultBudget(usdHigh: number): number {
   return Math.max(1, Math.ceil(usdHigh));
+}
+
+// ---------------------------------------------------------------------------
+// Looking through a book again (spec §4.7; detect.ts settles an earlier reader's misreadings)
+// ---------------------------------------------------------------------------
+
+const andList = (parts: readonly string[]) => (parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`);
+
+/**
+ * The toast after "Look for entries again" or "Re-check": what was found, the misreadings of an earlier
+ * version that nobody had reviewed (removed), and the reviewed ones (`movedBack`: how many accepted ones
+ * went back to review).
+ */
+export function lookThroughMessage(summary: Pick<DetectionSummary, 'total' | 'readyOffline' | 'needClaude' | 'removed' | 'doubted'>, movedBack: number): string {
+  const parts = [
+    summary.total === 0
+      ? 'Nothing here looks like something the app can use. All entries › Structure as… marks it by hand.'
+      : `Found ${summary.total}: ${summary.readyOffline} read on this device${summary.needClaude ? `, ${summary.needClaude} need Claude` : ''}.`,
+  ];
+  const removed = (Object.entries(summary.removed) as [StructuredKind, number][]).filter(([, n]) => n > 0);
+  if (removed.length) {
+    parts.push(`Removed ${andList(removed.map(([kind, n]) => kindCount(kind, n)))} an earlier version of the reader found by mistake (you hadn't reviewed them).`);
+  }
+  const n = summary.doubted.length;
+  if (n > 0) {
+    const kinds = [...new Set(summary.doubted.map((d) => d.kind))];
+    const one = n === 1;
+    const who = movedBack === n ? 'you had accepted' : movedBack === 0 ? 'you had edited' : 'you had reviewed';
+    const looks =
+      kinds.length === 1 ? `${one ? "doesn't" : "don't"} look like ${one ? `a ${KIND_LABELS[kinds[0]].one}` : KIND_LABELS[kinds[0]].many}` : 'may have been misread';
+    const where =
+      movedBack === n ? `${one ? "it's" : "they're"} back in To review, with a note` : movedBack === 0 ? `${one ? 'it has' : 'they have'} a note in To review` : "they're in To review, with a note";
+    parts.push(`${one ? '1 entry' : `${n} entries`} ${who} ${looks}: ${where}.`);
+  }
+  return parts.join(' ');
 }

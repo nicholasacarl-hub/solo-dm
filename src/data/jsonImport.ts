@@ -65,7 +65,7 @@ export function parseJsonImport(input: string | unknown, opts: { sourceId: strin
       return;
     }
     const e = result.data;
-    const kind: ContentKind = e.kind && KINDS.has(e.kind) ? (e.kind as ContentKind) : e.kind ? 'other' : guessKind(e.name, e.text);
+    const kind: ContentKind = e.kind && KINDS.has(e.kind) ? (e.kind as ContentKind) : e.kind ? 'other' : guessKind(e.name, e.text, e.path?.slice(0, -1));
     entries.push({
       id: `lib:${opts.sourceId}:${entries.length + 1}`,
       sourceId: opts.sourceId,
