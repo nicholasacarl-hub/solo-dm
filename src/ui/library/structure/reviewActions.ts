@@ -317,8 +317,8 @@ export async function structureAs(sourceId: string, entryIds: string[], kind: St
 
 /**
  * "Look for entries again" and "Re-check" (spec §4.7, §3.10): detection, then the entries the player had
- * accepted that the improved reader no longer finds go back to review (Undo accepts them again). The
- * index refreshes when entry kinds were corrected or something left it.
+ * accepted that the improved reader no longer finds go back to review (Undo accepts them again; the
+ * status change refreshes the index).
  */
 export async function lookThroughBook(
   sourceId: string,
@@ -326,11 +326,7 @@ export async function lookThroughBook(
 ): Promise<{ summary: DetectionSummary; movedBack: number; undo?: () => Promise<void> }> {
   const summary = await detectStructure(sourceId, opts);
   const accepted = summary.doubted.filter((d) => d.status === 'accepted').map((d) => d.id);
-  if (accepted.length === 0) {
-    if (summary.rekinded > 0) scheduleRefresh();
-    return { summary, movedBack: 0 };
-  }
-  // Schedules the refresh itself.
+  if (accepted.length === 0) return { summary, movedBack: 0 };
   const moved = await setRecordsStatus(accepted, 'pending');
   return { summary, movedBack: accepted.length, undo: moved.undo };
 }

@@ -233,7 +233,6 @@ describe('looking through the book again', () => {
     stored = stored.map((r) => (r.id === grace.id ? { ...r, status: 'accepted' } : r));
     vi.mocked(data.detectStructure).mockResolvedValueOnce({
       ...gloamwoodDetection(),
-      rekinded: 2,
       removed: { feat: 1 },
       doubted: [{ id: grace.id, kind: 'feat', status: 'accepted' }, { id: bearer.id, kind: 'feat', status: 'pending' }],
     });
@@ -247,16 +246,13 @@ describe('looking through the book again', () => {
     expect(byName("Moth's Grace").status).toBe('accepted');
   });
 
-  it('refreshes the index only when entry kinds changed, and offers no Undo when nothing moved', async () => {
-    vi.mocked(data.detectStructure).mockResolvedValueOnce(gloamwoodDetection());
+  it('offers no Undo and leaves the index alone when nothing went back to review', async () => {
+    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), removed: { feat: 2 }, doubted: [{ id: byName('Lantern Bearer').id, kind: 'feat', status: 'pending' }] });
     const quiet = await actions.lookThroughBook('gloam');
     expect(quiet.movedBack).toBe(0);
     expect(quiet.undo).toBeUndefined();
+    expect(storage.setRecordStatus).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(600);
     expect(data.invalidateRulesIndex).not.toHaveBeenCalled();
-    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), rekinded: 3 });
-    await actions.lookThroughBook('gloam');
-    await vi.advanceTimersByTimeAsync(600);
-    expect(data.invalidateRulesIndex).toHaveBeenCalledTimes(1);
   });
 });

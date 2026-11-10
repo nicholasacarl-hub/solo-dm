@@ -11,7 +11,7 @@ import { getBuilderProblems, useBuilderData } from '@/data';
 import { extractionAvailability, useRunner } from '@/dm';
 import { getSettings, useSettings } from '@/state/settingsStore';
 import { getSourceEntries, useJobs, useLibrarySources, useRecords } from '@/storage';
-import { PARSER_VERSION, type CompendiumEntry, type ModelId } from '@/types';
+import type { CompendiumEntry, ModelId } from '@/types';
 import { ErrorBoundary } from '@/ui/components/ErrorBoundary';
 import { ProgressBar } from '@/ui/components/ProgressBar';
 import { toast } from '@/ui/components/toast';
@@ -22,7 +22,7 @@ import { Page, useDocumentTitle } from '@/ui/shell/Page';
 import { AllEntriesView } from '@/ui/library/structure/AllEntriesView';
 import { BookDataDialog } from '@/ui/library/structure/BookDataDialog';
 import { DeleteBookDialog, useBookSwitch } from '@/ui/library/structure/bookControls';
-import { lookThroughMessage, reviewable, reviewCounts } from '@/ui/library/structure/bookData';
+import { lookThroughMessage, needsRecheck, reviewable, reviewCounts } from '@/ui/library/structure/bookData';
 import { BookHeader } from '@/ui/library/structure/BookHeader';
 import { ConsentDialog, needsClaude, type ConsentScope } from '@/ui/library/structure/ConsentDialog';
 import { kindCount } from '@/ui/library/structure/labels';
@@ -34,8 +34,7 @@ import { TOUCH, TOUCH_BUTTONS } from '@/ui/library/structure/touch';
 import { showUndo, UndoToast } from '@/ui/library/structure/UndoToast';
 import { useBookPageState } from '@/ui/library/structure/useBookPageState';
 
-/** The book's entries; read again when `revision` changes (a re-check corrected their kinds). */
-function useSourceEntries(sourceId: string, entryCount: number | undefined, revision: number): CompendiumEntry[] | null {
+function useSourceEntries(sourceId: string, entryCount: number | undefined): CompendiumEntry[] | null {
   const [entries, setEntries] = useState<CompendiumEntry[] | null>(null);
   useEffect(() => {
     if (entryCount === undefined) return;
@@ -50,7 +49,7 @@ function useSourceEntries(sourceId: string, entryCount: number | undefined, revi
     return () => {
       alive = false;
     };
-  }, [sourceId, entryCount, revision]);
+  }, [sourceId, entryCount]);
   return entries;
 }
 
@@ -74,8 +73,7 @@ export function LibrarySourceScreen() {
   const stored = useRecords(source ? sourceId : undefined);
   const jobs = useJobs();
   const runner = useRunner();
-  const [entriesRevision, setEntriesRevision] = useState(0);
-  const entries = useSourceEntries(sourceId, source?.entryCount, entriesRevision);
+  const entries = useSourceEntries(sourceId, source?.entryCount);
   const { data: builder } = useBuilderData();
   const availability = useAvailability();
   const phone = !useMediaQuery('(min-width: 1024px)', true);
@@ -85,7 +83,7 @@ export function LibrarySourceScreen() {
   const entriesById = useMemo(() => new Map((entries ?? []).map((e) => [e.id, e])), [entries]);
   const counts = useMemo(() => reviewCounts(records, source?.enabled ?? true), [records, source?.enabled]);
   const unread = records.filter(needsClaude).length;
-  const recheck = records.filter((r) => r.origin === 'parser' && (r.parserVersion ?? 0) < PARSER_VERSION && r.status !== 'rejected');
+  const recheck = records.filter(needsRecheck);
   const problems = useMemo(() => {
     const ids = new Set(records.map((r) => r.id));
     return getBuilderProblems().filter((p) => ids.has(p.recordId));
@@ -116,7 +114,6 @@ export function LibrarySourceScreen() {
     try {
       const { summary, movedBack, undo } = await lookThroughBook(source.id, { onProgress: (done, total) => setDetect({ done, total }) });
       setNothingFound(summary.total === 0);
-      if (summary.rekinded > 0) setEntriesRevision((n) => n + 1);
       const message = lookThroughMessage(summary, movedBack);
       if (undo) showUndo(message, undo);
       else toast.success(message);

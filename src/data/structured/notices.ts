@@ -17,7 +17,8 @@ export const ENGINE_NAMES = [
 ] as const;
 const ENGINE_KEYS = new Map(ENGINE_NAMES.map((n) => [nameKey(n), n]));
 
-const NOUN: Readonly<Record<StructuredKind, string>> = {
+/** "a monster", "an item"…: a kind as a noun with its article. */
+export const KIND_NOUN: Readonly<Record<StructuredKind, string>> = {
   monster: 'a monster', spell: 'a spell', 'magic-item': 'a magic item', item: 'an item', feat: 'a feat', background: 'a background',
   species: 'a species', class: 'a class', subclass: 'a subclass',
 };
@@ -54,9 +55,9 @@ export function nameNotices(
   const book = others.find((e) => e.sourceId !== SRD_SOURCE_ID && e.sourceId !== 'homebrew');
   if (srd) {
     out.push(warning('name-collision', 'info',
-      `The SRD also has ${NOUN[record.kind]} called ${quote(record.name)}. Once you accept this one, combat and the DM use this book's version when they look that name up. Both stay in the Library.`, 'name'));
+      `The SRD also has ${KIND_NOUN[record.kind]} called ${quote(record.name)}. Once you accept this one, combat and the DM use this book's version when they look that name up. Both stay in the Library.`, 'name'));
   } else if (book) {
-    out.push(warning('name-collision', 'info', `“${book.sourceName}” also has ${NOUN[record.kind]} called ${quote(record.name)}. Both stay in the Library.`, 'name'));
+    out.push(warning('name-collision', 'info', `“${book.sourceName}” also has ${KIND_NOUN[record.kind]} called ${quote(record.name)}. Both stay in the Library.`, 'name'));
   }
   for (const name of [record.name, ...partNames(record.data)]) {
     const engine = ENGINE_KEYS.get(nameKey(name));

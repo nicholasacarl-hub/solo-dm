@@ -4,7 +4,7 @@
  * text they copy; exports replace that text (redact.ts).
  */
 import { useLiveQuery } from 'dexie-react-hooks';
-import type { CompendiumEntry, ContentKind, HomebrewEntry, LibrarySource } from '@/types';
+import type { CompendiumEntry, HomebrewEntry, LibrarySource } from '@/types';
 import { db } from './db';
 
 const byName = (a: { name: string }, b: { name: string }) =>
@@ -96,24 +96,6 @@ export async function deleteLibrarySource(id: string): Promise<void> {
 export async function setLibrarySourceEnabled(id: string, enabled: boolean): Promise<void> {
   const updated = await db.library.update(id, { enabled, updatedAt: Date.now() });
   if (updated === 0) throw new Error('That library source no longer exists.');
-}
-
-/**
- * Correct the kinds (and the summaries that go with them) of some imported entries: detection's fix for
- * kinds an older import guessed wrongly. Missing entries are skipped; no summary given = none.
- */
-export async function updateEntryKinds(changes: readonly { id: string; kind: ContentKind; summary?: string }[]): Promise<void> {
-  if (changes.length === 0) return;
-  await db.transaction('rw', db.libraryEntries, async () => {
-    const rows = await db.libraryEntries.bulkGet(changes.map((c) => c.id));
-    const next = rows.flatMap((row, i) => {
-      if (!row) return [];
-      const { summary: _old, ...rest } = row;
-      const change = changes[i];
-      return [{ ...rest, kind: change.kind, ...(change.summary ? { summary: change.summary } : {}) }];
-    });
-    if (next.length) await db.libraryEntries.bulkPut(next);
-  });
 }
 
 /** Entries for the given sources (all enabled imported sources when omitted). */

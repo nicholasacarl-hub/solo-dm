@@ -13,6 +13,7 @@ import { createRulesIndex } from '../search';
 import { applyReading, detectStructure, doubtMessage, mergeReadings, readOffline, rereadOffline, settleUnmatched, structureEntryAs, type Reading } from './detect';
 import { noticeIndex } from './notices';
 import { segment } from './segment';
+import { staleFeatKinds } from '../chunk';
 
 const srd = (kind: CompendiumEntry['kind'], name: string): CompendiumEntry => ({
   id: `srd:${kind}:${name.toLowerCase().replace(/\W+/g, '-')}`, sourceId: SRD_SOURCE_ID, sourceName: 'SRD 5.2.1', kind, name, text: `${name}.`,
@@ -236,15 +237,25 @@ describe('after the offline reader improved', () => {
     return records;
   }
   const named = (records: StructuredRecord[], name: string) => records.find((r) => r.name === name);
+  /** What the database upgrade to version 4 does to those entries (src/storage/db.ts). */
+  async function upgradeEntryKinds(): Promise<void> {
+    const fixes = new Map(staleFeatKinds(OLD_ENTRIES).map((f) => [f.id, f]));
+    const upgraded = OLD_ENTRIES.map((e) => {
+      const fix = fixes.get(e.id);
+      if (!fix) return e;
+      const { summary: _old, ...rest } = e;
+      return { ...rest, kind: fix.kind, ...(fix.summary ? { summary: fix.summary } : {}) };
+    });
+    await saveLibrarySource(source('pdf'), upgraded);
+  }
 
-  it('corrects the stored kinds, drops what nobody reviewed, and keeps what the player reviewed with a note', async () => {
+  it('drops what nobody reviewed, and keeps what the player reviewed with a note', async () => {
     const v1 = await importedByVersion1();
     await putRecords([
       { ...named(v1, 'Moth Archive')!, status: 'rejected' },
       { ...named(v1, 'Bright Ember')!, status: 'accepted' },
     ]);
-    const summary = await detectStructure(HOLD);
-
+    await upgradeEntryKinds();
     const kinds = Object.fromEntries((await getSourceEntries(HOLD)).map((e) => [e.name, [e.kind, e.summary]]));
     expect(kinds).toEqual({
       'Glowworm Gallery': ['rule', `${BOOK} › Holding Rooms`],
@@ -253,6 +264,7 @@ describe('after the offline reader improved', () => {
       'Night Walker': ['feat', 'Prerequisite: Wisdom 13 or higher'],
       'Lamp Oil': ['rule', undefined],
     });
+    const summary = await detectStructure(HOLD);
 
     const after = await listRecords(HOLD);
     expect(named(after, 'Glowworm Gallery')).toBeUndefined();
@@ -264,7 +276,7 @@ describe('after the offline reader improved', () => {
     // A real older-style feat under a Feats heading is still a feat, read by today's reader.
     expect(named(after, 'Night Walker')).toMatchObject({ kind: 'feat', status: 'pending', parserVersion: PARSER_VERSION, data: { category: 'general', prerequisite: 'Wisdom 13 or higher' } });
 
-    expect(summary).toMatchObject({ rekinded: 3, removed: { feat: 1 }, doubted: [{ id: ember.id, kind: 'feat', status: 'accepted' }], total: 1 });
+    expect(summary).toMatchObject({ removed: { feat: 1 }, doubted: [{ id: ember.id, kind: 'feat', status: 'accepted' }], total: 1 });
     const counts = (await listLibrarySources()).find((s) => s.id === HOLD)?.structure?.counts;
     expect(counts?.feat).toEqual({ pending: 1, accepted: 1, rejected: 1 });
     // Nothing is left for "Re-check" (the book page offers it for parser records of an older version that aren't rejected).
@@ -273,17 +285,18 @@ describe('after the offline reader improved', () => {
 
   it('changes nothing the second time', async () => {
     await importedByVersion1();
+    await upgradeEntryKinds();
     await detectStructure(HOLD);
     const before = await listRecords(HOLD);
     const again = await detectStructure(HOLD);
-    expect(again).toMatchObject({ rekinded: 0, removed: {}, doubted: [] });
+    expect(again).toMatchObject({ removed: {}, doubted: [] });
     expect(await listRecords(HOLD)).toEqual(before);
   });
 
-  it("keeps a JSON file's kinds (they are the file's, not a guess)", async () => {
+  it("still finds the feats a JSON file says are feats (its kinds are the file's, not a guess), and re-checks them", async () => {
     await importedByVersion1('json');
     const summary = await detectStructure(HOLD);
-    expect(summary.rekinded).toBe(0);
+    expect(summary).toMatchObject({ removed: {}, doubted: [] });
     expect((await getSourceEntries(HOLD)).filter((e) => e.kind === 'feat')).toHaveLength(4);
     expect((await listRecords(HOLD)).map((r) => [r.name, r.parserVersion])).toEqual([
       ['Glowworm Gallery', PARSER_VERSION], ['Moth Archive', PARSER_VERSION], ['Bright Ember', PARSER_VERSION], ['Night Walker', PARSER_VERSION],

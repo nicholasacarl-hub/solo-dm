@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chunkDocument, guessKind, inferPlainTextHeadings, splitIntoChunks, staleFeatKinds, TARGET_CHUNK_CHARS } from './chunk';
+import { chunkDocument, guessKind, headingAncestors, inferPlainTextHeadings, splitIntoChunks, staleFeatKinds, TARGET_CHUNK_CHARS } from './chunk';
 import type { CompendiumEntry } from '@/types';
 
 const opts = { sourceId: 'import-abc', sourceName: 'My Notes' };
@@ -187,6 +187,22 @@ describe('guessKind', () => {
     expect(guessKind('Night Walker', older, ['Chapter 6: Character Options', 'Feats'])).toBe('feat');
     expect(guessKind('Night Walker', older, ['Racial Feats'])).toBe('feat');
     expect(guessKind('Night Walker', older, ['**Feat Descriptions**'])).toBe('feat');
+    expect(guessKind('Night Walker', older, ['Feats (Optional Rule)'])).toBe('feat');
+    expect(guessKind('Night Walker', older, ['List of Feats'])).toBe('feat');
+  });
+
+  it("doesn't count a title that only starts with the word (a book's name, a rules section)", () => {
+    const room = '_Prerequisite: None_\n\nThe keeper raises glowworms.';
+    expect(guessKind('Glowworm Gallery', room, ['Feats and Fortresses', 'Holding Rooms'])).toBe('rule');
+    expect(guessKind('Glowworm Gallery', room, ['Feats of the North'])).toBe('rule');
+    expect(guessKind('Glowworm Gallery', room, ['Feats of Strength'])).toBe('rule');
+  });
+
+  it('takes the headings above an entry from its path, with or without its own name last', () => {
+    expect(headingAncestors(['Feats', 'Night Walker'], 'Night Walker')).toEqual(['Feats']);
+    expect(headingAncestors(['Feats'], 'Night Walker')).toEqual(['Feats']);
+    expect(headingAncestors(['Feats', '**Night Walker**'], 'Night Walker')).toEqual(['Feats']);
+    expect(headingAncestors(undefined, 'Night Walker')).toEqual([]);
   });
 
   it("doesn't take other things that print a Prerequisite line for feats", () => {
@@ -284,16 +300,16 @@ describe('staleFeatKinds', () => {
     ]);
   });
 
-  it('reads only what the entry printed before its subsections, and takes a long entry’s parts along', () => {
+  it('reads only what the entry printed before its subsections, and takes a long entry’s parts along (in any order given)', () => {
     const long = 'x'.repeat(50);
     const path = ['Lamplight Holdings', 'Holding Rooms'];
     const fixes = staleFeatKinds([
+      entry(3, 'Moth Archive (part 3)', 'feat', long, [...path, 'Moth Archive (part 3)']),
+      entry(5, 'Night Walker (part 2)', 'feat', long, ['Feats', 'Night Walker (part 2)']),
       // Its subsection would read as a spell; the import read only the room's own text.
       entry(1, 'Moth Archive', 'feat', `_Level 9 Holding Room_\n\n_Prerequisite: None_\n\n${long}\n\n### Archive Charm\n\nCasting Time: Action`, [...path, 'Moth Archive']),
-      entry(2, 'Moth Archive (part 2)', 'feat', long, [...path, 'Moth Archive (part 2)']),
-      entry(3, 'Moth Archive (part 3)', 'feat', long, [...path, 'Moth Archive (part 3)']),
       entry(4, 'Night Walker', 'feat', '_Prerequisite: Wisdom 13 or higher_\n\nYou walk at night.', ['Feats', 'Night Walker']),
-      entry(5, 'Night Walker (part 2)', 'feat', long, ['Feats', 'Night Walker (part 2)']),
+      entry(2, 'Moth Archive (part 2)', 'feat', long, [...path, 'Moth Archive (part 2)']),
     ]);
     expect(fixes.map((f) => [f.id, f.kind])).toEqual([['lib:hold:1', 'rule'], ['lib:hold:2', 'rule'], ['lib:hold:3', 'rule']]);
   });

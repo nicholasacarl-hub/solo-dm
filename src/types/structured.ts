@@ -222,7 +222,7 @@ export type WarningCode =
   | 'needs-claude'      // the offline parser couldn't read it and Claude wasn't used
   | 'refused'           // stop_reason "refusal", with its category
   | 'failed'            // the request failed (truncated, invalid output, bad request…)
-  | 'not-this-kind'     // Claude said matchesKind: false (always 'block')
+  | 'not-this-kind'     // Claude said matchesKind: false ('block'), or an improved offline reader no longer finds this kind ('warn')
   | 'stale-text'        // the source text changed since extraction
   | 'model-note'        // Claude's `notes`
   | 'newer-version';    // written by a newer app version: read-only

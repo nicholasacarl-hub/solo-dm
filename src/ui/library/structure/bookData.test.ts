@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { extractionJob, gloamwoodEntries, gloamwoodRecords, structuredRecord } from '@/test/structuredFixtures';
-import type { CompendiumEntry, StructuredRecord } from '@/types';
+import { PARSER_VERSION, type CompendiumEntry, type StructuredRecord } from '@/types';
 import {
   acceptBlocker,
   blocksFor,
@@ -14,6 +14,7 @@ import {
   jobProgress,
   lookThroughMessage,
   matchesFilter,
+  needsRecheck,
   raisedBudget,
   remainingUsd,
   reviewCounts,
@@ -183,5 +184,20 @@ describe('looking through the book again', () => {
     expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted'), doubt('b', 'pending', 'spell')] }, 1)).toMatch(
       / 2 entries you had reviewed may have been misread: they're in To review, with a note\.$/,
     );
+  });
+});
+
+describe('what "Re-check" looks at', () => {
+  const old = (patch: Partial<StructuredRecord> = {}) => ({ ...byName('Lantern Bearer'), origin: 'parser' as const, parserVersion: 1, ...patch });
+  it('counts records an earlier offline reader made, except those kept as text, being read or from a newer app', () => {
+    expect(needsRecheck(old())).toBe(true);
+    expect(needsRecheck(old({ status: 'accepted' }))).toBe(true);
+    expect(needsRecheck(old({ parserVersion: undefined }))).toBe(true);
+    expect(needsRecheck(old({ parserVersion: PARSER_VERSION }))).toBe(false);
+    expect(needsRecheck(old({ status: 'rejected' }))).toBe(false);
+    expect(needsRecheck(old({ runState: 'queued' }))).toBe(false);
+    expect(needsRecheck(old({ runState: 'running' }))).toBe(false);
+    expect(needsRecheck(old({ origin: 'claude' }))).toBe(false);
+    expect(needsRecheck(old({ schemaVersion: 99 }))).toBe(false);
   });
 });

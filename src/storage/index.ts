@@ -15,7 +15,6 @@ import type {
   Clock,
   CombatState,
   CompendiumEntry,
-  ContentKind,
   ExtractionJob,
   GithubSyncSettings,
   HomebrewEntry,
@@ -147,9 +146,6 @@ export const STRUCTURING_BUSY_ERROR: string = library.STRUCTURING_BUSY_ERROR;
 export const setLibrarySourceEnabled: (id: string, enabled: boolean) => Promise<void> = library.setLibrarySourceEnabled;
 /** Entries for the given sources (all enabled imported sources when omitted). */
 export const getLibraryEntries: (sourceIds?: string[]) => Promise<CompendiumEntry[]> = library.getLibraryEntries;
-/** Correct some imported entries' kinds (and their summaries): detection's fix for kinds an older import guessed wrongly. */
-export const updateEntryKinds: (changes: readonly { id: string; kind: ContentKind; summary?: string }[]) => Promise<void> =
-  library.updateEntryKinds;
 
 // ---------------------------------------------------------------------------
 // Backups (export / import save files)

@@ -13,9 +13,11 @@
  * CampaignBundle.version too if exported files change shape.
  *
  * History: 1 = the original schema; 2 = illustrations (the "images" and "imageData" tables);
- * 3 = structured imports (the "libraryRecords" and "libraryJobs" tables).
+ * 3 = structured imports (the "libraryRecords" and "libraryJobs" tables); 4 = no schema change: entry
+ * kinds an older import guessed wrongly are corrected once.
  */
 import Dexie, { type EntityTable, type IndexableType, type Table } from 'dexie';
+import { staleFeatKinds } from '@/data/chunk';
 import type {
   Campaign,
   Character,
@@ -109,6 +111,43 @@ db.version(3).stores({
   libraryRecords: 'id, sourceId, [sourceId+kind], [sourceId+status], [jobId+runState]',
   libraryJobs: 'id, sourceId, status, createdAt',
 });
+
+// Version 4: no schema change. Imports made before the offline reader's version 2 stored some entries
+// as feats only because of a bare "Prerequisite:" line (stronghold rooms, class options, item
+// infusions); their kinds and summaries are corrected once, here, with today's rules (staleFeatKinds, a
+// pure function of the stored entries). Imported text only: a JSON file's kinds are the file's own.
+// Their structured records are settled by the book page's "Re-check" (detect.ts settleUnmatched).
+db.version(4)
+  .stores({})
+  .upgrade(async (tx) => {
+    const sources = (await tx.table('library').toArray()) as LibrarySource[];
+    const guessed = new Set(sources.filter((s) => s.kind === 'import' && s.format !== 'json').map((s) => s.id));
+    if (guessed.size === 0) return;
+    const feats = ((await tx.table('libraryEntries').where('kind').equals('feat').toArray()) as CompendiumEntry[]).filter((e) => guessed.has(e.sourceId));
+    const bySource = new Map<string, CompendiumEntry[]>();
+    for (const e of feats) {
+      const list = bySource.get(e.sourceId) ?? [];
+      list.push(e);
+      bySource.set(e.sourceId, list);
+    }
+    const byId = new Map(feats.map((e) => [e.id, e]));
+    const corrected: CompendiumEntry[] = [];
+    for (const [sourceId, list] of bySource) {
+      // An upgrade that throws leaves the whole database unopenable: a book whose old entries can't be
+      // read this way just keeps its kinds (Re-check and "Structure as…" still work on it).
+      try {
+        for (const fix of staleFeatKinds(list)) {
+          const entry = byId.get(fix.id);
+          if (!entry) continue;
+          const { summary: _old, ...rest } = entry;
+          corrected.push({ ...rest, kind: fix.kind, ...(fix.summary ? { summary: fix.summary } : {}) });
+        }
+      } catch (error) {
+        console.warn(`[storage] Kept the stored kinds of book ${sourceId}: they couldn't be checked.`, error);
+      }
+    }
+    if (corrected.length) await tx.table('libraryEntries').bulkPut(corrected);
+  });
 
 /**
  * Every table that holds a campaign's saved game (all of them except the library, its structured

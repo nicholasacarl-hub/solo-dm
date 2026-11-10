@@ -9,14 +9,13 @@
  * (unless the player explicitly re-reads it); a reading by Claude is never replaced by an offline one; a
  * record whose text changed gets `stale-text`. The one deletion: after the offline reader improved
  * (PARSER_VERSION rose), a record an older version made that it no longer finds is dropped when nobody
- * reviewed it, and kept with a note when the player did (settleUnmatched). Before segmenting, detection
- * corrects the entry kinds an older chunker guessed wrongly (staleFeatKinds).
+ * reviewed it, and kept with a note when the player did (settleUnmatched). (Entry kinds an older chunker
+ * guessed wrongly were corrected by the database upgrade to version 4, src/storage/db.ts.)
  *
  * Owner: E2.
  */
 import { nameKey, slugify } from '@/lib/id';
 import { bookFingerprint, textFingerprint } from '@/lib/importedContent';
-import { staleFeatKinds } from '../chunk';
 import {
   commitRecords,
   findSourcesByFingerprint,
@@ -27,13 +26,11 @@ import {
   markSourceStructured,
   putRecords,
   setSourceFingerprint,
-  updateEntryKinds,
 } from '@/storage';
 import {
   PARSER_VERSION,
   STRUCTURED_SCHEMA_VERSION,
   type CompendiumEntry,
-  type LibrarySource,
   type RecordOrigin,
   type RecordSpan,
   type RecordWarning,
@@ -44,10 +41,10 @@ import {
 import { getRulesIndex } from '../rulesIndexStore';
 import { normalize, normalizeItemRows, type NormalizeContext, type Normalized } from './normalize';
 import { warning } from './normalize/text';
-import { nameNotices, noticeIndex, type NoticeIndex } from './notices';
+import { KIND_NOUN, nameNotices, noticeIndex, type NoticeIndex } from './notices';
 import { parseOffline } from './parse';
 import { STRUCTURED_LIMITS } from './schemas';
-import { candidateFor, candidateKey, markCandidate, readingOrder, segment, type Candidate, type SegmentContext, type SpellListHint } from './segment';
+import { candidateFor, candidateKey, markCandidate, segment, type Candidate, type SegmentContext, type SpellListHint } from './segment';
 import type { Wire } from './wire';
 
 export interface DetectionSummary {
@@ -55,8 +52,6 @@ export interface DetectionSummary {
   total: number; readyOffline: number; needClaude: number;
   leftOut: number;                                   // over the 5,000-record limit
   duplicateOf?: { id: string; title: string };       // another source with the same fingerprint
-  /** Entries whose kind an older import guessed wrongly, corrected (a feat that was only a Prerequisite line). */
-  rekinded: number;
   /** Records an older offline reader made that this one doesn't find, dropped because nobody had reviewed them. */
   removed: Partial<Record<StructuredKind, number>>;
   /** Records like those that the player had reviewed (accepted or edited): kept with a note, for the player to decide. */
@@ -336,14 +331,9 @@ export function mergeReadings(
 // After the offline reader improved (pure)
 // ---------------------------------------------------------------------------
 
-const NOUN: Readonly<Record<StructuredKind, string>> = {
-  monster: 'a monster', spell: 'a spell', 'magic-item': 'a magic item', item: 'a piece of gear', feat: 'a feat', background: 'a background',
-  species: 'a species', class: 'a class', subclass: 'a subclass',
-};
-
 /** The note on a reviewed record the improved reader doesn't find any more. */
 export function doubtMessage(kind: StructuredKind): string {
-  return `An earlier version of the offline reader took this for ${NOUN[kind]}; the current one doesn't. If it isn't one, keep it as text. If it is, accept it.`;
+  return `An earlier version of the offline reader took this for ${KIND_NOUN[kind]}; the current one doesn't. If it isn't one, keep it as text. If it is, accept it.`;
 }
 
 const BEING_READ = new Set(['queued', 'running']);
@@ -427,32 +417,13 @@ function currentHash(record: StructuredRecord, entriesById: ReadonlyMap<string, 
   return textFingerprint(texts.join('\n\n'));
 }
 
-/**
- * The source's entries with the kinds an older chunker guessed wrongly corrected, in storage too (the
- * rules index and the Library show the stored kind). Imported text only: a JSON file's kinds are the file's.
- */
-async function correctStaleKinds(source: LibrarySource, entries: readonly CompendiumEntry[]): Promise<{ entries: CompendiumEntry[]; rekinded: number }> {
-  if (source.kind !== 'import' || source.format === 'json') return { entries: [...entries], rekinded: 0 };
-  const fixes = staleFeatKinds(readingOrder(entries));
-  if (fixes.length === 0) return { entries: [...entries], rekinded: 0 };
-  await updateEntryKinds(fixes);
-  const byId = new Map(fixes.map((f) => [f.id, f]));
-  const corrected = entries.map((e) => {
-    const fix = byId.get(e.id);
-    if (!fix) return e;
-    const { summary: _old, ...rest } = e;
-    return { ...rest, kind: fix.kind, ...(fix.summary ? { summary: fix.summary } : {}) };
-  });
-  return { entries: corrected, rekinded: fixes.length };
-}
-
 const countByKind = (records: readonly StructuredRecord[]): Partial<Record<StructuredKind, number>> => {
   const out: Partial<Record<StructuredKind, number>> = {};
   for (const r of records) out[r.kind] = (out[r.kind] ?? 0) + 1;
   return out;
 };
 
-function summarize(records: readonly (StructuredRecord | undefined)[], leftOut: number): Omit<DetectionSummary, 'duplicateOf' | 'rekinded' | 'removed' | 'doubted'> {
+function summarize(records: readonly (StructuredRecord | undefined)[], leftOut: number): Omit<DetectionSummary, 'duplicateOf' | 'removed' | 'doubted'> {
   const byKind: DetectionSummary['byKind'] = {};
   const withRows = new Set(records.flatMap((r) => (r?.tableRecordId ? [r.tableRecordId] : [])));
   for (const r of records) {
@@ -473,15 +444,11 @@ function summarize(records: readonly (StructuredRecord | undefined)[], leftOut: 
   };
 }
 
-/**
- * Local and free (~1–3 s for 300 pages); yields every 50 candidates. Callers refresh the rules index
- * afterwards: corrected entry kinds change what it holds.
- */
+/** Local and free (~1–3 s for 300 pages); yields every 50 candidates. */
 export async function detectStructure(sourceId: string, opts?: { onProgress?(done: number, total: number): void }): Promise<DetectionSummary> {
-  const [stored, sources, existing, context] = await Promise.all([getSourceEntries(sourceId), listLibrarySources(), listRecords(sourceId), detectionContext()]);
+  const [entries, sources, existing, context] = await Promise.all([getSourceEntries(sourceId), listLibrarySources(), listRecords(sourceId), detectionContext()]);
   const source = sources.find((s) => s.id === sourceId);
   if (!source) throw new Error('This book is no longer in the library.');
-  const { entries, rekinded } = await correctStaleKinds(source, stored);
   const entriesById = new Map(entries.map((e) => [e.id, e]));
   const { candidates, spellLists } = segment(entries, context.segment);
   const ctx: ReadingContext = { sourceId, entriesById, spellLists, notices: context.notices };
@@ -518,7 +485,6 @@ export async function detectStructure(sourceId: string, opts?: { onProgress?(don
   const duplicate = (await findSourcesByFingerprint(fingerprint)).find((s) => s.id !== sourceId);
   return {
     ...summarize(merged.records, leftOut),
-    rekinded,
     removed: countByKind(removed),
     doubted: settled.doubted.map((r) => ({ id: r.id, kind: r.kind, status: r.status })),
     ...(duplicate ? { duplicateOf: { id: duplicate.id, title: duplicate.title } } : {}),

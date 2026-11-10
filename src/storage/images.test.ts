@@ -334,7 +334,7 @@ describe('upgrading a database from before illustrations', () => {
 
     await db.open();
 
-    expect(db.verno).toBe(3);
+    expect(db.verno).toBe(4);
     expect(await getCampaign('old-camp')).toMatchObject({ id: 'old-camp' });
     await saveImage(storedImage({ campaignId: 'old-camp' }));
     expect((await listImages('old-camp')).map((i) => i.id)).toEqual(['img-1']);
@@ -358,7 +358,7 @@ describe('upgrading a database from before structured imports (version 2 → 3)'
 
     await db.open();
 
-    expect(db.verno).toBe(3);
+    expect(db.verno).toBe(4);
     expect(await getCampaign('old-camp')).toMatchObject({ id: 'old-camp' });
     expect(await db.library.get('gloam')).toEqual(library);
     expect(await db.libraryEntries.get('lib:gloam:1')).toEqual(entry);

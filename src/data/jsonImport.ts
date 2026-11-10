@@ -5,7 +5,7 @@
  */
 import { z } from 'zod';
 import { CONTENT_KINDS, type CompendiumEntry, type ContentKind } from '@/types';
-import { guessKind } from './chunk';
+import { guessKind, headingAncestors } from './chunk';
 import { isPackFile, parsePack, type PackImport } from './structured/packs';
 
 const MAX_ISSUES_SHOWN = 5;
@@ -65,7 +65,7 @@ export function parseJsonImport(input: string | unknown, opts: { sourceId: strin
       return;
     }
     const e = result.data;
-    const kind: ContentKind = e.kind && KINDS.has(e.kind) ? (e.kind as ContentKind) : e.kind ? 'other' : guessKind(e.name, e.text, e.path?.slice(0, -1));
+    const kind: ContentKind = e.kind && KINDS.has(e.kind) ? (e.kind as ContentKind) : e.kind ? 'other' : guessKind(e.name, e.text, headingAncestors(e.path ?? undefined, e.name));
     entries.push({
       id: `lib:${opts.sourceId}:${entries.length + 1}`,
       sourceId: opts.sourceId,

@@ -43,13 +43,27 @@ const PREREQUISITE_LINE = /^Prerequisites?:/i;
 const FEAT_LINE = new RegExp(`${FEAT_CATEGORY_LINE.source}|${PREREQUISITE_LINE.source}`, 'i');
 /** "Alert (Origin Feat)" or "Feat: Alert". */
 const FEAT_NAME = /\((?:(?:Origin|General|Fighting Style|Epic Boon)\s+)?Feat\)$|^Feat:/i;
-/** A heading that names feats: "Feats", "Racial Feats", "Feat Descriptions", "Chapter 5: Feats" (not "Features"). */
-const FEATS_HEADING = /\bFeats?\b/i;
+/**
+ * A heading that names feats: one that ends with the word ("Feats", "Racial Feats", "Chapter 5: Feats",
+ * "List of Feats"), or the word with a qualifier ("Feat Descriptions", "Feats (Optional)"). Not a title
+ * that only starts with it ("Feats of the North", "Feats and Fortresses"), and never "Features".
+ */
+const FEATS_HEADING = /\bFeats?$|^Feats?(?: Descriptions?| Lists?)?(?: \([^)]*\))?$/i;
 const SIZE_LINE = /^(?:Tiny|Small|Medium|Large|Huge|Gargantuan)\b/i;
 
 /** Whether one of the headings above an entry names feats (where older books print feats with only a Prerequisite line). */
 export function underFeatsHeading(ancestors: readonly string[]): boolean {
-  return ancestors.some((title) => FEATS_HEADING.test(stripInlineMarkdown(title)));
+  return ancestors.some((title) => FEATS_HEADING.test(stripInlineMarkdown(title).trim()));
+}
+
+/**
+ * The headings above an entry from its stored path. Imports store the entry's own name last
+ * (["Feats", "Night Walker"]); a JSON file may list only the headings above it, which are kept whole.
+ */
+export function headingAncestors(path: readonly string[] | undefined, name: string): string[] {
+  if (!path?.length) return [];
+  const last = stripInlineMarkdown(path[path.length - 1]).trim().toLowerCase();
+  return last === stripInlineMarkdown(name).trim().toLowerCase() ? path.slice(0, -1) : [...path];
 }
 
 /** Headings that are part of a stat block, never entries of their own. */
@@ -362,11 +376,18 @@ export interface KindCorrection {
   summary?: string;
 }
 
+/** The n of "lib:<sourceId>:<n>" (Infinity for any other id). */
+function ordinal(id: string): number {
+  const n = Number(id.slice(id.lastIndexOf(':') + 1));
+  return Number.isInteger(n) && n >= 0 ? n : Number.POSITIVE_INFINITY;
+}
+
 /**
- * Corrections for kinds an older version of guessKind stored (kinds are guessed once, at import): an
- * entry stored as a feat that today's rules don't read as one (a bare Prerequisite line outside a heading
- * that names feats) gets the kind and summary guessKind gives now. A long entry's "(part N)"
- * continuations follow their first part. Pure; `entries` in reading order, all from one source.
+ * Corrections for kinds an older version of guessKind stored (kinds are guessed once, at import; the
+ * database upgrade to version 4 applies these once, src/storage/db.ts): an entry stored as a feat that
+ * today's rules don't read as one (a bare Prerequisite line outside a heading that names feats) gets the
+ * kind and summary guessKind gives now. A long entry's "(part N)" continuations follow their first part.
+ * Pure. `entries`: one source's entries (all of them, or only those stored as feats), in any order.
  */
 export function staleFeatKinds(entries: readonly CompendiumEntry[]): KindCorrection[] {
   const out: KindCorrection[] = [];
@@ -375,7 +396,8 @@ export function staleFeatKinds(entries: readonly CompendiumEntry[]): KindCorrect
     const summary = summarize(kind, entry.text, entry.path);
     return { id: entry.id, kind, ...(summary ? { summary } : {}) };
   };
-  for (const entry of entries) {
+  const ordered = entries.map((entry, index) => ({ entry, index })).sort((a, b) => ordinal(a.entry.id) - ordinal(b.entry.id) || a.index - b.index);
+  for (const { entry } of ordered) {
     const ancestors = (entry.path ?? []).slice(0, -1);
     const parent = ancestors.join('\u0000');
     const part = PART_NAME.exec(entry.name);

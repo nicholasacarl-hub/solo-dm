@@ -28,7 +28,7 @@ import {
   type SubclassData,
   type TextSpan,
 } from '@/types';
-import { guessKind } from '../chunk';
+import { guessKind, headingAncestors } from '../chunk';
 import { validateData } from './normalize';
 import { splitParagraphs } from './paragraphs';
 import { DATA_SCHEMAS, RECORD_SCHEMA, STRUCTURED_LIMITS } from './schemas';
@@ -213,7 +213,7 @@ class PackContext {
         id,
         sourceId: this.sourceId,
         sourceName: this.sourceName,
-        kind: e.kind ?? guessKind(e.name, e.text, e.path?.slice(0, -1)),
+        kind: e.kind ?? guessKind(e.name, e.text, headingAncestors(e.path, e.name)),
         name: e.name,
         ...(e.summary ? { summary: e.summary } : {}),
         text: e.text,

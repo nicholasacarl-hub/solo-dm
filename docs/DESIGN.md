@@ -309,13 +309,15 @@ never touches a DM session, transcript or `Campaign.usage`.
 
 **Detection rules and re-checks.** A feat is an entry with a category line ("General Feat (Prerequisite:
 Level 4+)") or a name that says so; a bare "Prerequisite:" line counts only under a heading that names
-feats, because books print other options that way too (class options, stronghold rooms, item infusions).
-When the offline rules change, `PARSER_VERSION` rises and the book page offers *Re-check for free*: it
-looks through the book again (`detectStructure`), first correcting the entry kinds an older import
-guessed wrongly (imported text only: a JSON file's kinds are its own). A record an older reader made
-that the current one doesn't find is removed when nobody reviewed it; when the player had accepted or
-edited it, it keeps a note, and accepted ones go back to review (Undo accepts them again). Rejected
-records, records being read, and records Claude, a pack or the player made are left as they are.
+feats (one that ends with the word, or "Feat Descriptions"), because books print other options that way
+too (class options, stronghold rooms, item infusions). Entry kinds are guessed once, at import; when the
+guessing rules change, a database upgrade corrects the stored kinds once (version 4 did this for feats;
+imported text only, since a JSON file's kinds are its own). When the offline rules change,
+`PARSER_VERSION` rises and the book page offers *Re-check for free*: it looks through the book again
+(`detectStructure`). A record an older reader made that the current one doesn't find is removed when
+nobody reviewed it; when the player had accepted or edited it, it keeps a note, and accepted ones go back
+to review (Undo accepts them again). Rejected records, records being read, and records Claude, a pack or
+the player made are left as they are.
 
 **Running a job** (`src/dm/extract/runner.ts`). One job runs at a time across all books (others wait,
 queued). Per kind, the first request's first stream event opens the lane (the kind's cache entry is then
@@ -331,14 +333,14 @@ Each result is saved as it arrives. Requests set `maxRetries: 0` (the runner own
 stop once at double the limit; a refusal keeps whatever the offline reader found and can be retried on
 another model.
 
-**Storage** (Dexie version 3, `src/storage/structured.ts`): `libraryRecords` (one row per record, with
+**Storage** (Dexie version 3, and version 4's kind correction; `src/storage/structured.ts`): `libraryRecords` (one row per record, with
 the run state of the latest job that touched it) and `libraryJobs`. Neither is part of
 `campaignTables()`: like the library, they never leave the device. Every record write keeps the book's
 denormalized counts (`LibrarySource.structure`) right in the same transaction; deleting a book removes
 its records and jobs and is refused while a job runs.
 
-**Records beside entries.** Nothing writes structure into `libraryEntries` (a re-check only corrects
-the kinds the import itself guessed). `getLibrarySnapshot()` reads
+**Records beside entries.** Nothing writes structure into `libraryEntries` (the version 4 upgrade only
+corrected kinds the import itself had guessed). `getLibrarySnapshot()` reads
 the enabled imports, their entries and their accepted, schema-valid records once per rules-index version;
 `materializeEntries` turns accepted records into SRD-shaped index entries on read (a one-entry record keeps
 its chunk id; sections and table rows get four-segment ids; replaced chunk ids stay resolvable as

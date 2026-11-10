@@ -5,6 +5,7 @@
  */
 import { splitParagraphs, type CandidateBlock, type DetectionSummary } from '@/data';
 import {
+  PARSER_VERSION,
   STRUCTURED_KINDS,
   STRUCTURED_SCHEMA_VERSION,
   type CompendiumEntry,
@@ -207,6 +208,21 @@ export function isConfident(record: StructuredRecord): boolean {
     !isBeingRead(record) &&
     !isNewerVersion(record) &&
     !record.warnings.some((w) => w.severity !== 'info' || w.code === 'name-collision')
+  );
+}
+
+/**
+ * A record an older offline reader made that "Re-check" would look at again: read on this device by an
+ * earlier PARSER_VERSION, not kept as text, not being read by Claude (that reading settles it) and not
+ * written by a newer app.
+ */
+export function needsRecheck(record: StructuredRecord): boolean {
+  return (
+    record.origin === 'parser' &&
+    (record.parserVersion ?? 0) < PARSER_VERSION &&
+    record.status !== 'rejected' &&
+    !isBeingRead(record) &&
+    !isNewerVersion(record)
   );
 }
 

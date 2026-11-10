@@ -115,10 +115,7 @@ export async function getRecords(ids: string[]): Promise<(StructuredRecord | und
 
 /** Upsert; adjusts source.structure.counts by the delta of each written record (bulkGet of the old rows, same transaction). */
 export async function putRecords(records: StructuredRecord[]): Promise<void> {
-  if (records.length === 0) return;
-  const latest = new Map<string, StructuredRecord>();
-  for (const r of records) latest.set(r.id, r);
-  await db.transaction('rw', db.libraryRecords, db.library, () => writeCounted([...latest.values()], []));
+  await commitRecords(records, []);
 }
 
 /** Status changes (accept, reject, undo). Returns the previous statuses (for Undo). Sets reviewedAt. */
@@ -143,12 +140,10 @@ export async function setRecordStatus(ids: string[], status: RecordStatus): Prom
 }
 
 export async function deleteRecords(ids: string[]): Promise<void> {
-  const unique = [...new Set(ids)];
-  if (unique.length === 0) return;
-  await db.transaction('rw', db.libraryRecords, db.library, () => writeCounted([], unique));
+  await commitRecords([], ids);
 }
 
-/** Writes and deletes in one transaction (a detection re-run: new readings, notes, and the misreadings it drops); counts kept. */
+/** Writes (the last one per id wins) and deletes in one transaction, keeping the counts; detection's re-run uses both. */
 export async function commitRecords(puts: readonly StructuredRecord[], deleteIds: readonly string[]): Promise<void> {
   const latest = new Map<string, StructuredRecord>();
   for (const r of puts) latest.set(r.id, r);
