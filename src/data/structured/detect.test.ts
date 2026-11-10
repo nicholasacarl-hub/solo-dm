@@ -5,7 +5,7 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { bookFingerprint } from '@/lib/importedContent';
-import { getRecords, getSourceEntries, listLibrarySources, listRecords, putRecords, saveLibrarySource } from '@/storage';
+import { deleteRecords, getRecords, getSourceEntries, listLibrarySources, listRecords, putRecords, saveLibrarySource } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
 import { EXPECTED_DATA, GLOAMWOOD_CANDIDATES, GLOAMWOOD_SOURCE_ID, gloamwoodEntries, gloamwoodEntryId, gloamwoodSource } from '@/test/structuredFixtures';
 import { PARSER_VERSION, SRD_SOURCE_ID, type CompendiumEntry, type LibrarySource, type StructuredRecord } from '@/types';
@@ -13,7 +13,6 @@ import { createRulesIndex } from '../search';
 import { applyReading, detectStructure, doubtMessage, mergeReadings, readOffline, rereadOffline, settleUnmatched, structureEntryAs, type Reading } from './detect';
 import { noticeIndex } from './notices';
 import { segment } from './segment';
-import { staleFeatKinds } from '../chunk';
 
 const srd = (kind: CompendiumEntry['kind'], name: string): CompendiumEntry => ({
   id: `srd:${kind}:${name.toLowerCase().replace(/\W+/g, '-')}`, sourceId: SRD_SOURCE_ID, sourceName: 'SRD 5.2.1', kind, name, text: `${name}.`,
@@ -24,7 +23,7 @@ const SRD = [
   srd('class', 'Cleric'),
   srd('monster', 'Goblin Warrior'),
 ];
-vi.mock('../rulesIndexStore', () => ({ getRulesIndex: async () => createRulesIndex(SRD) }));
+vi.mock('../rulesIndexStore', () => ({ getRulesIndex: async () => createRulesIndex(SRD), invalidateRulesIndex: vi.fn() }));
 
 const SOURCE = GLOAMWOOD_SOURCE_ID;
 async function importBook(dialect: 'md' | 'mixed' = 'md', overrides: Parameters<typeof gloamwoodSource>[2] = {}) {
@@ -102,7 +101,7 @@ describe('detectStructure', () => {
     expect(summary.duplicateOf).toEqual({ id: 'copy', title: 'Gloamwood (old copy)' });
   });
 
-  it('re-runs without destroying work: same results are not rewritten, edits get a proposal, rejected and pack records stay', async () => {
+  it('re-runs without destroying work: same results are not rewritten, an edit gets a proposal when the reading changed, rejected and pack records stay', async () => {
     await importBook();
     await detectStructure(SOURCE);
     const before = await listRecords(SOURCE);
@@ -111,7 +110,8 @@ describe('detectStructure', () => {
     const cloak = byName(before, 'Mothsilk Cloak')!;
     const drake = byName(before, 'Glimmerwing Drake')!;
     await putRecords([
-      { ...hound, edited: true, data: { ...hound.data!, hp: 30 } as StructuredRecord['data'], updatedAt: 1 },
+      // Read by a reader that read it differently, then edited by the player.
+      { ...hound, edited: true, data: { ...hound.data!, hp: 30 } as StructuredRecord['data'], readingHash: 'an-older-reading', updatedAt: 1 },
       { ...choir, status: 'rejected', data: { ...choir.data!, level: 5 } as StructuredRecord['data'], updatedAt: 1 },
       { ...cloak, origin: 'pack', data: { ...cloak.data!, charges: 9 } as StructuredRecord['data'], updatedAt: 1 },
       { ...drake, origin: 'claude', data: { ...drake.data!, hp: 53 } as StructuredRecord['data'], updatedAt: 1 },
@@ -220,15 +220,16 @@ describe('after the offline reader improved', () => {
     entry(1, 'Glowworm Gallery', 'feat', '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\n_Room: Snug_\n\nThe keeper raises glowworms in jars of moss.\n\n### Gallery Tasks\n\nBrew. The keeper fills a jar with light.', 'Holding Rooms', 'Prerequisite: None'),
     entry(2, 'Moth Archive', 'feat', "_Level 9 Holding Room_\n\n_Prerequisite: Proficiency with a lantern-maker's tools_\n\nMoths copy every map left on the tables.", 'Holding Rooms', "Prerequisite: Proficiency with a lantern-maker's tools"),
     entry(3, 'Bright Ember', 'feat', "_Prerequisite: Level 5+ Wickwright_\n\nYour wick's flame sheds bright light 10 feet farther.", 'Wick Charm Options', 'Prerequisite: Level 5+ Wickwright'),
-    entry(4, 'Night Walker', 'feat', '_Prerequisite: Wisdom 13 or higher_\n\nYou can walk the lamp roads at night without a light.', 'Feats', 'Prerequisite: Wisdom 13 or higher'),
+    // A real older-style feat, under a heading that doesn't name feats (as a flattened PDF leaves it).
+    entry(4, 'Night Walker', 'feat', '_Prerequisite: Wisdom 13 or higher_\n\nYou can walk the lamp roads at night without a light.', 'Heroic Talents', 'Prerequisite: Wisdom 13 or higher'),
     entry(5, 'Lamp Oil', 'rule', 'Lamp oil burns for six hours in a hooded lantern.', 'Supplies'),
   ];
   const source = (format: LibrarySource['format']): LibrarySource => ({ id: HOLD, title: BOOK, kind: 'import', format, enabled: true, entryCount: OLD_ENTRIES.length, createdAt: 1, updatedAt: 1 });
+  const ctx = { sourceId: HOLD, entriesById: new Map(OLD_ENTRIES.map((e) => [e.id, e])), spellLists: [], notices: null };
 
   /** What version 1 wrote: a feat record per Prerequisite entry (read offline, version 1). */
   async function importedByVersion1(format: LibrarySource['format'] = 'pdf'): Promise<StructuredRecord[]> {
     await saveLibrarySource(source(format), OLD_ENTRIES);
-    const ctx = { sourceId: HOLD, entriesById: new Map(OLD_ENTRIES.map((e) => [e.id, e])), spellLists: [], notices: null };
     const { candidates } = segment(OLD_ENTRIES, { knownSpellNames: new Set(), knownClassNames: new Set() });
     const readings = candidates.flatMap((c) => readOffline(c, ctx));
     const records = mergeReadings(HOLD, [], readings, { explicit: false, now: 1 }).writes.map((r) => ({ ...r, parserVersion: 1 }));
@@ -237,25 +238,17 @@ describe('after the offline reader improved', () => {
     return records;
   }
   const named = (records: StructuredRecord[], name: string) => records.find((r) => r.name === name);
-  /** What the database upgrade to version 4 does to those entries (src/storage/db.ts). */
-  async function upgradeEntryKinds(): Promise<void> {
-    const fixes = new Map(staleFeatKinds(OLD_ENTRIES).map((f) => [f.id, f]));
-    const upgraded = OLD_ENTRIES.map((e) => {
-      const fix = fixes.get(e.id);
-      if (!fix) return e;
-      const { summary: _old, ...rest } = e;
-      return { ...rest, kind: fix.kind, ...(fix.summary ? { summary: fix.summary } : {}) };
-    });
-    await saveLibrarySource(source('pdf'), upgraded);
-  }
+  const recheckCount = (records: StructuredRecord[]) =>
+    records.filter((r) => r.origin === 'parser' && (r.parserVersion ?? 0) < PARSER_VERSION && r.status !== 'rejected' && !r.runState).length;
 
-  it('drops what nobody reviewed, and keeps what the player reviewed with a note', async () => {
+  it('corrects the stored kinds, drops the misreadings nobody worked on, and keeps the ones the player did with a note', async () => {
     const v1 = await importedByVersion1();
     await putRecords([
       { ...named(v1, 'Moth Archive')!, status: 'rejected' },
       { ...named(v1, 'Bright Ember')!, status: 'accepted' },
     ]);
-    await upgradeEntryKinds();
+    const summary = await detectStructure(HOLD);
+
     const kinds = Object.fromEntries((await getSourceEntries(HOLD)).map((e) => [e.name, [e.kind, e.summary]]));
     expect(kinds).toEqual({
       'Glowworm Gallery': ['rule', `${BOOK} › Holding Rooms`],
@@ -264,8 +257,6 @@ describe('after the offline reader improved', () => {
       'Night Walker': ['feat', 'Prerequisite: Wisdom 13 or higher'],
       'Lamp Oil': ['rule', undefined],
     });
-    const summary = await detectStructure(HOLD);
-
     const after = await listRecords(HOLD);
     expect(named(after, 'Glowworm Gallery')).toBeUndefined();
     // The player's decisions stand: rejected stays untouched, accepted stays accepted with a note.
@@ -273,80 +264,156 @@ describe('after the offline reader improved', () => {
     const ember = named(after, 'Bright Ember')!;
     expect(ember).toMatchObject({ status: 'accepted', parserVersion: PARSER_VERSION, confidence: 'medium' });
     expect(ember.warnings).toContainEqual({ code: 'not-this-kind', severity: 'warn', field: 'kind', message: doubtMessage('feat') });
-    // A real older-style feat under a Feats heading is still a feat, read by today's reader.
+    // The real feat is still a feat (no Feats heading needed), read by today's reader.
     expect(named(after, 'Night Walker')).toMatchObject({ kind: 'feat', status: 'pending', parserVersion: PARSER_VERSION, data: { category: 'general', prerequisite: 'Wisdom 13 or higher' } });
 
-    expect(summary).toMatchObject({ removed: { feat: 1 }, doubted: [{ id: ember.id, kind: 'feat', status: 'accepted' }], total: 1 });
+    expect(summary).toMatchObject({
+      total: 1,
+      removed: { feat: 1 },
+      removedNames: ['Glowworm Gallery'],
+      removedRecords: [expect.objectContaining({ id: named(v1, 'Glowworm Gallery')!.id, parserVersion: 1 })],
+      doubted: [{ id: ember.id, kind: 'feat', status: 'accepted' }],
+    });
     const counts = (await listLibrarySources()).find((s) => s.id === HOLD)?.structure?.counts;
     expect(counts?.feat).toEqual({ pending: 1, accepted: 1, rejected: 1 });
-    // Nothing is left for "Re-check" (the book page offers it for parser records of an older version that aren't rejected).
-    expect(after.filter((r) => r.origin === 'parser' && (r.parserVersion ?? 0) < PARSER_VERSION && r.status !== 'rejected')).toEqual([]);
+    expect(recheckCount(after)).toBe(0);
+  });
+
+  it('never removes what the player marked or changed the kind of: it reads them again', async () => {
+    const v1 = await importedByVersion1();
+    /** A marking as version 1 stored it (before records remembered markings). */
+    const markedByVersion1 = async (entryId: string, kind: StructuredRecord['kind']) => {
+      const { marked: _marked, ...record } = await structureEntryAs(HOLD, [entryId], kind);
+      await putRecords([{ ...record, parserVersion: 1 }]);
+    };
+    // "What it is" turned the room's feat record into a background; "Structure as… feat" marked Lamp Oil;
+    // and a newer marking says the archive is a feat after all.
+    await markedByVersion1('lib:hold:1', 'background');
+    await deleteRecords([named(v1, 'Glowworm Gallery')!.id]);
+    await markedByVersion1('lib:hold:5', 'feat');
+    await putRecords([{ ...named(v1, 'Moth Archive')!, marked: true }]);
+
+    const summary = await detectStructure(HOLD);
+    const after = await listRecords(HOLD);
+    expect(after.map((r) => [r.name, r.kind, r.parserVersion]).sort()).toEqual([
+      ['Glowworm Gallery', 'background', PARSER_VERSION],
+      ['Lamp Oil', 'feat', PARSER_VERSION],
+      ['Moth Archive', 'feat', PARSER_VERSION],
+      ['Night Walker', 'feat', PARSER_VERSION],
+    ]);
+    expect(named(after, 'Moth Archive')).toMatchObject({ marked: true });
+    expect(summary).toMatchObject({ removed: { feat: 1 }, removedNames: ['Bright Ember'] });
+    expect(recheckCount(after)).toBe(0);
+  });
+
+  it('leaves alone a record that changed while it looked through the book, and one Claude is reading', async () => {
+    const v1 = await importedByVersion1();
+    const walker = named(v1, 'Night Walker')!;
+    const gallery = named(v1, 'Glowworm Gallery')!;
+    const ember = named(v1, 'Bright Ember')!;
+    await putRecords([{ ...ember, runState: 'queued', jobId: 'job:1' }]);
+    let wrote: Promise<void> | null = null;
+    await detectStructure(HOLD, {
+      onProgress: (done, total) => {
+        if (done !== total || wrote) return;
+        // Meanwhile: the player accepts Night Walker and Glowworm Gallery; Claude's reading of Bright Ember lands.
+        wrote = putRecords([
+          { ...walker, status: 'accepted', updatedAt: 999_999 },
+          { ...gallery, status: 'accepted', updatedAt: 999_999 },
+          { ...ember, origin: 'claude', runState: 'done', jobId: 'job:1', updatedAt: 999_999 },
+        ]);
+      },
+    });
+    await wrote;
+    const after = await listRecords(HOLD);
+    expect(named(after, 'Night Walker')).toMatchObject({ status: 'accepted', updatedAt: 999_999 });
+    expect(named(after, 'Glowworm Gallery')).toMatchObject({ status: 'accepted', updatedAt: 999_999 });
+    expect(named(after, 'Bright Ember')).toMatchObject({ origin: 'claude', runState: 'done', updatedAt: 999_999 });
+  });
+
+  it("doesn't offer an offline reading over the player's edit or over Claude's waiting reading, and judges stale text by the record's own entries", async () => {
+    const v1 = await importedByVersion1();
+    const walker = named(v1, 'Night Walker')!;
+    const edited = { ...walker, status: 'accepted' as const, edited: true, data: { ...(walker.data as object), prerequisite: 'Wisdom 14 or higher' } as StructuredRecord['data'] };
+    await putRecords([edited]);
+    await detectStructure(HOLD);
+    const once = named(await listRecords(HOLD), 'Night Walker')!;
+    expect(once).toMatchObject({ edited: true, parserVersion: PARSER_VERSION, data: { prerequisite: 'Wisdom 14 or higher' } });
+    expect(once).not.toHaveProperty('proposal');
+    expect(once.warnings.some((w) => w.code === 'stale-text')).toBe(false);
+
+    const claudeProposal = { data: walker.data!, warnings: [], adaptations: [], excerpts: [], origin: 'claude' as const, createdAt: 5 };
+    const accepted = { ...walker, status: 'accepted' as const, data: { ...(walker.data as object), repeatable: true } as StructuredRecord['data'], proposal: claudeProposal, parserVersion: 1 };
+    await putRecords([accepted]);
+    await detectStructure(HOLD);
+    expect(named(await listRecords(HOLD), 'Night Walker')?.proposal).toEqual(claudeProposal);
   });
 
   it('changes nothing the second time', async () => {
     await importedByVersion1();
-    await upgradeEntryKinds();
     await detectStructure(HOLD);
     const before = await listRecords(HOLD);
     const again = await detectStructure(HOLD);
-    expect(again).toMatchObject({ removed: {}, doubted: [] });
+    expect(again).toMatchObject({ removed: {}, removedNames: [], removedRecords: [], doubted: [] });
     expect(await listRecords(HOLD)).toEqual(before);
   });
 
-  it("still finds the feats a JSON file says are feats (its kinds are the file's, not a guess), and re-checks them", async () => {
+  it("keeps a JSON file's kinds (they are the file's, not a guess), and re-checks its records", async () => {
     await importedByVersion1('json');
     const summary = await detectStructure(HOLD);
     expect(summary).toMatchObject({ removed: {}, doubted: [] });
     expect((await getSourceEntries(HOLD)).filter((e) => e.kind === 'feat')).toHaveLength(4);
-    expect((await listRecords(HOLD)).map((r) => [r.name, r.parserVersion])).toEqual([
-      ['Glowworm Gallery', PARSER_VERSION], ['Moth Archive', PARSER_VERSION], ['Bright Ember', PARSER_VERSION], ['Night Walker', PARSER_VERSION],
-    ]);
+    expect(recheckCount(await listRecords(HOLD))).toBe(0);
   });
 
   it('stamps a reviewed record today’s reader still finds, so the re-check is done for it', () => {
     const entries = gloamwoodEntries(SOURCE);
-    const ctx = { sourceId: SOURCE, entriesById: new Map(entries.map((e) => [e.id, e])), spellLists: [], notices: null };
+    const gctx = { sourceId: SOURCE, entriesById: new Map(entries.map((e) => [e.id, e])), spellLists: [], notices: null };
     const { candidates } = segment(entries, { knownSpellNames: new Set(), knownClassNames: new Set() });
-    const reading = candidates.filter((c) => c.kind === 'spell').flatMap((c) => readOffline(c, ctx));
+    const reading = candidates.filter((c) => c.kind === 'spell').flatMap((c) => readOffline(c, gctx));
     const [fresh] = mergeReadings(SOURCE, [], reading, { explicit: false, now: 1 }).writes;
     const accepted: StructuredRecord = { ...fresh, status: 'accepted', parserVersion: 1 };
     expect(applyReading(accepted, fresh, { explicit: false, now: 2 })).toEqual({ ...accepted, parserVersion: PARSER_VERSION, updatedAt: 2 });
     expect(applyReading({ ...accepted, origin: 'claude' }, fresh, { explicit: false, now: 2 })).toBeNull();
+    // Stale text follows the predicate when given (detection passes the record's own entries).
+    const moved = { ...fresh, textHash: 'other' };
+    expect(applyReading({ ...accepted, parserVersion: PARSER_VERSION }, moved, { explicit: false, now: 3, textChanged: () => false })).toBeNull();
+    expect(applyReading({ ...accepted, parserVersion: PARSER_VERSION }, fresh, { explicit: false, now: 3, textChanged: () => true })?.warnings).toContainEqual(expect.objectContaining({ code: 'stale-text' }));
+    // A record Claude is reading is left to that reading.
+    expect(applyReading({ ...fresh, runState: 'running', parserVersion: 1 }, fresh, { explicit: false, now: 3 })).toBeNull();
   });
 });
 
 describe('settleUnmatched (pure)', () => {
+  const room = { id: 'lib:hold:1', sourceId: 'hold', sourceName: 'Holdings', kind: 'rule', name: 'Glowworm Gallery', text: '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\nGlowworms.', path: ['Holdings', 'Glowworm Gallery'] } as CompendiumEntry;
+  const feat = { id: 'lib:hold:2', sourceId: 'hold', sourceName: 'Holdings', kind: 'feat', name: 'Night Walker', text: 'Prerequisite: Wisdom 13 or higher\n\nYou walk at night.', path: ['Holdings', 'Night Walker'] } as CompendiumEntry;
+  const entriesById = new Map([room, feat].map((e) => [e.id, e]));
   const base = (id: string, patch: Partial<StructuredRecord> = {}): StructuredRecord => ({
-    id, publicId: id, sourceId: 'hold', kind: 'feat', name: id, schemaVersion: 1, entryIds: [`lib:hold:${id}`], span: 'entry', candidateKey: id,
+    id, publicId: room.id, sourceId: 'hold', kind: 'feat', name: id, schemaVersion: 1, entryIds: [room.id], span: 'entry', candidateKey: id,
     status: 'pending', confidence: 'high', origin: 'parser', data: null, warnings: [], adaptations: [], excerpts: [], edited: false,
     textHash: 'h', parserVersion: 1, createdAt: 1, updatedAt: 1, ...patch,
   });
 
-  it('drops what nobody reviewed and notes what the player did; leaves everything else alone', () => {
+  it('removes only the misreadings the version change explains that nobody worked on', () => {
     const records = [
       base('unreviewed'),
-      base('edited', { edited: true }),
       base('accepted', { status: 'accepted' }),
+      base('edited', { edited: true }),
+      base('proposal', { proposal: { data: { format: '2014', category: 'general', repeatable: false, text: { entryIds: [room.id], from: 2, to: 2 } }, warnings: [], adaptations: [], excerpts: [], origin: 'claude', createdAt: 1 } }),
+      base('read-by-claude', { runState: 'done', jobId: 'job:1' }),
+      base('marked', { marked: true }),
+      base('a-background', { kind: 'background' }),
+      base('a-real-feat', { entryIds: [feat.id] }),
       base('rejected', { status: 'rejected' }),
       base('by-claude', { origin: 'claude', parserVersion: undefined }),
-      base('from-pack', { origin: 'pack' }),
       base('being-read', { runState: 'queued' }),
+      base('newer-app', { schemaVersion: 99 }),
       base('current', { parserVersion: PARSER_VERSION }),
     ];
-    const settled = settleUnmatched(records, records, 5);
+    const settled = settleUnmatched(records, entriesById, 5);
     expect([...settled.remove]).toEqual(['unreviewed']);
-    expect(settled.doubted.map((r) => r.id)).toEqual(['edited', 'accepted']);
-    expect([...settled.changed.keys()]).toEqual(['edited', 'accepted']);
-    expect(settled.changed.get('accepted')).toMatchObject({ status: 'accepted', confidence: 'medium', parserVersion: PARSER_VERSION, updatedAt: 5 });
-  });
-
-  it('keeps a table while a row of it stays, stamped so it leaves the re-check', () => {
-    const table = base('table', { kind: 'item', span: 'table' });
-    const kept = base('row-kept', { kind: 'item', span: 'row', rowIndex: 0, tableRecordId: 'table', status: 'accepted' });
-    const dropped = base('row-dropped', { kind: 'item', span: 'row', rowIndex: 1, tableRecordId: 'table' });
-    const settled = settleUnmatched([table, kept, dropped], [table, kept, dropped], 5);
-    expect([...settled.remove]).toEqual(['row-dropped']);
-    expect(settled.changed.get('table')).toMatchObject({ parserVersion: PARSER_VERSION, warnings: [] });
-    expect(settleUnmatched([table, dropped], [table, dropped], 5).remove).toEqual(new Set(['table', 'row-dropped']));
+    expect(settled.doubted.map((r) => r.id)).toEqual(['accepted', 'edited', 'proposal', 'read-by-claude']);
+    expect(settled.doubted[0]).toMatchObject({ status: 'accepted', confidence: 'medium', parserVersion: PARSER_VERSION, updatedAt: 5 });
+    expect(settled.reread.map((r) => r.id)).toEqual(['marked', 'a-background', 'a-real-feat']);
   });
 });

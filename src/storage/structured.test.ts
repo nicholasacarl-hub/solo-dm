@@ -3,6 +3,7 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { PARSER_VERSION, type CompendiumEntry, type LibrarySource, type StructuredRecord } from '@/types';
 import {
   charactersUsingSource,
+  commitRecords,
   deleteLibrarySource,
   deleteRecords,
   findSourcesByFingerprint,
@@ -155,6 +156,42 @@ describe('putRecords and the source counts', () => {
     await putRecords(gloamwoodRecords().slice(0, 3));
     const after = await db.library.get('gloam');
     expect({ ...after, structure: undefined }).toEqual({ ...before, structure: undefined });
+  });
+});
+
+describe('commitRecords', () => {
+  it('skips writes and deletes of records that changed since they were read, and says what it applied', async () => {
+    await seedBook();
+    const [a, b, c, d] = gloamwoodRecords();
+    await putRecords([a, b, c, d]);
+    const read = new Map<string, number | null>([a, b, c, d].map((r) => [r.id, r.updatedAt]));
+    read.set('rec:gloam:spell:fresh', null);
+    // Meanwhile: the player accepts b, and c is deleted elsewhere; a new record appears where detection made one too.
+    await putRecords([{ ...b, status: 'accepted', updatedAt: b.updatedAt + 5 }]);
+    await deleteRecords([c.id]);
+    await putRecords([{ ...a, id: 'rec:gloam:spell:fresh', publicId: 'lib:gloam:spell:fresh', name: 'Elsewhere', updatedAt: 7 }]);
+
+    const result = await commitRecords(
+      [{ ...a, name: 'A2' }, { ...b, status: 'pending', name: 'B2' }, { ...c, name: 'C2' }, { ...a, id: 'rec:gloam:spell:fresh', publicId: 'lib:gloam:spell:fresh', name: 'Fresh' }],
+      [d.id],
+      read,
+    );
+    expect([...result.written]).toEqual([a.id]);
+    expect([...result.deleted]).toEqual([d.id]);
+    const [ra, rb, rc, rd, fresh] = await getRecords([a.id, b.id, c.id, d.id, 'rec:gloam:spell:fresh']);
+    expect(ra?.name).toBe('A2');
+    expect(rb).toMatchObject({ status: 'accepted', name: b.name });
+    expect(rc).toBeUndefined();
+    expect(rd).toBeUndefined();
+    expect(fresh?.name).toBe('Elsewhere');
+  });
+
+  it('writes and deletes unconditionally without what was read', async () => {
+    await seedBook();
+    const [a, b] = gloamwoodRecords();
+    await putRecords([a, b]);
+    await putRecords([{ ...a, updatedAt: a.updatedAt + 9 }]);
+    expect(await commitRecords([{ ...a, name: 'A2' }], [b.id])).toEqual({ written: new Set([a.id]), deleted: new Set([b.id]) });
   });
 });
 

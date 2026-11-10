@@ -8,16 +8,18 @@
  * accepted one gets a `proposal` when the new reading differs; a rejected or pack record is left alone
  * (unless the player explicitly re-reads it); a reading by Claude is never replaced by an offline one; a
  * record whose text changed gets `stale-text`. The one deletion: after the offline reader improved
- * (PARSER_VERSION rose), a record an older version made that it no longer finds is dropped when nobody
- * reviewed it, and kept with a note when the player did (settleUnmatched). (Entry kinds an older chunker
- * guessed wrongly were corrected by the database upgrade to version 4, src/storage/db.ts.)
+ * (PARSER_VERSION rose), a misreading the version change explains is dropped when nobody worked on it,
+ * and kept with a note when someone did (settleUnmatched). Detection first corrects the entry kinds an
+ * older chunker guessed wrongly (staleKinds.ts), and never overwrites a record that changed while it ran.
  *
  * Owner: E2.
  */
 import { nameKey, slugify } from '@/lib/id';
 import { bookFingerprint, textFingerprint } from '@/lib/importedContent';
+import { headingAncestors, misreadAsFeatBefore } from '../chunk';
 import {
   commitRecords,
+  compareRecordsByReading,
   findSourcesByFingerprint,
   getRecords,
   getSourceEntries,
@@ -44,6 +46,7 @@ import { warning } from './normalize/text';
 import { KIND_NOUN, nameNotices, noticeIndex, type NoticeIndex } from './notices';
 import { parseOffline } from './parse';
 import { STRUCTURED_LIMITS } from './schemas';
+import { correctStaleKinds } from './staleKinds';
 import { candidateFor, candidateKey, markCandidate, segment, type Candidate, type SegmentContext, type SpellListHint } from './segment';
 import type { Wire } from './wire';
 
@@ -52,9 +55,13 @@ export interface DetectionSummary {
   total: number; readyOffline: number; needClaude: number;
   leftOut: number;                                   // over the 5,000-record limit
   duplicateOf?: { id: string; title: string };       // another source with the same fingerprint
-  /** Records an older offline reader made that this one doesn't find, dropped because nobody had reviewed them. */
+  /** Misreadings of an older offline reader (settleUnmatched) that nobody had worked on, removed: by kind. */
   removed: Partial<Record<StructuredKind, number>>;
-  /** Records like those that the player had reviewed (accepted or edited): kept with a note, for the player to decide. */
+  /** The first few of them by name, in reading order. */
+  removedNames: string[];
+  /** Them, as they were (so Undo can put them back). */
+  removedRecords: StructuredRecord[];
+  /** Misreadings someone had worked on: kept with a note, for the player to decide. */
   doubted: { id: string; kind: StructuredKind; status: StructuredRecord['status'] }[];
 }
 
@@ -174,14 +181,32 @@ function replaceable(existing: StructuredRecord, fresh: StructuredRecord): boole
   return !(existing.origin === 'claude' && fresh.origin === 'parser');
 }
 
+const BEING_READ = new Set(['queued', 'running']);
+
+/** The fingerprint of an offline reading's data (StructuredRecord.readingHash). */
+export function readingHashOf(data: unknown): string {
+  return textFingerprint(JSON.stringify(data));
+}
+
+export interface ApplyOptions {
+  explicit: boolean;
+  now: number;
+  /** Whether the record's own text changed since it was read (default: the fresh reading's hash differs). */
+  textChanged?: (existing: StructuredRecord) => boolean;
+}
+
 /**
  * §3.10: what a fresh reading does to a stored record (null = no write). `explicit`: the player asked for
- * this record (Re-read, Retry, a selection), which also reaches rejected and pack records.
+ * this record (Re-read, Retry, a selection), which also reaches rejected and pack records. A look
+ * through the book (not explicit) leaves alone a record Claude is reading (that reading settles it),
+ * never offers an offline reading over the player's own edit (Re-read still does), and never replaces
+ * a Claude reading waiting as a proposal with an offline one.
  */
-export function applyReading(existing: StructuredRecord, fresh: StructuredRecord, opts: { explicit: boolean; now: number }): StructuredRecord | null {
+export function applyReading(existing: StructuredRecord, fresh: StructuredRecord, opts: ApplyOptions): StructuredRecord | null {
   const { explicit, now } = opts;
   if (existing.schemaVersion > STRUCTURED_SCHEMA_VERSION) return null; // a newer app wrote it: read-only here
-  const changedText = fresh.textHash !== existing.textHash;
+  if (!explicit && BEING_READ.has(existing.runState ?? '')) return null;
+  const changedText = opts.textChanged ? opts.textChanged(existing) : fresh.textHash !== existing.textHash;
   if (!explicit && (existing.status === 'rejected' || existing.origin === 'pack')) return changedText ? withStale(existing, now) : null;
   if (replaceable(existing, fresh)) {
     const next: StructuredRecord = {
@@ -197,22 +222,37 @@ export function applyReading(existing: StructuredRecord, fresh: StructuredRecord
       textHash: fresh.textHash,
       ...(fresh.parserVersion !== undefined ? { parserVersion: fresh.parserVersion } : {}),
       ...(fresh.extraction ? { extraction: fresh.extraction } : {}),
+      ...(fresh.marked ? { marked: true as const } : {}),
     };
     delete next.proposal;
+    if (fresh.readingHash) next.readingHash = fresh.readingHash;
+    else delete next.readingHash;
     if (fresh.modelNote) next.modelNote = fresh.modelNote;
     else delete next.modelNote;
-    const keys: (keyof StructuredRecord)[] = ['name', 'entryIds', 'data', 'warnings', 'adaptations', 'excerpts', 'confidence', 'origin', 'textHash', 'modelNote', 'parserVersion', 'proposal', 'extraction'];
+    const keys: (keyof StructuredRecord)[] = ['name', 'entryIds', 'data', 'warnings', 'adaptations', 'excerpts', 'confidence', 'origin', 'textHash', 'modelNote', 'parserVersion', 'proposal', 'extraction', 'marked', 'readingHash'];
     if (keys.every((k) => same(next[k], existing[k]))) return null;
     return { ...next, updatedAt: now };
   }
   let next: StructuredRecord | null = null;
   const reviewed = existing.edited || existing.status === 'accepted';
-  if (fresh.data !== null && !same(fresh.data, existing.data) && (explicit || reviewed) && !same(fresh.data, existing.proposal?.data)) {
+  // A look through the book offers an offline reading only when the reader's reading changed since this
+  // record was last read (not merely because the player's edit differs from it), and never over Claude's.
+  const offline = !explicit && fresh.origin === 'parser';
+  // Only a record the offline reader made has a baseline: Claude's, a pack's or the player's own fields are never second-guessed.
+  const baseline =
+    existing.origin !== 'parser' ? undefined : (existing.readingHash ?? (existing.edited || existing.data === null ? undefined : readingHashOf(existing.data)));
+  const readerChanged = fresh.readingHash !== undefined && baseline !== undefined && fresh.readingHash !== baseline;
+  const mayPropose = !offline || (readerChanged && existing.proposal?.origin !== 'claude');
+  if (fresh.data !== null && !same(fresh.data, existing.data) && (explicit || reviewed) && !same(fresh.data, existing.proposal?.data) && mayPropose) {
     next = {
       ...existing,
       proposal: { data: fresh.data, warnings: fresh.warnings, adaptations: fresh.adaptations, excerpts: fresh.excerpts, origin: fresh.origin, createdAt: now },
       updatedAt: now,
     };
+  }
+  // Remember what the reader said this time (also for a record from before readings were remembered).
+  if (fresh.origin === 'parser' && fresh.readingHash !== undefined && existing.origin === 'parser' && existing.readingHash !== fresh.readingHash) {
+    next = { ...(next ?? existing), readingHash: fresh.readingHash, updatedAt: now };
   }
   // The current offline reader has looked at it (any difference waits in the proposal): "Re-check" is done for it.
   if (existing.origin === 'parser' && fresh.origin === 'parser' && fresh.parserVersion !== undefined && (existing.parserVersion ?? 0) < fresh.parserVersion) {
@@ -263,7 +303,7 @@ function recordOf(reading: Reading, sourceId: string, matched: StructuredRecord 
     ...(n.modelNote ? { modelNote: n.modelNote.slice(0, STRUCTURED_LIMITS.modelNoteChars) } : {}),
     edited: false,
     textHash: reading.textHash,
-    ...(reading.origin === 'parser' ? { parserVersion: PARSER_VERSION } : {}),
+    ...(reading.origin === 'parser' ? { parserVersion: PARSER_VERSION, ...(n.data !== null ? { readingHash: readingHashOf(n.data) } : {}) } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -288,7 +328,7 @@ export function mergeReadings(
   sourceId: string,
   existing: readonly StructuredRecord[],
   readings: readonly Reading[],
-  opts: { explicit: boolean; now: number; limit?: number; decorate?: (record: StructuredRecord, reading: Reading) => StructuredRecord },
+  opts: ApplyOptions & { limit?: number; decorate?: (record: StructuredRecord, reading: Reading) => StructuredRecord },
 ): MergeResult {
   const space: IdSpace = { ids: new Set(existing.map((r) => r.id)), publicIds: new Set(existing.map((r) => r.publicId)) };
   const byKey = new Map(existing.map((r) => [r.candidateKey, r]));
@@ -331,14 +371,12 @@ export function mergeReadings(
 // After the offline reader improved (pure)
 // ---------------------------------------------------------------------------
 
-/** The note on a reviewed record the improved reader doesn't find any more. */
+/** The note on a record someone worked on that the improved reader doesn't find any more. */
 export function doubtMessage(kind: StructuredKind): string {
   return `An earlier version of the offline reader took this for ${KIND_NOUN[kind]}; the current one doesn't. If it isn't one, keep it as text. If it is, accept it.`;
 }
 
-const BEING_READ = new Set(['queued', 'running']);
-
-/** A reviewed record the improved reader doesn't find: a note (a `warn`, so it can still be accepted), checked by today's reader. */
+/** A note (a `warn`, so it can still be accepted), and today's reader version: the re-check is done for it. */
 function doubted(record: StructuredRecord, now: number): StructuredRecord {
   const message = doubtMessage(record.kind);
   const warnings = record.warnings.some((w) => w.code === 'not-this-kind' && w.message === message)
@@ -347,40 +385,55 @@ function doubted(record: StructuredRecord, now: number): StructuredRecord {
   return { ...record, warnings, confidence: record.confidence === 'low' ? 'low' : 'medium', parserVersion: PARSER_VERSION, updatedAt: now };
 }
 
+/** Anything a person or Claude did to a record: accepted, edited, a newer reading waiting, a Claude reading or run. */
+const workedOn = (r: StructuredRecord) =>
+  r.status === 'accepted' || r.edited || r.proposal !== undefined || r.extraction !== undefined || r.runState !== undefined;
+
+/**
+ * The misreadings PARSER_VERSION 2 explains: a feat version 1 read from a bare Prerequisite line that
+ * today's rules read as something else (a stronghold room, a class option). Never a record the player
+ * marked (All entries › Structure as…, What it is).
+ */
+function explainedMisreading(r: StructuredRecord, entriesById: ReadonlyMap<string, CompendiumEntry>): boolean {
+  if (r.kind !== 'feat' || r.span !== 'entry' || r.marked) return false;
+  const entry = entriesById.get(r.entryIds[0]);
+  return entry !== undefined && misreadAsFeatBefore(entry.name, entry.text, headingAncestors(entry.path, entry.name));
+}
+
 export interface Settled {
-  /** Records to delete: nobody reviewed them. */
+  /** Explained misreadings nobody worked on: deleted. */
   remove: Set<string>;
-  /** Records to write: reviewed ones with a note, and tables kept for their rows, stamped with today's version. */
-  changed: Map<string, StructuredRecord>;
-  /** The reviewed ones (also in `changed`). */
+  /** Explained misreadings someone worked on: kept with a note (doubted()). */
   doubted: StructuredRecord[];
+  /** The other records an older reader made: read again with today's reader (the player's markings among them). */
+  reread: StructuredRecord[];
 }
 
 /**
- * Stored records today's detection didn't find again (`unmatched`), among a source's records (`all`):
- * a record an older version of the offline reader made (PARSER_VERSION rose) was a misreading. When
- * nobody reviewed it (pending, unedited) it goes; when the player did (accepted or edited) it stays with
- * a note, so the player decides. A table stays while a row of it does. Rejected records, records Claude,
- * a pack or the player made, records being read and records today's reader made are left as they are.
+ * Stored records today's detection didn't find again (`unmatched`) that an older offline reader made
+ * (PARSER_VERSION rose). Only misreadings the version change explains are settled: removed when nobody
+ * worked on them, kept with a note when someone did, so the player decides. The rest are read again.
+ * Rejected records, records Claude, a pack or the player filled in, records being read and records a
+ * newer app wrote are left as they are.
  */
-export function settleUnmatched(all: readonly StructuredRecord[], unmatched: readonly StructuredRecord[], now: number): Settled {
+export function settleUnmatched(unmatched: readonly StructuredRecord[], entriesById: ReadonlyMap<string, CompendiumEntry>, now: number): Settled {
   const older = unmatched.filter(
-    (r) => r.origin === 'parser' && (r.parserVersion ?? 0) < PARSER_VERSION && r.status !== 'rejected' && !BEING_READ.has(r.runState ?? ''),
+    (r) =>
+      r.origin === 'parser' &&
+      (r.parserVersion ?? 0) < PARSER_VERSION &&
+      r.status !== 'rejected' &&
+      !BEING_READ.has(r.runState ?? '') &&
+      r.schemaVersion <= STRUCTURED_SCHEMA_VERSION,
   );
-  const reviewed = (r: StructuredRecord) => r.edited || r.status === 'accepted';
-  const remove = new Set(older.filter((r) => !reviewed(r)).map((r) => r.id));
-  for (const r of all) if (r.tableRecordId && !remove.has(r.id)) remove.delete(r.tableRecordId);
-  const changed = new Map<string, StructuredRecord>();
+  const remove = new Set<string>();
   const doubts: StructuredRecord[] = [];
+  const reread: StructuredRecord[] = [];
   for (const r of older) {
-    if (remove.has(r.id)) continue;
-    if (reviewed(r)) {
-      const next = doubted(r, now);
-      changed.set(r.id, next);
-      doubts.push(next);
-    } else changed.set(r.id, { ...r, parserVersion: PARSER_VERSION, updatedAt: now });
+    if (!explainedMisreading(r, entriesById)) reread.push(r);
+    else if (workedOn(r)) doubts.push(doubted(r, now));
+    else remove.add(r.id);
   }
-  return { remove, changed, doubted: doubts };
+  return { remove, doubted: doubts, reread };
 }
 
 // ---------------------------------------------------------------------------
@@ -417,13 +470,14 @@ function currentHash(record: StructuredRecord, entriesById: ReadonlyMap<string, 
   return textFingerprint(texts.join('\n\n'));
 }
 
-const countByKind = (records: readonly StructuredRecord[]): Partial<Record<StructuredKind, number>> => {
+/** How many of these records there are by kind, counted like "Found N" (a gear table whose rows are there counts as its rows). */
+function countFound(records: readonly StructuredRecord[]): Partial<Record<StructuredKind, number>> {
   const out: Partial<Record<StructuredKind, number>> = {};
-  for (const r of records) out[r.kind] = (out[r.kind] ?? 0) + 1;
+  for (const [kind, row] of Object.entries(summarize(records, 0).byKind) as [StructuredKind, { found: number }][]) out[kind] = row.found;
   return out;
-};
+}
 
-function summarize(records: readonly (StructuredRecord | undefined)[], leftOut: number): Omit<DetectionSummary, 'duplicateOf' | 'removed' | 'doubted'> {
+function summarize(records: readonly (StructuredRecord | undefined)[], leftOut: number): Omit<DetectionSummary, 'duplicateOf' | 'removed' | 'removedNames' | 'removedRecords' | 'doubted'> {
   const byKind: DetectionSummary['byKind'] = {};
   const withRows = new Set(records.flatMap((r) => (r?.tableRecordId ? [r.tableRecordId] : [])));
   for (const r of records) {
@@ -444,8 +498,23 @@ function summarize(records: readonly (StructuredRecord | undefined)[], leftOut: 
   };
 }
 
-/** Local and free (~1–3 s for 300 pages); yields every 50 candidates. */
+/** The readings today's reader gives for records it didn't find again (their candidates rebuilt from the records). */
+function rereadings(records: readonly StructuredRecord[], ctx: ReadingContext): Reading[] {
+  return records.flatMap((r) => {
+    if (r.span === 'table' || r.span === 'row') return [];
+    const parentClassName = r.kind === 'subclass' ? (r.data as StructuredDataByKind['subclass'] | null)?.parentClass || undefined : undefined;
+    const candidate = candidateFor(r, ctx.entriesById, parentClassName ? { parentClassName } : {});
+    return candidate ? readOffline(candidate, ctx) : [];
+  });
+}
+
+/**
+ * Local and free (~1–3 s for 300 pages); yields every 50 candidates. The records are read at the start
+ * and the results written at the end: a record that changed meanwhile (an accept, an edit, a Claude
+ * reading) keeps its change and is left for the next look.
+ */
 export async function detectStructure(sourceId: string, opts?: { onProgress?(done: number, total: number): void }): Promise<DetectionSummary> {
+  await correctStaleKinds(sourceId);
   const [entries, sources, existing, context] = await Promise.all([getSourceEntries(sourceId), listLibrarySources(), listRecords(sourceId), detectionContext()]);
   const source = sources.find((s) => s.id === sourceId);
   if (!source) throw new Error('This book is no longer in the library.');
@@ -462,18 +531,30 @@ export async function detectStructure(sourceId: string, opts?: { onProgress?(don
   }
   opts?.onProgress?.(candidates.length, candidates.length);
   const now = Date.now();
-  const merged = mergeReadings(sourceId, existing, readings, { explicit: false, now, limit: STRUCTURED_LIMITS.recordsPerSource });
+  // Stale text is judged on a record's own entries: a section whose scope changed isn't a text change.
+  const textChanged = (r: StructuredRecord) => currentHash(r, entriesById) !== r.textHash;
+  const merged = mergeReadings(sourceId, existing, readings, { explicit: false, now, limit: STRUCTURED_LIMITS.recordsPerSource, textChanged });
   const leftOut = merged.records.filter((r) => r === undefined).length;
-  const settled = settleUnmatched(existing, merged.unmatched, now);
+  const settled = settleUnmatched(merged.unmatched, entriesById, now);
+  const reread = mergeReadings(sourceId, settled.reread, rereadings(settled.reread, ctx), { explicit: false, now, textChanged });
+  const rereadById = new Map(reread.writes.map((r) => [r.id, r]));
+  const doubtedById = new Map(settled.doubted.map((r) => [r.id, r]));
+  const rereadIds = new Set(settled.reread.map((r) => r.id));
   const unmatchedWrites = merged.unmatched.flatMap((r) => {
-    if (settled.remove.has(r.id)) return [];
-    const base = settled.changed.get(r.id) ?? r;
-    const textChanged = r.origin !== 'pack' && r.origin !== 'manual' && r.span !== 'row' && currentHash(r, entriesById) !== r.textHash;
-    const next = textChanged ? (withStale(base, now) ?? base) : base;
-    return next === r ? [] : [next];
+    if (settled.remove.has(r.id) || BEING_READ.has(r.runState ?? '')) return [];
+    const rereadNext = rereadById.get(r.id);
+    if (rereadNext) return [rereadNext];
+    // Read again and unchanged, or nothing to read it from (a table, a row, entries gone): today's reader has seen it.
+    let base = doubtedById.get(r.id) ?? (rereadIds.has(r.id) ? { ...r, parserVersion: PARSER_VERSION, updatedAt: now } : r);
+    const stale = r.origin !== 'pack' && r.origin !== 'manual' && r.span !== 'row' && textChanged(r);
+    if (stale) base = withStale(base, now) ?? base;
+    return base === r ? [] : [base];
   });
-  const removed = existing.filter((r) => settled.remove.has(r.id));
-  await commitRecords([...merged.writes, ...unmatchedWrites], [...settled.remove]);
+  // Every write and delete is checked against the record as it was read at the start.
+  const expected = new Map<string, number | null>(existing.map((r) => [r.id, r.updatedAt]));
+  for (const w of merged.writes) if (!expected.has(w.id)) expected.set(w.id, null);
+  const applied = await commitRecords([...merged.writes, ...unmatchedWrites], [...settled.remove], expected);
+  const removed = existing.filter((r) => applied.deleted.has(r.id));
   // Nothing found: the source remembers that detection ran (an empty structure), so "nothing detected" outlasts this page (§4.7).
   if (merged.records.length === 0) await markSourceStructured(sourceId);
 
@@ -485,8 +566,10 @@ export async function detectStructure(sourceId: string, opts?: { onProgress?(don
   const duplicate = (await findSourcesByFingerprint(fingerprint)).find((s) => s.id !== sourceId);
   return {
     ...summarize(merged.records, leftOut),
-    removed: countByKind(removed),
-    doubted: settled.doubted.map((r) => ({ id: r.id, kind: r.kind, status: r.status })),
+    removed: countFound(removed),
+    removedNames: removed.slice().sort(compareRecordsByReading).slice(0, 3).map((r) => r.name),
+    removedRecords: removed,
+    doubted: settled.doubted.filter((r) => applied.written.has(r.id)).map((r) => ({ id: r.id, kind: r.kind, status: r.status })),
     ...(duplicate ? { duplicateOf: { id: duplicate.id, title: duplicate.title } } : {}),
   };
 }
@@ -499,7 +582,8 @@ export async function structureEntryAs(sourceId: string, entryIds: string[], kin
   const { spellLists } = segment(entries, context.segment);
   const ctx: ReadingContext = { sourceId, entriesById: new Map(entries.map((e) => [e.id, e])), spellLists, notices: context.notices };
   const readings = readOffline(candidate, ctx);
-  const merged = mergeReadings(sourceId, existing, readings, { explicit: true, now: Date.now() });
+  // The player's marking: never removed by a later version of the reader (settleUnmatched).
+  const merged = mergeReadings(sourceId, existing, readings, { explicit: true, now: Date.now(), decorate: (record) => ({ ...record, marked: true }) });
   await putRecords(merged.writes);
   const record = merged.records[0];
   if (!record) throw new Error("This book can't hold any more structured entries.");

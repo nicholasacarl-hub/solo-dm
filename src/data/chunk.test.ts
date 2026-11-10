@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { chunkDocument, guessKind, headingAncestors, inferPlainTextHeadings, splitIntoChunks, staleFeatKinds, TARGET_CHUNK_CHARS } from './chunk';
+import { chunkDocument, guessKind, headingAncestors, inferPlainTextHeadings, misreadAsFeatBefore, splitIntoChunks, staleFeatKinds, TARGET_CHUNK_CHARS } from './chunk';
 import type { CompendiumEntry } from '@/types';
 
 const opts = { sourceId: 'import-abc', sourceName: 'My Notes' };
@@ -178,31 +178,19 @@ describe('guessKind', () => {
     expect(guessKind('Potion of Healing', 'Potion, common\nYou regain 2d4 + 2 Hit Points.')).toBe('magic-item');
   });
 
-  it('recognizes feats by their category line, or by a Prerequisite line under a heading that names feats', () => {
+  it('recognizes feats by their category line, or by a Prerequisite line before their text', () => {
     expect(guessKind('Alert', '_Origin Feat_\n\nYou gain the following benefits.')).toBe('feat');
     expect(guessKind('Grappler', '_General Feat (Prerequisite: Level 4+, Strength or Dexterity 13+)_\n\nBenefits.')).toBe('feat');
     expect(guessKind('Lucky (Origin Feat)', 'You have inexplicable luck.')).toBe('feat');
     const older = '_Prerequisite: Wisdom 13 or higher_\n\nYou can walk the lamp roads at night without a light.';
+    // Wherever the headings put it: PDF, photo and pasted-text imports often lose or flatten the Feats heading.
+    expect(guessKind('Night Walker', older)).toBe('feat');
+    expect(guessKind('Night Walker', older, ['Lantern Folk', 'Chapter 6: Character Options'])).toBe('feat');
     expect(guessKind('Night Walker', older, ['Feats'])).toBe('feat');
-    expect(guessKind('Night Walker', older, ['Chapter 6: Character Options', 'Feats'])).toBe('feat');
-    expect(guessKind('Night Walker', older, ['Racial Feats'])).toBe('feat');
-    expect(guessKind('Night Walker', older, ['**Feat Descriptions**'])).toBe('feat');
-    expect(guessKind('Night Walker', older, ['Feats (Optional Rule)'])).toBe('feat');
-    expect(guessKind('Night Walker', older, ['List of Feats'])).toBe('feat');
-  });
-
-  it("doesn't count a title that only starts with the word (a book's name, a rules section)", () => {
-    const room = '_Prerequisite: None_\n\nThe keeper raises glowworms.';
-    expect(guessKind('Glowworm Gallery', room, ['Feats and Fortresses', 'Holding Rooms'])).toBe('rule');
-    expect(guessKind('Glowworm Gallery', room, ['Feats of the North'])).toBe('rule');
-    expect(guessKind('Glowworm Gallery', room, ['Feats of Strength'])).toBe('rule');
-  });
-
-  it('takes the headings above an entry from its path, with or without its own name last', () => {
-    expect(headingAncestors(['Feats', 'Night Walker'], 'Night Walker')).toEqual(['Feats']);
-    expect(headingAncestors(['Feats'], 'Night Walker')).toEqual(['Feats']);
-    expect(headingAncestors(['Feats', '**Night Walker**'], 'Night Walker')).toEqual(['Feats']);
-    expect(headingAncestors(undefined, 'Night Walker')).toEqual([]);
+    expect(guessKind('Sharpshooter', 'Prerequisite: Level 4+\nYou can shoot far.')).toBe('feat');
+    expect(guessKind('Spell Ward', 'Prerequisite: Spellcasting or Pact Magic feature\n\nYou ward yourself.')).toBe('feat');
+    expect(guessKind('Quick Hands', 'Prerequisite: Proficiency with a martial weapon\n\nYou draw in a blink.')).toBe('feat');
+    expect(guessKind('Lantern Born', '- *Prerequisite: Lampkin*\n\nYour light never gutters.')).toBe('feat');
   });
 
   it("doesn't take other things that print a Prerequisite line for feats", () => {
@@ -210,11 +198,47 @@ describe('guessKind', () => {
     const room = '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\n_Room: Snug_\n\n_Keepers: 1_\n\nThe keeper raises glowworms in jars of moss.';
     expect(guessKind('Glowworm Gallery', room, ['Lamplight Holdings', 'Holding Rooms'])).toBe('rule');
     expect(guessKind('Glowworm Gallery', room)).toBe('rule');
-    // An invented class option that only prints a prerequisite.
-    const charm = '_Prerequisite: Level 5+ Wickwright_\n\nYour wick’s flame sheds bright light 10 feet farther.';
-    expect(guessKind('Bright Ember', charm, ['Wickwright', 'Wick Charm Options'])).toBe('rule');
-    expect(guessKind('Bright Ember', charm, ['Wickwright', 'Class Features'])).toBe('rule'); // "Features" isn't "Feats"
-    expect(guessKind('Sharpshooter', 'Prerequisite: Level 4+\nYou can shoot far.')).toBe('rule');
+    // A PDF that lost the type line, or joined the labelled lines: the labels still tell.
+    expect(guessKind('Glowworm Gallery', "_Prerequisite: A lantern-maker's tools_\n\n_Room: Snug_\n\n_Keepers: 1_\n\nThe keeper sells light.")).toBe('rule');
+    expect(guessKind('Glowworm Gallery', 'Prerequisite: Lantern tools Room: Snug Keepers: 1\n\nThe keeper sells light.')).toBe('rule');
+    expect(guessKind('Glowworm Gallery', 'Prerequisite: None\n\nThe keeper raises glowworms.')).toBe('rule');
+    // Invented class options that name a class level or a pact.
+    expect(guessKind('Bright Ember', '_Prerequisite: Level 5+ Wickwright_\n\nYour flame burns brighter.', ['Wickwright', 'Wick Charm Options'])).toBe('rule');
+    expect(guessKind('Bright Ember', 'Prerequisite: 5th level\n\nYour flame burns brighter.')).toBe('rule');
+    expect(guessKind('Lantern Boots', 'Prerequisite: 6th-level wickwright\nItem: A pair of boots\n\nWhile you wear them, you glow.')).toBe('rule');
+    expect(guessKind('Thread Bond', 'Prerequisite: Pact of the Thread feature\n\nYour pact holds.')).toBe('rule');
+  });
+
+  it('counts a Prerequisite line under a heading that names feats, whatever else the entry prints', () => {
+    const typed = '_Lamp Talent_\n\n_Prerequisite: Level 5+ Wickwright_\n\nYour flame burns brighter.';
+    expect(guessKind('Bright Ember', typed)).toBe('rule');
+    expect(guessKind('Bright Ember', typed, ['Feats'])).toBe('feat');
+    expect(guessKind('Bright Ember', typed, ['Chapter 6: Character Options', 'Racial Feats'])).toBe('feat');
+    expect(guessKind('Bright Ember', typed, ['**Feat Descriptions**'])).toBe('feat');
+    expect(guessKind('Bright Ember', typed, ['Feats (Optional Rule)'])).toBe('feat');
+    expect(guessKind('Bright Ember', typed, ['List of Feats:'])).toBe('feat');
+    // Not a title that only starts with the word, and never "Features".
+    expect(guessKind('Bright Ember', typed, ['Feats and Fortresses'])).toBe('rule');
+    expect(guessKind('Bright Ember', typed, ['Feats of Strength'])).toBe('rule');
+    expect(guessKind('Bright Ember', typed, ['Wickwright', 'Class Features'])).toBe('rule');
+  });
+
+  it('knows what the first version took for a feat that today’s rules read as something else', () => {
+    const room = '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\nThe keeper raises glowworms.';
+    expect(misreadAsFeatBefore('Glowworm Gallery', room, ['Holding Rooms'])).toBe(true);
+    expect(misreadAsFeatBefore('Bright Ember', 'Prerequisite: Level 5+ Wickwright\n\nYour flame burns brighter.', [])).toBe(true);
+    expect(misreadAsFeatBefore('Night Walker', 'Prerequisite: Wisdom 13 or higher\n\nYou walk at night.', [])).toBe(false);
+    expect(misreadAsFeatBefore('Lantern Bearer', '_General Feat_\n\nYou carry the light.', [])).toBe(false);
+    expect(misreadAsFeatBefore('Lamp Oil', 'Lamp oil burns for six hours.', [])).toBe(false);
+    // Its own text only: a subsection's Prerequisite line never made it a feat.
+    expect(misreadAsFeatBefore('Lamp Oil', 'Lamp oil burns.\n\n### Oil Lore\n\nPrerequisite: None', [])).toBe(false);
+  });
+
+  it('takes the headings above an entry from its path, with or without its own name last', () => {
+    expect(headingAncestors(['Feats', 'Night Walker'], 'Night Walker')).toEqual(['Feats']);
+    expect(headingAncestors(['Feats'], 'Night Walker')).toEqual(['Feats']);
+    expect(headingAncestors(['Feats', '**Night Walker**'], 'Night Walker')).toEqual(['Feats']);
+    expect(headingAncestors(undefined, 'Night Walker')).toEqual([]);
   });
 
   it('defaults to rule, even for prose that mentions feats or rarity', () => {
@@ -312,5 +336,13 @@ describe('staleFeatKinds', () => {
       entry(2, 'Moth Archive (part 2)', 'feat', long, [...path, 'Moth Archive (part 2)']),
     ]);
     expect(fixes.map((f) => [f.id, f.kind])).toEqual([['lib:hold:1', 'rule'], ['lib:hold:2', 'rule'], ['lib:hold:3', 'rule']]);
+  });
+
+  it('keeps an older-style feat whose import lost the Feats heading (a PDF that flattened it)', () => {
+    expect(staleFeatKinds([
+      entry(1, 'Feats', 'rule', 'A feat is a talent.', ['Lantern Folk', 'Feats']),
+      entry(2, 'Night Walker', 'feat', 'Prerequisite: Wisdom 13 or higher\n\nYou walk at night.', ['Lantern Folk', 'Night Walker']),
+      entry(3, 'Wick Guard', 'feat', 'Prerequisite: Proficiency with shields\n\nYou guard the flame.', ['Lantern Folk', 'Wick Guard']),
+    ])).toEqual([]);
   });
 });

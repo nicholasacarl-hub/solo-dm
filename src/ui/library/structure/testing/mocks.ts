@@ -86,6 +86,8 @@ export function gloamwoodDetection(): DetectionSummary {
     needClaude: all.reduce((n, k) => n + k.needClaude, 0),
     leftOut: 0,
     removed: {},
+    removedNames: [],
+    removedRecords: [],
     doubted: [],
   };
 }

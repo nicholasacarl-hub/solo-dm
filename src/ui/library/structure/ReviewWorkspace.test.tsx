@@ -166,20 +166,50 @@ describe('the review list', () => {
 });
 
 describe('after the offline reader improved', () => {
-  it('"Re-check" looks through the book again, says what changed, and can undo moving accepted entries back to review', async () => {
+  it('"Re-check" looks through the book again, says what changed, puts focus on Undo, and Undo restores it', async () => {
     const user = userEvent.setup();
     replace("Moth's Grace", { parserVersion: 1, status: 'accepted' });
     replace('Lantern Bearer', { parserVersion: 1 });
     const grace = byName("Moth's Grace");
-    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), removed: { feat: 1 }, doubted: [{ id: grace.id, kind: 'feat', status: 'accepted' }] });
+    const room = { ...byName('Hooked Reach'), id: 'rec:gloam:feat:glowworm-gallery', name: 'Glowworm Gallery' };
+    vi.mocked(data.detectStructure).mockResolvedValueOnce({
+      ...gloamwoodDetection(),
+      removed: { feat: 1 },
+      removedNames: ['Glowworm Gallery'],
+      removedRecords: [room],
+      doubted: [{ id: grace.id, kind: 'feat', status: 'accepted' }],
+    });
     renderPage();
     const banner = (await screen.findByText('The offline reader improved: re-check 2 entries for free.')).parentElement as HTMLElement;
     await user.click(within(banner).getByRole('button', { name: 'Re-check' }));
     await waitFor(() => expect(data.detectStructure).toHaveBeenCalledWith('gloam', expect.objectContaining({ onProgress: expect.any(Function) })));
     expect(storage.setRecordStatus).toHaveBeenCalledWith([grace.id], 'pending');
-    expect(await screen.findByText(/Removed 1 feat an earlier version of the reader found by mistake \(you hadn't reviewed them\)\. 1 entry you had accepted doesn't look like a feat: it's back in To review, with a note\./)).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Undo' }));
+    expect(
+      await screen.findByText(
+        "Removed 1 entry an earlier version of the reader took for a feat: Glowworm Gallery (you hadn't reviewed it). 1 entry you had accepted is back in To review: it may not be a feat.",
+      ),
+    ).toBeInTheDocument();
+    const undo = screen.getByRole('button', { name: 'Undo' });
+    await waitFor(() => expect(undo).toHaveFocus());
+    await user.click(undo);
     await waitFor(() => expect(storage.setRecordStatus).toHaveBeenLastCalledWith([grace.id], 'accepted'));
+    expect(storage.putRecords).toHaveBeenCalledWith([room]);
+  });
+
+  it('keeps the banner button focusable while it runs, and leaves focus on the title when there is nothing to undo', async () => {
+    const user = userEvent.setup();
+    replace('Lantern Bearer', { parserVersion: 1 });
+    let finish: (value: Awaited<ReturnType<typeof data.detectStructure>>) => void = () => {};
+    vi.mocked(data.detectStructure).mockReturnValueOnce(new Promise((resolve) => (finish = resolve)));
+    renderPage();
+    const button = await screen.findByRole('button', { name: 'Re-check' });
+    button.focus();
+    await user.keyboard('{Enter}');
+    expect(await screen.findByText('Looking through the book…')).toBeInTheDocument();
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(button).toHaveFocus();
+    await act(async () => finish(gloamwoodDetection()));
+    await waitFor(() => expect(screen.getByRole('heading', { level: 1, name: 'The Gloamwood Almanac' })).toHaveFocus());
   });
 });
 

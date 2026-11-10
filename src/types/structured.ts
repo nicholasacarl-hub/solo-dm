@@ -13,8 +13,8 @@ export const STRUCTURED_SCHEMA_VERSION = 1;
 /**
  * Bump when offline parsing or detection rules change: the book page offers "re-check N entries for
  * free", which looks through the book again (detect.ts settles what an older version misread).
- * History: 1 = the first reader; 2 = a bare "Prerequisite:" line makes a feat only under a heading that
- * names feats (stronghold rooms and class options print one too).
+ * History: 1 = the first reader; 2 = a bare "Prerequisite:" line doesn't make a feat when the entry shows
+ * it is something else (a stronghold room's type line, labelled lines, a class-level prerequisite).
  */
 export const PARSER_VERSION = 2;
 /** Bump with any change to a system prompt or wire schema. */
@@ -273,6 +273,10 @@ export interface StructuredRecord<K extends StructuredKind = StructuredKind> {
   proposal?: RecordProposal<K>;
   textHash: string;                   // textFingerprint() of the joined source texts when read
   parserVersion?: number;
+  /** The player chose this entry and kind (All entries › Structure as…, What it is): a later reader never removes it. */
+  marked?: true;
+  /** A fingerprint of the offline reading the record was last read with: a later look offers a reading only when it changed. */
+  readingHash?: string;
   extraction?: {
     model: string;                    // message.model (may be a fallback model)
     requestedModel: string;

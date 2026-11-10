@@ -14,7 +14,7 @@ import {
   type StructuredKind,
   type StructuredRecord,
 } from '@/types';
-import { KIND_LABELS, kindCount, readButIncomplete, recordState, type RecordState, type ReviewFilter } from './labels';
+import { KIND_LABELS, readButIncomplete, recordState, type RecordState, type ReviewFilter } from './labels';
 
 // ---------------------------------------------------------------------------
 // Order
@@ -306,30 +306,39 @@ export function defaultBudget(usdHigh: number): number {
 const andList = (parts: readonly string[]) => (parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`);
 
 /**
- * The toast after "Look for entries again" or "Re-check": what was found, the misreadings of an earlier
- * version that nobody had reviewed (removed), and the reviewed ones (`movedBack`: how many accepted ones
- * went back to review).
+ * The toast after "Look for entries again" or "Re-check": what was found, or, when an earlier reader's
+ * misreadings were settled, what happened to them (removed ones nobody had reviewed, by name; the
+ * reviewed ones, `movedBack` of them accepted ones moved back to review).
  */
-export function lookThroughMessage(summary: Pick<DetectionSummary, 'total' | 'readyOffline' | 'needClaude' | 'removed' | 'doubted'>, movedBack: number): string {
-  const parts = [
-    summary.total === 0
-      ? 'Nothing here looks like something the app can use. All entries › Structure as… marks it by hand.'
-      : `Found ${summary.total}: ${summary.readyOffline} read on this device${summary.needClaude ? `, ${summary.needClaude} need Claude` : ''}.`,
-  ];
+export function lookThroughMessage(
+  summary: Pick<DetectionSummary, 'total' | 'readyOffline' | 'needClaude' | 'removed' | 'removedNames' | 'doubted'>,
+  movedBack: number,
+): string {
   const removed = (Object.entries(summary.removed) as [StructuredKind, number][]).filter(([, n]) => n > 0);
-  if (removed.length) {
-    parts.push(`Removed ${andList(removed.map(([kind, n]) => kindCount(kind, n)))} an earlier version of the reader found by mistake (you hadn't reviewed them).`);
+  const removedCount = removed.reduce((sum, [, n]) => sum + n, 0);
+  const doubted = summary.doubted.length;
+  if (removedCount === 0 && doubted === 0) {
+    if (summary.total === 0) return 'Nothing here looks like something the app can use. All entries › Structure as… marks it by hand.';
+    const claude = summary.needClaude ? `, ${summary.needClaude} ${summary.needClaude === 1 ? 'needs' : 'need'} Claude` : '';
+    return `Found ${summary.total}: ${summary.readyOffline} read on this device${claude}.`;
   }
-  const n = summary.doubted.length;
-  if (n > 0) {
+  const parts: string[] = [];
+  if (removedCount > 0) {
+    const one = removedCount === 1;
+    const kinds = removed.map(([kind]) => kind);
+    const took = kinds.length === 1 ? (one ? `a ${KIND_LABELS[kinds[0]].one}` : KIND_LABELS[kinds[0]].many) : kinds.map((k) => KIND_LABELS[k].many).join(' or ');
+    const names = summary.removedNames;
+    const examples = names.length === 0 ? '' : removedCount <= names.length ? `: ${andList(names)}` : `, such as ${andList(names.slice(0, 2))}`;
+    parts.push(`Removed ${one ? '1 entry' : `${removedCount} entries`} an earlier version of the reader took for ${took}${examples} (you hadn't reviewed ${one ? 'it' : 'them'}).`);
+  }
+  if (doubted > 0) {
+    const one = doubted === 1;
     const kinds = [...new Set(summary.doubted.map((d) => d.kind))];
-    const one = n === 1;
-    const who = movedBack === n ? 'you had accepted' : movedBack === 0 ? 'you had edited' : 'you had reviewed';
-    const looks =
-      kinds.length === 1 ? `${one ? "doesn't" : "don't"} look like ${one ? `a ${KIND_LABELS[kinds[0]].one}` : KIND_LABELS[kinds[0]].many}` : 'may have been misread';
-    const where =
-      movedBack === n ? `${one ? "it's" : "they're"} back in To review, with a note` : movedBack === 0 ? `${one ? 'it has' : 'they have'} a note in To review` : "they're in To review, with a note";
-    parts.push(`${one ? '1 entry' : `${n} entries`} ${who} ${looks}: ${where}.`);
+    const notKind = kinds.length === 1 ? `may not be ${one ? `a ${KIND_LABELS[kinds[0]].one}` : KIND_LABELS[kinds[0]].many}` : 'may have been misread';
+    const entries = one ? '1 entry' : `${doubted} entries`;
+    if (movedBack === doubted) parts.push(`${entries} you had accepted ${one ? 'is' : 'are'} back in To review: ${one ? 'it' : 'they'} ${notKind}.`);
+    else if (movedBack === 0) parts.push(`${entries} you had edited ${one ? 'has' : 'have'} a note in To review: ${one ? 'it' : 'they'} ${notKind}.`);
+    else parts.push(`${entries} you had reviewed ${one ? 'is' : 'are'} in To review with a note: ${one ? 'it' : 'they'} ${notKind}.`);
   }
   return parts.join(' ');
 }

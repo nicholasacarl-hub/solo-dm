@@ -226,14 +226,16 @@ describe('edits', () => {
 });
 
 describe('looking through the book again', () => {
-
-  it('moves the accepted entries the improved reader no longer finds back to review, with Undo', async () => {
+  it('moves the accepted entries the improved reader no longer finds back to review; Undo restores them and what it removed', async () => {
     const grace = byName("Moth's Grace");
     const bearer = byName('Lantern Bearer');
+    const removedRoom = { ...byName('Hooked Reach'), id: 'rec:gloam:feat:glowworm-gallery', name: 'Glowworm Gallery' };
     stored = stored.map((r) => (r.id === grace.id ? { ...r, status: 'accepted' } : r));
     vi.mocked(data.detectStructure).mockResolvedValueOnce({
       ...gloamwoodDetection(),
       removed: { feat: 1 },
+      removedNames: ['Glowworm Gallery'],
+      removedRecords: [removedRoom],
       doubted: [{ id: grace.id, kind: 'feat', status: 'accepted' }, { id: bearer.id, kind: 'feat', status: 'pending' }],
     });
     const result = await actions.lookThroughBook('gloam');
@@ -244,15 +246,48 @@ describe('looking through the book again', () => {
     expect(data.invalidateRulesIndex).toHaveBeenCalledTimes(1);
     await result.undo?.();
     expect(byName("Moth's Grace").status).toBe('accepted');
+    expect(storage.putRecords).toHaveBeenCalledWith([removedRoom]);
   });
 
-  it('offers no Undo and leaves the index alone when nothing went back to review', async () => {
-    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), removed: { feat: 2 }, doubted: [{ id: byName('Lantern Bearer').id, kind: 'feat', status: 'pending' }] });
-    const quiet = await actions.lookThroughBook('gloam');
-    expect(quiet.movedBack).toBe(0);
-    expect(quiet.undo).toBeUndefined();
+  it('offers Undo for removals alone, and nothing when nothing changed', async () => {
+    const removedRoom = { ...byName('Hooked Reach'), id: 'rec:gloam:feat:glowworm-gallery', name: 'Glowworm Gallery' };
+    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), removed: { feat: 1 }, removedNames: ['Glowworm Gallery'], removedRecords: [removedRoom] });
+    const removal = await actions.lookThroughBook('gloam');
+    expect(removal.movedBack).toBe(0);
     expect(storage.setRecordStatus).not.toHaveBeenCalled();
+    await removal.undo?.();
+    expect(storage.putRecords).toHaveBeenCalledWith([removedRoom]);
+
+    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), doubted: [{ id: byName('Lantern Bearer').id, kind: 'feat', status: 'pending' }] });
+    const quiet = await actions.lookThroughBook('gloam');
+    expect(quiet.undo).toBeUndefined();
     await vi.advanceTimersByTimeAsync(600);
     expect(data.invalidateRulesIndex).not.toHaveBeenCalled();
+  });
+
+  it('tells the DM nothing when an entry goes back to review and Undo accepts it again', async () => {
+    vi.mocked(storage.listCampaigns).mockResolvedValue([slot('camp-a', 'sess-1')]);
+    const grace = byName("Moth's Grace");
+    stored = stored.map((r) => (r.id === grace.id ? { ...r, status: 'accepted' } : r));
+    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), doubted: [{ id: grace.id, kind: 'feat', status: 'accepted' }] });
+    const result = await actions.lookThroughBook('gloam');
+    await vi.advanceTimersByTimeAsync(3000);
+    await result.undo?.();
+    await vi.advanceTimersByTimeAsync(actions.NOTICE_DELAY_MS + 1000);
+    expect(queueCampaignNotice).not.toHaveBeenCalled();
+  });
+});
+
+describe('keeping the fields after the text changed', () => {
+  it('drops the note and takes the text as it is now, so the next look doesn’t note it again', async () => {
+    const choir = { ...byName('Ashen Choir'), warnings: [{ code: 'stale-text' as const, severity: 'warn' as const, message: 'The text changed since this was read.' }], textHash: 'old' };
+    stored = stored.map((r) => (r.id === choir.id ? choir : r));
+    const entries = gloamwoodEntries();
+    vi.mocked(storage.getSourceEntries).mockResolvedValue(entries);
+    await actions.keepFields(choir.id);
+    const saved = byName('Ashen Choir');
+    expect(saved.warnings).toEqual([]);
+    const { textFingerprint } = await import('@/lib/importedContent');
+    expect(saved.textHash).toBe(textFingerprint(choir.entryIds.map((id) => entries.find((e) => e.id === id)!.text).join('\n\n')));
   });
 });

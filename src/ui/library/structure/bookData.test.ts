@@ -159,30 +159,44 @@ describe('jobs', () => {
 });
 
 describe('looking through the book again', () => {
-  const found = { total: 22, readyOffline: 20, needClaude: 2, removed: {}, doubted: [] };
+  const found = { total: 22, readyOffline: 20, needClaude: 2, removed: {}, removedNames: [] as string[], doubted: [] };
   const doubt = (id: string, status: StructuredRecord['status'], kind: StructuredRecord['kind'] = 'feat') => ({ id, kind, status });
 
   it('says what it found', () => {
     expect(lookThroughMessage(found, 0)).toBe('Found 22: 20 read on this device, 2 need Claude.');
+    expect(lookThroughMessage({ ...found, total: 3, readyOffline: 2, needClaude: 1 }, 0)).toBe('Found 3: 2 read on this device, 1 needs Claude.');
     expect(lookThroughMessage({ ...found, total: 0, readyOffline: 0, needClaude: 0 }, 0)).toBe(
       'Nothing here looks like something the app can use. All entries › Structure as… marks it by hand.',
     );
   });
 
-  it("names what an earlier version found by mistake and nobody had reviewed", () => {
-    expect(lookThroughMessage({ ...found, removed: { feat: 17, spell: 1 } }, 0)).toBe(
-      "Found 22: 20 read on this device, 2 need Claude. Removed 17 feats and 1 spell an earlier version of the reader found by mistake (you hadn't reviewed them).",
+  it('names what an earlier version found by mistake and nobody had reviewed', () => {
+    expect(lookThroughMessage({ ...found, removed: { feat: 1 }, removedNames: ['Glowworm Gallery'] }, 0)).toBe(
+      "Removed 1 entry an earlier version of the reader took for a feat: Glowworm Gallery (you hadn't reviewed it).",
+    );
+    expect(lookThroughMessage({ ...found, removed: { feat: 3 }, removedNames: ['Glowworm Gallery', 'Moth Archive', 'Bright Ember'] }, 0)).toBe(
+      "Removed 3 entries an earlier version of the reader took for feats: Glowworm Gallery, Moth Archive and Bright Ember (you hadn't reviewed them).",
+    );
+    expect(lookThroughMessage({ ...found, removed: { feat: 26, spell: 1 }, removedNames: ['Glowworm Gallery', 'Moth Archive', 'Bright Ember'] }, 0)).toBe(
+      "Removed 27 entries an earlier version of the reader took for feats or spells, such as Glowworm Gallery and Moth Archive (you hadn't reviewed them).",
     );
   });
 
-  it('says where the reviewed ones went', () => {
+  it('says where the reviewed ones went, and nothing about what was found when that is the news', () => {
     expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted'), doubt('b', 'accepted')] }, 2)).toBe(
-      "Found 22: 20 read on this device, 2 need Claude. 2 entries you had accepted don't look like feats: they're back in To review, with a note.",
+      "2 entries you had accepted are back in To review: they may not be feats.",
     );
-    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted')] }, 1)).toMatch(/ 1 entry you had accepted doesn't look like a feat: it's back in To review, with a note\.$/);
-    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'pending')] }, 0)).toMatch(/ 1 entry you had edited doesn't look like a feat: it has a note in To review\.$/);
-    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted'), doubt('b', 'pending', 'spell')] }, 1)).toMatch(
-      / 2 entries you had reviewed may have been misread: they're in To review, with a note\.$/,
+    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted')] }, 1)).toBe('1 entry you had accepted is back in To review: it may not be a feat.');
+    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'pending')] }, 0)).toBe('1 entry you had edited has a note in To review: it may not be a feat.');
+    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted'), doubt('b', 'pending', 'spell')] }, 1)).toBe(
+      '2 entries you had reviewed are in To review with a note: they may have been misread.',
+    );
+    // Nothing found, yet something settled: no "Nothing here…".
+    expect(lookThroughMessage({ ...found, total: 0, readyOffline: 0, needClaude: 0, doubted: [doubt('a', 'accepted')] }, 1)).toBe(
+      '1 entry you had accepted is back in To review: it may not be a feat.',
+    );
+    expect(lookThroughMessage({ ...found, removed: { feat: 2 }, removedNames: ['Glowworm Gallery', 'Moth Archive'], doubted: [doubt('a', 'accepted')] }, 1)).toBe(
+      "Removed 2 entries an earlier version of the reader took for feats: Glowworm Gallery and Moth Archive (you hadn't reviewed them). 1 entry you had accepted is back in To review: it may not be a feat.",
     );
   });
 });

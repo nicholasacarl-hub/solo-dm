@@ -20,7 +20,7 @@
 import { nameKey } from '@/lib/id';
 import { textFingerprint } from '@/lib/importedContent';
 import type { CompendiumEntry, RecordSpan, StructuredKind } from '@/types';
-import { guessKind } from '../chunk';
+import { guessKind, ownBody } from '../chunk';
 import { STRUCTURED_LIMITS } from './schemas';
 import { isDelimiterRow, splitParagraphs } from './paragraphs';
 
@@ -351,20 +351,21 @@ const ENTITY_REASON: Record<string, string> = {
   monster: 'Has Armor Class, Hit Points and Challenge lines',
   spell: 'Has a spell level and school line, or a Casting Time line',
   'magic-item': 'Has a magic item category and rarity line',
-  feat: 'Has a feat category line, or a Prerequisite line under a Feats heading',
+  feat: 'Has a feat category line, or a Prerequisite line before its text',
 };
 
 /**
- * An entity kind for a node with entries: its stored kind, else what guessKind reads with the headings
- * above it (a bare Prerequisite line makes a feat only under a heading that names feats). Detection
- * corrects the stored kinds an older guessKind got wrong before it segments (detect.ts).
+ * An entity kind for a node with entries: its stored kind, else what guessKind reads from the entry's
+ * own text (before its first subsection, as the importer reads it: an older import may have kept a
+ * room's subsections, a stat block among them, inside the room's entry) and the headings above it.
+ * Detection corrects the stored kinds an older guessKind got wrong before it segments (staleKinds.ts).
  */
 function entityKind(node: OutlineNode): { kind: StructuredKind; reason: string } | null {
   if (!node.chain) return null;
   const first = node.chain.entries[0];
   if (ENTITY_KINDS.has(first.kind as StructuredKind)) return { kind: first.kind as StructuredKind, reason: ENTITY_REASON[first.kind] };
   const ancestors = ancestorsOf(node).map((a) => a.title).reverse();
-  const guessed = guessKind(node.title, ownText(node), ancestors);
+  const guessed = guessKind(node.title, ownBody(ownText(node)), ancestors);
   return ENTITY_KINDS.has(guessed as StructuredKind) ? { kind: guessed as StructuredKind, reason: ENTITY_REASON[guessed] } : null;
 }
 

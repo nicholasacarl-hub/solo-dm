@@ -94,6 +94,9 @@ function joinLines(a: string, b: string): string {
   return `${a} ${b}`;
 }
 
+/** A paragraph so far that is exactly a feat category line, possibly wrapped ("General Feat (Prerequisite: Level 4+)"). */
+const FEAT_CATEGORY_PARAGRAPH = /^(?:Origin|General|Fighting Style|Epic Boon) Feat(?:\s*\([^)]*\))?$/i;
+
 /** Convert extracted PDF pages to Markdown with inferred headings. */
 export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
   const all = pages.flatMap((runs, i) => pageLines(runs, i + 1));
@@ -146,7 +149,9 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
     } else {
       flushHeading();
       const gap = prev && !newPage ? prev.y - line.y : 0;
-      const paragraphBreak = !paragraph || newPage || gap > line.fontSize * 1.9 || gap < 0 || lastBodyLength < shortLine;
+      // A feat's category line ("General Feat (Prerequisite: Level 4+)") stands on its own, as print shows it.
+      const afterCategory = FEAT_CATEGORY_PARAGRAPH.test(paragraph);
+      const paragraphBreak = !paragraph || newPage || gap > line.fontSize * 1.9 || gap < 0 || lastBodyLength < shortLine || afterCategory;
       if (paragraphBreak) {
         flushParagraph();
         paragraph = line.text;

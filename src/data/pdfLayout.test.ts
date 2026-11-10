@@ -61,6 +61,30 @@ describe('pdfPagesToMarkdown', () => {
     );
   });
 
+  it("keeps a feat's category line apart from the sentence after it, even when it is as long as a body line", () => {
+    const page = [
+      line('Lamp Lifter', 760, 14),
+      line('General Feat (Prerequisite: Level 4+)', 740),
+      line('You gain the following benefits while you carry a lit lantern.', 728),
+      line('Your light spreads 10 feet farther and you can raise it high.', 716),
+      line('Wick Dancer', 690, 14),
+      line('General Feat (Prerequisite: Level 4+, Strength or', 670),
+      line('Dexterity 13+)', 658),
+      line('You move between flames without catching fire, and you can', 646),
+      line('step through a burning doorway as if it were open ground.', 634),
+    ];
+    expect(pdfPagesToMarkdown([page])).toBe(
+      [
+        '# Lamp Lifter',
+        'General Feat (Prerequisite: Level 4+)',
+        'You gain the following benefits while you carry a lit lantern. Your light spreads 10 feet farther and you can raise it high.',
+        '# Wick Dancer',
+        'General Feat (Prerequisite: Level 4+, Strength or Dexterity 13+)',
+        'You move between flames without catching fire, and you can step through a burning doorway as if it were open ground.',
+      ].join('\n\n'),
+    );
+  });
+
   it('drops running headers and page numbers', () => {
     const pages = [1, 2, 3, 4].map((n) => [
       line("Player's Notes", 800, 8),

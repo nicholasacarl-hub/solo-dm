@@ -200,6 +200,24 @@ describe('segment: structure rules', () => {
   });
 });
 
+describe('segment: entries an older import stored whole', () => {
+  const none: SegmentContext = { knownSpellNames: new Set(), knownClassNames: new Set() };
+  // An invented room the first chunker stored as one feat entry, its subsections (a creature among them) inside.
+  const room: CompendiumEntry = {
+    id: 'lib:pad:1', sourceId: 'pad', sourceName: 'Lamplight Holdings', kind: 'rule', name: 'Moth Paddock', path: ['Lamplight Holdings', 'Holding Rooms', 'Moth Paddock'],
+    text: '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\n_Room: Roomy_\n\nMoths graze here.\n\n### Paddock Moth\n\n_Tiny Beast, Unaligned_\n\n**AC** 12\n\n**HP** 3 (1d4 + 1)\n\n**CR** 0 (XP 10)\n\n### Paddock Chores\n\nSweep the dust.',
+  };
+
+  it("guesses from the entry's own text, so a stat block inside it doesn't make the room a monster", () => {
+    expect(segment([room], none).candidates).toEqual([]);
+  });
+
+  it('still reads a stored rule whose own text is a stat block as a monster', () => {
+    const drake = { ...room, id: 'lib:pad:2', name: 'Lamp Drake', path: ['Lamplight Holdings', 'Lamp Drake'], text: '_Small Dragon_\n\n**AC** 14\n\n**HP** 22 (4d6 + 8)\n\n**CR** 1 (XP 200)\n\n### Actions\n\nBite.' };
+    expect(segment([drake], none).candidates.map((c) => [c.kind, c.name])).toEqual([['monster', 'Lamp Drake']]);
+  });
+});
+
 describe('markCandidate and candidateFor', () => {
   it('marks entries as a kind ("Structure as…"), taking a section’s subtree along', () => {
     const marked = markCandidate(md, [gloamwoodEntryId('Mothkin')], 'species')!;

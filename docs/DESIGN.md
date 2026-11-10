@@ -308,16 +308,26 @@ nothing else (no book title, character or campaign). Extraction has its own ledg
 never touches a DM session, transcript or `Campaign.usage`.
 
 **Detection rules and re-checks.** A feat is an entry with a category line ("General Feat (Prerequisite:
-Level 4+)") or a name that says so; a bare "Prerequisite:" line counts only under a heading that names
-feats (one that ends with the word, or "Feat Descriptions"), because books print other options that way
-too (class options, stronghold rooms, item infusions). Entry kinds are guessed once, at import; when the
-guessing rules change, a database upgrade corrects the stored kinds once (version 4 did this for feats;
-imported text only, since a JSON file's kinds are its own). When the offline rules change,
-`PARSER_VERSION` rises and the book page offers *Re-check for free*: it looks through the book again
-(`detectStructure`). A record an older reader made that the current one doesn't find is removed when
-nobody reviewed it; when the player had accepted or edited it, it keeps a note, and accepted ones go back
-to review (Undo accepts them again). Rejected records, records being read, and records Claude, a pack or
-the player made are left as they are.
+Level 4+)"), a name that says so, or a bare "Prerequisite:" line before its text, which is how older
+books print feats. Books print other things that way too, so a bare Prerequisite line doesn't make a
+feat when the entry shows it is something else: a line before it (a stronghold room's type line),
+"Prerequisite: None", a prerequisite naming a class level or a warlock pact (class options), or other
+labelled lines after it ("Item:", "Space:"). Headings don't decide it, because PDF, photo and pasted-text
+imports often lose or merge them; under a heading that names feats, a Prerequisite line always counts.
+PDF import keeps a feat's category line on its own line. Entry kinds are guessed once, at import:
+`src/data/structured/staleKinds.ts` corrects, after startup and before each look through a book, the
+kinds the first version stored for entries it now reads as rules (imported text only: a JSON file's
+kinds are its own). When the offline rules change, `PARSER_VERSION` rises and the book page offers
+*Re-check for free*, which looks through the book again (`detectStructure`). It removes only the
+misreadings the version change explains (for version 2: feats read from a bare Prerequisite line) when
+nobody worked on them; one someone accepted, edited, re-read with Claude or has a newer reading waiting
+for keeps a note, and accepted ones go back to review. Undo puts all of it back. Records the player
+marked (*Structure as…*, *What it is*) are never removed, only read again. A look through the book reads
+the records first and writes at the end, skipping any record that changed meanwhile (an accept, an edit,
+a Claude reading), and leaves alone a record Claude is reading. It offers an offline reading as a
+"newer reading" only when the reader's reading changed since the record was last read
+(`readingHash`), never over the player's edit merely because the edit differs, and never over a Claude
+reading. Stale text is judged on a record's own entries.
 
 **Running a job** (`src/dm/extract/runner.ts`). One job runs at a time across all books (others wait,
 queued). Per kind, the first request's first stream event opens the lane (the kind's cache entry is then
@@ -333,14 +343,14 @@ Each result is saved as it arrives. Requests set `maxRetries: 0` (the runner own
 stop once at double the limit; a refusal keeps whatever the offline reader found and can be retried on
 another model.
 
-**Storage** (Dexie version 3, and version 4's kind correction; `src/storage/structured.ts`): `libraryRecords` (one row per record, with
+**Storage** (Dexie version 3, `src/storage/structured.ts`): `libraryRecords` (one row per record, with
 the run state of the latest job that touched it) and `libraryJobs`. Neither is part of
 `campaignTables()`: like the library, they never leave the device. Every record write keeps the book's
 denormalized counts (`LibrarySource.structure`) right in the same transaction; deleting a book removes
 its records and jobs and is refused while a job runs.
 
-**Records beside entries.** Nothing writes structure into `libraryEntries` (the version 4 upgrade only
-corrected kinds the import itself had guessed). `getLibrarySnapshot()` reads
+**Records beside entries.** Nothing writes structure into `libraryEntries` (staleKinds.ts only corrects
+kinds the import itself had guessed). `getLibrarySnapshot()` reads
 the enabled imports, their entries and their accepted, schema-valid records once per rules-index version;
 `materializeEntries` turns accepted records into SRD-shaped index entries on read (a one-entry record keeps
 its chunk id; sections and table rows get four-segment ids; replaced chunk ids stay resolvable as

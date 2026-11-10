@@ -11,6 +11,7 @@
 import { DATA_SCHEMAS, detectStructure, rereadOffline, structureEntryAs, validateData, type DetectionSummary } from '@/data';
 import { useGame, queueCampaignNotice } from '@/state/gameStore';
 import { deleteRecords, getRecords, getSourceEntries, listCampaigns, listLibrarySources, listRecords, putRecords, setRecordStatus } from '@/storage';
+import { textFingerprint } from '@/lib/importedContent';
 import type {
   LibrarySource,
   RecordConfidence,
@@ -98,10 +99,11 @@ export function bookGoneNotice(source: Pick<LibrarySource, 'title'>, change: 'of
 const pendingAccepts = new Map<string, Partial<Record<StructuredKind, number>>>();
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Signed, so a move back to review and its Undo cancel out (only a net gain is news for the DM). */
 function noteAccepted(records: readonly Pick<StructuredRecord, 'sourceId' | 'kind'>[], sign: 1 | -1): void {
   for (const r of records) {
     const counts = pendingAccepts.get(r.sourceId) ?? {};
-    counts[r.kind] = Math.max(0, (counts[r.kind] ?? 0) + sign);
+    counts[r.kind] = (counts[r.kind] ?? 0) + sign;
     pendingAccepts.set(r.sourceId, counts);
   }
   if (noticeTimer) clearTimeout(noticeTimer);
@@ -114,7 +116,7 @@ export async function flushAcceptNotices(): Promise<void> {
   noticeTimer = null;
   const waiting = [...pendingAccepts.entries()];
   pendingAccepts.clear();
-  if (waiting.every(([, counts]) => Object.values(counts).every((n) => !n))) return;
+  if (waiting.every(([, counts]) => Object.values(counts).every((n) => !n || n <= 0))) return;
   let sources: LibrarySource[];
   try {
     sources = await listLibrarySources();
@@ -124,9 +126,9 @@ export async function flushAcceptNotices(): Promise<void> {
   }
   for (const [sourceId, counts] of waiting) {
     const source = sources.find((s) => s.id === sourceId);
-    if (!source?.enabled || Object.values(counts).every((n) => !n)) continue;
+    if (!source?.enabled || Object.values(counts).every((n) => !n || n <= 0)) continue;
     const ordered: Partial<Record<StructuredKind, number>> = {};
-    for (const kind of Object.keys(KIND_LABELS) as StructuredKind[]) if (counts[kind]) ordered[kind] = counts[kind];
+    for (const kind of Object.keys(KIND_LABELS) as StructuredKind[]) if ((counts[kind] ?? 0) > 0) ordered[kind] = counts[kind];
     await tellDmsInSession(structureNotice(source, ordered));
   }
 }
@@ -276,11 +278,14 @@ export async function resolveProposal(recordId: string, use: 'new' | 'mine'): Pr
   if (record.status === 'accepted') scheduleRefresh();
 }
 
-/** "Keep these fields" after the book's text changed: the stale-text notice goes. */
+/** "Keep these fields" after the book's text changed: the stale-text notice goes, and the record takes the text as it is now. */
 export async function keepFields(recordId: string): Promise<void> {
   const [record] = await getRecords([recordId]);
   if (!record) return;
-  await putRecords([{ ...record, warnings: record.warnings.filter((w) => w.code !== 'stale-text'), updatedAt: Date.now() }]);
+  const entries = new Map((await getSourceEntries(record.sourceId)).map((e) => [e.id, e.text]));
+  const texts = record.entryIds.map((id) => entries.get(id));
+  const textHash = texts.every((t) => t !== undefined) ? textFingerprint(texts.join('\n\n')) : record.textHash;
+  await putRecords([{ ...record, textHash, warnings: record.warnings.filter((w) => w.code !== 'stale-text'), updatedAt: Date.now() }]);
 }
 
 /** A subclass's "Attaches to" (required to accept, D26); a parent problem the player resolved goes. */
@@ -317,8 +322,8 @@ export async function structureAs(sourceId: string, entryIds: string[], kind: St
 
 /**
  * "Look for entries again" and "Re-check" (spec §4.7, §3.10): detection, then the entries the player had
- * accepted that the improved reader no longer finds go back to review (Undo accepts them again; the
- * status change refreshes the index).
+ * accepted that the improved reader no longer finds go back to review. Undo puts back what detection
+ * removed and accepts those again (the status changes refresh the index; the DM hears of nothing new).
  */
 export async function lookThroughBook(
   sourceId: string,
@@ -326,9 +331,17 @@ export async function lookThroughBook(
 ): Promise<{ summary: DetectionSummary; movedBack: number; undo?: () => Promise<void> }> {
   const summary = await detectStructure(sourceId, opts);
   const accepted = summary.doubted.filter((d) => d.status === 'accepted').map((d) => d.id);
-  if (accepted.length === 0) return { summary, movedBack: 0 };
-  const moved = await setRecordsStatus(accepted, 'pending');
-  return { summary, movedBack: accepted.length, undo: moved.undo };
+  const moved = accepted.length ? await setRecordsStatus(accepted, 'pending') : null;
+  const removed = summary.removedRecords;
+  if (!moved && removed.length === 0) return { summary, movedBack: 0 };
+  return {
+    summary,
+    movedBack: accepted.length,
+    undo: async () => {
+      if (removed.length) await putRecords(removed);
+      if (moved) await moved.undo();
+    },
+  };
 }
 
 /** "On this device (free)". */

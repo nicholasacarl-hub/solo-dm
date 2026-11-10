@@ -4,7 +4,7 @@
  * and the counts line with the privacy popover.
  */
 import { Link } from 'react-router';
-import { ArrowLeft, Download, MoreHorizontal, RefreshCw, ScanSearch, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowLeft, Download, MoreHorizontal, ScanSearch, Sparkles, Trash2 } from 'lucide-react';
 import type { LibrarySource } from '@/types';
 import { Button, IconButton, Switch } from '@/ui/components/ui';
 import { Menu, type MenuItem } from '@/ui/play/components/Menu';
@@ -28,17 +28,18 @@ export function countsLine(counts: ReviewCounts): string {
   return `${counts.all} found${parts.length ? `: ${parts.join(' · ')}` : ''}`;
 }
 
+/** The id of the book's title (a focus target that stays on the page). */
+export const BOOK_TITLE_ID = 'book-title';
+
 export function BookHeader({
   source,
   counts,
   structured,
   unread,
-  recheck,
   detecting,
   onToggle,
   onRead,
   onDetect,
-  onRecheck,
   onDownloadBookData,
   onDelete,
 }: {
@@ -48,19 +49,15 @@ export function BookHeader({
   structured: boolean;
   /** Records the offline reader couldn't read. */
   unread: number;
-  /** Records an improved offline reader can re-check for free. */
-  recheck: number;
   detecting: boolean;
   onToggle(enabled: boolean): void;
   onRead(): void;
   onDetect(): void;
-  onRecheck(): void;
   onDownloadBookData(): void;
   onDelete(): void;
 }) {
   const menu: MenuItem[] = [
     { id: 'detect', label: structured ? 'Look for entries again' : 'Structure this book', icon: <ScanSearch className="size-4" aria-hidden />, onSelect: onDetect, disabled: detecting },
-    ...(recheck > 0 ? [{ id: 'recheck', label: `Re-check ${recheck} for free`, icon: <RefreshCw className="size-4" aria-hidden />, onSelect: onRecheck }] : []),
     { id: 'data', label: "Download book data (contains the book's text)", icon: <Download className="size-4" aria-hidden />, onSelect: onDownloadBookData },
     { id: 'delete', label: 'Delete this book', icon: <Trash2 className="size-4" aria-hidden />, onSelect: onDelete },
   ];
@@ -73,7 +70,12 @@ export function BookHeader({
       </Link>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         {/* Leaves room for the ⋯ button (44 px on touch screens) and the gap on the title's line. */}
-        <h1 className="order-1 w-[calc(100%-3.5rem)] min-w-0 font-display text-2xl font-semibold tracking-wide [overflow-wrap:anywhere] sm:text-[1.75rem] lg:w-auto lg:flex-1">
+        {/* Focusable by script: where focus goes when the control that had it goes away (BOOK_TITLE_ID). */}
+        <h1
+          id={BOOK_TITLE_ID}
+          tabIndex={-1}
+          className="order-1 w-[calc(100%-3.5rem)] min-w-0 font-display text-2xl font-semibold tracking-wide outline-none [overflow-wrap:anywhere] sm:text-[1.75rem] lg:w-auto lg:flex-1"
+        >
           {source.title}
         </h1>
         <div className="order-2 lg:order-5">

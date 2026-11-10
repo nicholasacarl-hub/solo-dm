@@ -28,4 +28,8 @@ afterFirstRender(() => {
   import('@/dm/extract')
     .then((extract) => extract.recoverJobsOnStartup())
     .catch((err: unknown) => console.warn('Could not check for interrupted structuring jobs.', err));
+  // Entry kinds an older import guessed wrongly (a stronghold room stored as a feat) are corrected quietly.
+  import('@/data/structured/staleKinds')
+    .then((kinds) => kinds.correctStaleKinds())
+    .catch((err: unknown) => console.warn('Could not check the kinds of imported entries.', err));
 });

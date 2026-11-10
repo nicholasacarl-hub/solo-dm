@@ -23,7 +23,7 @@ import { AllEntriesView } from '@/ui/library/structure/AllEntriesView';
 import { BookDataDialog } from '@/ui/library/structure/BookDataDialog';
 import { DeleteBookDialog, useBookSwitch } from '@/ui/library/structure/bookControls';
 import { lookThroughMessage, needsRecheck, reviewable, reviewCounts } from '@/ui/library/structure/bookData';
-import { BookHeader } from '@/ui/library/structure/BookHeader';
+import { BOOK_TITLE_ID, BookHeader } from '@/ui/library/structure/BookHeader';
 import { ConsentDialog, needsClaude, type ConsentScope } from '@/ui/library/structure/ConsentDialog';
 import { kindCount } from '@/ui/library/structure/labels';
 import type { Availability } from '@/ui/library/structure/RecordDetail';
@@ -107,16 +107,22 @@ export function LibrarySourceScreen() {
     set({ setup: false });
   }, [setup, ready, unread, set]);
 
+  const titleTarget = () => document.getElementById(BOOK_TITLE_ID);
   // "Look for entries again" and "Re-check" (after the offline reader improved) are the same look through the book.
-  const runDetect = async () => {
+  // Focus never falls to the page body: Undo takes it when there is something to undo; a run started from the
+  // banner (which goes away once the re-check is done) leaves it on the book's title.
+  const runDetect = async (from?: 'banner') => {
     if (!source || detect) return;
     setDetect({ done: 0, total: 1 });
     try {
       const { summary, movedBack, undo } = await lookThroughBook(source.id, { onProgress: (done, total) => setDetect({ done, total }) });
       setNothingFound(summary.total === 0);
       const message = lookThroughMessage(summary, movedBack);
-      if (undo) showUndo(message, undo);
-      else toast.success(message);
+      if (undo) showUndo(message, undo, { focus: true, returnFocus: titleTarget });
+      else {
+        toast.success(message);
+        if (from === 'banner') titleTarget()?.focus();
+      }
     } catch (error) {
       toast.error(errorMessage(error, 'Could not look through the book.'));
     } finally {
@@ -172,12 +178,10 @@ export function LibrarySourceScreen() {
             counts={counts}
             structured={structured}
             unread={unread}
-            recheck={recheck.length}
             detecting={detect !== null}
             onToggle={(enabled) => toggle(source, enabled)}
             onRead={() => setConsent({ kind: 'all' })}
             onDetect={() => void runDetect()}
-            onRecheck={() => void runDetect()}
             onDownloadBookData={() => setBookData(true)}
             onDelete={() => setDeleting(true)}
           />
@@ -193,7 +197,14 @@ export function LibrarySourceScreen() {
             {recheck.length > 0 && (
               <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-info/30 bg-info-soft/40 px-4 py-2.5 text-sm">
                 <p className="min-w-0 flex-1">The offline reader improved: re-check {recheck.length} {recheck.length === 1 ? 'entry' : 'entries'} for free.</p>
-                <Button size="sm" className={TOUCH} icon={<RefreshCw className="size-4" aria-hidden />} disabled={detect !== null} onClick={() => void runDetect()}>
+                {/* aria-disabled, not disabled: a disabled button would drop keyboard focus to the page body. */}
+                <Button
+                  size="sm"
+                  className={TOUCH}
+                  icon={<RefreshCw className="size-4" aria-hidden />}
+                  aria-disabled={detect !== null || undefined}
+                  onClick={() => void runDetect('banner')}
+                >
                   Re-check
                 </Button>
               </div>
@@ -215,8 +226,12 @@ export function LibrarySourceScreen() {
                 </div>
               </div>
             )}
+            {/* Always in the page, so screen readers announce the change of text. */}
+            <p className="sr-only" role="status">
+              {detect ? 'Looking through the book…' : ''}
+            </p>
             {detect && (
-              <div role="status" className="rounded-2xl border border-border bg-surface px-4 py-3">
+              <div className="rounded-2xl border border-border bg-surface px-4 py-3">
                 <p className="text-sm font-medium">Looking for spells, monsters and character options…</p>
                 <ProgressBar className="mt-2" label="Looking through the book" value={detect.done} max={Math.max(1, detect.total)} valueText={`${detect.done} of ${detect.total}`} />
               </div>

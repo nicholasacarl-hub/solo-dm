@@ -337,6 +337,8 @@ const envelope = z.object({
     .optional(),
   textHash: z.string(),
   parserVersion: z.int().min(1).optional(),
+  marked: z.literal(true).optional(),
+  readingHash: z.string().max(64).optional(),
   extraction: z
     .object({
       model: z.string(),

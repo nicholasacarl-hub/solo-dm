@@ -15,6 +15,7 @@ import type {
   Clock,
   CombatState,
   CompendiumEntry,
+  ContentKind,
   ExtractionJob,
   GithubSyncSettings,
   HomebrewEntry,
@@ -146,6 +147,11 @@ export const STRUCTURING_BUSY_ERROR: string = library.STRUCTURING_BUSY_ERROR;
 export const setLibrarySourceEnabled: (id: string, enabled: boolean) => Promise<void> = library.setLibrarySourceEnabled;
 /** Entries for the given sources (all enabled imported sources when omitted). */
 export const getLibraryEntries: (sourceIds?: string[]) => Promise<CompendiumEntry[]> = library.getLibraryEntries;
+/** The stored entries of one kind from the given sources. */
+export const getEntriesByKind: (kind: ContentKind, sourceIds: readonly string[]) => Promise<CompendiumEntry[]> = library.getEntriesByKind;
+/** Correct some imported entries' kinds (and their summaries): the fix for kinds an older import guessed wrongly. */
+export const updateEntryKinds: (changes: readonly { id: string; kind: ContentKind; summary?: string }[]) => Promise<void> =
+  library.updateEntryKinds;
 
 // ---------------------------------------------------------------------------
 // Backups (export / import save files)
@@ -261,6 +267,8 @@ export const IMAGE_CAMPAIGN_MISSING: string = images.IMAGE_CAMPAIGN_MISSING;
 // GitHub saves. Characters keep provenance for book text they copy; exports replace that text (redact.ts).
 // ---------------------------------------------------------------------------
 
+/** Records in a book's reading order (their first entry's ordinal, then row). */
+export const compareRecordsByReading: (a: StructuredRecord, b: StructuredRecord) => number = structured.compareRecordsByReading;
 /** A source's entries in reading order (numeric suffix of lib:<sourceId>:<n>, not IndexedDB string order). */
 export const getSourceEntries: (sourceId: string) => Promise<CompendiumEntry[]> = structured.getSourceEntries;
 export const listRecords: (sourceId: string, opts?: { kind?: StructuredKind; status?: RecordStatus }) => Promise<StructuredRecord[]> =
@@ -277,8 +285,12 @@ export const putRecords: (records: StructuredRecord[]) => Promise<void> = struct
 export const setRecordStatus: (ids: string[], status: RecordStatus) => Promise<{ id: string; status: RecordStatus }[]> =
   structured.setRecordStatus;
 export const deleteRecords: (ids: string[]) => Promise<void> = structured.deleteRecords;
-/** Writes and deletes in one transaction; keeps the source's counts right. */
-export const commitRecords: (puts: readonly StructuredRecord[], deleteIds: readonly string[]) => Promise<void> = structured.commitRecords;
+/** Writes and deletes in one transaction; keeps the source's counts right; skips records changed since `expected`. */
+export const commitRecords: (
+  puts: readonly StructuredRecord[],
+  deleteIds: readonly string[],
+  expected?: ReadonlyMap<string, number | null>,
+) => Promise<{ written: Set<string>; deleted: Set<string> }> = structured.commitRecords;
 /** Accepted records of enabled import sources (or of the given sources). */
 export const getAcceptedRecords: (sourceIds?: string[]) => Promise<StructuredRecord[]> = structured.getAcceptedRecords;
 /** Records of a job in a run state, in queue order (STRUCTURED_KINDS, then reading order). */

@@ -143,13 +143,35 @@ export async function deleteRecords(ids: string[]): Promise<void> {
   await commitRecords([], ids);
 }
 
-/** Writes (the last one per id wins) and deletes in one transaction, keeping the counts; detection's re-run uses both. */
-export async function commitRecords(puts: readonly StructuredRecord[], deleteIds: readonly string[]): Promise<void> {
+/**
+ * Writes (the last one per id wins) and deletes in one transaction, keeping the counts. `expected`
+ * (detection's re-run, which reads every record, scans for seconds, then writes): the `updatedAt` each
+ * record had when it was read, or null for one that didn't exist; a write or delete whose record has
+ * changed since (an accept, an edit, a Claude reading) is skipped. Returns what was applied.
+ */
+export async function commitRecords(
+  puts: readonly StructuredRecord[],
+  deleteIds: readonly string[],
+  expected?: ReadonlyMap<string, number | null>,
+): Promise<{ written: Set<string>; deleted: Set<string> }> {
   const latest = new Map<string, StructuredRecord>();
   for (const r of puts) latest.set(r.id, r);
   const deletes = [...new Set(deleteIds)].filter((id) => !latest.has(id));
-  if (latest.size === 0 && deletes.length === 0) return;
-  await db.transaction('rw', db.libraryRecords, db.library, () => writeCounted([...latest.values()], deletes));
+  if (latest.size === 0 && deletes.length === 0) return { written: new Set(), deleted: new Set() };
+  return db.transaction('rw', db.libraryRecords, db.library, async () => {
+    let writes = [...latest.values()];
+    let removals = deletes;
+    if (expected) {
+      const ids = [...writes.map((r) => r.id), ...removals];
+      const rows = await db.libraryRecords.bulkGet(ids);
+      const current = new Map(ids.map((id, i) => [id, rows[i]?.updatedAt ?? null]));
+      const unchanged = (id: string) => !expected.has(id) || expected.get(id) === current.get(id);
+      writes = writes.filter((r) => unchanged(r.id));
+      removals = removals.filter(unchanged);
+    }
+    await writeCounted(writes, removals);
+    return { written: new Set(writes.map((r) => r.id)), deleted: new Set(removals) };
+  });
 }
 
 /** Accepted records of enabled import sources (or of the given sources), by source and reading order. */

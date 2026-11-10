@@ -45,11 +45,31 @@ const FEAT_LINE = new RegExp(`${FEAT_CATEGORY_LINE.source}|${PREREQUISITE_LINE.s
 const FEAT_NAME = /\((?:(?:Origin|General|Fighting Style|Epic Boon)\s+)?Feat\)$|^Feat:/i;
 /**
  * A heading that names feats: one that ends with the word ("Feats", "Racial Feats", "Chapter 5: Feats",
- * "List of Feats"), or the word with a qualifier ("Feat Descriptions", "Feats (Optional)"). Not a title
+ * "List of Feats:"), or the word with a qualifier ("Feat Descriptions", "Feats (Optional)"). Not a title
  * that only starts with it ("Feats of the North", "Feats and Fortresses"), and never "Features".
  */
-const FEATS_HEADING = /\bFeats?$|^Feats?(?: Descriptions?| Lists?)?(?: \([^)]*\))?$/i;
+const FEATS_HEADING = /\bFeats?[:.]?$|^Feats?(?: Descriptions?| Lists?)?(?: \([^)]*\))?[:.]?$/i;
 const SIZE_LINE = /^(?:Tiny|Small|Medium|Large|Huge|Gargantuan)\b/i;
+
+/*
+ * A bare Prerequisite line. Older books print feats with only a "Prerequisite: …" line before their text,
+ * and print other things that way too. These signs say an entry is not a feat (headings can't decide it:
+ * PDF, photo and pasted-text imports often lose or merge them):
+ * - a line before the Prerequisite line (a type line such as "Level 5 Stronghold Room");
+ * - "Prerequisite: None" (a feat without one prints none);
+ * - a prerequisite that names a class level or a warlock pact, as class options do ("Level 5+ Warlock",
+ *   "6th-level artificer", "Pact of the Blade feature");
+ * - other labelled lines right after it, as a stat block has ("Item: …", "Space: …", "Order: …").
+ * Under a heading that names feats, none of these matter.
+ */
+const PREREQUISITE_NONE = /^Prerequisites?:\s*(?:None|—|-|n\/a)\.?$/i;
+const CLASS_OPTION_PREREQUISITE = /\bLevel \d{1,2}\+ [A-Z][a-z]+|\b\d{1,2}(?:st|nd|rd|th)[- ]level\b|\bPact of the\b/i;
+/** "Item: A pair of boots", "Space: Roomy": a short label, a colon and a value. */
+const LABEL_LINE = /^[\p{Lu}][\p{L}' ]{1,24}:\s*\S/u;
+/** Labels a feat's own text may start with (not signs of a stat block). */
+const FEAT_LABELS = /^(?:Repeatable|Benefits?|Ability Score Increase|Special|Normal)\b/i;
+/** A label inside the Prerequisite line itself, when a PDF joined two labelled lines ("Prerequisite: None Space: Roomy"). */
+const JOINED_LABEL = /\s[\p{Lu}][\p{L}']{1,24}:\s/u;
 
 /** Whether one of the headings above an entry names feats (where older books print feats with only a Prerequisite line). */
 export function underFeatsHeading(ancestors: readonly string[]): boolean {
@@ -81,15 +101,25 @@ function leadingLines(text: string, n: number): string[] {
     .slice(0, n);
 }
 
+/** Whether a bare Prerequisite line in the first two lines makes this text a feat (see the signs above). */
+function prerequisiteFeat(text: string, ancestors: readonly string[]): boolean {
+  const lines = leadingLines(text, 4);
+  const at = lines.slice(0, 2).findIndex((l) => PREREQUISITE_LINE.test(l));
+  if (at < 0) return false;
+  if (underFeatsHeading(ancestors)) return true;
+  const line = lines[at];
+  if (at > 0 || PREREQUISITE_NONE.test(line) || CLASS_OPTION_PREREQUISITE.test(line)) return false;
+  if (JOINED_LABEL.test(line.replace(PREREQUISITE_LINE, ''))) return false;
+  return !lines.slice(1, 3).some((l) => LABEL_LINE.test(l) && !FEAT_LABELS.test(l) && !PREREQUISITE_LINE.test(l));
+}
+
 /**
  * Guess what a piece of rules text is: a spell ("Casting Time" or "Level 3 Evocation"), a monster
  * (AC, HP and CR/Challenge), a magic item (an item category with a rarity), a feat, or otherwise a rule.
  *
- * A feat has a category line ("Origin Feat", "General Feat (Prerequisite: Level 4+)") or a name that
- * says so ("Alert (Origin Feat)"). Older books print some feats with only a "Prerequisite:" line, but
- * books print other things that way too (class options such as invocations, stronghold rooms, item
- * infusions), so a bare Prerequisite line only counts under a heading that names feats (`ancestors`:
- * the headings above the entry, outermost first).
+ * A feat has a category line ("Origin Feat", "General Feat (Prerequisite: Level 4+)"), a name that says
+ * so ("Alert (Origin Feat)"), or a bare Prerequisite line that nothing marks as something else (see the
+ * signs above). `ancestors`: the headings above the entry, outermost first.
  */
 export function guessKind(name: string, text: string, ancestors: readonly string[] = []): ContentKind {
   const head = text.slice(0, 2000);
@@ -99,8 +129,18 @@ export function guessKind(name: string, text: string, ancestors: readonly string
   if (ARMOR_CLASS.test(head) && HIT_POINTS.test(head) && CHALLENGE.test(head)) return 'monster';
   if (ITEM_LINE.test(top)) return 'magic-item';
   if (FEAT_NAME.test(name.trim()) || lines.some((l) => FEAT_CATEGORY_LINE.test(l))) return 'feat';
-  if (lines.some((l) => PREREQUISITE_LINE.test(l)) && underFeatsHeading(ancestors)) return 'feat';
+  if (prerequisiteFeat(text, ancestors)) return 'feat';
   return 'rule';
+}
+
+/**
+ * Whether the first version of guessKind (PARSER_VERSION 1) read this text as a feat that today's
+ * rules don't: it took any Prerequisite line in the first two lines for a feat. Only its own text
+ * counts (before its first subsection), as at import.
+ */
+export function misreadAsFeatBefore(name: string, text: string, ancestors: readonly string[]): boolean {
+  const body = ownBody(text);
+  return guessKind(name, body, ancestors) === 'rule' && leadingLines(body, 2).some((l) => PREREQUISITE_LINE.test(l));
 }
 
 function summaryLine(text: string, pattern: RegExp): string | undefined {
@@ -367,7 +407,9 @@ export function chunkDocument(text: string, opts: ChunkOptions): CompendiumEntry
 const PART_NAME = /^(.*) \(part (\d+)\)$/;
 
 /** An entity entry's own text: what its stored text holds before its first subsection (renderSection re-levels those to ### and deeper). */
-const ownBody = (text: string) => text.split(/\n(?=#{3,6}[ \t])/)[0];
+export function ownBody(text: string): string {
+  return text.split(/\n(?=#{3,6}[ \t])/)[0];
+}
 
 /** A corrected kind for a stored entry, with the summary that kind gives (none = no summary). */
 export interface KindCorrection {
@@ -383,11 +425,11 @@ function ordinal(id: string): number {
 }
 
 /**
- * Corrections for kinds an older version of guessKind stored (kinds are guessed once, at import; the
- * database upgrade to version 4 applies these once, src/storage/db.ts): an entry stored as a feat that
- * today's rules don't read as one (a bare Prerequisite line outside a heading that names feats) gets the
- * kind and summary guessKind gives now. A long entry's "(part N)" continuations follow their first part.
- * Pure. `entries`: one source's entries (all of them, or only those stored as feats), in any order.
+ * Corrections for kinds the first version of guessKind stored (kinds are guessed once, at import;
+ * src/data/structured/staleKinds.ts applies these): an entry stored as a feat only because of a bare
+ * Prerequisite line that today's rules read as something else (misreadAsFeatBefore) gets the kind and
+ * summary guessKind gives now. A long entry's "(part N)" continuations follow their first part. Pure.
+ * `entries`: one source's entries (all of them, or only those stored as feats), in any order.
  */
 export function staleFeatKinds(entries: readonly CompendiumEntry[]): KindCorrection[] {
   const out: KindCorrection[] = [];
@@ -406,9 +448,8 @@ export function staleFeatKinds(entries: readonly CompendiumEntry[]): KindCorrect
       continue;
     }
     head = { name: entry.name, parent, kind: null };
-    if (entry.kind !== 'feat') continue;
+    if (entry.kind !== 'feat' || !misreadAsFeatBefore(entry.name, entry.text, ancestors)) continue;
     const kind = guessKind(entry.name, ownBody(entry.text), ancestors);
-    if (kind === 'feat') continue;
     head.kind = kind;
     out.push(correction(entry, kind));
   }
