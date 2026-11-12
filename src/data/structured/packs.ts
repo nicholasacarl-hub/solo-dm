@@ -28,7 +28,8 @@ import {
   type SubclassData,
   type TextSpan,
 } from '@/types';
-import { guessKind, headingAncestors } from '../chunk';
+import { GUESSED_ENTITY_KINDS, guessKind, headingAncestors, kindsAreGuesses, misreadBefore, withCurrentKinds } from '../chunk';
+import { doubtMessage } from './notices';
 import { validateData } from './normalize';
 import { splitParagraphs } from './paragraphs';
 import { DATA_SCHEMAS, RECORD_SCHEMA, STRUCTURED_LIMITS } from './schemas';
@@ -42,6 +43,8 @@ export interface PackFileV1 {
   license?: string; attribution?: string; notes?: string;
   /** "Download book data" files only: the book they were made from. */
   bookFingerprint?: string;
+  /** "Download book data" files only: true when the entries' kinds are an importer's guesses (a book imported as text), false when they are its file's own. */
+  kindsGuessed?: boolean;
   entries: { id: string; name: string; kind?: ContentKind; summary?: string; text: string; path?: string[] }[];
   records?: PackRecordV1[];
 }
@@ -58,7 +61,7 @@ export interface PackRecordV1 {
   reviewedStatus?: 'accepted' | 'pending';
 }
 export interface PackImport {
-  source: Pick<LibrarySource, 'title' | 'license' | 'attribution' | 'notes' | 'fingerprint'>;
+  source: Pick<LibrarySource, 'title' | 'license' | 'attribution' | 'notes' | 'fingerprint' | 'kindsGuessed'>;
   entries: CompendiumEntry[]; records: StructuredRecord[];
   issues: { path: string; message: string }[];          // first 20 listed
   reviewedElsewhere: number;                             // records with reviewedStatus 'accepted'
@@ -85,6 +88,7 @@ const head = z.object({
   attribution: z.string().max(4000).optional(),
   notes: z.string().max(4000).optional(),
   bookFingerprint: z.string().regex(/^[0-9a-f]{16}$/, 'a book fingerprint is 16 hex characters').optional(),
+  kindsGuessed: z.boolean().optional(),
   entries: z.array(z.unknown()).min(1, 'the pack has no entries').max(L.pack.entries, `a pack holds at most ${L.pack.entries} entries`),
   records: z.array(z.unknown()).max(L.pack.records, `a pack holds at most ${L.pack.records} records`).optional(),
 });
@@ -139,7 +143,11 @@ export function parsePack(json: unknown, opts: { sourceId: string; sourceName: s
     throw invalid(`${path}: ${message}.`);
   }
   const now = opts.now ?? Date.now();
-  const ctx = new PackContext(opts.sourceId, opts.sourceName, now);
+  // Book data of a book imported as text: the entry kinds are what the importer guessed on the other device,
+  // so the ones an earlier version misread are corrected, and its records of them get the note. A file
+  // without kindsGuessed comes from a version that didn't write it: its fingerprint says it is book data.
+  const guessed = top.data.kindsGuessed ?? top.data.bookFingerprint !== undefined;
+  const ctx = new PackContext(opts.sourceId, opts.sourceName, now, guessed);
   ctx.readEntries(top.data.entries);
   const records = ctx.readRecords(top.data.records ?? []);
   const fingerprint = top.data.bookFingerprint ?? bookFingerprint(ctx.packEntries.map((e) => e.text));
@@ -152,6 +160,7 @@ export function parsePack(json: unknown, opts: { sourceId: string; sourceName: s
       ...(top.data.attribution ? { attribution: top.data.attribution } : {}),
       ...(notes ? { notes } : {}),
       fingerprint,
+      kindsGuessed: guessed,
     },
     entries: [...ctx.packEntries, ...ctx.inlineEntries],
     records,
@@ -191,6 +200,8 @@ class PackContext {
     private readonly sourceId: string,
     private readonly sourceName: string,
     private readonly now: number,
+    /** The entry kinds are an importer's guesses (book data), not the file author's. */
+    private readonly guessedKinds = false,
   ) {}
 
   private entryId(n: number): string {
@@ -222,6 +233,10 @@ class PackContext {
       this.packEntries.push(entry);
       this.byId.set(id, entry);
     });
+    if (!this.guessedKinds) return;
+    const corrected = withCurrentKinds(this.packEntries);
+    this.packEntries.splice(0, this.packEntries.length, ...corrected);
+    for (const e of corrected) this.byId.set(e.id, e);
   }
 
   readRecords(raw: readonly unknown[]): StructuredRecord[] {
@@ -352,6 +367,12 @@ class PackContext {
         });
         confidence = 'low';
       }
+    }
+    // A record of an entry an earlier version misread (book data from that version): offered with the note, never applied.
+    const first = this.byId.get(d.entryIds[0]);
+    if (this.guessedKinds && d.span === 'entry' && first && GUESSED_ENTITY_KINDS.includes(d.kind) && misreadBefore(d.kind, first.name, first.text, headingAncestors(first.path, first.name))) {
+      warnings.push({ code: 'not-this-kind', severity: 'warn', field: 'kind', message: doubtMessage(d.kind) });
+      if (confidence === 'high') confidence = 'medium';
     }
     const texts = d.entryIds.map((id) => this.byId.get(id)?.text ?? '');
     const record: StructuredRecord = {
@@ -501,7 +522,9 @@ export function exportPack(source: LibrarySource, entries: CompendiumEntry[], re
     ...(source.license ? { license: source.license } : {}),
     ...(source.attribution ? { attribution: source.attribution } : {}),
     ...(source.notes ? { notes: source.notes } : {}),
-    ...(source.fingerprint ? { bookFingerprint: source.fingerprint } : {}),
+    // Whether the kinds are guesses, as this device treats them (a JSON book that didn't record it keeps its kinds
+    // here), so the next device treats the book the same way.
+    ...(source.fingerprint ? { bookFingerprint: source.fingerprint, kindsGuessed: kindsAreGuesses(source) } : {}),
     entries: ordered.map((e) => ({
       id: e.id,
       name: e.name,

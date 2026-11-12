@@ -8,9 +8,9 @@
  * reaches the DM. Nothing here ever throws after the records are written: a failed refresh, restore
  * or notice must not undo a saved decision.
  */
-import { DATA_SCHEMAS, detectStructure, rereadOffline, structureEntryAs, validateData, type DetectionSummary } from '@/data';
+import { DATA_SCHEMAS, detectStructure, doubted, rereadOffline, structureEntryAs, validateData, type DetectionSummary } from '@/data';
 import { useGame, queueCampaignNotice } from '@/state/gameStore';
-import { deleteRecords, getRecords, getSourceEntries, listCampaigns, listLibrarySources, listRecords, putRecords, setRecordStatus } from '@/storage';
+import { commitRecords, deleteRecords, getRecords, getSourceEntries, listCampaigns, listLibrarySources, listRecords, putRecords, setRecordStatus } from '@/storage';
 import { textFingerprint } from '@/lib/importedContent';
 import type {
   LibrarySource,
@@ -23,6 +23,7 @@ import type {
 import { refreshRulesIndex } from '../kinds';
 import { acceptBlocker, blocksFor, isConfident } from './bookData';
 import { KIND_LABELS, kindCount } from './labels';
+import { undoOffered } from './UndoToast';
 import { mergeWarnings, withoutParentProblems } from './warnings';
 
 // ---------------------------------------------------------------------------
@@ -95,28 +96,46 @@ export function bookGoneNotice(source: Pick<LibrarySource, 'title'>, change: 'of
   return `The player ${what} “${source.title}”. Its entries, stat blocks and character options are no longer available; characters keep the features they already have, and the player may give you the numbers for anything from it.`;
 }
 
-// Accepted counts per book, waiting out the Undo window.
-const pendingAccepts = new Map<string, Partial<Record<StructuredKind, number>>>();
+// Accepts per book and record, waiting out the Undo window.
+const pendingAccepts = new Map<string, Map<string, { kind: StructuredKind; net: number }>>();
 let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Signed, so a move back to review and its Undo cancel out (only a net gain is news for the DM). */
-function noteAccepted(records: readonly Pick<StructuredRecord, 'sourceId' | 'kind'>[], sign: 1 | -1): void {
+/**
+ * Per record, so a move back to review and its Undo cancel out, and moving one record back never hides
+ * another's accept: only records accepted in the end are news for the DM.
+ */
+function noteAccepted(records: readonly Pick<StructuredRecord, 'id' | 'sourceId' | 'kind'>[], sign: 1 | -1): void {
   for (const r of records) {
-    const counts = pendingAccepts.get(r.sourceId) ?? {};
-    counts[r.kind] = (counts[r.kind] ?? 0) + sign;
-    pendingAccepts.set(r.sourceId, counts);
+    const book = pendingAccepts.get(r.sourceId) ?? new Map<string, { kind: StructuredKind; net: number }>();
+    const change = book.get(r.id) ?? { kind: r.kind, net: 0 };
+    change.net += sign;
+    book.set(r.id, change);
+    pendingAccepts.set(r.sourceId, book);
   }
   if (noticeTimer) clearTimeout(noticeTimer);
-  noticeTimer = setTimeout(() => void flushAcceptNotices(), NOTICE_DELAY_MS);
+  noticeTimer = setTimeout(flushOnceUndoCloses, NOTICE_DELAY_MS);
+}
+
+/** The notices wait while an Undo is on offer (an Undo then still cancels them out), then go. */
+function flushOnceUndoCloses(): void {
+  if (undoOffered()) {
+    noticeTimer = setTimeout(flushOnceUndoCloses, 1_000);
+    return;
+  }
+  void flushAcceptNotices();
 }
 
 /** Send the waiting accept notices now (one per book, to every campaign in session). */
 export async function flushAcceptNotices(): Promise<void> {
   if (noticeTimer) clearTimeout(noticeTimer);
   noticeTimer = null;
-  const waiting = [...pendingAccepts.entries()];
+  const waiting = [...pendingAccepts.entries()].map(([sourceId, book]) => {
+    const counts: Partial<Record<StructuredKind, number>> = {};
+    for (const { kind, net } of book.values()) if (net > 0) counts[kind] = (counts[kind] ?? 0) + 1;
+    return [sourceId, counts] as const;
+  });
   pendingAccepts.clear();
-  if (waiting.every(([, counts]) => Object.values(counts).every((n) => !n || n <= 0))) return;
+  if (waiting.every(([, counts]) => Object.keys(counts).length === 0)) return;
   let sources: LibrarySource[];
   try {
     sources = await listLibrarySources();
@@ -126,7 +145,7 @@ export async function flushAcceptNotices(): Promise<void> {
   }
   for (const [sourceId, counts] of waiting) {
     const source = sources.find((s) => s.id === sourceId);
-    if (!source?.enabled || Object.values(counts).every((n) => !n || n <= 0)) continue;
+    if (!source?.enabled || Object.keys(counts).length === 0) continue;
     const ordered: Partial<Record<StructuredKind, number>> = {};
     for (const kind of Object.keys(KIND_LABELS) as StructuredKind[]) if ((counts[kind] ?? 0) > 0) ordered[kind] = counts[kind];
     await tellDmsInSession(structureNotice(source, ordered));
@@ -322,12 +341,13 @@ export async function structureAs(sourceId: string, entryIds: string[], kind: St
 
 /**
  * "Look for entries again" and "Re-check" (spec §4.7, §3.10): detection, then the entries the player had
- * accepted that the improved reader no longer finds go back to review. Undo puts back what detection
- * removed and accepts those again (the status changes refresh the index; the DM hears of nothing new).
+ * accepted that the improved reader no longer finds go back to review. Undo accepts those again and puts
+ * back what detection removed, with the improved reader's note, so a later look leaves them alone (and
+ * never over a record made again meanwhile). The status changes refresh the index; the DM hears of nothing new.
  */
 export async function lookThroughBook(
   sourceId: string,
-  opts?: { onProgress?(done: number, total: number): void },
+  opts?: { onProgress?(done: number, total: number): void; keep?: readonly string[] },
 ): Promise<{ summary: DetectionSummary; movedBack: number; undo?: () => Promise<void> }> {
   const summary = await detectStructure(sourceId, opts);
   const accepted = summary.doubted.filter((d) => d.status === 'accepted').map((d) => d.id);
@@ -338,16 +358,27 @@ export async function lookThroughBook(
     summary,
     movedBack: accepted.length,
     undo: async () => {
-      if (removed.length) await putRecords(removed);
+      if (removed.length) {
+        const now = Date.now();
+        await commitRecords(removed.map((r) => doubted(r, now)), [], new Map(removed.map((r) => [r.id, null])));
+      }
       if (moved) await moved.undo();
     },
   };
 }
 
-/** "On this device (free)". */
-export async function rereadHere(recordIds: string[]): Promise<void> {
-  await rereadOffline(recordIds);
+/**
+ * "On this device (free)". `doubted`: how many got the improved reader's note instead of a new reading;
+ * the accepted ones among them go back to review (`movedBack`, with Undo), as Re-check does.
+ * `alreadyNoted`: misreadings that had the note already; `busy`: records a job is reading.
+ */
+export async function rereadHere(
+  recordIds: string[],
+): Promise<{ doubted: number; alreadyNoted: number; busy: number; movedBack: number; undo?: () => Promise<void> }> {
+  const result = await rereadOffline(recordIds);
+  const moved = result.accepted.length ? await setRecordsStatus(result.accepted, 'pending') : null;
   scheduleRefresh();
+  return { doubted: result.doubted, alreadyNoted: result.alreadyNoted, busy: result.busy, movedBack: result.accepted.length, ...(moved ? { undo: moved.undo } : {}) };
 }
 
 /** Tests: run the pending refresh and drop pending notices. */

@@ -21,6 +21,7 @@ import {
   saveLibrarySource,
   saveLibrarySourceWithRecords,
   setLibrarySourceEnabled,
+  setPausedJobCounts,
   setRecordStatus,
   setSourceFingerprint,
   structuringSpendUsd,
@@ -51,6 +52,20 @@ async function seedBook(source: LibrarySource = gloamwoodSource(), entries: Comp
 }
 
 const structureOf = async (id = 'gloam') => (await db.library.get(id))?.structure;
+
+describe('setPausedJobCounts', () => {
+  it('sets a paused job\'s counts only while it is still paused as it was read', async () => {
+    const paused = extractionJob({ id: 'job:p', status: 'paused', updatedAt: 5 });
+    await putJob(paused);
+    const counts = { ...paused.counts, queued: 1, skipped: 2 };
+    expect(await setPausedJobCounts('job:p', 5, counts)).toBe(true);
+    expect((await getJob('job:p'))?.counts).toEqual(counts);
+    // Resumed meanwhile: the recount never puts the old paused job back.
+    await putJob({ ...paused, status: 'queued', updatedAt: 6 });
+    expect(await setPausedJobCounts('job:p', 5, { ...counts, queued: 0 })).toBe(false);
+    expect(await getJob('job:p')).toMatchObject({ status: 'queued', counts: paused.counts });
+  });
+});
 
 describe('getSourceEntries', () => {
   it('returns entries in reading order (numeric suffix), not IndexedDB string order', async () => {

@@ -177,7 +177,7 @@ describe('after the offline reader improved', () => {
       removed: { feat: 1 },
       removedNames: ['Glowworm Gallery'],
       removedRecords: [room],
-      doubted: [{ id: grace.id, kind: 'feat', status: 'accepted' }],
+      doubted: [{ id: grace.id, kind: 'feat', status: 'accepted', edited: false }],
     });
     renderPage();
     const banner = (await screen.findByText('The offline reader improved: re-check 2 entries for free.')).parentElement as HTMLElement;
@@ -193,7 +193,7 @@ describe('after the offline reader improved', () => {
     await waitFor(() => expect(undo).toHaveFocus());
     await user.click(undo);
     await waitFor(() => expect(storage.setRecordStatus).toHaveBeenLastCalledWith([grace.id], 'accepted'));
-    expect(storage.putRecords).toHaveBeenCalledWith([room]);
+    expect(storage.commitRecords).toHaveBeenCalledWith([expect.objectContaining({ id: room.id })], [], new Map([[room.id, null]]));
   });
 
   it('keeps the banner button focusable while it runs, and leaves focus on the title when there is nothing to undo', async () => {

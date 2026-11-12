@@ -77,6 +77,12 @@ export interface LibrarySource {
   /** Imports: bookFingerprint() of the entries' texts as imported, in ordinal order. Set once; never recomputed. */
   fingerprint?: string;
   /**
+   * A JSON book's provenance: true when its entry kinds are an importer's guesses ("Download book data" of a
+   * book imported as text), corrected like imported text's (src/data/chunk.ts kindsAreGuesses); false when
+   * they are its file's own. Unset on books imported before this was recorded.
+   */
+  kindsGuessed?: boolean;
+  /**
    * Denormalized counts for the library row; kept by every record write in @/storage (putRecords,
    * setRecordStatus, deleteRecords) in the same transaction. A gear table whose rows exist counts
    * nowhere (its rows stand for it). Absent = never structured.

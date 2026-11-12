@@ -7,10 +7,11 @@
  * Owner: E2. Pure.
  */
 import type { ItemBonuses, MagicItemData, RecordWarning } from '@/types';
+import { bonusReading, itemNouns, itemParagraphs, itemText, typeLine, type BonusTarget } from '../parse/magicItem';
 import { parseMagicItemSubtitle } from '../parse/srdRulesEntity';
 import type { Wire } from '../wire';
 import type { NormalizeContext, Normalized } from './index';
-import { beginNormalize, finishNormalize, gradeConfidence, missing, warning } from './text';
+import { beginNormalize, finishNormalize, gradeConfidence, missing, quote, warning } from './text';
 
 export const MAGIC_ITEM_FIELDS: Readonly<Record<string, string>> = {
   typeLineText: 'category', attunementText: 'attunement', baseItemText: 'baseItem', bonusText: 'bonuses', chargesText: 'charges',
@@ -69,6 +70,9 @@ export function normalizeMagicItem(wire: Wire<'magic-item'>, ctx: NormalizeConte
     else w.push(warning('ungrounded', 'warn', `A +${n} bonus to ${BONUS_TARGETS[key].label} was read, but the text quoted doesn't state it: it was left out.`, 'bonuses'));
   }
   if (bonuses.ac !== undefined && wire.acCondition !== 'always') bonuses.acOnlyWhen = wire.acCondition;
+  const text = itemText(ctx.blocks);
+  const note = situationalNote(itemParagraphs(text), bonuses, itemNouns(base.name, typeLine(text).line), base.name);
+  if (note) w.push(note);
   const charges = /(\d+)\s+charges/i.exec(wire.chargesText)?.[1];
 
   const data: MagicItemData = {
@@ -82,6 +86,54 @@ export function normalizeMagicItem(wire: Wire<'magic-item'>, ctx: NormalizeConte
     ...(charges ? { charges: Number(charges) } : {}),
   };
   return finishNormalize('magic-item', base, data, [], { matchesKind: wire.matchesKind, keyFields: KEY_FIELDS, ctx, extra: [...w, ...magicItemChecks(data)] });
+}
+
+/** When an AC bonus counts, by its condition (acOnlyWhen; none: always). */
+const AC_WHEN: Readonly<Record<NonNullable<ItemBonuses['acOnlyWhen']> | 'always', string>> = {
+  always: 'whatever you wear',
+  'no-armor': 'only while you wear no armor',
+  'no-armor-no-shield': 'only while you wear no armor and use no Shield',
+};
+
+/**
+ * A bonus the text gives only in some situations, or for one variant of the item, is the DM's to apply:
+ * the note says whether the record applies it (Claude may have read it in), so the player checks it.
+ * Nothing when the same bonus is also given where it always holds. Every bonus a record applies that the
+ * offline reader doesn't also read as always-on, with the same size for that target, is noted, whatever its
+ * wording ("+1 to AC", "+1 bonus to your Armor Class", "+2 bonus to spell attack rolls"), quoting the sentence
+ * that states it when there is one (or none: a table); and so is an AC bonus whose condition (acOnlyWhen)
+ * isn't the one the text sets ("…if you are wearing no armor and using no Shield" read as always, or as no
+ * armor only). Pure.
+ */
+export function situationalNote(paragraphs: readonly string[], applied: ItemBonuses, nouns: readonly string[] = [], name = ''): RecordWarning | null {
+  const reading = bonusReading(paragraphs, nouns, name);
+  const always = reading.flat;
+  // Per target: what an always-on bonus of the same size gives isn't the situational one's.
+  const open = reading.situational
+    .map((s) => ({ ...s, targets: s.targets.filter((t: BonusTarget) => always[t] !== s.n) }))
+    .filter((s) => s.targets.length > 0);
+  const isApplied = (s: (typeof open)[number]) => s.targets.some((t: BonusTarget) => applied[t] === s.n);
+  const used = open.find(isApplied);
+  if (used) {
+    const excerpt = quote(used.excerpt, 120);
+    const message = used.variant
+      ? `The app applies a +${used.n} bonus that only one kind of this item gives: check it. ${excerpt}`
+      : `The app applies a +${used.n} bonus that the text gives only in some situations: check it. ${excerpt}`;
+    return warning('cross-check', 'warn', message, 'bonuses');
+  }
+  if (applied.ac && always.ac === applied.ac && (applied.acOnlyWhen ?? 'always') !== reading.acCondition) {
+    const message = `The app applies a +${applied.ac} bonus to Armor Class ${AC_WHEN[applied.acOnlyWhen ?? 'always']}, but the text gives it ${AC_WHEN[reading.acCondition]}: check it. ${quote(reading.acExcerpt, 120)}`;
+    return warning('cross-check', 'warn', message, 'bonuses');
+  }
+  const unread = (Object.keys(BONUS_TARGETS) as BonusTarget[]).find((t) => (applied[t] ?? 0) > 0 && always[t] !== applied[t]);
+  if (unread) return warning('cross-check', 'warn', `The app applies a +${applied[unread]} bonus to ${BONUS_TARGETS[unread].label} that the text doesn't say always holds: check it.`, 'bonuses');
+  const shown = open.find((s) => !s.loose);
+  if (!shown) return null;
+  const excerpt = quote(shown.excerpt, 120);
+  const message = shown.variant
+    ? `One kind of this item gives a +${shown.n} bonus, so the app doesn't apply it (the DM can): ${excerpt}`
+    : `A +${shown.n} bonus here holds only in some situations, so the app doesn't apply it (the DM can): ${excerpt}`;
+  return warning('cross-check', 'warn', message, 'bonuses');
 }
 
 /** Ranges the engine accepts (bonuses 1–5, charges 1–100). */

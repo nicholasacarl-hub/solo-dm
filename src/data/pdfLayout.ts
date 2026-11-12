@@ -72,20 +72,63 @@ function bodySize(lines: Line[]): number {
   return best;
 }
 
-/** Short lines repeated on many pages (running headers/footers) and bare page numbers. */
-function boilerplate(lines: Line[], pageCount: number): Set<string> {
+/** A stat block's labelled line ("Speed 30 ft.", "Languages None", "AC 15"): never a running header. */
+const STAT_LINE = /^(?:AC|HP|CR|Speed|Senses|Languages|Skills|Saving Throws|Immunities|Resistances|Initiative)\b/;
+/** An item's type line ("Wondrous Item, Uncommon"): one item to a page repeats it at the top of each. */
+const ITEM_TYPE_LINE = /^(?:Wondrous Item|Weapon|Armor|Ring|Rod|Staff|Wand|Potion|Scroll|Shield|Ammunition)\b.{0,80}?\b(?:very rare|uncommon|common|rare|legendary|artifact|rarity varies)\b/i;
+/** A labelled line a book repeats in its spells or stronghold rooms ("Casting Time: Action", "Hirelings: 1"). */
+const LABEL_LINE = /^[\p{Lu}][\p{L}' ]{1,24}[:.]\s/u;
+/**
+ * A line that starts with a spell card's label: beside its value (two runs on one baseline: "Casting Time Action",
+ * "Casting Time: Action"), alone above it or in a grid's row of labels ("CASTING TIME RANGE"), in any case (small
+ * capitals), perhaps after the bullet a list puts before it ("● Casting Time Action", "– Range: 60 feet").
+ */
+const CARD_LABEL_LINE = /^(?:[•◦▪‣·●○■□◆◇►▸▶\uf0b7]\s*|[-+–—]\s+)*(?:Casting Time|Range(?:\/Area)?|Components|Duration)(?=[:.]?(?:\s|$))/i;
+/** How much smaller than the body text a card's labels may be set (capitals or small capitals a size or two down). */
+const CARD_LABEL_MIN_SIZE = 0.7;
+/** A running header's shape, even with a colon ("Appendix B: Magic Items", "Chapter 8: Strongholds"). */
+const HEADER_WORDS = /^(?:Chapter|Appendix|Part|Book|Section|Volume)\b/i;
+
+/**
+ * Short lines repeated on many pages (running headers/footers): only lines at the top or bottom of their
+ * page (the first or last two) count, and only those copies are dropped. Never a stat block's line, an
+ * item's type line, a feat's category line or a line that starts with a spell card's label (in any case, at
+ * any size from 70% of the body text's, perhaps after a list's bullet), nor a labelled line in body text (unless
+ * it reads like a chapter header), so a book that is mostly spells, stat blocks, items or feats (one to a page)
+ * keeps its "Casting Time:" (or "Casting Time Action", "CASTING TIME RANGE", "● Casting Time Action"), "Speed",
+ * type and category lines.
+ */
+function boilerplate(lines: Line[], pageCount: number): { texts: Set<string>; atEdge: Set<Line> } {
+  const byPage = new Map<number, Line[]>();
+  for (const l of lines) {
+    const page = byPage.get(l.page) ?? [];
+    page.push(l);
+    byPage.set(l.page, page);
+  }
+  const atEdge = new Set<Line>();
+  for (const page of byPage.values()) {
+    const sorted = [...page].sort((a, b) => b.y - a.y);
+    for (const l of [...sorted.slice(0, 2), ...sorted.slice(-2)]) atEdge.add(l);
+  }
+  const body = bodySize(lines);
+  const kept = (l: Line) =>
+    STAT_LINE.test(l.text) ||
+    ITEM_TYPE_LINE.test(l.text) ||
+    FEAT_CATEGORY_PARAGRAPH.test(l.text) ||
+    (CARD_LABEL_LINE.test(l.text) && l.fontSize >= body * CARD_LABEL_MIN_SIZE) ||
+    (LABEL_LINE.test(l.text) && !HEADER_WORDS.test(l.text) && roundSize(l.fontSize) === body);
   const pagesWith = new Map<string, Set<number>>();
   for (const l of lines) {
-    if (l.text.length > 60) continue;
+    if (l.text.length > 60 || !atEdge.has(l) || kept(l)) continue;
     const set = pagesWith.get(l.text) ?? new Set<number>();
     set.add(l.page);
     pagesWith.set(l.text, set);
   }
-  const out = new Set<string>();
+  const texts = new Set<string>();
   for (const [text, pages] of pagesWith) {
-    if (pageCount >= 3 && pages.size >= 3 && pages.size >= pageCount * 0.3) out.add(text);
+    if (pageCount >= 3 && pages.size >= 3 && pages.size >= pageCount * 0.3) texts.add(text);
   }
-  return out;
+  return { texts, atEdge };
 }
 
 function joinLines(a: string, b: string): string {
@@ -94,6 +137,15 @@ function joinLines(a: string, b: string): string {
   return `${a} ${b}`;
 }
 
+/** A line that starts a stat-block or spell label ("AC 17", "HP 150 (12d10 + 84)", "Speed 40 ft.", "Casting Time: Action"). */
+const STAT_LABEL_START =
+  /^(?:(?:AC|HP|CR)\s+\d|Speed\s+\d|Initiative\s+[+\u2212-]?\d|(?:Armor Class|Hit Points|Challenge)\s+\d|(?:Casting Time|Range|Components|Duration|Prerequisites?)\s*:)/;
+
+/** A spell card's labels alone on their line: one above its value, or a grid's row of them ("Casting Time", "RANGE", "CASTING TIME RANGE"). */
+const CARD_LABELS_ALONE = /^(?:Casting Time|Range(?:\/Area)?|Components|Duration)(?:\s+(?:Casting Time|Range(?:\/Area)?|Components|Duration))*$/i;
+/** A line of a card's labels alone (not a wrapped "range"): a line of its own, and its values start the next. */
+const cardLabelAlone = (text: string) => /^\p{Lu}/u.test(text) && CARD_LABELS_ALONE.test(text);
+
 /** A paragraph so far that is exactly a feat category line, possibly wrapped ("General Feat (Prerequisite: Level 4+)"). */
 const FEAT_CATEGORY_PARAGRAPH = /^(?:Origin|General|Fighting Style|Epic Boon) Feat(?:\s*\([^)]*\))?$/i;
 
@@ -101,7 +153,7 @@ const FEAT_CATEGORY_PARAGRAPH = /^(?:Origin|General|Fighting Style|Epic Boon) Fe
 export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
   const all = pages.flatMap((runs, i) => pageLines(runs, i + 1));
   const skip = boilerplate(all, pages.length);
-  const lines = all.filter((l) => !skip.has(l.text) && !/^\d{1,4}$/.test(l.text));
+  const lines = all.filter((l) => !(skip.texts.has(l.text) && skip.atEdge.has(l)) && !/^\d{1,4}$/.test(l.text));
   if (!lines.length) return '';
   const body = bodySize(lines);
   const isHeadingLine = (l: Line) =>
@@ -149,9 +201,20 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
     } else {
       flushHeading();
       const gap = prev && !newPage ? prev.y - line.y : 0;
-      // A feat's category line ("General Feat (Prerequisite: Level 4+)") stands on its own, as print shows it.
+      // A feat's category line ("General Feat (Prerequisite: Level 4+)") stands on its own, as print shows it,
+      // and so does each stat or spell label line ("AC 17", "Casting Time: Action", "Casting Time" above its value, a
+      // grid's "CASTING TIME RANGE" above its row of values).
       const afterCategory = FEAT_CATEGORY_PARAGRAPH.test(paragraph);
-      const paragraphBreak = !paragraph || newPage || gap > line.fontSize * 1.9 || gap < 0 || lastBodyLength < shortLine || afterCategory;
+      const paragraphBreak =
+        !paragraph ||
+        newPage ||
+        gap > line.fontSize * 1.9 ||
+        gap < 0 ||
+        lastBodyLength < shortLine ||
+        afterCategory ||
+        STAT_LABEL_START.test(line.text) ||
+        cardLabelAlone(line.text) ||
+        cardLabelAlone(paragraph);
       if (paragraphBreak) {
         flushParagraph();
         paragraph = line.text;

@@ -783,7 +783,12 @@ async function request(run: Run, queued: StructuredRecord, flight: Flight): Prom
   try {
     const [stored] = await getRecords([queued.id]);
     if (!stored) {
-      // Deleted while it waited (its book was removed): nothing to read or write.
+      // Deleted while it waited (its book was removed, or a re-check removed a misreading): nothing to read or write.
+      move(run, 'running', 'skipped');
+      return;
+    }
+    if (stored.jobId !== run.job.id || (stored.runState !== 'queued' && stored.runState !== 'running')) {
+      // Taken out of this job's queue while it waited (a re-check gave it a note, or another job has it): never paid for here.
       move(run, 'running', 'skipped');
       return;
     }

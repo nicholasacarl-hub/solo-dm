@@ -13,10 +13,13 @@ export const STRUCTURED_SCHEMA_VERSION = 1;
 /**
  * Bump when offline parsing or detection rules change: the book page offers "re-check N entries for
  * free", which looks through the book again (detect.ts settles what an older version misread).
- * History: 1 = the first reader; 2 = a bare "Prerequisite:" line doesn't make a feat when the entry shows
- * it is something else (a stronghold room's type line, labelled lines, a class-level prerequisite).
+ * History: 1 = the first reader; 2 = never released; 3 = a bare "Prerequisite:" line doesn't make a feat
+ * when the entry shows a shape other things print (a stronghold room's type line, labelled lines, a class
+ * option's prerequisite); spells, monsters and magic items are found by their own lines (a type line,
+ * stat-block labels), not by mentions in prose; a magic item's type line is read by its grammar, and a
+ * bonus that applies only in some situations isn't applied.
  */
-export const PARSER_VERSION = 2;
+export const PARSER_VERSION = 3;
 /** Bump with any change to a system prompt or wire schema. */
 export const EXTRACT_PROMPT_VERSION = 1;
 

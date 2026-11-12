@@ -1,6 +1,6 @@
 /**
  * The book page's header (spec §4.4): back to the Library, the title, the "Use in rules search" switch,
- * "Read the rest with Claude…", the ⋯ menu (look again, re-check for free, Download book data, delete),
+ * "Read the rest with Claude…", the ⋯ menu (look again, Download book data, delete; "Re-check for free" is the banner's),
  * and the counts line with the privacy popover.
  */
 import { Link } from 'react-router';

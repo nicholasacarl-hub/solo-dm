@@ -122,7 +122,8 @@ export { guessKind } from './chunk';
 // ---------------------------------------------------------------------------
 
 /** Detection: segment → parse offline → normalize → records (local and free). */
-export { detectStructure, structureEntryAs, rereadOffline, type DetectionSummary } from './structured/detect';
+export { detectStructure, doubted, readingJobIds, structureEntryAs, rereadOffline, type DetectionSummary } from './structured/detect';
+export { useCorrectedKindsVersion } from './structured/staleKinds';
 /**
  * The pure halves of detection, shared with the extraction runner (src/dm/extract): a reading of a
  * candidate (offline or Claude's wire) and §3.10's re-run table for writing it over stored records.

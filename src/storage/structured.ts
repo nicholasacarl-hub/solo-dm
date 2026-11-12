@@ -207,6 +207,19 @@ export async function getJob(id: string): Promise<ExtractionJob | undefined> {
   return db.libraryJobs.get(id);
 }
 
+/**
+ * A paused job's counts, set in one transaction only if the job is still paused as it was read (`updatedAt`):
+ * a Resume or a Cancel meanwhile wins. Returns whether it wrote.
+ */
+export async function setPausedJobCounts(id: string, updatedAt: number, counts: ExtractionJob['counts']): Promise<boolean> {
+  return db.transaction('rw', db.libraryJobs, async () => {
+    const job = await db.libraryJobs.get(id);
+    if (!job || job.status !== 'paused' || job.updatedAt !== updatedAt) return false;
+    await db.libraryJobs.put({ ...job, counts });
+    return true;
+  });
+}
+
 /** Oldest first (the runner starts the oldest queued job). */
 export async function listJobs(filter: { sourceId?: string; status?: JobStatus[] } = {}): Promise<ExtractionJob[]> {
   const rows = filter.sourceId

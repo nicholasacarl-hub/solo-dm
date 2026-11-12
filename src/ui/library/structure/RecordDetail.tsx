@@ -248,8 +248,13 @@ export function RecordDetail(props: RecordDetailProps) {
 
   const rereadOffline = () =>
     void run('reread', async () => {
-      await rereadHere([record.id]);
-      toast.success('Read again on this device. A different reading shows here to compare.');
+      const result = await rereadHere([record.id]);
+      const kind = `a ${KIND_LABELS[record.kind].one}`;
+      if (result.movedBack) showUndo(`The current reader doesn't take ${record.name} for ${kind}: it is back in To review with a note.`, result.undo);
+      else if (result.doubted) toast.success(`Read again on this device. The current reader doesn't take this for ${kind}: see the note.`);
+      else if (result.alreadyNoted) toast.info(`Nothing new to read: the current reader still doesn't take this for ${kind} (see the note).`);
+      else if (result.busy) toast.info('Claude is reading this entry: read it again once that is done.');
+      else toast.success('Read again on this device. A different reading shows here to compare.');
     });
 
   const fillIn = () => {

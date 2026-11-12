@@ -446,6 +446,21 @@ describe('the spending limit, pause and cancel', () => {
     expect(fake.requests).toHaveLength(1);
   });
 
+  it('never reads a record a re-check took out of the queue while it waited', async () => {
+    await seed(['Bramble Hound', 'Glimmerwing Drake', 'Goblin Warrior']);
+    for (const t of ['Bramble Hound', 'Glimmerwing Drake', 'Goblin Warrior']) fake.script(t, { type: 'answer', delayMs: 1000 });
+    const started = await startJob(SOURCE, choices({ concurrency: 1 }));
+    await until('in flight', () => runnerSnapshot().inFlight.length === 1);
+    const [flying] = runnerSnapshot().inFlight;
+    // Meanwhile a re-check gives the others the note (taking them out of the queue).
+    const waiting = (await listRecords(SOURCE)).filter((r) => r.jobId === started.id && r.runState === 'queued' && r.id !== flying);
+    await putRecords(waiting.map((r) => ({ ...r, runState: 'skipped' as const, updatedAt: r.updatedAt + 1 })));
+    await until('done', finished(started.id), { advance: 500 });
+    expect(fake.requests).toHaveLength(1);
+    expect(waiting.length).toBe(2);
+    expect(await job(started.id)).toMatchObject({ status: 'done', counts: { done: 1, skipped: waiting.length, queued: 0, running: 0 } });
+  });
+
   it('cancels at once: aborts what is in flight (interrupted) and skips the rest', async () => {
     await seed(['Bramble Hound', 'Glimmerwing Drake', 'Goblin Warrior']);
     fake.failNext({ type: 'stall' });

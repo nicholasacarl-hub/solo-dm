@@ -1,7 +1,8 @@
 /**
- * The 10-second Undo toast after a review action (spec §4.6, §4.9): "Accepted 94 · They're in the
- * builder, combat and spell lists now. [Undo]". After a bulk action focus moves to Undo. One at a
- * time; a newer action replaces it. (The app's shared toast has no actions, so this one lives here.)
+ * The Undo toast after a review action (spec §4.6, §4.9): "Accepted 94 · They're in the builder, combat
+ * and spell lists now. [Undo]". Its window is 10 seconds, longer for a long message, and stops while the
+ * pointer rests on it. After a bulk action focus moves to Undo. One at a time; a newer action replaces
+ * it. (The app's shared toast has no actions, so this one lives here.)
  *
  * The polite live region is always in the page and only its content changes, so screen readers
  * announce every toast. The Undo window runs from the action, not from the toast's mount: leaving the
@@ -19,6 +20,8 @@ import { errorMessage } from '@/ui/shell/format';
 import { TOUCH, TOUCH_SQUARE } from './touch';
 
 export const UNDO_MS = 10_000;
+/** A long message gets longer to read before its Undo goes (up to 30 seconds). */
+export const undoWindowMs = (message: string): number => Math.min(30_000, UNDO_MS + Math.max(0, message.length - 80) * 50);
 
 interface UndoItem {
   id: number;
@@ -30,6 +33,8 @@ interface UndoItem {
   returnFocus?: () => HTMLElement | null;
   /** When the Undo window closes (epoch ms). */
   expiresAt: number;
+  /** While the pointer rests on the toast: how much of the window was left. */
+  pausedLeft?: number;
 }
 
 export interface UndoOptions {
@@ -41,6 +46,10 @@ interface UndoStore {
   item: UndoItem | null;
   show(message: string, undo?: () => Promise<void>, opts?: UndoOptions): void;
   dismiss(id?: number): void;
+  /** The pointer rests on the toast: its window stops running. */
+  pause(id: number): void;
+  /** The pointer left: the window runs on, with at least a few seconds left. */
+  resume(id: number): void;
 }
 
 let counter = 0;
@@ -50,12 +59,29 @@ let focusedId = 0;
 export const useUndoToast = create<UndoStore>()((set, get) => ({
   item: null,
   show(message, undo, opts) {
-    set({ item: { id: ++counter, message, undo, focus: opts?.focus ?? false, returnFocus: opts?.returnFocus, expiresAt: Date.now() + UNDO_MS } });
+    set({ item: { id: ++counter, message, undo, focus: opts?.focus ?? false, returnFocus: opts?.returnFocus, expiresAt: Date.now() + undoWindowMs(message) } });
   },
   dismiss(id) {
     if (id === undefined || get().item?.id === id) set({ item: null });
   },
+  pause(id) {
+    const item = get().item;
+    if (item?.id === id && item.pausedLeft === undefined) set({ item: { ...item, pausedLeft: Math.max(0, item.expiresAt - Date.now()) } });
+  },
+  resume(id) {
+    const item = get().item;
+    if (item?.id === id && item.pausedLeft !== undefined) {
+      const { pausedLeft, ...rest } = item;
+      set({ item: { ...rest, expiresAt: Date.now() + Math.max(pausedLeft, 3_000) } });
+    }
+  },
 }));
+
+/** Whether an Undo is still on offer (its window hasn't closed): DM notices about what it would undo wait for it. */
+export function undoOffered(): boolean {
+  const item = useUndoToast.getState().item;
+  return item !== null && (item.pausedLeft !== undefined || item.expiresAt > Date.now());
+}
 
 /** Show the Undo toast (focus moves to Undo when `focus`). */
 export function showUndo(message: string, undo?: () => Promise<void>, opts?: UndoOptions): void {
@@ -68,13 +94,15 @@ const focusable = (el: HTMLElement | null | undefined): el is HTMLElement =>
 export function UndoToast() {
   const stored = useUndoToast((s) => s.item);
   const dismiss = useUndoToast((s) => s.dismiss);
+  const pause = useUndoToast((s) => s.pause);
+  const resume = useUndoToast((s) => s.resume);
   const [busy, setBusy] = useState(false);
   const undoRef = useRef<HTMLButtonElement>(null);
   const toastRef = useRef<HTMLDivElement>(null);
   /** What had focus before Undo took it. */
   const before = useRef<HTMLElement | null>(null);
   // An item whose window closed while this page was away is not shown again.
-  const item = stored && stored.expiresAt > Date.now() ? stored : null;
+  const item = stored && (stored.pausedLeft !== undefined || stored.expiresAt > Date.now()) ? stored : null;
 
   /** Close the toast; if focus is in it, put focus back first (the buttons are about to go). */
   const close = (closing: UndoItem) => {
@@ -88,21 +116,32 @@ export function UndoToast() {
   const closeRef = useRef(close);
   closeRef.current = close;
 
+  // The page goes while the pointer rests on the toast: its window runs again, so it can't wait forever.
+  useEffect(
+    () => () => {
+      const left = useUndoToast.getState().item;
+      if (left?.pausedLeft !== undefined) useUndoToast.getState().resume(left.id);
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!stored) return;
     const left = stored.expiresAt - Date.now();
-    if (left <= 0) {
+    if (stored.pausedLeft === undefined && left <= 0) {
       dismiss(stored.id);
       return;
     }
-    const timer = window.setTimeout(() => closeRef.current(stored), left);
+    const timer = stored.pausedLeft === undefined ? window.setTimeout(() => closeRef.current(stored), left) : undefined;
     if (stored.focus && focusedId !== stored.id) {
       focusedId = stored.id;
       const active = document.activeElement;
       before.current = active instanceof HTMLElement && !toastRef.current?.contains(active) ? active : null;
       undoRef.current?.focus();
     }
-    return () => window.clearTimeout(timer);
+    return () => {
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [stored, dismiss]);
 
   const undo = async () => {
@@ -129,6 +168,8 @@ export function UndoToast() {
         <div
           key={item.id}
           ref={toastRef}
+          onPointerEnter={() => pause(item.id)}
+          onPointerLeave={() => resume(item.id)}
           className="pointer-events-auto flex max-w-xl items-center gap-3 rounded-xl border border-border bg-surface px-4 py-2.5 text-sm shadow-card"
         >
           <span className="min-w-0 flex-1">{item.message}</span>

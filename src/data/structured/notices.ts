@@ -23,6 +23,11 @@ export const KIND_NOUN: Readonly<Record<StructuredKind, string>> = {
   species: 'a species', class: 'a class', subclass: 'a subclass',
 };
 
+/** The note on a record someone worked on that the improved reader doesn't find any more. */
+export function doubtMessage(kind: StructuredKind): string {
+  return `An earlier version of the offline reader took this for ${KIND_NOUN[kind]}; the current one doesn't. If it isn't one, keep it as text. If it is, accept it.`;
+}
+
 /** Rules-index entries by kind and nameKey (built once per detection or job). */
 export type NoticeIndex = ReadonlyMap<string, readonly Pick<CompendiumEntry, 'sourceId' | 'sourceName' | 'name' | 'kind'>[]>;
 

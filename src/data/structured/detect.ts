@@ -16,23 +16,28 @@
  */
 import { nameKey, slugify } from '@/lib/id';
 import { bookFingerprint, textFingerprint } from '@/lib/importedContent';
-import { headingAncestors, misreadAsFeatBefore } from '../chunk';
+import { GUESSED_ENTITY_KINDS, headingAncestors, misreadBefore, withCurrentKinds } from '../chunk';
 import {
   commitRecords,
   compareRecordsByReading,
   findSourcesByFingerprint,
   getRecords,
   getSourceEntries,
+  listJobs,
   listLibrarySources,
   listRecords,
   markSourceStructured,
   putRecords,
+  setPausedJobCounts,
   setSourceFingerprint,
 } from '@/storage';
 import {
   PARSER_VERSION,
   STRUCTURED_SCHEMA_VERSION,
   type CompendiumEntry,
+  type ExtractionJob,
+  type JobStatus,
+  type RunState,
   type RecordOrigin,
   type RecordSpan,
   type RecordWarning,
@@ -43,10 +48,10 @@ import {
 import { getRulesIndex } from '../rulesIndexStore';
 import { normalize, normalizeItemRows, type NormalizeContext, type Normalized } from './normalize';
 import { warning } from './normalize/text';
-import { KIND_NOUN, nameNotices, noticeIndex, type NoticeIndex } from './notices';
+import { doubtMessage, nameNotices, noticeIndex, type NoticeIndex } from './notices';
 import { parseOffline } from './parse';
 import { STRUCTURED_LIMITS } from './schemas';
-import { correctStaleKinds } from './staleKinds';
+import { correctStaleKinds, guessedKinds } from './staleKinds';
 import { candidateFor, candidateKey, markCandidate, segment, type Candidate, type SegmentContext, type SpellListHint } from './segment';
 import type { Wire } from './wire';
 
@@ -62,7 +67,7 @@ export interface DetectionSummary {
   /** Them, as they were (so Undo can put them back). */
   removedRecords: StructuredRecord[];
   /** Misreadings someone had worked on: kept with a note, for the player to decide. */
-  doubted: { id: string; kind: StructuredKind; status: StructuredRecord['status'] }[];
+  doubted: { id: string; kind: StructuredKind; status: StructuredRecord['status']; edited: boolean; open?: true }[];
 }
 
 /** The warning a record gets when this device couldn't read it (spec §3.13). */
@@ -178,10 +183,28 @@ function withStale(record: StructuredRecord, now: number): StructuredRecord | nu
 function replaceable(existing: StructuredRecord, fresh: StructuredRecord): boolean {
   if (existing.edited || existing.status === 'accepted') return false;
   if (existing.origin === 'pack' || existing.origin === 'manual') return false;
-  return !(existing.origin === 'claude' && fresh.origin === 'parser');
+  // Claude's reading, in the record or waiting as a proposal, is never replaced by an offline one.
+  return fresh.origin !== 'parser' || (existing.origin !== 'claude' && existing.proposal?.origin !== 'claude');
 }
 
 const BEING_READ = new Set(['queued', 'running']);
+
+/** A job that is reading, or about to: its queued and running records are left to that reading. */
+const READING_JOB = new Set<JobStatus>(['queued', 'running', 'pausing']);
+
+/**
+ * The ids of a book's jobs that are reading, or about to: also a job paused only until another tab lets go
+ * or the connection returns (it resumes by itself). Not one paused for the player: Resume waits for them.
+ */
+export function readingJobIds(jobs: readonly Pick<ExtractionJob, 'id' | 'status' | 'pauseReason'>[]): Set<string> {
+  const resumesItself = (j: Pick<ExtractionJob, 'status' | 'pauseReason'>) => j.status === 'paused' && (j.pauseReason === 'other-tab' || j.pauseReason === 'offline');
+  return new Set(jobs.filter((j) => READING_JOB.has(j.status) || resumesItself(j)).map((j) => j.id));
+}
+
+/** Whether a record waits for, or is in, a reading by one of these jobs (`reading`; any job when omitted). */
+export function beingRead(r: Pick<StructuredRecord, 'runState' | 'jobId'>, reading?: ReadonlySet<string>): boolean {
+  return BEING_READ.has(r.runState ?? '') && (reading === undefined || r.jobId === undefined || reading.has(r.jobId));
+}
 
 /** The fingerprint of an offline reading's data (StructuredRecord.readingHash). */
 export function readingHashOf(data: unknown): string {
@@ -193,19 +216,21 @@ export interface ApplyOptions {
   now: number;
   /** Whether the record's own text changed since it was read (default: the fresh reading's hash differs). */
   textChanged?: (existing: StructuredRecord) => boolean;
+  /** The book's jobs that are reading (readingJobIds): a look leaves only their queues alone. Default: every job's. */
+  reading?: ReadonlySet<string>;
 }
 
 /**
  * §3.10: what a fresh reading does to a stored record (null = no write). `explicit`: the player asked for
  * this record (Re-read, Retry, a selection), which also reaches rejected and pack records. A look
  * through the book (not explicit) leaves alone a record Claude is reading (that reading settles it),
- * never offers an offline reading over the player's own edit (Re-read still does), and never replaces
- * a Claude reading waiting as a proposal with an offline one.
+ * and never offers an offline reading over the player's own edit (Re-read still does). An offline
+ * reading never replaces a Claude reading waiting as a proposal (a paid reading): the player resolves it first.
  */
 export function applyReading(existing: StructuredRecord, fresh: StructuredRecord, opts: ApplyOptions): StructuredRecord | null {
   const { explicit, now } = opts;
   if (existing.schemaVersion > STRUCTURED_SCHEMA_VERSION) return null; // a newer app wrote it: read-only here
-  if (!explicit && BEING_READ.has(existing.runState ?? '')) return null;
+  if (!explicit && beingRead(existing, opts.reading)) return null;
   const changedText = opts.textChanged ? opts.textChanged(existing) : fresh.textHash !== existing.textHash;
   if (!explicit && (existing.status === 'rejected' || existing.origin === 'pack')) return changedText ? withStale(existing, now) : null;
   if (replaceable(existing, fresh)) {
@@ -236,13 +261,14 @@ export function applyReading(existing: StructuredRecord, fresh: StructuredRecord
   let next: StructuredRecord | null = null;
   const reviewed = existing.edited || existing.status === 'accepted';
   // A look through the book offers an offline reading only when the reader's reading changed since this
-  // record was last read (not merely because the player's edit differs from it), and never over Claude's.
+  // record was last read (not merely because the player's edit differs from it).
   const offline = !explicit && fresh.origin === 'parser';
   // Only a record the offline reader made has a baseline: Claude's, a pack's or the player's own fields are never second-guessed.
   const baseline =
     existing.origin !== 'parser' ? undefined : (existing.readingHash ?? (existing.edited || existing.data === null ? undefined : readingHashOf(existing.data)));
   const readerChanged = fresh.readingHash !== undefined && baseline !== undefined && fresh.readingHash !== baseline;
-  const mayPropose = !offline || (readerChanged && existing.proposal?.origin !== 'claude');
+  const overClaude = fresh.origin === 'parser' && existing.proposal?.origin === 'claude';
+  const mayPropose = !overClaude && (!offline || readerChanged);
   if (fresh.data !== null && !same(fresh.data, existing.data) && (explicit || reviewed) && !same(fresh.data, existing.proposal?.data) && mayPropose) {
     next = {
       ...existing,
@@ -371,38 +397,50 @@ export function mergeReadings(
 // After the offline reader improved (pure)
 // ---------------------------------------------------------------------------
 
-/** The note on a record someone worked on that the improved reader doesn't find any more. */
-export function doubtMessage(kind: StructuredKind): string {
-  return `An earlier version of the offline reader took this for ${KIND_NOUN[kind]}; the current one doesn't. If it isn't one, keep it as text. If it is, accept it.`;
-}
+export { doubtMessage };
 
-/** A note (a `warn`, so it can still be accepted), and today's reader version: the re-check is done for it. */
-function doubted(record: StructuredRecord, now: number): StructuredRecord {
+/**
+ * A note (a `warn`, so it can still be accepted), and today's reader version: the re-check is done for it.
+ * A record waiting in a (paused) job's queue leaves it, so Resume never pays to read a misreading. Also what
+ * Re-check's Undo puts back: the player wanted it kept, so a later look leaves it as it is.
+ */
+export function doubted(record: StructuredRecord, now: number): StructuredRecord {
   const message = doubtMessage(record.kind);
   const warnings = record.warnings.some((w) => w.code === 'not-this-kind' && w.message === message)
     ? record.warnings
     : [...record.warnings, warning('not-this-kind', 'warn', message, 'kind')];
-  return { ...record, warnings, confidence: record.confidence === 'low' ? 'low' : 'medium', parserVersion: PARSER_VERSION, updatedAt: now };
+  const leavesQueue = BEING_READ.has(record.runState ?? '') ? { runState: 'skipped' as const } : {};
+  return { ...record, warnings, confidence: record.confidence === 'low' ? 'low' : 'medium', parserVersion: PARSER_VERSION, ...leavesQueue, updatedAt: now };
 }
 
-/** Anything a person or Claude did to a record: accepted, edited, a newer reading waiting, a Claude reading or run. */
+/** Anything a person or Claude did to a record: accepted, edited, a newer reading waiting, a Claude reading. A place in a job's queue isn't. */
 const workedOn = (r: StructuredRecord) =>
-  r.status === 'accepted' || r.edited || r.proposal !== undefined || r.extraction !== undefined || r.runState !== undefined;
+  r.status === 'accepted' || r.edited || r.proposal !== undefined || r.extraction !== undefined || r.runState === 'done';
+
+/** The improved reader's note is on it (doubted()): the player has been told, and decides. */
+const hasDoubt = (r: StructuredRecord) => r.warnings.some((w) => w.code === 'not-this-kind' && w.severity === 'warn');
+
+/** A record a re-check may settle: the offline reader's, not kept as text, not being read, not from a newer app. */
+const settleable = (r: StructuredRecord, reading?: ReadonlySet<string>) =>
+  r.origin === 'parser' && r.status !== 'rejected' && !beingRead(r, reading) && r.schemaVersion <= STRUCTURED_SCHEMA_VERSION;
 
 /**
- * The misreadings PARSER_VERSION 2 explains: a feat version 1 read from a bare Prerequisite line that
- * today's rules read as something else (a stronghold room, a class option). Never a record the player
- * marked (All entries › Structure as…, What it is).
+ * The misreadings the version change explains: an entry an earlier reader took for this record's kind
+ * (a spell, monster, magic item or feat) that today's rules read as something else (a stronghold room
+ * taken for a feat, a rules paragraph taken for a magic item). Never a record the player marked (All
+ * entries › Structure as…, What it is).
  */
 function explainedMisreading(r: StructuredRecord, entriesById: ReadonlyMap<string, CompendiumEntry>): boolean {
-  if (r.kind !== 'feat' || r.span !== 'entry' || r.marked) return false;
+  if (r.span !== 'entry' || r.marked || !GUESSED_ENTITY_KINDS.includes(r.kind)) return false;
   const entry = entriesById.get(r.entryIds[0]);
-  return entry !== undefined && misreadAsFeatBefore(entry.name, entry.text, headingAncestors(entry.path, entry.name));
+  return entry !== undefined && misreadBefore(r.kind, entry.name, entry.text, headingAncestors(entry.path, entry.name));
 }
 
 export interface Settled {
   /** Explained misreadings nobody worked on: deleted. */
   remove: Set<string>;
+  /** Of the doubted ones, those noted only because the player has them open. */
+  open: Set<string>;
   /** Explained misreadings someone worked on: kept with a note (doubted()). */
   doubted: StructuredRecord[];
   /** The other records an older reader made: read again with today's reader (the player's markings among them). */
@@ -410,30 +448,41 @@ export interface Settled {
 }
 
 /**
- * Stored records today's detection didn't find again (`unmatched`) that an older offline reader made
- * (PARSER_VERSION rose). Only misreadings the version change explains are settled: removed when nobody
- * worked on them, kept with a note when someone did, so the player decides. The rest are read again.
- * Rejected records, records Claude, a pack or the player filled in, records being read and records a
- * newer app wrote are left as they are.
+ * Stored records today's detection didn't find again (`unmatched`). Only misreadings the version change
+ * explains are settled, by what the entry's text shows rather than by the version a record carries (a
+ * record read again as its old kind carries today's): removed when nobody worked on them and no note
+ * was given, given a note once when someone did, so the player decides. The other records an older
+ * reader made are read again. Rejected records, records Claude, a pack or the player filled in, records
+ * being read (by the jobs in `reading`, when given: a paused job's queue is settled too, and a note takes
+ * the record out of that queue) and records a newer app wrote are left as they are.
  */
-export function settleUnmatched(unmatched: readonly StructuredRecord[], entriesById: ReadonlyMap<string, CompendiumEntry>, now: number): Settled {
-  const older = unmatched.filter(
-    (r) =>
-      r.origin === 'parser' &&
-      (r.parserVersion ?? 0) < PARSER_VERSION &&
-      r.status !== 'rejected' &&
-      !BEING_READ.has(r.runState ?? '') &&
-      r.schemaVersion <= STRUCTURED_SCHEMA_VERSION,
-  );
+export function settleUnmatched(
+  unmatched: readonly StructuredRecord[],
+  entriesById: ReadonlyMap<string, CompendiumEntry>,
+  now: number,
+  reading?: ReadonlySet<string>,
+  /** Records the player has open: given the note, never removed from under them. */
+  keep: ReadonlySet<string> = new Set(),
+): Settled {
   const remove = new Set<string>();
+  const open = new Set<string>();
   const doubts: StructuredRecord[] = [];
   const reread: StructuredRecord[] = [];
-  for (const r of older) {
-    if (!explainedMisreading(r, entriesById)) reread.push(r);
-    else if (workedOn(r)) doubts.push(doubted(r, now));
-    else remove.add(r.id);
+  for (const r of unmatched) {
+    if (!settleable(r, reading)) continue;
+    const older = (r.parserVersion ?? 0) < PARSER_VERSION;
+    if (!explainedMisreading(r, entriesById)) {
+      if (older) reread.push(r);
+      continue;
+    }
+    const untouched = !workedOn(r) && !hasDoubt(r);
+    if (untouched && !keep.has(r.id)) remove.add(r.id);
+    else if (older || (keep.has(r.id) && !hasDoubt(r))) {
+      doubts.push(doubted(r, now));
+      if (untouched) open.add(r.id);
+    }
   }
-  return { remove, doubted: doubts, reread };
+  return { remove, open, doubted: doubts, reread };
 }
 
 // ---------------------------------------------------------------------------
@@ -513,11 +562,27 @@ function rereadings(records: readonly StructuredRecord[], ctx: ReadingContext): 
  * and the results written at the end: a record that changed meanwhile (an accept, an edit, a Claude
  * reading) keeps its change and is left for the next look.
  */
-export async function detectStructure(sourceId: string, opts?: { onProgress?(done: number, total: number): void }): Promise<DetectionSummary> {
+export async function detectStructure(
+  sourceId: string,
+  opts?: {
+    onProgress?(done: number, total: number): void;
+    /** Records the player has open (perhaps with changes not saved yet): never removed, given the note instead. */
+    keep?: readonly string[];
+  },
+): Promise<DetectionSummary> {
   await correctStaleKinds(sourceId);
-  const [entries, sources, existing, context] = await Promise.all([getSourceEntries(sourceId), listLibrarySources(), listRecords(sourceId), detectionContext()]);
+  const [stored, sources, existing, context, jobs] = await Promise.all([
+    getSourceEntries(sourceId),
+    listLibrarySources(),
+    listRecords(sourceId),
+    detectionContext(),
+    listJobs({ sourceId }),
+  ]);
+  const reading = readingJobIds(jobs);
   const source = sources.find((s) => s.id === sourceId);
   if (!source) throw new Error('This book is no longer in the library.');
+  // Today's kinds, even where correctStaleKinds couldn't store them.
+  const entries = guessedKinds(source) ? withCurrentKinds(stored) : stored;
   const entriesById = new Map(entries.map((e) => [e.id, e]));
   const { candidates, spellLists } = segment(entries, context.segment);
   const ctx: ReadingContext = { sourceId, entriesById, spellLists, notices: context.notices };
@@ -533,15 +598,16 @@ export async function detectStructure(sourceId: string, opts?: { onProgress?(don
   const now = Date.now();
   // Stale text is judged on a record's own entries: a section whose scope changed isn't a text change.
   const textChanged = (r: StructuredRecord) => currentHash(r, entriesById) !== r.textHash;
-  const merged = mergeReadings(sourceId, existing, readings, { explicit: false, now, limit: STRUCTURED_LIMITS.recordsPerSource, textChanged });
+  // A paused job's queue is read again like any other record (its place in the queue is kept).
+  const merged = mergeReadings(sourceId, existing, readings, { explicit: false, now, limit: STRUCTURED_LIMITS.recordsPerSource, textChanged, reading });
   const leftOut = merged.records.filter((r) => r === undefined).length;
-  const settled = settleUnmatched(merged.unmatched, entriesById, now);
-  const reread = mergeReadings(sourceId, settled.reread, rereadings(settled.reread, ctx), { explicit: false, now, textChanged });
+  const settled = settleUnmatched(merged.unmatched, entriesById, now, reading, new Set(opts?.keep ?? []));
+  const reread = mergeReadings(sourceId, settled.reread, rereadings(settled.reread, ctx), { explicit: false, now, textChanged, reading });
   const rereadById = new Map(reread.writes.map((r) => [r.id, r]));
   const doubtedById = new Map(settled.doubted.map((r) => [r.id, r]));
   const rereadIds = new Set(settled.reread.map((r) => r.id));
   const unmatchedWrites = merged.unmatched.flatMap((r) => {
-    if (settled.remove.has(r.id) || BEING_READ.has(r.runState ?? '')) return [];
+    if (settled.remove.has(r.id) || (beingRead(r, reading) && !doubtedById.has(r.id))) return [];
     const rereadNext = rereadById.get(r.id);
     if (rereadNext) return [rereadNext];
     // Read again and unchanged, or nothing to read it from (a table, a row, entries gone): today's reader has seen it.
@@ -557,6 +623,7 @@ export async function detectStructure(sourceId: string, opts?: { onProgress?(don
   const removed = existing.filter((r) => applied.deleted.has(r.id));
   // Nothing found: the source remembers that detection ran (an empty structure), so "nothing detected" outlasts this page (§4.7).
   if (merged.records.length === 0) await markSourceStructured(sourceId);
+  if (applied.written.size || applied.deleted.size) await recountPausedJobs(sourceId, jobs, reading);
 
   let fingerprint = source.fingerprint;
   if (!fingerprint) {
@@ -569,9 +636,27 @@ export async function detectStructure(sourceId: string, opts?: { onProgress?(don
     removed: countFound(removed),
     removedNames: removed.slice().sort(compareRecordsByReading).slice(0, 3).map((r) => r.name),
     removedRecords: removed,
-    doubted: settled.doubted.filter((r) => applied.written.has(r.id)).map((r) => ({ id: r.id, kind: r.kind, status: r.status })),
+    doubted: settled.doubted
+      .filter((r) => applied.written.has(r.id))
+      .map((r) => ({ id: r.id, kind: r.kind, status: r.status, edited: r.edited, ...(settled.open.has(r.id) ? { open: true as const } : {}) })),
     ...(duplicate ? { duplicateOf: { id: duplicate.id, title: duplicate.title } } : {}),
   };
+}
+
+/**
+ * A paused job's counts once a look removed or took records out of its queue, so its card's "N left" and
+ * cost are right. Only a job still paused as it was at the start (a Resume meanwhile recounts by itself).
+ */
+async function recountPausedJobs(sourceId: string, jobs: readonly ExtractionJob[], reading: ReadonlySet<string>): Promise<void> {
+  const paused = jobs.filter((j) => j.status === 'paused' && !reading.has(j.id));
+  if (!paused.length) return;
+  const records = await listRecords(sourceId);
+  for (const job of paused) {
+    const counts: Record<RunState, number> = { queued: 0, running: 0, done: 0, failed: 0, refused: 0, skipped: 0 };
+    for (const r of records) if (r.jobId === job.id && r.runState) counts[r.runState] += 1;
+    if ((Object.keys(counts) as RunState[]).every((k) => counts[k] === job.counts[k])) continue;
+    await setPausedJobCounts(job.id, job.updatedAt, counts);
+  }
 }
 
 /** "All entries › Structure as…": a candidate the player marked (reason 'Marked by you'), read offline if possible. */
@@ -615,29 +700,60 @@ export function candidatesForRecords(
   return { candidates: out, spellLists };
 }
 
-/** Free; writes proposals where §3.10 says so. */
-export async function rereadOffline(recordIds: string[]): Promise<void> {
+/** What "Re-read on this device" did beyond reading: misreadings it gave the note instead, and the records it left alone. */
+export interface RereadResult {
+  /** Misreadings the version change explains that got the improved reader's note instead of a reading. */
+  doubted: number;
+  /** Of those, the ones the player had accepted (the UI moves them back to review, as Re-check does). */
+  accepted: string[];
+  /** Misreadings that already had the note: nothing new to read. */
+  alreadyNoted: number;
+  /** Records a job is reading: left to that reading. */
+  busy: number;
+}
+
+/**
+ * Free; writes proposals where §3.10 says so. A misreading the version change explains isn't read again
+ * as the kind an earlier reader took it for: it gets the improved reader's note (as a re-check gives it),
+ * which also takes it out of a paused job's queue. Records a job is reading are left to it.
+ */
+export async function rereadOffline(recordIds: string[]): Promise<RereadResult> {
   const records = (await getRecords(recordIds)).filter((r): r is StructuredRecord => Boolean(r));
-  const context = await detectionContext();
+  const [context, sources] = await Promise.all([detectionContext(), listLibrarySources()]);
   const bySource = new Map<string, StructuredRecord[]>();
   for (const r of records) bySource.set(r.sourceId, [...(bySource.get(r.sourceId) ?? []), r]);
   const now = Date.now();
+  const result: RereadResult = { doubted: 0, accepted: [], alreadyNoted: 0, busy: 0 };
   for (const [sourceId, list] of bySource) {
-    const [entries, existing] = await Promise.all([getSourceEntries(sourceId), listRecords(sourceId)]);
+    const [stored, existing, jobs] = await Promise.all([getSourceEntries(sourceId), listRecords(sourceId), listJobs({ sourceId })]);
+    const reading = readingJobIds(jobs);
+    const source = sources.find((s) => s.id === sourceId);
+    const entries = source && guessedKinds(source) ? withCurrentKinds(stored) : stored;
+    const entriesById = new Map(entries.map((e) => [e.id, e]));
+    const busy = list.filter((r) => beingRead(r, reading));
+    const misread = list.filter((r) => settleable(r, reading) && explainedMisreading(r, entriesById));
+    const notes = misread.filter((r) => !hasDoubt(r)).map((r) => doubted(r, now));
+    result.busy += busy.length;
+    result.doubted += notes.length;
+    result.alreadyNoted += misread.length - notes.length;
+    result.accepted.push(...notes.filter((r) => r.status === 'accepted').map((r) => r.id));
     // A row is re-read with its table (one parse gives every row).
     const byId = new Map(existing.map((r) => [r.id, r]));
-    const targets = [...new Map(list.map((r) => {
+    const skip = new Set([...busy, ...misread].map((r) => r.id));
+    const targets = [...new Map(list.filter((r) => !skip.has(r.id)).map((r) => {
       const t = r.span === 'row' && r.tableRecordId ? byId.get(r.tableRecordId) ?? r : r;
       return [t.id, t];
     })).values()];
     const { candidates, spellLists } = candidatesForRecords(targets, entries, context.segment);
-    const ctx: ReadingContext = { sourceId, entriesById: new Map(entries.map((e) => [e.id, e])), spellLists, notices: context.notices };
+    const ctx: ReadingContext = { sourceId, entriesById, spellLists, notices: context.notices };
     const readings: Reading[] = [];
     for (const target of targets) {
       const candidate = candidates.get(target.id);
       if (candidate) readings.push(...readOffline({ ...candidate, key: target.candidateKey }, ctx));
     }
     const merged = mergeReadings(sourceId, existing, readings, { explicit: true, now });
-    await putRecords(merged.writes);
+    await putRecords([...merged.writes, ...notes]);
+    if (notes.length) await recountPausedJobs(sourceId, jobs, reading);
   }
+  return result;
 }

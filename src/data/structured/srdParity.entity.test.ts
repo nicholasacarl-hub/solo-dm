@@ -13,9 +13,10 @@
 import { describe, expect, it } from 'vitest';
 import builderRaw from '../../../public/srd/builder.json?raw';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
-import { guessKind } from '@/data/chunk';
+import { chunkDocument, guessKind } from '@/data/chunk';
+import { pdfPagesToMarkdown, type PdfTextRun } from '@/data/pdfLayout';
 import { nameKey } from '@/lib/id';
-import type { BuilderData, CompendiumEntry, StructuredKind } from '@/types';
+import type { BuilderData, CompendiumEntry, ItemBonuses, StructuredKind } from '@/types';
 import { normalize, normalizeItemRows } from './normalize';
 import { parseOffline } from './parse';
 import { flatten } from './parse/flatten';
@@ -209,5 +210,207 @@ describe('SRD parity (gear tables)', () => {
   it('reads no gear offline from a PDF text layer, whose tables are lost: those wait for Claude', () => {
     const m = measureGear('pdf');
     expect(m.read, m.worst.join('\n')).toBe(0);
+  });
+});
+
+/**
+ * What each SRD 5.2.1 item that states a "+N bonus to …" gives in the app when read offline (the shipped
+ * data has no bonuses to compare with). Bonuses the item always grants are applied; one that holds only
+ * in some situations, or for one variant, isn't (SRD 5.2.1 "Magic Items": Arrow-Catching Shield's bonus
+ * against ranged attacks, Defender's transfer, one Ioun Stone, Rod of Alertness's minute, Bracers of
+ * Archery's bows), and the record says so.
+ */
+const SRD_BONUSES: Record<string, ItemBonuses | null> = {
+  'Arrow-Catching Shield': null,
+  'Berserker Axe': { attack: 1, damage: 1 },
+  'Bracers of Archery': null,
+  'Bracers of Defense': { ac: 2, acOnlyWhen: 'no-armor-no-shield' },
+  'Cloak of Protection': { ac: 1, savingThrows: 1 },
+  'Dagger of Venom': { attack: 1, damage: 1 },
+  Defender: { attack: 3, damage: 3 },
+  'Demon Armor': { ac: 1 },
+  'Dragon Scale Mail': { ac: 1 },
+  'Dragon Slayer': { attack: 1, damage: 1 },
+  'Dwarven Plate': { ac: 2 },
+  'Dwarven Thrower': { attack: 3, damage: 3 },
+  'Elven Chain': { ac: 1 },
+  'Energy Bow': { attack: 1, damage: 1 },
+  'Giant Slayer': { attack: 1, damage: 1 },
+  'Glamoured Studded Leather': { ac: 1 },
+  'Gloves of Swimming and Climbing': null,
+  'Gloves of Thievery': null,
+  'Hammer of Thunderbolts': { attack: 1, damage: 1 },
+  'Holy Avenger': { attack: 3, damage: 3 },
+  'Ioun Stone': null,
+  'Luck Blade': { savingThrows: 1, attack: 1, damage: 1 },
+  'Mace of Smiting': { attack: 1, damage: 1 },
+  'Nine Lives Stealer': { attack: 2, damage: 2 },
+  'Quarterstaff of the Acrobat': { attack: 2, damage: 2 },
+  'Ring of Protection': { ac: 1, savingThrows: 1 },
+  'Robe of Stars': { savingThrows: 1 },
+  'Rod of Alertness': null,
+  'Rod of Lordly Might': { attack: 3, damage: 3 },
+  'Scarab of Protection': { ac: 1 },
+  'Scimitar of Speed': { attack: 2, damage: 2 },
+  'Shield of the Cavalier': { ac: 2 },
+  'Staff of Power': { ac: 2, savingThrows: 2, attack: 2, damage: 2 },
+  'Staff of Striking': { attack: 3, damage: 3 },
+  'Staff of the Magi': { attack: 2, damage: 2 },
+  'Staff of the Woodlands': { attack: 2, damage: 2 },
+  'Staff of Thunder and Lightning': { attack: 2, damage: 2 },
+  'Stone of Good Luck (Luckstone)': { savingThrows: 1 },
+  'Sun Blade': { attack: 2, damage: 2 },
+  'Talisman of Pure Good': null,
+  'Talisman of Ultimate Evil': null,
+  'Vorpal Sword': { attack: 3, damage: 3 },
+};
+const SRD_BONUS_NOTES = new Set(['Arrow-Catching Shield', 'Bracers of Archery', 'Defender', 'Ioun Stone', 'Rod of Alertness']);
+
+describe('SRD parity (magic item bonuses)', () => {
+  const dialects = {
+    markdown: (md: string) => md,
+    pdf: (md: string) => flatten(md),
+    // A PDF that joined the type line and the first paragraph.
+    joined: (md: string) => flatten(md).replace(/^([^\n]+)\n\n/, '$1 '),
+  };
+  it.each(Object.keys(dialects) as (keyof typeof dialects)[])('applies the bonuses an SRD item always grants, and notes the rest (%s)', (dialect) => {
+    const stating = SRD.filter((e) => e.kind === 'magic-item' && /\+\d\s+bonus\s+to\b/i.test(e.text));
+    const wrong: string[] = [];
+    for (const [i, e] of stating.entries()) {
+      const text = dialects[dialect](e.text);
+      const entry: CompendiumEntry = { id: `lib:srd-bonus:${i + 1}`, sourceId: 'srd-bonus', sourceName: 'Bonus', kind: guessKind(e.name, text), name: e.name, text, path: ['Magic Items', e.name] };
+      const c = segment([entry], CTX).candidates[0];
+      if (!c) {
+        wrong.push(`${e.name}: not detected`);
+        continue;
+      }
+      const n = normalize('magic-item', parseOffline(c).wire as Wire<'magic-item'>, { blocks: c.blocks, entriesById: new Map([[entry.id, entry]]), origin: 'parser', spellLists: [] });
+      const bonuses = (n.data as { bonuses?: ItemBonuses } | null)?.bonuses ?? null;
+      if (!same(bonuses, SRD_BONUSES[e.name] ?? null)) wrong.push(`${e.name}: ${JSON.stringify(bonuses)} vs ${JSON.stringify(SRD_BONUSES[e.name] ?? null)}`);
+      const noted = n.warnings.some((w) => w.field === 'bonuses');
+      if (noted !== SRD_BONUS_NOTES.has(e.name)) wrong.push(`${e.name}: ${noted ? 'a note it shouldn’t have' : 'no note'}`);
+    }
+    expect(stating.map((e) => e.name).sort()).toEqual(Object.keys(SRD_BONUSES).sort());
+    expect(wrong).toEqual([]);
+  });
+
+  /**
+   * Every SRD item printed as one flowing two-column PDF book (an item goes on in the next column or on the next
+   * page, under a running header, with page numbers), `perColumn` lines to a column, read back by
+   * pdfPagesToMarkdown and chunkDocument. A column or page break can cut a sentence ("…a +1 bonus to Armor Class
+   * while you" | "wear this armor.", "…a +2 bonus to Armor" | "Class, saving throws…"): read together again, each
+   * item gives what it gives in Markdown.
+   */
+  function twoColumnBook(entries: readonly CompendiumEntry[], perColumn = 52, width = 46): CompendiumEntry[] {
+    const PER_COLUMN = perColumn;
+    const line = (str: string, x: number, y: number, fontSize = 10): PdfTextRun => ({ str, x, y, width: str.length * fontSize * 0.5, fontSize, hasEOL: true });
+    const wrap = (text: string) =>
+      text.split(/\s+/).filter(Boolean).reduce<string[]>((lines, word) => {
+        const last = lines.length ? lines[lines.length - 1] : undefined;
+        if (last !== undefined && `${last} ${word}`.length <= width) lines[lines.length - 1] = `${last} ${word}`;
+        else lines.push(word);
+        return lines;
+      }, []);
+    const pages: PdfTextRun[][] = [];
+    let page: PdfTextRun[] = [];
+    let column = 0;
+    let row = 0;
+    const startPage = () => {
+      page = [line('Compendium of Curios', 50, 800, 8)];
+      column = 0;
+      row = 0;
+    };
+    const endPage = () => pages.push([...page, line(String(pages.length + 1), 300, 30, 8)]);
+    const nextColumn = () => {
+      if (column === 0) {
+        column = 1;
+        row = 0;
+      } else {
+        endPage();
+        startPage();
+      }
+    };
+    const put = (str: string, fontSize: number, gap: number) => {
+      if (row + gap + 1 > PER_COLUMN) nextColumn();
+      else if (row > 0) row += gap;
+      page.push(line(str, column === 0 ? 50 : 320, 760 - row * 12, fontSize));
+      row += 1;
+    };
+    startPage();
+    put('Magic Items', 18, 0);
+    for (const e of entries) {
+      const paragraphs = e.text.split(/\n\s*\n/).map((p) => wrap(p.replace(/^\s*[-*]\s+/gm, '').replace(/[*_]/g, '')));
+      // An item's name stays with its type line.
+      if (row > 0 && row + 4 > PER_COLUMN) nextColumn();
+      put(e.name, 13, 1);
+      paragraphs.forEach((lines, i) => lines.forEach((l, j) => put(l, 10, j === 0 && i > 0 ? 1 : 0)));
+    }
+    endPage();
+    return chunkDocument(pdfPagesToMarkdown(pages), { sourceId: 'srd-book', sourceName: 'Book' });
+  }
+
+  it('applies the same bonuses, and notes the rest, when every SRD item is printed as a flowing two-column PDF book', () => {
+    const items = SRD.filter((e) => e.kind === 'magic-item');
+    const book = twoColumnBook(items);
+    const candidates = segment(book, CTX).candidates.filter((c) => c.kind === 'magic-item');
+    const wrong: string[] = [];
+    let cut = 0;
+    for (const name of Object.keys(SRD_BONUSES)) {
+      const c = candidates.find((x) => x.name === name);
+      if (!c) {
+        wrong.push(`${name}: not detected`);
+        continue;
+      }
+      // How often the book cut one of these items' sentences at a column or page break.
+      const paragraphs = book.find((e) => e.name === name)?.text.split(/\n\n/) ?? [];
+      if (paragraphs.some((p, i) => i > 0 && !/[.!?:|]\s*$/.test(paragraphs[i - 1]) && /^\p{Ll}/u.test(p))) cut++;
+      const n = normalize('magic-item', parseOffline(c).wire as Wire<'magic-item'>, { blocks: c.blocks, entriesById: new Map(book.map((e) => [e.id, e])), origin: 'parser', spellLists: [] });
+      const bonuses = (n.data as { bonuses?: ItemBonuses } | null)?.bonuses ?? null;
+      if (!same(bonuses, SRD_BONUSES[name])) wrong.push(`${name}: ${JSON.stringify(bonuses)} vs ${JSON.stringify(SRD_BONUSES[name])}`);
+      if (n.warnings.some((w) => w.field === 'bonuses') !== SRD_BONUS_NOTES.has(name)) wrong.push(`${name}: a note ${SRD_BONUS_NOTES.has(name) ? 'missing' : 'it shouldn’t have'}`);
+    }
+    expect(wrong).toEqual([]);
+    // The book does cut some of them (Dwarven Plate, Elven Chain and Staff of Power in this layout).
+    expect(cut).toBeGreaterThanOrEqual(2);
+  });
+
+  /**
+   * Every column height from 30 to 70 lines at 46 characters a line; at 40, 50 and 56 characters, every tenth height; and
+   * every layout the round-5 layout review found Defender, Sun Blade, Dwarven Plate, Glamoured Studded Leather or Shield
+   * of the Cavalier misread in ("…+2 bonus to Armor Class." | "The adjusted bonuses…", "…instead of" | "Slashing damage.",
+   * "…+2 bonus to" | "Armor Class. …"). A scratch sweep read 14 widths from 34 to 60 at every height (574 layouts) the same.
+   */
+  const LAYOUTS: [number, number][] = [
+    ...Array.from({ length: 41 }, (_, i): [number, number] => [46, 30 + i]),
+    ...[40, 50, 56].flatMap((w) => [30, 40, 50, 60, 70].map((h): [number, number] => [w, h])),
+    [34, 69], [38, 35], [40, 38], [42, 33], [42, 45], [44, 33], [44, 66], [50, 38], [48, 34], [48, 41], [52, 53], [54, 45], [56, 30], [58, 38],
+  ];
+  it('does so at every column height from 30 to 70 lines and at several line widths, wherever the breaks fall (46×59 cuts Staff of Power at "Armor" | "Class")', () => {
+    const items = SRD.filter((e) => e.kind === 'magic-item');
+    const names = new Set(Object.keys(SRD_BONUSES));
+    const wrong: string[] = [];
+    let capitalCuts = 0;
+    for (const [width, per] of LAYOUTS) {
+      const book = twoColumnBook(items, per, width);
+      const byId = new Map(book.map((e) => [e.id, e]));
+      // Only the items that state a bonus are read (the rest of the book still sets where the breaks fall).
+      const candidates = segment(book.filter((e) => names.has(e.name)), CTX).candidates.filter((c) => c.kind === 'magic-item');
+      for (const name of names) {
+        const c = candidates.find((x) => x.name === name);
+        if (!c) {
+          wrong.push(`w${width} h${per} ${name}: not detected`);
+          continue;
+        }
+        const paragraphs = book.find((e) => e.name === name)?.text.split(/\n\n/) ?? [];
+        if (paragraphs.some((p, i) => i > 0 && !/[.!?:|]\s*$/.test(paragraphs[i - 1]) && /^\p{Lu}/u.test(p))) capitalCuts++;
+        const n = normalize('magic-item', parseOffline(c).wire as Wire<'magic-item'>, { blocks: c.blocks, entriesById: byId, origin: 'parser', spellLists: [] });
+        const bonuses = (n.data as { bonuses?: ItemBonuses } | null)?.bonuses ?? null;
+        if (!same(bonuses, SRD_BONUSES[name])) wrong.push(`w${width} h${per} ${name}: ${JSON.stringify(bonuses)} vs ${JSON.stringify(SRD_BONUSES[name])}`);
+        if (n.warnings.some((w) => w.field === 'bonuses') !== SRD_BONUS_NOTES.has(name)) wrong.push(`w${width} h${per} ${name}: a note ${SRD_BONUS_NOTES.has(name) ? 'missing' : 'it shouldn’t have'}`);
+      }
+    }
+    expect(wrong).toEqual([]);
+    // Some heights cut an item before a capital ("Armor" | "Class", "a magic" | "Quarterstaff").
+    expect(capitalCuts).toBeGreaterThanOrEqual(2);
   });
 });

@@ -12,7 +12,9 @@ Two kinds of files use this format:
 - **"Download book data"** (the book page's ⋯ menu): a personal copy of one of your imported books with
   your review decisions, to move it to another of your devices without structuring it again. It
   contains the book's full text — keep it for yourself. It is never part of campaign saves or GitHub
-  backups.
+  backups. A book that came to a device as JSON before the app recorded where its kinds came from keeps
+  them as they are, and its book data says `kindsGuessed: false`; to have a text book's kinds corrected
+  there, download its book data again from the device that imported the text, and import that.
 
 Older JSON imports (a plain array of entries, or `{ "entries": [...] }`) still work as before; only a
 file with `"format": "solo-dm-pack"` is read as a pack.
@@ -27,6 +29,7 @@ file with `"format": "solo-dm-pack"` is read as a pack.
 | `title` | yes | The book's title in the Library |
 | `license`, `attribution`, `notes` | no | Shown on the book's Library row |
 | `bookFingerprint` | no | Book-data files only: identifies the book the file was made from |
+| `kindsGuessed` | no | Book-data files only, written whenever `bookFingerprint` is: `true` when the entries' kinds are the app's guesses (the book was imported as text), so a later version may correct the ones it misread; `false` when they are its file's own (a JSON import). A book-data file without it is read as `true` |
 | `entries` | yes | The text, one entry per heading section (1–10,000) |
 | `records` | no | Structured data for some entries (up to 5,000) |
 

@@ -142,10 +142,11 @@ export function abilityIncreaseOf(text: string): FeatData['abilityIncrease'] {
   return abilities.length ? { abilities, amount } : undefined;
 }
 
-/** The feat's text: its paragraphs after the category (or prerequisite) line. */
+/** The feat's text: its paragraphs after the category (or prerequisite) line, or from the first when the text goes on after that line. */
 function featSpan(block: CandidateBlock | undefined): TextSpan | null {
   if (!block?.paragraphs.length) return null;
-  const from = featLine(block.paragraphs[0]) ? 2 : 1;
+  const line = featLine(block.paragraphs[0]);
+  const from = line && !line.joined ? 2 : 1;
   return from <= block.paragraphs.length ? { entryIds: [...block.entryIds], from, to: block.paragraphs.length } : null;
 }
 

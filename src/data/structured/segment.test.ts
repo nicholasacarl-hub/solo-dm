@@ -187,6 +187,19 @@ describe('segment: structure rules', () => {
     ]);
   });
 
+  it('stops taking siblings at a class option that opens with a Prerequisite line', () => {
+    const entries = [
+      entry(1, 'Druid Circles', 'Circles.', ['Druid Circles']),
+      entry(2, 'Circle of Ash', 'Ash druids.', ['Druid Circles', 'Circle of Ash']),
+      entry(3, 'Ash Walk', 'At 2nd level, you walk on ash.', ['Druid Circles', 'Ash Walk']),
+      // Class options stored as rules (no longer taken for feats): not part of the circle.
+      entry(4, 'Mossy Lantern', 'Prerequisite: Level 5+ Druid\n\nYour lantern grows moss.', ['Druid Circles', 'Mossy Lantern'], 'rule'),
+      entry(5, 'Ashen Wick', 'Prerequisite: Level 9+ Druid\n\nYour wick burns grey.', ['Druid Circles', 'Ashen Wick'], 'rule'),
+    ];
+    const known = { ...CTX, knownClassNames: new Set(['druid']) };
+    expect(segment(entries, known).candidates.map((c) => [c.name, c.entryIds.length])).toEqual([['Circle of Ash', 2]]);
+  });
+
   it('splits a gear table over 60 rows into table candidates of at most 60 rows', () => {
     const rows = Array.from({ length: 130 }, (_, i) => `| Blade ${i + 1} | 1d6 Slashing | Light | Nick | 2 lb. | 5 GP |`);
     const text = ['| Martial Melee Weapons | Damage | Properties | Mastery | Weight | Cost |', '|---|---|---|---|---|---|', ...rows].join('\n');

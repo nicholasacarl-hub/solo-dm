@@ -147,6 +147,11 @@ const notUsed = (name: string) => async (): Promise<never> => {
 export const detectStructure = notUsed('detectStructure');
 export const structureEntryAs = notUsed('structureEntryAs');
 export const rereadOffline = notUsed('rereadOffline');
+export const doubted = () => {
+  throw new Error('fake data: doubted is not used by the DM');
+};
+export const readingJobIds = () => new Set<string>();
+export const useCorrectedKindsVersion = () => 0;
 export const getLibrarySnapshot = notUsed('getLibrarySnapshot');
 export const buildLibraryLookup = notUsed('buildLibraryLookup');
 export const countUnreviewedOptions = async () => [];

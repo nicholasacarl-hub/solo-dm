@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { GLOAMWOOD_SOURCE_ID, SCRIPTED_WIRE, gloamwoodEntries } from '@/test/structuredFixtures';
 import { segment, type Candidate } from '../segment';
 import type { Wire } from '../wire';
-import { parseFeat } from './feat';
+import { featLine, parseFeat } from './feat';
 
 const ctx = { knownSpellNames: new Set<string>(), knownClassNames: new Set(['fighter', 'cleric']) };
 const candidates = (dialect: 'md' | 'mixed') => segment(gloamwoodEntries(GLOAMWOOD_SOURCE_ID, dialect), ctx).candidates;
@@ -22,6 +22,11 @@ describe('parseFeat', () => {
       });
     }
   }
+
+  it("keeps only the prerequisite when a PDF joined the feat's first sentence to its line", () => {
+    expect(featLine('*Prerequisite: Elf or half-elf* You learn the old magic of the moth groves.')).toEqual({ categoryText: '', category: 'unknown', prerequisite: 'Elf or half-elf', joined: true });
+    expect(featLine('Prerequisite: Wisdom 13 or higher')).toEqual({ categoryText: '', category: 'unknown', prerequisite: 'Wisdom 13 or higher', joined: false });
+  });
 
   it('reads an older feat with a bare Prerequisite line and no category', () => {
     const base = candidate('Watchlight Vigil');

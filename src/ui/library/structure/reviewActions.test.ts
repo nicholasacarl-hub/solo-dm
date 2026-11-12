@@ -126,6 +126,30 @@ describe('accepting', () => {
     expect(queueCampaignNotice).not.toHaveBeenCalled();
   });
 
+  it('waits to tell the DM while an Undo is still on offer (a longer window, or the pointer on the toast)', async () => {
+    const { showUndo, useUndoToast } = await import('./UndoToast');
+    const result = await actions.acceptRecords([byName('Cinder Mote').id]);
+    showUndo('Accepted Cinder Mote.', result.undo);
+    useUndoToast.getState().pause(useUndoToast.getState().item!.id);
+    await vi.advanceTimersByTimeAsync(actions.NOTICE_DELAY_MS + 20_000);
+    expect(queueCampaignNotice).not.toHaveBeenCalled();
+    // Undone after all: nothing to tell.
+    await result.undo();
+    useUndoToast.getState().dismiss();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(queueCampaignNotice).not.toHaveBeenCalled();
+  });
+
+  it('never lets a move back to review hide another entry’s accept', async () => {
+    const choir = byName('Ashen Choir');
+    stored = stored.map((r) => (r.id === choir.id ? { ...r, status: 'accepted' } : r));
+    // An entry accepted long ago goes back to review, then another spell is accepted.
+    await actions.setRecordsStatus([choir.id], 'pending');
+    await actions.acceptRecords([byName('Cinder Mote').id]);
+    await vi.advanceTimersByTimeAsync(actions.NOTICE_DELAY_MS + 1000);
+    expect(vi.mocked(queueCampaignNotice).mock.calls[0]?.[1]).toContain('(1 spell)');
+  });
+
   it('stays quiet for a book that is switched off', async () => {
     vi.mocked(storage.listLibrarySources).mockResolvedValue([gloamwoodSource('gloam', 'md', { enabled: false })]);
     await actions.acceptRecords([byName('Ashen Choir').id]);
@@ -225,6 +249,27 @@ describe('edits', () => {
   });
 });
 
+describe('re-reading on this device', () => {
+  it('moves an accepted misreading that got the note back to review, as Re-check does, with Undo', async () => {
+    const grace = byName("Moth's Grace");
+    stored = stored.map((r) => (r.id === grace.id ? { ...r, status: 'accepted' } : r));
+    vi.mocked(data.rereadOffline).mockResolvedValueOnce({ doubted: 1, accepted: [grace.id], alreadyNoted: 0, busy: 0 });
+    const result = await actions.rereadHere([grace.id]);
+    expect(result).toMatchObject({ doubted: 1, movedBack: 1, alreadyNoted: 0, busy: 0 });
+    expect(storage.setRecordStatus).toHaveBeenCalledWith([grace.id], 'pending');
+    await result.undo?.();
+    expect(byName("Moth's Grace").status).toBe('accepted');
+  });
+
+  it('moves nothing when nothing accepted got the note', async () => {
+    vi.mocked(data.rereadOffline).mockResolvedValueOnce({ doubted: 0, accepted: [], alreadyNoted: 1, busy: 0 });
+    const result = await actions.rereadHere([byName("Moth's Grace").id]);
+    expect(result).toMatchObject({ movedBack: 0, alreadyNoted: 1 });
+    expect(result.undo).toBeUndefined();
+    expect(storage.setRecordStatus).not.toHaveBeenCalled();
+  });
+});
+
 describe('looking through the book again', () => {
   it('moves the accepted entries the improved reader no longer finds back to review; Undo restores them and what it removed', async () => {
     const grace = byName("Moth's Grace");
@@ -236,7 +281,7 @@ describe('looking through the book again', () => {
       removed: { feat: 1 },
       removedNames: ['Glowworm Gallery'],
       removedRecords: [removedRoom],
-      doubted: [{ id: grace.id, kind: 'feat', status: 'accepted' }, { id: bearer.id, kind: 'feat', status: 'pending' }],
+      doubted: [{ id: grace.id, kind: 'feat', status: 'accepted', edited: false }, { id: bearer.id, kind: 'feat', status: 'pending', edited: false }],
     });
     const result = await actions.lookThroughBook('gloam');
     expect(result.movedBack).toBe(1);
@@ -246,7 +291,9 @@ describe('looking through the book again', () => {
     expect(data.invalidateRulesIndex).toHaveBeenCalledTimes(1);
     await result.undo?.();
     expect(byName("Moth's Grace").status).toBe('accepted');
-    expect(storage.putRecords).toHaveBeenCalledWith([removedRoom]);
+    // Put back with the improved reader's note (a later look leaves it), and only where nothing took its place.
+    expect(data.doubted).toHaveBeenCalledWith(removedRoom, expect.any(Number));
+    expect(storage.commitRecords).toHaveBeenCalledWith([expect.objectContaining({ id: removedRoom.id })], [], new Map([[removedRoom.id, null]]));
   });
 
   it('offers Undo for removals alone, and nothing when nothing changed', async () => {
@@ -256,9 +303,9 @@ describe('looking through the book again', () => {
     expect(removal.movedBack).toBe(0);
     expect(storage.setRecordStatus).not.toHaveBeenCalled();
     await removal.undo?.();
-    expect(storage.putRecords).toHaveBeenCalledWith([removedRoom]);
+    expect(storage.commitRecords).toHaveBeenCalledWith([expect.objectContaining({ id: removedRoom.id })], [], new Map([[removedRoom.id, null]]));
 
-    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), doubted: [{ id: byName('Lantern Bearer').id, kind: 'feat', status: 'pending' }] });
+    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), doubted: [{ id: byName('Lantern Bearer').id, kind: 'feat', status: 'pending', edited: false }] });
     const quiet = await actions.lookThroughBook('gloam');
     expect(quiet.undo).toBeUndefined();
     await vi.advanceTimersByTimeAsync(600);
@@ -269,7 +316,7 @@ describe('looking through the book again', () => {
     vi.mocked(storage.listCampaigns).mockResolvedValue([slot('camp-a', 'sess-1')]);
     const grace = byName("Moth's Grace");
     stored = stored.map((r) => (r.id === grace.id ? { ...r, status: 'accepted' } : r));
-    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), doubted: [{ id: grace.id, kind: 'feat', status: 'accepted' }] });
+    vi.mocked(data.detectStructure).mockResolvedValueOnce({ ...gloamwoodDetection(), doubted: [{ id: grace.id, kind: 'feat', status: 'accepted', edited: false }] });
     const result = await actions.lookThroughBook('gloam');
     await vi.advanceTimersByTimeAsync(3000);
     await result.undo?.();

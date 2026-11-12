@@ -98,11 +98,11 @@ export async function setLibrarySourceEnabled(id: string, enabled: boolean): Pro
   if (updated === 0) throw new Error('That library source no longer exists.');
 }
 
-/** The stored entries of one kind (the "kind" index), from the given sources. */
-export async function getEntriesByKind(kind: ContentKind, sourceIds: readonly string[]): Promise<CompendiumEntry[]> {
-  if (sourceIds.length === 0) return [];
+/** The stored entries of these kinds (the "kind" index), from the given sources. */
+export async function getEntriesByKind(kinds: readonly ContentKind[], sourceIds: readonly string[]): Promise<CompendiumEntry[]> {
+  if (sourceIds.length === 0 || kinds.length === 0) return [];
   const wanted = new Set(sourceIds);
-  return db.libraryEntries.where('kind').equals(kind).filter((e) => wanted.has(e.sourceId)).toArray();
+  return db.libraryEntries.where('kind').anyOf([...kinds]).filter((e) => wanted.has(e.sourceId)).toArray();
 }
 
 /**

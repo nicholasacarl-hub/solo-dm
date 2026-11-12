@@ -10,7 +10,7 @@ import { bookFingerprint } from '@/lib/importedContent';
 import { saveLibrarySource, saveLibrarySourceWithRecords } from '@/storage';
 import { gloamwoodEntries, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
 import { importLibraryDocument } from './importer';
-import { exportPack } from './structured/packs';
+import { exportPack, parsePack } from './structured/packs';
 import { extractPdfMarkdown } from './pdf';
 import { invalidateRulesIndex } from './rulesIndexStore';
 import { transcribeImages } from './vision';
@@ -55,6 +55,23 @@ describe('importLibraryDocument', () => {
     const source = await importLibraryDocument({ title: 'Pack', format: 'json', files: [file] });
     expect(source.format).toBe('json');
     expect(saved()[1]).toEqual([{ id: `lib:${source.id}:1`, sourceId: source.id, sourceName: 'Pack', kind: 'spell', name: 'Frost Lance', text: 'Ice.' }]);
+  });
+
+  it("records that a JSON file's kinds are its own (one it leaves out is guessed now), and its book data says so", async () => {
+    const wight = { kind: 'monster', name: 'Lamp Wight', text: 'Medium Undead, Neutral Evil\n\nArmor Class 13\nHit Points 22 (5d8)\nChallenge 1\n\nThe wight carries a lantern that never goes out.' };
+    const lash = { name: 'Ember Lash', text: '| Casting Time | 1 action |\n|---|---|\n| Range | 60 feet |\n| Duration | Instantaneous |\n\nA lash of embers strikes one creature.' };
+    const file = new File([JSON.stringify({ entries: [wight, lash] })], 'lamp.json');
+    const source = await importLibraryDocument({ title: 'Lamp Bestiary', format: 'json', files: [file] });
+    expect(source).toMatchObject({ format: 'json', kindsGuessed: false });
+    // The file's own kind stays (today's rules would read this stat block, which has no XP, as a rule); the missing one is guessed.
+    const [, entries] = saved();
+    expect(entries.map((e) => [e.name, e.kind])).toEqual([['Lamp Wight', 'monster'], ['Ember Lash', 'spell']]);
+    // Its book data says the kinds are the file's, so another device keeps them too.
+    const data = JSON.parse(JSON.stringify(exportPack(source, entries, []))) as ReturnType<typeof exportPack>;
+    expect(data).toMatchObject({ bookFingerprint: source.fingerprint, kindsGuessed: false });
+    expect(parsePack(data, { sourceId: 'other', sourceName: 'Lamp Bestiary' }).entries.map((e) => e.kind)).toEqual(['monster', 'spell']);
+    // Imported text records nothing: its kinds are guesses by its format.
+    expect(await importLibraryDocument({ title: 'Notes', format: 'markdown', text: '# One\nFirst.' })).not.toHaveProperty('kindsGuessed');
   });
 
   it('extracts PDF text locally and reports page progress', async () => {

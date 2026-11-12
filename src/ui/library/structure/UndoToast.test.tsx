@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { autoCleanup } from '@/ui/shell/testUtils';
-import { UNDO_MS, UndoToast, showUndo, useUndoToast } from './UndoToast';
+import { UNDO_MS, UndoToast, showUndo, undoWindowMs, useUndoToast } from './UndoToast';
 
 autoCleanup();
 
@@ -92,6 +92,37 @@ describe('the Undo toast (spec §4.6, §4.9)', () => {
     act(() => vi.advanceTimersByTime(UNDO_MS - 100));
     expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
     act(() => vi.advanceTimersByTime(200));
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+  });
+
+  it('gives a long message longer, and stops the window while the pointer rests on the toast', () => {
+    expect(undoWindowMs('Kept 2 as text.')).toBe(UNDO_MS);
+    expect(undoWindowMs('x'.repeat(240))).toBe(UNDO_MS + 160 * 50);
+    expect(undoWindowMs('x'.repeat(2000))).toBe(30_000);
+    vi.useFakeTimers();
+    render(<UndoToast />);
+    act(() => showUndo('Kept 2 as text.', async () => undefined));
+    const toastBox = screen.getByRole('button', { name: 'Undo' }).closest('div')!;
+    act(() => vi.advanceTimersByTime(UNDO_MS - 2_000));
+    act(() => toastBox.dispatchEvent(new PointerEvent('pointerover', { bubbles: true })));
+    act(() => vi.advanceTimersByTime(60_000));
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+    act(() => toastBox.dispatchEvent(new PointerEvent('pointerout', { bubbles: true })));
+    act(() => vi.advanceTimersByTime(2_500));
+    expect(screen.getByRole('button', { name: 'Undo' })).toBeInTheDocument();
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
+  });
+
+  it('lets the window run again when the page goes while the pointer rests on the toast', () => {
+    vi.useFakeTimers();
+    const { unmount } = render(<UndoToast />);
+    act(() => showUndo('Kept 2 as text.', async () => undefined));
+    const toastBox = screen.getByRole('button', { name: 'Undo' }).closest('div')!;
+    act(() => toastBox.dispatchEvent(new PointerEvent('pointerover', { bubbles: true })));
+    unmount();
+    act(() => vi.advanceTimersByTime(60_000));
+    render(<UndoToast />);
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
   });
 

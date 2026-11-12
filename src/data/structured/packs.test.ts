@@ -100,6 +100,55 @@ describe('parsePack (spec §3.12)', () => {
     expect(() => parsePack({ ...json, title: '  ' }, OPTS)).toThrow(/title/);
   });
 
+  it('corrects what an earlier version misread in book data, and notes its records of them, but trusts an authored pack', () => {
+    const room = { id: 'e1', kind: 'feat', name: 'Glowworm Gallery', text: '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\n_Room: Snug_\n\nThe keeper raises glowworms.', path: ['Holdings', 'Glowworm Gallery'] };
+    const feat = { id: 'e2', kind: 'feat', name: 'Night Walker', text: '_Prerequisite: Wisdom 13 or higher_\n\nYou walk at night.', path: ['Feats', 'Night Walker'] };
+    const featData = (from: string) => ({ format: '2014', category: 'general', repeatable: false, text: { entries: [from], from: 2, to: 2 } });
+    const file = (extra: Record<string, unknown>) => ({
+      format: 'solo-dm-pack', version: 1, schemaVersion: 1, title: 'Lamplight Holdings',
+      entries: [room, feat],
+      records: [
+        { kind: 'feat', name: 'Glowworm Gallery', entries: ['e1'], data: featData('e1'), reviewedStatus: 'accepted' },
+        { kind: 'feat', name: 'Night Walker', entries: ['e2'], data: featData('e2') },
+      ],
+      ...extra,
+    });
+    const bookData = parsePack(file({ bookFingerprint: '0123456789abcdef' }), OPTS);
+    expect(bookData.entries.map((e) => [e.name, e.kind])).toEqual([['Glowworm Gallery', 'rule'], ['Night Walker', 'feat']]);
+    const [gallery, walker] = bookData.records;
+    expect(gallery).toMatchObject({ status: 'pending', reviewedElsewhere: true, confidence: 'medium' });
+    expect(gallery.warnings).toContainEqual(expect.objectContaining({ code: 'not-this-kind', severity: 'warn' }));
+    expect(walker.warnings.some((w) => w.code === 'not-this-kind')).toBe(false);
+    // An authored pack's kinds are its author's.
+    const authored = parsePack(file({}), OPTS);
+    expect(authored.entries.map((e) => e.kind)).toEqual(['feat', 'feat']);
+    expect(authored.records.every((r) => r.warnings.every((w) => w.code !== 'not-this-kind'))).toBe(true);
+  });
+
+  it('says in book data whether its kinds are guesses, so an authored book keeps its kinds on another device', () => {
+    const authored = gloamwoodSource('gloam', 'md', { format: 'json', fingerprint: '0123456789abcdef', kindsGuessed: false });
+    const text = gloamwoodSource('gloam', 'md', { format: 'pdf', fingerprint: '0123456789abcdef' });
+    const room = { id: 'lib:gloam:1', sourceId: 'gloam', sourceName: 'Gloamwood', kind: 'feat' as const, name: 'Glowworm Gallery', text: '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\nThe keeper raises glowworms.', path: ['Holdings', 'Glowworm Gallery'] };
+    const fromAuthored = exportPack(authored, [room], []);
+    const fromText = exportPack(text, [room], []);
+    expect(fromAuthored.kindsGuessed).toBe(false);
+    expect(fromText.kindsGuessed).toBe(true);
+    expect(parsePack(fromAuthored, OPTS)).toMatchObject({ entries: [{ kind: 'feat' }], source: { fingerprint: '0123456789abcdef' } });
+    expect(parsePack(fromAuthored, OPTS).source.kindsGuessed).toBe(false);
+    expect(parsePack(fromText, OPTS)).toMatchObject({ entries: [{ kind: 'rule' }], source: { kindsGuessed: true } });
+    // A JSON book imported before this was recorded keeps its kinds on this device, so its file says so and the
+    // next device keeps them too.
+    const unrecorded = exportPack({ ...authored, kindsGuessed: undefined }, [room], []);
+    expect(unrecorded.kindsGuessed).toBe(false);
+    expect(parsePack(unrecorded, OPTS)).toMatchObject({ entries: [{ kind: 'feat' }], source: { kindsGuessed: false } });
+    // A file from a version that didn't write it is judged by its fingerprint: book data, its kinds guesses.
+    const { kindsGuessed: _unwritten, ...older } = unrecorded;
+    expect(parsePack(older, OPTS)).toMatchObject({ entries: [{ kind: 'rule' }], source: { kindsGuessed: true } });
+    // An authored pack imported now records that its kinds are its own.
+    const { kindsGuessed: _guessed, bookFingerprint: _fingerprint, ...first } = fromAuthored;
+    expect(parsePack(first, OPTS).source.kindsGuessed).toBe(false);
+  });
+
   it('leaves legacy JSON imports to the old reader, unchanged', () => {
     const legacy = [{ name: 'Lantern Oil', kind: 'item', text: 'Burns green for an hour.' }];
     expect(isPackFile(legacy)).toBe(false);

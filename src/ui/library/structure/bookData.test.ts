@@ -160,7 +160,7 @@ describe('jobs', () => {
 
 describe('looking through the book again', () => {
   const found = { total: 22, readyOffline: 20, needClaude: 2, removed: {}, removedNames: [] as string[], doubted: [] };
-  const doubt = (id: string, status: StructuredRecord['status'], kind: StructuredRecord['kind'] = 'feat') => ({ id, kind, status });
+  const doubt = (id: string, status: StructuredRecord['status'], kind: StructuredRecord['kind'] = 'feat', edited = status !== 'accepted') => ({ id, kind, status, edited });
 
   it('says what it found', () => {
     expect(lookThroughMessage(found, 0)).toBe('Found 22: 20 read on this device, 2 need Claude.');
@@ -187,10 +187,14 @@ describe('looking through the book again', () => {
       "2 entries you had accepted are back in To review: they may not be feats.",
     );
     expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted')] }, 1)).toBe('1 entry you had accepted is back in To review: it may not be a feat.');
-    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'pending')] }, 0)).toBe('1 entry you had edited has a note in To review: it may not be a feat.');
+    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'pending')] }, 0)).toBe('1 entry you had edited has a note: it may not be a feat.');
+    // Read by Claude (its reading failed or was declined), not edited: no claim it was edited or where it is listed.
+    expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'pending', 'feat', false)] }, 0)).toBe('1 entry you had worked on has a note: it may not be a feat.');
     expect(lookThroughMessage({ ...found, doubted: [doubt('a', 'accepted'), doubt('b', 'pending', 'spell')] }, 1)).toBe(
-      '2 entries you had reviewed are in To review with a note: they may have been misread.',
+      '1 entry you had accepted is back in To review: it may not be a feat. 1 entry you had edited has a note: it may not be a spell.',
     );
+    // The entry the player has open was kept with a note: said so, not that they worked on it.
+    expect(lookThroughMessage({ ...found, doubted: [{ ...doubt('a', 'pending', 'feat', false), open: true as const }] }, 0)).toBe('The entry you have open has a note: it may not be a feat.');
     // Nothing found, yet something settled: no "Nothing here…".
     expect(lookThroughMessage({ ...found, total: 0, readyOffline: 0, needClaude: 0, doubted: [doubt('a', 'accepted')] }, 1)).toBe(
       '1 entry you had accepted is back in To review: it may not be a feat.',
@@ -211,7 +215,19 @@ describe('what "Re-check" looks at', () => {
     expect(needsRecheck(old({ status: 'rejected' }))).toBe(false);
     expect(needsRecheck(old({ runState: 'queued' }))).toBe(false);
     expect(needsRecheck(old({ runState: 'running' }))).toBe(false);
+    // With the jobs known: a paused job's queue counts (Re-check reads it again), a running job's doesn't.
+    const reading = new Set(['job:running']);
+    expect(needsRecheck(old({ runState: 'queued', jobId: 'job:paused' }), reading)).toBe(true);
+    expect(needsRecheck(old({ runState: 'queued', jobId: 'job:running' }), reading)).toBe(false);
     expect(needsRecheck(old({ origin: 'claude' }))).toBe(false);
     expect(needsRecheck(old({ schemaVersion: 99 }))).toBe(false);
+  });
+});
+
+describe('naming several kinds that were removed', () => {
+  it('lists them with commas and "or"', () => {
+    expect(
+      lookThroughMessage({ total: 1, readyOffline: 1, needClaude: 0, removed: { 'magic-item': 1, feat: 1, monster: 1 }, removedNames: ['Buying and Selling', 'Glowworm Gallery', 'Building a Creature'], doubted: [] }, 0),
+    ).toBe("Removed 3 entries an earlier version of the reader took for magic items, feats or monsters: Buying and Selling, Glowworm Gallery and Building a Creature (you hadn't reviewed them).");
   });
 });

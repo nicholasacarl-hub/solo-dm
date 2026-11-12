@@ -5,13 +5,15 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { bookFingerprint } from '@/lib/importedContent';
-import { deleteRecords, getRecords, getSourceEntries, listLibrarySources, listRecords, putRecords, saveLibrarySource } from '@/storage';
+import * as storage from '@/storage';
+import { deleteRecords, getJob, getRecords, getSourceEntries, listLibrarySources, listRecords, putJob, putRecords, saveLibrarySource } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
-import { EXPECTED_DATA, GLOAMWOOD_CANDIDATES, GLOAMWOOD_SOURCE_ID, gloamwoodEntries, gloamwoodEntryId, gloamwoodSource } from '@/test/structuredFixtures';
+import { EXPECTED_DATA, GLOAMWOOD_CANDIDATES, GLOAMWOOD_SOURCE_ID, extractionJob, gloamwoodEntries, gloamwoodEntryId, gloamwoodSource } from '@/test/structuredFixtures';
 import { PARSER_VERSION, SRD_SOURCE_ID, type CompendiumEntry, type LibrarySource, type StructuredRecord } from '@/types';
 import { createRulesIndex } from '../search';
-import { applyReading, detectStructure, doubtMessage, mergeReadings, readOffline, rereadOffline, settleUnmatched, structureEntryAs, type Reading } from './detect';
+import { applyReading, detectStructure, doubted, doubtMessage, mergeReadings, readingJobIds, readOffline, rereadOffline, settleUnmatched, structureEntryAs, type Reading } from './detect';
 import { noticeIndex } from './notices';
+import { correctStaleKinds } from './staleKinds';
 import { segment } from './segment';
 
 const srd = (kind: CompendiumEntry['kind'], name: string): CompendiumEntry => ({
@@ -358,6 +360,127 @@ describe('after the offline reader improved', () => {
     expect(await listRecords(HOLD)).toEqual(before);
   });
 
+  it('gives a misreading read again on this device the note instead of a feat reading, and the next look leaves it to the player', async () => {
+    const v1 = await importedByVersion1();
+    await correctStaleKinds();
+    const gallery = named(v1, 'Glowworm Gallery')!;
+    expect(await rereadOffline([gallery.id])).toEqual({ doubted: 1, accepted: [], alreadyNoted: 0, busy: 0 });
+    const [noted] = await getRecords([gallery.id]);
+    expect(noted).toMatchObject({ kind: 'feat', status: 'pending', parserVersion: PARSER_VERSION, data: gallery.data });
+    expect(noted!.warnings).toContainEqual({ code: 'not-this-kind', severity: 'warn', field: 'kind', message: doubtMessage('feat') });
+    const summary = await detectStructure(HOLD);
+    expect(summary.removedNames).not.toContain('Glowworm Gallery');
+    expect(named(await listRecords(HOLD), 'Glowworm Gallery')).toBeDefined();
+  });
+
+  it('removes an untouched misreading whatever version stamped it', async () => {
+    const v1 = await importedByVersion1();
+    // Read again as a feat by an earlier build of "Re-read on this device".
+    await putRecords([{ ...named(v1, 'Moth Archive')!, parserVersion: PARSER_VERSION }]);
+    const summary = await detectStructure(HOLD);
+    expect(summary.removedNames).toEqual(expect.arrayContaining(['Moth Archive']));
+    expect(named(await listRecords(HOLD), 'Moth Archive')).toBeUndefined();
+  });
+
+  it("reads the book with today's kinds when they couldn't be stored", async () => {
+    await importedByVersion1();
+    const fail = vi.spyOn(storage, 'updateEntryKinds').mockRejectedValueOnce(new Error('The quota was exceeded.'));
+    const summary = await detectStructure(HOLD);
+    expect(fail).toHaveBeenCalled();
+    // The stored kinds are still the old ones, but the look removed the misreadings all the same.
+    expect((await getSourceEntries(HOLD)).find((e) => e.name === 'Glowworm Gallery')?.kind).toBe('feat');
+    expect(summary.removedNames).toEqual(['Glowworm Gallery', 'Moth Archive', 'Bright Ember']);
+    expect(named(await listRecords(HOLD), 'Night Walker')).toMatchObject({ kind: 'feat', parserVersion: PARSER_VERSION });
+    fail.mockRestore();
+  });
+
+  it("settles a paused job's queue (Resume never pays for a misreading), and leaves a running job's alone", async () => {
+    const v1 = await importedByVersion1();
+    const queued = (name: string, jobId: string, patch: Partial<StructuredRecord> = {}) => ({ ...named(v1, name)!, jobId, runState: 'queued' as const, ...patch });
+    await putJob(extractionJob({ id: 'job:paused', sourceId: HOLD, status: 'paused' }));
+    await putJob(extractionJob({ id: 'job:running', sourceId: HOLD, status: 'running' }));
+    await putRecords([
+      queued('Glowworm Gallery', 'job:paused'),
+      queued('Bright Ember', 'job:paused', { status: 'accepted' }),
+      queued('Moth Archive', 'job:running'),
+    ]);
+    const summary = await detectStructure(HOLD);
+    const after = await listRecords(HOLD);
+    expect(named(after, 'Glowworm Gallery')).toBeUndefined();
+    expect(named(after, 'Bright Ember')).toMatchObject({ status: 'accepted', runState: 'skipped', parserVersion: PARSER_VERSION });
+    expect(named(after, 'Moth Archive')).toMatchObject({ runState: 'queued', parserVersion: 1 });
+    expect(summary.removedNames).toEqual(['Glowworm Gallery']);
+  });
+
+  it("reads a paused job's queued records again like any other, keeping their place, and recounts the job", async () => {
+    const v1 = await importedByVersion1();
+    await putJob(extractionJob({ id: 'job:paused', sourceId: HOLD, status: 'paused', pauseReason: 'budget', counts: { queued: 3, running: 0, done: 0, failed: 0, refused: 0, skipped: 0 } }));
+    const walker = named(v1, 'Night Walker')!;
+    await putRecords([
+      { ...walker, jobId: 'job:paused', runState: 'queued', status: 'accepted', readingHash: 'an-older-reading', data: { ...(walker.data as object), prerequisite: 'Wisdom 12 or higher' } as StructuredRecord['data'] },
+      { ...named(v1, 'Glowworm Gallery')!, jobId: 'job:paused', runState: 'queued' },
+      { ...named(v1, 'Moth Archive')!, jobId: 'job:paused', runState: 'queued', edited: true },
+    ]);
+    await detectStructure(HOLD);
+    const after = await listRecords(HOLD);
+    // Found again: read by today's reader (a newer reading offered over the accepted one), still in the queue.
+    expect(named(after, 'Night Walker')).toMatchObject({ parserVersion: PARSER_VERSION, runState: 'queued', jobId: 'job:paused', status: 'accepted', proposal: { origin: 'parser' } });
+    expect(named(after, 'Glowworm Gallery')).toBeUndefined();
+    expect(named(after, 'Moth Archive')).toMatchObject({ runState: 'skipped' });
+    expect(after.filter((r) => r.origin === 'parser' && (r.parserVersion ?? 0) < PARSER_VERSION)).toEqual([]);
+    // The paused card's "N left" counts what is still queued.
+    expect((await getJob('job:paused'))?.counts).toMatchObject({ queued: 1, skipped: 1 });
+  });
+
+  it('counts a job paused only for another tab or the connection as reading (it resumes by itself)', () => {
+    const jobs = [
+      extractionJob({ id: 'a', status: 'paused', pauseReason: 'budget' }),
+      extractionJob({ id: 'b', status: 'paused', pauseReason: 'other-tab' }),
+      extractionJob({ id: 'c', status: 'paused', pauseReason: 'offline' }),
+      extractionJob({ id: 'd', status: 'running' }),
+      extractionJob({ id: 'e', status: 'done' }),
+    ];
+    expect([...readingJobIds(jobs)].sort()).toEqual(['b', 'c', 'd']);
+  });
+
+  it('never removes the entry the player has open: it gets the note instead', async () => {
+    const v1 = await importedByVersion1();
+    const gallery = named(v1, 'Glowworm Gallery')!;
+    const summary = await detectStructure(HOLD, { keep: [gallery.id] });
+    expect(summary.removedNames).not.toContain('Glowworm Gallery');
+    expect(summary.doubted).toContainEqual({ id: gallery.id, kind: 'feat', status: 'pending', edited: false, open: true });
+    expect((await getRecords([gallery.id]))[0]?.warnings).toContainEqual(expect.objectContaining({ code: 'not-this-kind', severity: 'warn' }));
+  });
+
+  it("re-reading on this device reports accepted, already noted and busy misreadings, and notes a paused job's queued one", async () => {
+    const v1 = await importedByVersion1();
+    await putJob(extractionJob({ id: 'job:paused', sourceId: HOLD, status: 'paused', pauseReason: 'budget' }));
+    await putJob(extractionJob({ id: 'job:running', sourceId: HOLD, status: 'running' }));
+    const [gallery, archive, ember] = ['Glowworm Gallery', 'Moth Archive', 'Bright Ember'].map((n) => named(v1, n)!);
+    await putRecords([
+      { ...gallery, status: 'accepted' },
+      { ...archive, jobId: 'job:paused', runState: 'queued' },
+      { ...ember, jobId: 'job:running', runState: 'queued' },
+    ]);
+    expect(await rereadOffline([gallery.id, archive.id, ember.id])).toEqual({ doubted: 2, accepted: [gallery.id], alreadyNoted: 0, busy: 1 });
+    expect((await getRecords([archive.id]))[0]).toMatchObject({ runState: 'skipped', jobId: 'job:paused' });
+    expect((await getRecords([ember.id]))[0]).toMatchObject({ runState: 'queued', parserVersion: 1 });
+    expect(await rereadOffline([gallery.id])).toMatchObject({ doubted: 0, alreadyNoted: 1 });
+  });
+
+  it("never replaces Claude's waiting reading with an offline one, even when the player asks for a re-read", async () => {
+    const v1 = await importedByVersion1();
+    const walker = named(v1, 'Night Walker')!;
+    const claudeProposal = { data: { ...(walker.data as object), repeatable: true } as StructuredRecord['data'] & object, warnings: [], adaptations: [], excerpts: [], origin: 'claude' as const, createdAt: 5 };
+    const pending = { ...walker, data: { ...(walker.data as object), prerequisite: 'Wisdom 12 or higher' } as StructuredRecord['data'], proposal: claudeProposal };
+    await putRecords([pending]);
+    await rereadOffline([walker.id]);
+    expect((await getRecords([walker.id]))[0]).toMatchObject({ proposal: claudeProposal, data: { prerequisite: 'Wisdom 12 or higher' } });
+    await putRecords([{ ...pending, status: 'accepted' }]);
+    await rereadOffline([walker.id]);
+    expect((await getRecords([walker.id]))[0]?.proposal).toEqual(claudeProposal);
+  });
+
   it("keeps a JSON file's kinds (they are the file's, not a guess), and re-checks its records", async () => {
     await importedByVersion1('json');
     const summary = await detectStructure(HOLD);
@@ -384,6 +507,33 @@ describe('after the offline reader improved', () => {
   });
 });
 
+describe('after the offline reader improved again (version 3)', () => {
+  const DM = 'ledger';
+  const e = (n: number, name: string, kind: CompendiumEntry['kind'], text: string): CompendiumEntry => ({
+    id: `lib:${DM}:${n}`, sourceId: DM, sourceName: 'Lantern Ledger', kind, name, text, path: ['Lantern Ledger', 'Treasure', name],
+  });
+  // As versions 1 and 2 stored them: a rules paragraph taken for a magic item, an item taken for a spell.
+  const OLD = [
+    e(1, 'Buying and Selling', 'magic-item', 'A magic weapon or armor of rare quality is almost never for sale, and selling one draws attention.'),
+    e(2, 'Wand of Little Sparks', 'spell', '_Wand, Common_\n\nThis wand has 5 charges. You can expend 1 charge to cast an Evocation cantrip you know.'),
+  ];
+
+  it('removes their old records, finds the item as an item, and reads its charges', async () => {
+    await saveLibrarySource({ id: DM, title: 'Lantern Ledger', kind: 'import', format: 'pdf', enabled: true, entryCount: 2, createdAt: 1, updatedAt: 1 }, OLD);
+    const ctx = { sourceId: DM, entriesById: new Map(OLD.map((x) => [x.id, x])), spellLists: [], notices: null };
+    const { candidates } = segment(OLD, { knownSpellNames: new Set(), knownClassNames: new Set() });
+    const old = mergeReadings(DM, [], candidates.flatMap((c) => readOffline(c, ctx)), { explicit: false, now: 1 }).writes.map((r) => ({ ...r, parserVersion: 2 }));
+    expect(old.map((r) => [r.name, r.kind])).toEqual([['Buying and Selling', 'magic-item'], ['Wand of Little Sparks', 'spell']]);
+    await putRecords(old);
+
+    const summary = await detectStructure(DM);
+    expect(summary).toMatchObject({ removed: { 'magic-item': 1, spell: 1 }, total: 1 });
+    const after = await listRecords(DM);
+    expect(after.map((r) => [r.name, r.kind, r.parserVersion])).toEqual([['Wand of Little Sparks', 'magic-item', PARSER_VERSION]]);
+    expect(after[0].data).toMatchObject({ category: 'wand', rarity: 'common', charges: 5 });
+  });
+});
+
 describe('settleUnmatched (pure)', () => {
   const room = { id: 'lib:hold:1', sourceId: 'hold', sourceName: 'Holdings', kind: 'rule', name: 'Glowworm Gallery', text: '_Level 5 Holding Room_\n\n_Prerequisite: None_\n\nGlowworms.', path: ['Holdings', 'Glowworm Gallery'] } as CompendiumEntry;
   const feat = { id: 'lib:hold:2', sourceId: 'hold', sourceName: 'Holdings', kind: 'feat', name: 'Night Walker', text: 'Prerequisite: Wisdom 13 or higher\n\nYou walk at night.', path: ['Holdings', 'Night Walker'] } as CompendiumEntry;
@@ -394,7 +544,7 @@ describe('settleUnmatched (pure)', () => {
     textHash: 'h', parserVersion: 1, createdAt: 1, updatedAt: 1, ...patch,
   });
 
-  it('removes only the misreadings the version change explains that nobody worked on', () => {
+  it('removes only the misreadings the version change explains that nobody worked on, whatever version stamped them', () => {
     const records = [
       base('unreviewed'),
       base('accepted', { status: 'accepted' }),
@@ -408,12 +558,22 @@ describe('settleUnmatched (pure)', () => {
       base('by-claude', { origin: 'claude', parserVersion: undefined }),
       base('being-read', { runState: 'queued' }),
       base('newer-app', { schemaVersion: 99 }),
+      // Read again as a feat by "Re-read on this device", which stamped today's version.
       base('current', { parserVersion: PARSER_VERSION }),
+      // Given the note once already: the player has been told, and decides.
+      base('noted', { parserVersion: PARSER_VERSION, warnings: [{ code: 'not-this-kind', severity: 'warn', message: 'An earlier version…', field: 'kind' }] }),
+      base('noted-accepted', { status: 'accepted', parserVersion: PARSER_VERSION }),
     ];
     const settled = settleUnmatched(records, entriesById, 5);
-    expect([...settled.remove]).toEqual(['unreviewed']);
+    expect([...settled.remove]).toEqual(['unreviewed', 'current']);
     expect(settled.doubted.map((r) => r.id)).toEqual(['accepted', 'edited', 'proposal', 'read-by-claude']);
     expect(settled.doubted[0]).toMatchObject({ status: 'accepted', confidence: 'medium', parserVersion: PARSER_VERSION, updatedAt: 5 });
     expect(settled.reread.map((r) => r.id)).toEqual(['marked', 'a-background', 'a-real-feat']);
+  });
+
+  it('takes a noted record out of a queue wherever the note comes from', () => {
+    const queued = { ...base('queued'), runState: 'queued' as const, jobId: 'job:paused' };
+    expect(doubted(queued, 5)).toMatchObject({ runState: 'skipped', parserVersion: PARSER_VERSION });
+    expect(doubted({ ...queued, runState: 'done' }, 5).runState).toBe('done');
   });
 });

@@ -150,6 +150,8 @@ export async function importLibraryDocument(
     updatedAt: now,
     // The book's identity (spec D7): restores copied text on another device that imports the same book.
     fingerprint: bookFingerprint(entries.map((e) => e.text)),
+    // A JSON file's kinds are its own (one it left out was guessed just now, by today's rules): never corrected, here or on another device.
+    ...(format === 'json' ? { kindsGuessed: false } : {}),
   };
   await saveLibrarySource(source, entries);
   invalidateRulesIndex();
@@ -180,6 +182,7 @@ async function savePack(
     ...(pack.source.attribution ? { attribution: pack.source.attribution } : {}),
     ...(notes ? { notes } : {}),
     ...(pack.source.fingerprint ? { fingerprint: pack.source.fingerprint } : {}),
+    ...(pack.source.kindsGuessed !== undefined ? { kindsGuessed: pack.source.kindsGuessed } : {}),
     createdAt: now,
     updatedAt: now,
   };

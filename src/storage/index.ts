@@ -147,8 +147,8 @@ export const STRUCTURING_BUSY_ERROR: string = library.STRUCTURING_BUSY_ERROR;
 export const setLibrarySourceEnabled: (id: string, enabled: boolean) => Promise<void> = library.setLibrarySourceEnabled;
 /** Entries for the given sources (all enabled imported sources when omitted). */
 export const getLibraryEntries: (sourceIds?: string[]) => Promise<CompendiumEntry[]> = library.getLibraryEntries;
-/** The stored entries of one kind from the given sources. */
-export const getEntriesByKind: (kind: ContentKind, sourceIds: readonly string[]) => Promise<CompendiumEntry[]> = library.getEntriesByKind;
+/** The stored entries of these kinds from the given sources. */
+export const getEntriesByKind: (kinds: readonly ContentKind[], sourceIds: readonly string[]) => Promise<CompendiumEntry[]> = library.getEntriesByKind;
 /** Correct some imported entries' kinds (and their summaries): the fix for kinds an older import guessed wrongly. */
 export const updateEntryKinds: (changes: readonly { id: string; kind: ContentKind; summary?: string }[]) => Promise<void> =
   library.updateEntryKinds;
@@ -296,6 +296,7 @@ export const getAcceptedRecords: (sourceIds?: string[]) => Promise<StructuredRec
 /** Records of a job in a run state, in queue order (STRUCTURED_KINDS, then reading order). */
 export const listJobRecords: (jobId: string, runState: RunState) => Promise<StructuredRecord[]> = structured.listJobRecords;
 export const putJob: (job: ExtractionJob) => Promise<void> = structured.putJob;
+export const setPausedJobCounts: (id: string, updatedAt: number, counts: ExtractionJob['counts']) => Promise<boolean> = structured.setPausedJobCounts;
 export const getJob: (id: string) => Promise<ExtractionJob | undefined> = structured.getJob;
 export const listJobs: (filter?: { sourceId?: string; status?: JobStatus[] }) => Promise<ExtractionJob[]> = structured.listJobs;
 /** React hook: live jobs (of one source, or all), undefined while loading. */

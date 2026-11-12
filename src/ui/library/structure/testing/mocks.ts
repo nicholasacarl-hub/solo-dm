@@ -43,7 +43,7 @@ import type { CostEstimate, ModelId, StructuredKind, StructuredRecord } from '@/
 
 /** The value exports each barrel adds for structured imports (types are erased at runtime). */
 export const STRUCTURED_DATA_EXPORTS = [
-  'detectStructure', 'structureEntryAs', 'rereadOffline', 'segment', 'splitParagraphs', 'resolveSpan', 'featureText',
+  'detectStructure', 'doubted', 'readingJobIds', 'useCorrectedKindsVersion', 'structureEntryAs', 'rereadOffline', 'segment', 'splitParagraphs', 'resolveSpan', 'featureText',
   'parseOffline', 'normalize', 'validateData', 'DATA_SCHEMAS', 'RECORD_SCHEMA', 'STRUCTURED_LIMITS', 'TEXT_SPAN', 'WIRE',
   'materializeEntries', 'isReviewedImport', 'statsLine', 'getLibrarySnapshot', 'importedOptions', 'mergeBuilderData',
   'getBuilderProblems', 'countUnreviewedOptions', 'backgroundOptionFor', 'classByName', 'classOptionFor', 'findEquipment',
@@ -53,8 +53,8 @@ export const STRUCTURED_DATA_EXPORTS = [
   'isPackFile', 'adaptationNote',
 ] as const;
 export const STRUCTURED_STORAGE_EXPORTS = [
-  'getSourceEntries', 'listRecords', 'useRecords', 'getRecords', 'putRecords', 'setRecordStatus', 'deleteRecords',
-  'getAcceptedRecords', 'listJobRecords', 'putJob', 'getJob', 'listJobs', 'useJobs', 'structuringSpendUsd',
+  'getSourceEntries', 'listRecords', 'useRecords', 'getRecords', 'putRecords', 'commitRecords', 'setRecordStatus', 'deleteRecords',
+  'getAcceptedRecords', 'listJobRecords', 'putJob', 'setPausedJobCounts', 'getJob', 'listJobs', 'useJobs', 'structuringSpendUsd',
   'setSourceFingerprint', 'markSourceStructured', 'findSourcesByFingerprint', 'charactersUsingSource', 'saveLibrarySourceWithRecords',
   'redactCopiedImports', 'exportCampaignBundleWithReport', 'downloadCampaign',
 ] as const;
@@ -97,7 +97,10 @@ export function structuredDataMock() {
     // I/O (vi.fn()s resolving fixture data)
     detectStructure: vi.fn(async () => gloamwoodDetection()),
     structureEntryAs: vi.fn(async (_sourceId: string, _entryIds: string[], kind: StructuredKind) => gloamwoodRecords().find((r) => r.kind === kind) as StructuredRecord),
-    rereadOffline: vi.fn(async () => undefined),
+    rereadOffline: vi.fn(async () => ({ doubted: 0, accepted: [] as string[], alreadyNoted: 0, busy: 0 })),
+    doubted: vi.fn((record: StructuredRecord, now: number) => ({ ...record, updatedAt: now })),
+    useCorrectedKindsVersion: vi.fn(() => 0),
+    readingJobIds: vi.fn((jobs: readonly { id: string; status: string }[]) => new Set(jobs.filter((j) => ['queued', 'running', 'pausing'].includes(j.status)).map((j) => j.id))),
     getLibrarySnapshot: vi.fn(async () => gloamwoodSnapshot()),
     getBuilderProblems: vi.fn(() => [] as merge.MergeProblem[]),
     countUnreviewedOptions: vi.fn(async () => [] as { sourceId: string; title: string; kind: StructuredKind; count: number }[]),
@@ -161,11 +164,13 @@ export function structuredStorageMock() {
     useRecords: vi.fn(() => records),
     getRecords: vi.fn(async (ids: string[]) => ids.map((id) => records.find((r) => r.id === id))),
     putRecords: vi.fn(async () => undefined),
+    commitRecords: vi.fn(async (puts: readonly StructuredRecord[], deletes: readonly string[]) => ({ written: new Set(puts.map((r) => r.id)), deleted: new Set(deletes) })),
     setRecordStatus: vi.fn(async (ids: string[]) => ids.map((id) => ({ id, status: records.find((r) => r.id === id)?.status ?? 'pending' }))),
     deleteRecords: vi.fn(async () => undefined),
     getAcceptedRecords: vi.fn(async () => records.filter((r) => r.status === 'accepted')),
     listJobRecords: vi.fn(async () => [] as StructuredRecord[]),
     putJob: vi.fn(async () => undefined),
+    setPausedJobCounts: vi.fn(async () => true),
     getJob: vi.fn(async () => undefined),
     listJobs: vi.fn(async () => jobs),
     useJobs: vi.fn(() => jobs),

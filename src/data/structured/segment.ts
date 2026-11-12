@@ -20,7 +20,7 @@
 import { nameKey } from '@/lib/id';
 import { textFingerprint } from '@/lib/importedContent';
 import type { CompendiumEntry, RecordSpan, StructuredKind } from '@/types';
-import { guessKind, ownBody } from '../chunk';
+import { guessKind, opensWithPrerequisite, ownBody } from '../chunk';
 import { STRUCTURED_LIMITS } from './schemas';
 import { isDelimiterRow, splitParagraphs } from './paragraphs';
 
@@ -404,7 +404,8 @@ const isSubclassTitle = (title: string) => SUBCLASS_TITLE.test(title) || SUBCLAS
 /**
  * A PDF's three heading sizes can flatten a subclass's feature headings to its own level: a
  * subclass-titled node without children takes the following leaf siblings (up to the next
- * subclass-titled sibling, an entry stored as an entity, or a sibling with children of its own).
+ * subclass-titled sibling, an entry stored as an entity or opening with a Prerequisite line, or a
+ * sibling with children of its own).
  */
 function adoptedSiblings(node: OutlineNode): OutlineNode[] {
   if (node.children.length || !node.parent || !isSubclassTitle(node.title)) return [];
@@ -412,7 +413,8 @@ function adoptedSiblings(node: OutlineNode): OutlineNode[] {
   const out: OutlineNode[] = [];
   for (let i = siblings.indexOf(node) + 1; i < siblings.length && out.length < STRUCTURED_LIMITS.subclassFeatures; i++) {
     const s = siblings[i];
-    if (isSubclassTitle(s.title) || s.children.length || !s.chain || ENTITY_KINDS.has(s.chain.entries[0].kind as StructuredKind)) break;
+    // A class option or feat that follows (it opens with a Prerequisite line) is no subclass feature.
+    if (isSubclassTitle(s.title) || s.children.length || !s.chain || ENTITY_KINDS.has(s.chain.entries[0].kind as StructuredKind) || opensWithPrerequisite(ownText(s))) break;
     out.push(s);
   }
   return out;

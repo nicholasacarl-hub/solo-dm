@@ -307,27 +307,215 @@ numbers; app code parses, grounds and cross-checks every number. A request carri
 nothing else (no book title, character or campaign). Extraction has its own ledger (`job.usage`) and
 never touches a DM session, transcript or `Campaign.usage`.
 
-**Detection rules and re-checks.** A feat is an entry with a category line ("General Feat (Prerequisite:
-Level 4+)"), a name that says so, or a bare "Prerequisite:" line before its text, which is how older
-books print feats. Books print other things that way too, so a bare Prerequisite line doesn't make a
-feat when the entry shows it is something else: a line before it (a stronghold room's type line),
-"Prerequisite: None", a prerequisite naming a class level or a warlock pact (class options), or other
-labelled lines after it ("Item:", "Space:"). Headings don't decide it, because PDF, photo and pasted-text
-imports often lose or merge them; under a heading that names feats, a Prerequisite line always counts.
-PDF import keeps a feat's category line on its own line. Entry kinds are guessed once, at import:
-`src/data/structured/staleKinds.ts` corrects, after startup and before each look through a book, the
-kinds the first version stored for entries it now reads as rules (imported text only: a JSON file's
-kinds are its own). When the offline rules change, `PARSER_VERSION` rises and the book page offers
-*Re-check for free*, which looks through the book again (`detectStructure`). It removes only the
-misreadings the version change explains (for version 2: feats read from a bare Prerequisite line) when
-nobody worked on them; one someone accepted, edited, re-read with Claude or has a newer reading waiting
-for keeps a note, and accepted ones go back to review. Undo puts all of it back. Records the player
-marked (*Structure as…*, *What it is*) are never removed, only read again. A look through the book reads
-the records first and writes at the end, skipping any record that changed meanwhile (an accept, an edit,
-a Claude reading), and leaves alone a record Claude is reading. It offers an offline reading as a
-"newer reading" only when the reader's reading changed since the record was last read
-(`readingHash`), never over the player's edit merely because the edit differs, and never over a Claude
-reading. Stale text is judged on a record's own entries.
+**Detection rules.** Entry kinds are guessed at import (`guessKind`, `src/data/chunk.ts`) from an entry's own
+lines, never from mentions in prose. Headings don't decide a kind, because PDF, photo and pasted-text imports often
+lose or merge them.
+
+- **Feats**: a category line ("General Feat (Prerequisite: Level 4+)", also when a PDF or pasted text joined it to
+  the feat's first sentence or wrapped it), a name that says so, or a bare "Prerequisite:" line before the text,
+  which is how older books print feats. Books print other things that way too, so a bare Prerequisite line doesn't
+  make a feat when the entry shows a shape such things print and feats don't: a type line before it (a stronghold
+  room's "Level 5 … Room", a class option's "Eldritch Invocation"), a prerequisite naming a class at a level, a
+  warlock pact, a cantrip or a patron ("Level 5+ Warlock", "ember dart cantrip"), labelled lines after it ("Item: A
+  pair of boots", "Space: Roomy", or such a label joined into the Prerequisite line), or a heading above it that
+  names invocations or infusions. A level alone ("4th Level") and "Prerequisite: None" are not signs: feats print
+  them too. Only the prerequisite itself is read, not the feat's first sentence a PDF joined to its line, and a web
+  copy's "Source:" line never counts. Under a heading that names feats, a Prerequisite line always counts.
+- **Magic items**: a type line that starts with its category (perhaps after a "Type:" label, a table cell, or the
+  item's name and a dash or parenthesis) and names a rarity. It is checked first, so an item that mentions a cantrip
+  stays an item.
+- **Monsters**: AC and HP lines with a CR and its XP, or the six ability scores. A stat block's "Actions" and the
+  like follow the creature before them when a PDF puts them at its heading level.
+- **Spells**: a level and school line, a "Casting Time:" label, or a spell card's labels without colons at the top
+  of the entry. A card is labels alone over their values, or a run of labels over a run of values (a web grid
+  copied as text, but not a run whose Name or Spell label holds another spell's name); a grid's row of labels,
+  Casting Time first, over its row of values ("CASTING TIME RANGE" / "1 action 120 feet"); a label set off from its
+  value by a tab, spaces or a dash ("—", "–", "--", pandoc's "---"), or by one space after a bold label or a PDF's
+  label run; a one-row table under its labels; or a table of label/value pairs, two or four columns, whose every row
+  is a card field. A table is a Markdown pipe table, one pasted as text, or one of pandoc's own (a simple table: a
+  header over a rule of each column's dashes; a multiline table: between two rules across), read by its rule's
+  column positions, a merged title row over the labels counting as a caption. A pandoc table that isn't a card that
+  way is still read row by row ("Casting Time   1 action" under a "Property   Value" header) when its header is one
+  a key/value card has (a values column, "Property | Value" or "Attribute | Info"; the spell's name; or one of the
+  card's own rows), its cells read without emphasis (a bold header row, a Word table's bold label column), not a
+  table that compares spells or modes ("| Ember Lash | Glow Mote", "Normal casting | As a ritual") or says what
+  each field means, holds or defaults to ("Field | Meaning", "Field | Example"). pandoc's grid tables aren't read.
+
+Before a card is read, converter marks go: hard-break backslashes and `<br>`, Markdown escapes, and any run of quote
+marks and bullets a line opens with (a callout's "> - ", ● ■ ◆ ► ▪ • · U+F0B7, and - + – — before a space). Any space
+a converter writes (no-break, en, em, thin, hair, figure, narrow no-break, ideographic, or its HTML reference) reads
+as a space, and characters that show nothing are dropped. Casting Time's value must be one spell's casting time
+(Action, Bonus Action, Magic action, Reaction, N minutes or hours…, "Action or 8 hours", "1 minute or Ritual"), not a
+page number, "Varies", a definition, or a list of the casting times spells can have: two with a comma between them,
+or "or longer", anywhere in the value's own words (up to the card's next label on its line, a reaction's ", which
+you take …" trigger left out); "or more" counts only right after the casting times. So neither an index nor a
+glossary is a card, and a rules section that opens with such a glossary keeps its subsections as rule entries. A
+feat or an item that prints the card of a spell it grants or casts stays a feat or an item (its category or type
+line anywhere above the card, or a Prerequisite line above it); a creature or feat that prints a table of spells
+stays what it is; a summoning spell is read before the stat block it prints. A section that reads as a spell but
+has subsections that read as spells is a chapter: its own text is an entry, read as whatever it reads as, and each
+subsection is an entry. Other entities keep their subsections (a creature its Variant stat block, a summoning spell
+its creature). Pasted text never takes for a heading a table's row (any line with "|"), a card label over its
+value, a label set off from its value, or "Origin Feat".
+
+**PDF import** (`src/data/pdfLayout.ts`) drops a repeated line as a running header only where it stands at the top
+or bottom of its page, and never a stat block's line, an item's type line, a feat's category line, a labelled line
+in body text such as "Casting Time:", or a line that starts with a spell card's label set at 70% of the body size or
+more (in any case, with or without a bullet or a colon); a chapter header such as "Appendix B: Magic Items" still
+goes. A feat's category line keeps its own line, and a line of card labels alone (one label, or a grid's row of
+them) is a paragraph of its own.
+
+**Magic items** (`src/data/structured/parse/magicItem.ts`). A type line is read by its own grammar: a category,
+then rarities joined by "or", each with its parentheticals (attunement among them), also when wrapped over two
+lines, and cut only where a PDF joined prose onto it. Variants start at a "Name (Rarity)." run-in, or at the same
+name as a heading, bold line or PDF line; a variant's text runs to the next variant or to a paragraph about the whole
+item ("Each such cloak…", "These cloaks…" after the last variant), and its bonuses and charges are its own.
+
+A +N bonus to AC, saving throws, attack rolls or damage rolls is applied only when the text says it always holds:
+the item worn, held, carried or attuned. Anything else is left out with a note ("…holds only in some situations, so
+the app doesn't apply it (the DM can)"), and a Claude reading that applies such a bonus gets "…check it". The
+reader fails closed, so a shape it can't read is noted rather than applied: a conditional bonus applied silently
+changes combat without the player knowing, while an always-on bonus left out shows its note and the DM can still
+apply it. It reads the item's own name with it, and judges:
+
+- **Paragraphs.** List items, headings and bold-only label lines are paragraphs of their own. A paragraph with no
+  closing punctuation goes on into the next when that one starts in lower case, with "(" or a dash, or when the
+  first ends where a sentence can't (an article, a preposition, "you", "+N", a comma…), never into a heading, a
+  table, a list item, a type line or a variant, nor after a ":". A bullet a PDF column cut off starts its list item
+  again; a sentence still cut at a paragraph's end is noted.
+- **Labels and intros.** A run-in label fails on "Only", a parenthesis, a condition, or a place, state or time word,
+  and then governs the rest of its paragraph; one that is an always-on or no-armor phrase ("While Attuned", "While
+  Wearing This Cloak") holds. An intro (a last sentence ending in ":", or one that offers "the following…", "these
+  benefits", "as follows") offers the run-ins and list items after it, and governs them when it fails. A paragraph
+  that is only a label and its ":" holds only when the label names what follows ("Benefits:", "Magical
+  Properties:", "Its Powers:") or is an always-on or no-armor phrase ("While attuned:", "No Armor:"); any other
+  ("Wild Shape:", "While raging:") is an intro that fails. A paragraph that is only a label (a heading, a bold line,
+  a label a PDF column ended after) governs as an intro does, up to the next label-only paragraph or variant; a
+  label alone ending in "." (a run-in label a column ended after) governs only its own text, up to the next run-in,
+  while a heading or bold line keeps its range even where flattened text prints it plain. A failing label's or
+  intro's range, and a no-armor one's, goes on past plain paragraphs that a list item or run-in follows (a list
+  item's or run-in's second paragraph; a Homebrewery `\column` or `\page`, `---`, an image, an HTML comment,
+  `{{note}}`, `<br>` or `&nbsp;` line between bullets), up to the next intro, label-only paragraph, variant or
+  paragraph about the whole item. A label or intro that holds by the no-armor condition gives the AC bonuses it
+  governs `acOnlyWhen` ("no-armor", "no-armor-no-shield") and leaves their other targets out. A choice never holds
+  ("choose one of these bonuses", "choose one of the listed bonuses", "choose one of the following bonuses",
+  "alternatively…", "…instead"); "choose one of the following/below" properties, powers or the like offers what
+  follows, and leaves an always-on bonus before it applied.
+- **The bonus's own sentence.** Everything between a clause's start and its subject is its lead-in, and holds only
+  as an always-on or no-armor phrase, a body place ("In your hands"), a connective, or a concession with no
+  condition word ("even if/when/while…", "even in/at/during…", "even underwater", "whether or not", "regardless
+  of", "no matter", "at all times", "in any light"). A colon run-in label before the subject is judged as a label:
+  one that holds ("Stealth:", "Care:", "Lore:") is dropped and the sentence judged on its own; one that doesn't
+  stays its lead-in. An
+  opening (a preposition or subordinator, "Each night,", an inversion such as "Should you…") governs every later
+  clause with no lead-in of its own, and each further lead-in after its comma is judged on its own. The bonus is
+  yours, the wearer's, or the item's to give; anything else is another creature's and is noted. Only always-on
+  phrases, "made with this weapon" and more benefits may follow the bonus: words after the clause's last benefit
+  belong to the whole clause ("…and Resistance to Cold damage between dusk and dawn" leaves the AC bonus out too),
+  and a bonus joined by "or", or under "either" or "your choice of", is a choice.
+- **Limits elsewhere.** A restriction of the item in any main clause of any sentence leaves out every bonus of the
+  item (or of its variant): the item as subject (by name, "it", "this <noun>", "the item", perhaps with an aside or
+  a second subject before its verb), with a negated verb and a condition, "only" beside a works-verb, a negated
+  work or function, a negated protect, help, apply or extend with a condition, "only", or a scope of attacks, hits,
+  rolls, saves, spells or a kind of creature ("doesn't protect you from ranged attacks"; a damage type is no scope),
+  a failure to work, or a state ("is powerless", "becomes inert", "functions as" or "is treated as a nonmagical
+  cloak", with up to three adverbs before the state word: "is magically inert", "is all but useless"; also after a
+  colon run-in label that isn't an always-on phrase: "Daytime: The cloak is inert."); or the item as object
+  ("Sunlight renders the cloak powerless", "Only sunlight renders…", "Only fire magic renders…", and the
+  wearer gaining no benefit from it however the wearer is named: "you", "the wearer", "its bearer", "a creature
+  wearing it"). When no subject is found, a clause that names the item before such a predicate is a restriction
+  too, its own noun or kind after a preposition included ("A cloak of this kind works only at night", "The threads
+  of this cloak unravel…"), and so is "only" up to three words after a works-verb ("…protects you only from
+  arrows"). The item's magic or protection as a
+  subject ("The cloak's magic fails in sunlight, but…") restricts the item. A reference back to a bonus ("the bonus",
+  "this benefit", "these properties", "it") limits it with a condition word, a negation of its working, or a limit
+  word; a limit covers its paragraph, what an intro there offers, and the paragraph before it when the limit opens
+  its paragraph or, in a paragraph with no bonus of its own, is a reference to a bonus anywhere in it (in a plain
+  paragraph, to a benefit, a protection or a ward too), stepping over headings. A reference to an effect, a
+  property or a pronoun later in such a paragraph is that paragraph's own and reaches no further (SRD Cloak of
+  Invisibility's "The effect ends early if…", Cloak of Displacement's "…the property ceases to function…"). When
+  armor worn is the only condition, the AC bonus gets `acOnlyWhen` and the other targets are left out.
+- **What limits nothing**, judged per main clause so the clauses beside it are still read: a reuse limit ("can't be
+  used again until…"), cut from a limit it is joined to (at ", after which", ", at which point", ", whereupon",
+  "and (then) can't be used", or after a ", which …," aside) so that limit is still read; a permanent loss
+  ("becomes a nonmagical cloak", "is destroyed", or after a bare use count: "After the tenth time, it cracks and
+  becomes useless") where a loss in a place, time or state is a restriction, and so is one after uses that may come
+  back ("Once its uses are spent…"); "can't be suppressed", "doesn't stack", "increases to +N", examples and table
+  cells; the item only as a preposition's object ("in excess of this number") or inside a leading "If…" clause
+  whose main clause is about the other one ("If one of the stones in a pair is destroyed, the other one becomes
+  nonmagical.", though a later part of that main clause about the item still counts: "…, the other properties stop
+  working and the cloak becomes powerless."); what other creatures gain ("Other creatures gain no benefit from the
+  cloak", "A thief gains no benefit…") and what nothing short of a Wish spell, a deity, divine magic or an artifact
+  can do ("No mortal magic can render the cloak powerless", "Only a Wish spell can render it inert"); "only" away
+  from a works-verb or a condition ("…forged this armor only for
+  their kings"); and a spell's, effect's or part's own failing ("the spell doesn't work on Undead", "The strap
+  doesn't work loose").
+- **Claude readings** get "check it" for a bonus whenever the offline reader doesn't read the same always-on value
+  for that target, and an AC bonus whose `acOnlyWhen` differs from the text's condition is noted.
+- **Speed.** No regex has nested or overlapping quantifiers, cheap word tests run before costly patterns, and every
+  pass is linear in the item's paragraphs; caps fail closed (a sentence with more than 24 bonus phrases is noted, a
+  clause with more than 64 places a subject could start is a restriction). Pathological items read in under 100 ms,
+  and the whole SRD chapter as one entry in about 60 ms.
+
+**Correcting stored kinds** (`src/data/structured/staleKinds.ts`). Kinds are guessed once, at import. After
+startup and before each look through a book, the app corrects the kinds an earlier version stored for entries it
+now reads differently: a frozen copy of the first release's rules (`guessKindV1`) recognises what that version
+stored, and `misreadBefore` asks whether today's rules read the entry as something else. Only guessed kinds are
+corrected: imported text, and "Download book data" files of it, which say so (`kindsGuessed`; a file from a
+version that didn't write it is judged by its `bookFingerprint`). An authored JSON file's kinds are its own on every
+device, and so are those of a JSON book already in the Library from before `kindsGuessed` was recorded: nothing
+tells it apart from an authored one (its book data says `kindsGuessed: false`). A safety net keeps what the first release stored in a shape today's rules don't read whole, because a kept
+misreading is the safer side:
+
+- A stored spell is kept when one of its first 16 lines with text (converter marks gone; spaces and their
+  references as spaces; links' targets and pandoc spans' attributes dropped, their text and HTML tags' place set off
+  by spaces, so "**Casting Time**[Action]{.value}" is a label and its value, but not from a colon or comma after
+  them, so "[Casting Time](…):" is "Casting Time:") opens with "Casting Time" after any marks, as the first
+  release's test read it, and a casting time stands in its value's place: later on
+  that line, past marks, short tags ("(R)", "(ritual)", "(C)") and the card's other labels and fields ("| Casting
+  Time | 1 action |", "**Casting Time** (R) 1 minute", a PDF's "CASTING TIME RANGE SCHOOL 1 action 60 feet
+  Evocation"); or, when the rest of the line holds only marks, tags, labels and fields (not a column of names), at
+  the start of the first line below it that doesn't only draw the table (delimiter rows, pandoc's rules, grid
+  borders, fenced-div fences, Org rules, spacer rows and thematic breaks are skipped), or of the line above it (a
+  value printed over its label; the entry's name when the label opens the text), or nowhere at all (the label row
+  ends the entry's text, or only more lone labels follow it, as when a PDF reader copied a card table's label
+  column and the values went to the next entry, whatever stands above them: a Source, Classes or school line, a
+  tagline, the previous spell's prose in a copy without headings; so a section's prose over a bare list of the
+  labels stays a stored spell, the lesser harm). A run of labels over their values, and a card's table, count too,
+  unless the entry opens with a creature's size line.
+- A stored magic item is kept when its first two lines print a category (and its parenthetical) and then a rarity:
+  after a comma or another separator (";", "/", "|", "·", "•", "—", "–", " - ", pandoc's "--" and "---"), perhaps
+  labelled "Rarity:"; after a "Rarity:" label; or in parentheses ("Item Type: Wondrous Item / Rarity: Rare", "Magic
+  Item: Armor (Plate) (Uncommon)").
+- Still corrected: feats and items that print a granted spell's card, an index's page numbers, a glossary's
+  definitions, "Varies", a contents page, a web grid's list of spells, prose about rare armor, "Magic Item Values by
+  Rarity", and the first release's "feats" that were rooms, invocations or other class options.
+
+A look through the book uses today's kinds even when that correction couldn't be stored, and an open book page reads
+its entries again after one.
+
+**Re-check.** When the offline rules change, `PARSER_VERSION` rises and the book page offers *Re-check for free*, which
+looks through the book again (`detectStructure`). It settles only the misreadings the version change
+explains (an entry an earlier version took for a spell, monster, magic item or feat that today's rules
+read as something else), judged by the entry's text, not by the version a record carries: removed when
+nobody worked on them, kept with a note once when someone accepted, edited, re-read with Claude or has a
+newer reading waiting, and accepted ones go back to review. A record that already has that note is the
+player's to decide, and the entry the player has open is never removed (it gets the note). *Re-read on
+this device* gives such a record the note instead of reading it again as its old kind, and moves an
+accepted one back to review, as Re-check does. Records waiting in a paused Claude job are read again like
+any other (their place in the queue is kept); a note takes a record out of the queue, wherever it comes
+from (Undo included), the runner never reads a record taken out of its queue, and the paused job is
+recounted, so Resume never pays to read a misreading. A job that is reading, or paused only until another
+tab lets go or the connection returns, keeps its queue. Undo accepts the moved records again and puts back
+the removed ones with the note, never over a record made again meanwhile; its toast stays longer for a
+long message and while the pointer rests on it, and the DM hears of an accept only once its Undo is gone. Records the player marked (*Structure as…*, *What it is*)
+are never removed, only read again. A look through the book reads the records first and writes at the
+end, skipping any record that changed meanwhile (an accept, an edit, a Claude reading). It offers an
+offline reading as a "newer reading" only when the reader's reading changed since the record was last
+read (`readingHash`), and never over the player's edit merely because the edit differs. No offline
+reading, asked for or not, ever replaces a Claude reading waiting as a proposal. Stale text is judged on a
+record's own entries. A subclass that takes the feature headings a PDF flattened beside it stops at a
+sibling that opens with a Prerequisite line (a class option).
 
 **Running a job** (`src/dm/extract/runner.ts`). One job runs at a time across all books (others wait,
 queued). Per kind, the first request's first stream event opens the lane (the kind's cache entry is then

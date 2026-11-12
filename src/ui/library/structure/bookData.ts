@@ -213,15 +213,16 @@ export function isConfident(record: StructuredRecord): boolean {
 
 /**
  * A record an older offline reader made that "Re-check" would look at again: read on this device by an
- * earlier PARSER_VERSION, not kept as text, not being read by Claude (that reading settles it) and not
- * written by a newer app.
+ * earlier PARSER_VERSION, not kept as text, not being read by Claude (that reading settles it; with
+ * `reading`, the jobs reading now: a paused job's queue counts) and not written by a newer app.
  */
-export function needsRecheck(record: StructuredRecord): boolean {
+export function needsRecheck(record: StructuredRecord, reading?: ReadonlySet<string>): boolean {
+  const waitsForReading = isBeingRead(record) && (reading === undefined || record.jobId === undefined || reading.has(record.jobId));
   return (
     record.origin === 'parser' &&
     (record.parserVersion ?? 0) < PARSER_VERSION &&
     record.status !== 'rejected' &&
-    !isBeingRead(record) &&
+    !waitsForReading &&
     !isNewerVersion(record)
   );
 }
@@ -303,7 +304,10 @@ export function defaultBudget(usdHigh: number): number {
 // Looking through a book again (spec §4.7; detect.ts settles an earlier reader's misreadings)
 // ---------------------------------------------------------------------------
 
-const andList = (parts: readonly string[]) => (parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`);
+const listWith = (word: string) => (parts: readonly string[]) =>
+  parts.length <= 1 ? parts.join('') : `${parts.slice(0, -1).join(', ')} ${word} ${parts[parts.length - 1]}`;
+const andList = listWith('and');
+const orList = listWith('or');
 
 /**
  * The toast after "Look for entries again" or "Re-check": what was found, or, when an earlier reader's
@@ -326,19 +330,30 @@ export function lookThroughMessage(
   if (removedCount > 0) {
     const one = removedCount === 1;
     const kinds = removed.map(([kind]) => kind);
-    const took = kinds.length === 1 ? (one ? `a ${KIND_LABELS[kinds[0]].one}` : KIND_LABELS[kinds[0]].many) : kinds.map((k) => KIND_LABELS[k].many).join(' or ');
+    const took = kinds.length === 1 ? (one ? `a ${KIND_LABELS[kinds[0]].one}` : KIND_LABELS[kinds[0]].many) : orList(kinds.map((k) => KIND_LABELS[k].many));
     const names = summary.removedNames;
     const examples = names.length === 0 ? '' : removedCount <= names.length ? `: ${andList(names)}` : `, such as ${andList(names.slice(0, 2))}`;
     parts.push(`Removed ${one ? '1 entry' : `${removedCount} entries`} an earlier version of the reader took for ${took}${examples} (you hadn't reviewed ${one ? 'it' : 'them'}).`);
   }
   if (doubted > 0) {
-    const one = doubted === 1;
-    const kinds = [...new Set(summary.doubted.map((d) => d.kind))];
-    const notKind = kinds.length === 1 ? `may not be ${one ? `a ${KIND_LABELS[kinds[0]].one}` : KIND_LABELS[kinds[0]].many}` : 'may have been misread';
-    const entries = one ? '1 entry' : `${doubted} entries`;
-    if (movedBack === doubted) parts.push(`${entries} you had accepted ${one ? 'is' : 'are'} back in To review: ${one ? 'it' : 'they'} ${notKind}.`);
-    else if (movedBack === 0) parts.push(`${entries} you had edited ${one ? 'has' : 'have'} a note in To review: ${one ? 'it' : 'they'} ${notKind}.`);
-    else parts.push(`${entries} you had reviewed ${one ? 'is' : 'are'} in To review with a note: ${one ? 'it' : 'they'} ${notKind}.`);
+    const notKind = (subset: readonly { kind: StructuredKind }[], n: number) => {
+      const kinds = [...new Set(subset.map((d) => d.kind))];
+      return kinds.length === 1 ? `may not be ${n === 1 ? `a ${KIND_LABELS[kinds[0]].one}` : KIND_LABELS[kinds[0]].many}` : 'may have been misread';
+    };
+    const entries = (n: number) => (n === 1 ? '1 entry' : `${n} entries`);
+    const accepted = summary.doubted.filter((d) => d.status === 'accepted');
+    const opened = summary.doubted.filter((d) => d.open && d.status !== 'accepted');
+    const others = summary.doubted.filter((d) => d.status !== 'accepted' && !d.open);
+    const moved = Math.min(movedBack, doubted);
+    const kept = doubted - moved - opened.length;
+    if (opened.length) parts.push(`The entry you have open has a note: it ${notKind(opened, 1)}.`);
+    if (moved > 0) parts.push(`${entries(moved)} you had accepted ${moved === 1 ? 'is' : 'are'} back in To review: ${moved === 1 ? 'it' : 'they'} ${notKind(accepted.length ? accepted : summary.doubted, moved)}.`);
+    if (kept > 0) {
+      // Edited, or read by Claude: a note says so, wherever the entry is listed.
+      const subset = others.length === kept ? others : summary.doubted;
+      const what = subset.every((d) => d.edited) ? 'you had edited' : 'you had worked on';
+      parts.push(`${entries(kept)} ${what} ${kept === 1 ? 'has' : 'have'} a note: ${kept === 1 ? 'it' : 'they'} ${notKind(subset, kept)}.`);
+    }
   }
   return parts.join(' ');
 }

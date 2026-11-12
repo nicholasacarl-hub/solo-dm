@@ -7,7 +7,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useShallow } from 'zustand/react/shallow';
 import { BookX, LoaderCircle, RefreshCw, ScanSearch, TriangleAlert } from 'lucide-react';
-import { getBuilderProblems, useBuilderData } from '@/data';
+import { getBuilderProblems, readingJobIds, useBuilderData, useCorrectedKindsVersion } from '@/data';
 import { extractionAvailability, useRunner } from '@/dm';
 import { getSettings, useSettings } from '@/state/settingsStore';
 import { getSourceEntries, useJobs, useLibrarySources, useRecords } from '@/storage';
@@ -34,8 +34,10 @@ import { TOUCH, TOUCH_BUTTONS } from '@/ui/library/structure/touch';
 import { showUndo, UndoToast } from '@/ui/library/structure/UndoToast';
 import { useBookPageState } from '@/ui/library/structure/useBookPageState';
 
+/** The book's entries, read again when their count changes or their stored kinds were corrected. */
 function useSourceEntries(sourceId: string, entryCount: number | undefined): CompendiumEntry[] | null {
   const [entries, setEntries] = useState<CompendiumEntry[] | null>(null);
+  const kindsVersion = useCorrectedKindsVersion();
   useEffect(() => {
     if (entryCount === undefined) return;
     let alive = true;
@@ -49,7 +51,7 @@ function useSourceEntries(sourceId: string, entryCount: number | undefined): Com
     return () => {
       alive = false;
     };
-  }, [sourceId, entryCount]);
+  }, [sourceId, entryCount, kindsVersion]);
   return entries;
 }
 
@@ -83,7 +85,9 @@ export function LibrarySourceScreen() {
   const entriesById = useMemo(() => new Map((entries ?? []).map((e) => [e.id, e])), [entries]);
   const counts = useMemo(() => reviewCounts(records, source?.enabled ?? true), [records, source?.enabled]);
   const unread = records.filter(needsClaude).length;
-  const recheck = records.filter(needsRecheck);
+  // Until the jobs are known, every queued record counts as being read.
+  const reading = useMemo(() => (jobs ? readingJobIds(jobs.filter((j) => j.sourceId === sourceId)) : undefined), [jobs, sourceId]);
+  const recheck = records.filter((r) => needsRecheck(r, reading));
   const problems = useMemo(() => {
     const ids = new Set(records.map((r) => r.id));
     return getBuilderProblems().filter((p) => ids.has(p.recordId));
@@ -115,7 +119,9 @@ export function LibrarySourceScreen() {
     if (!source || detect) return;
     setDetect({ done: 0, total: 1 });
     try {
-      const { summary, movedBack, undo } = await lookThroughBook(source.id, { onProgress: (done, total) => setDetect({ done, total }) });
+      // The entry the player has open (perhaps with changes not saved yet) is never removed from under them.
+      const keep = state.recordId ? [state.recordId] : [];
+      const { summary, movedBack, undo } = await lookThroughBook(source.id, { onProgress: (done, total) => setDetect({ done, total }), keep });
       setNothingFound(summary.total === 0);
       const message = lookThroughMessage(summary, movedBack);
       if (undo) showUndo(message, undo, { focus: true, returnFocus: titleTarget });

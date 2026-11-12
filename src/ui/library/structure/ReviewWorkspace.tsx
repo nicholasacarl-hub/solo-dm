@@ -620,8 +620,15 @@ export function BulkBar({
               disabled: none,
               onSelect: () =>
                 void run('reread', async () => {
-                  await rereadHere(ids);
-                  toast.success(`Read ${ids.length} again on this device.`);
+                  const result = await rereadHere(ids);
+                  const read = ids.length - result.alreadyNoted - result.busy;
+                  const parts = [
+                    read > 0 ? `Read ${read} again on this device.` : 'Nothing new to read.',
+                    result.doubted ? `${result.doubted} ${result.doubted === 1 ? 'has' : 'have'} a note to check${result.movedBack ? ` (${result.movedBack} you had accepted ${result.movedBack === 1 ? 'is' : 'are'} back in To review)` : ''}.` : '',
+                    result.busy ? `${result.busy} ${result.busy === 1 ? 'is' : 'are'} being read by Claude.` : '',
+                  ].filter(Boolean);
+                  if (result.undo) showUndo(parts.join(' '), result.undo, { focus: true, returnFocus });
+                  else toast.success(parts.join(' '));
                 }),
             },
             {
