@@ -91,8 +91,9 @@ builder's on a feat's or species' spell). Numbers name their sources where a con
 names each item it counts, the Saving throws line what every save includes (`saveBonusSources`: a Ring or Cloak of
 Protection, an item's bonus the app read as always on, Aura of Protection), and an active item's attack and damage
 bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Magic items")
-leave the rest to the DM: a bonus an item's text gives only sometimes, a condition that stops a counted one, and those
-attack and damage bonuses, applied by adjusting the AC or DC it passes (and the damage it applies) and told to the
+leave the rest to the DM: a bonus an item's text gives only sometimes, a condition that stops a counted one, those
+attack and damage bonuses, and any bonus of an SRD or homebrew item (the app reads no text there; it counts only the
+Ring and Cloak of Protection, Bracers of Defense and a "+N" armor or shield by name), applied by adjusting the AC or DC it passes (and the damage it applies) and told to the
 player in a line; the order of truth says an item's own text (or a recorded ruling) beats a number the app worked
 out from it, and the player's inventory says the DM adds those bonuses, so nobody adds them twice. An AC the DM sets
 by hand (`armor_class`, for Mage Armor) gets the formula "set by the DM: <reason>" rather than keeping the old one's
