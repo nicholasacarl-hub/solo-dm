@@ -277,12 +277,17 @@ export const PERSONALITY_LABELS: Record<keyof Personality, string> = {
   backstory: 'Backstory',
 };
 
+/** The opening a personality notice quotes; past it, the notice says the whole text is on the sheet. */
+const NOTICE_QUOTE = 60;
+
 export function personalityChange(c: Character, field: keyof Personality, value: string): SheetChange {
   const text = value.trim();
   if ((c.personality[field] ?? '') === text) return unchanged(c);
   const personality = { ...c.personality, [field]: text || undefined };
   const label = PERSONALITY_LABELS[field].toLowerCase();
-  return { character: { ...c, personality }, notice: text ? `Player updated their ${label}: ${quote(text)}` : `Player cleared their ${label}` };
+  // One line (notices are parsed back line by line): the opening, and where the DM reads the rest.
+  const more = text.replace(/\s+/g, ' ').length > NOTICE_QUOTE ? ' (its opening; get_character_sheet has the whole text)' : '';
+  return { character: { ...c, personality }, notice: text ? `Player updated their ${label}: ${quote(text, NOTICE_QUOTE)}${more}` : `Player cleared their ${label}` };
 }
 
 export function notesChange(c: Character, value: string): SheetChange {

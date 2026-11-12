@@ -82,6 +82,15 @@ This keeps prompt caching effective (explicit breakpoint on the system prompt + 
 the conversation tail; TTL from Settings, default 1h because players pause between turns) and keeps
 preserved thinking valid.
 
+**The hero's sheet** (`characterSheetText`, src/engine/summary.ts) is one rendering for the frozen
+prompt's snapshot and `get_character_sheet`. The numbers are compact; every text is whole: what the
+player wrote (traits, ideals, bonds, flaws, appearance, backstory, notes), each feature's rules text,
+and a transformation's summary and way back, with paragraphs and lists kept and indented under their
+bullet. A field is cut only past 20,000 characters (`SHEET_TEXT_MAX`, far above any real sheet: the
+longest SRD feature is about 3,000, a level-20 SRD character's features 6,000–13,000 in all), and then
+the sheet says how much it left out and to ask the player. A personality edit mid-session reaches the DM
+as a one-line notice quoting its opening and pointing to `get_character_sheet` for the whole text.
+
 **Ending a session** (player clicks End Session, or the DM suggests it, or the context passes the
 soft limit): the app appends a wrap-up instruction; the DM records any missing journal/quest updates
 via tools, then writes `## Recap` (player-facing) and `## DM Notes` (private plans/secrets). The
@@ -595,7 +604,8 @@ byte-identical.
 **Provenance, export redaction, restore.** Every copy of book text onto a character (features, traits,
 lineages, feats, a background's feature; the DM's words about an imported entry) carries an
 `ImportedRef`: the book's title and fingerprint, the option and part, where the text sits and its hash.
-The sheet text wraps copied text after truncating, so the DM's frozen prompt can be redacted whole.
+The sheet text wraps each copied description whole, as one passage (cut only past `SHEET_TEXT_MAX`,
+with the note outside the wrapper), so the DM's frozen prompt can be redacted whole.
 Exports and GitHub saves (`exportCampaignBundleWithReport`) replace copied descriptions — and the DM's
 `level_up` / `update_character` inputs that echo them — with a placeholder sentence (the stored campaign
 and transcript are never changed), then remove every wrapped passage; the download toast says what was
@@ -619,7 +629,9 @@ Invariants, checked in CI (the definition of done):
 
 - **Unchanged without imports.** With an empty library, the builder data (the SRD object itself), the
   rules index contents, an SRD character's sheet text, the DM system prompt and the DM request bodies
-  are byte-identical to before (`src/dm/requestBytes.test.ts` pins the request bytes).
+  are byte-identical to before (`src/dm/requestBytes.test.ts` pins the request bytes). The sheet has
+  since carried long text whole (above); a sheet whose texts are all one line and within the old
+  limits reads byte for byte as before (`sheet-srd-character.md`).
 - **One deliberate `DM_TOOLS` change** in this release (above), reviewed with its cost; otherwise
   `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
 - **Privacy.** No marker sentence of the test book appears in any exported bundle (the e2e test). Every

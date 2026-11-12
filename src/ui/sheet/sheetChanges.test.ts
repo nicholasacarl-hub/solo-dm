@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { sampleCharacter } from '@/test/fixtures';
-import { itemAttuneChange, itemEquipChange } from './sheetChanges';
+import { itemAttuneChange, itemEquipChange, personalityChange } from './sheetChanges';
 
 // SRD 5.2.1 Magic Items: Ring of Protection — "+1 bonus to AC and saving throws" while attuned.
 describe('sheet gear changes keep AC in step', () => {
@@ -27,5 +27,25 @@ describe('sheet gear changes keep AC in step', () => {
     const r = itemEquipChange(c, 'item-spellbook', true, null);
     expect(r.character.armorClass).toBe(c.armorClass);
     expect(r.notice).not.toMatch(/AC/);
+  });
+});
+
+describe('personality edits tell the DM', () => {
+  it('quotes a short edit whole', () => {
+    expect(personalityChange(sampleCharacter(), 'ideals', 'Freedom.').notice).toBe('Player updated their ideals: “Freedom.”');
+  });
+
+  it('quotes the opening of a long edit and says get_character_sheet has the whole text, on one line', () => {
+    const backstory = [
+      'Kestrel Vane grew up on the salt flats east of Harrowmere, where the caravans stop only to water their oxen.',
+      'He fights with twin hooked blades joined by a length of black chain.',
+    ].join('\n\n');
+    const r = personalityChange(sampleCharacter(), 'backstory', backstory);
+    expect(r.character.personality.backstory).toBe(backstory);
+    // Notices reach the DM as one "- " line each and are parsed back line by line.
+    expect(r.notice).not.toContain('\n');
+    expect(r.notice).toBe(
+      'Player updated their backstory: “Kestrel Vane grew up on the salt flats east of Harrowmere, …” (its opening; get_character_sheet has the whole text)',
+    );
   });
 });

@@ -287,3 +287,35 @@ describe('update_character links names to the rules index and builder data', () 
     expect(h.sheet().features.find((f) => f.name === 'Alert')?.ref).toBeUndefined();
   });
 });
+
+describe('get_character_sheet', () => {
+  // Invented: three paragraphs of backstory and long ideals, past the old 500- and 200-character cuts.
+  const BACKSTORY = [
+    'Kestrel Vane grew up on the salt flats east of Harrowmere, where the caravans stop only to water their oxen. His mother traded rope and lamp oil; his father was a story she told on cold nights.',
+    "At twelve he found a dragon's shed scale half buried in the flats, warm as a hearthstone in his hand. He swore an oath over it: one day he will become a dragon himself, scales and wings and all.",
+    'He fights with twin hooked blades joined by a length of black chain, a gift from the smith who taught him to throw them.',
+  ];
+  const IDEALS =
+    'Transformation. Anything worth having is worth changing yourself to reach, and a person who stays the same out of fear has already lost. Freedom. No chain holds me that I did not forge myself. Loyalty to the few who stayed.';
+  const SPELLCASTING = [
+    'You can cast sorcerer spells using Charisma. You know four cantrips and two level 1 spells of your choice from the Sorcerer spell list, and you regain all expended spell slots when you finish a Long Rest.',
+    'You can use an Arcane Focus as a Spellcasting Focus for your sorcerer spells. Whenever you gain a Sorcerer level, you can replace one spell you know with another of a level for which you have spell slots.',
+  ];
+
+  it("returns the player's long text and each feature's text whole, as the frozen prompt renders it", async () => {
+    const base = sampleCharacter();
+    const character: Character = {
+      ...base,
+      personality: { ...base.personality, backstory: BACKSTORY.join('\n\n'), ideals: IDEALS },
+      features: [{ id: 'f-sc', name: 'Spellcasting', source: 'class', sourceName: 'Sorcerer 1', description: SPELLCASTING.join('\n\n') }],
+    };
+    const h = setup({ character });
+    const out = await h.run('get_character_sheet', {});
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toBe(characterSheetText(h.sheet()));
+    expect(out.content).toContain(`- Backstory: ${BACKSTORY.join('\n\n  ')}`);
+    expect(out.content).toContain(`- Ideals: ${IDEALS}`);
+    expect(out.content).toContain(`- **Spellcasting** (Sorcerer 1): ${SPELLCASTING.join('\n\n  ')}`);
+    expect(out.content).not.toContain('…');
+  });
+});

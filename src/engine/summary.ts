@@ -27,9 +27,59 @@ import {
 } from './rules';
 import { ordinal } from './spellcasting';
 import { activeTransformations } from './transform';
-import { truncate } from './util';
+import { formatInt } from './util';
 
 const SLOT_LEVELS: readonly SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+/**
+ * The most of one free-text field the DM's sheet carries: a personality field, the player's notes, a feature's
+ * rules text. Real sheets stay far below it (a long backstory runs a few thousand characters, the longest SRD
+ * feature about 3,000); it only keeps a pasted book from swelling every request of a session, and past it the
+ * sheet says how much it left out. The frozen prompt and get_character_sheet render the same text.
+ */
+export const SHEET_TEXT_MAX = 20_000;
+
+/**
+ * Text as written: lines and paragraphs kept (a run of blank lines becomes one), a line's indent kept, runs of
+ * spaces after a word and trailing spaces gone. Linear in the text (no pattern that backtracks over a long run).
+ */
+function tidy(text: string): string {
+  return text
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/(\S)[^\S\n]+/g, '$1 ').trimEnd())
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/** The text cut at SHEET_TEXT_MAX, at a paragraph, line or word end near it, and how many characters that left out. */
+function capped(text: string): { kept: string; left: number } {
+  if (text.length <= SHEET_TEXT_MAX) return { kept: text, left: 0 };
+  const head = text.slice(0, SHEET_TEXT_MAX);
+  const at = [head.lastIndexOf('\n\n'), head.lastIndexOf('\n'), head.lastIndexOf(' ')].find((i) => i > SHEET_TEXT_MAX * 0.8) ?? SHEET_TEXT_MAX;
+  const kept = head.slice(0, at).trimEnd();
+  return { kept, left: text.length - kept.length };
+}
+
+/** Every line after the first indented two spaces, so a multi-line text stays inside its list item. */
+function indented(text: string): string {
+  return text
+    .split('\n')
+    .map((line, i) => (i === 0 || line === '' ? line : `  ${line}`))
+    .join('\n');
+}
+
+/** What a cut field says after its text. */
+function leftOut(left: number): string {
+  return left > 0 ? ` [${formatInt(left)} more characters are too long for this sheet; ask the player if you need the rest]` : '';
+}
+
+/** A free-text field for a list item, whole up to SHEET_TEXT_MAX; a one-line text is formatted as it always was. */
+function fieldText(text: string): string {
+  const { kept, left } = capped(tidy(text));
+  return `${indented(kept)}${leftOut(left)}`;
+}
 
 function classText(c: Character): string {
   if (c.classes.length === 0) return 'no class yet';
@@ -219,20 +269,20 @@ function spellcastingLines(c: Character): string[] {
 const RECHARGE_TEXT: Record<string, string> = { short: 'short rest', long: 'long rest', dawn: 'dawn', turn: 'turn', none: 'total' };
 
 /**
- * A feature's description for the DM. Text copied from an imported book (ref.textCopied) is wrapped AFTER
- * truncating, so the closing marker survives the 200-character cut and exports can remove the whole passage
- * (spec §7.2); a placeholder (text left out of a save) says how to get it back. A ruling the DM wrote over a
- * pulled placeholder shows as written, though its ref still says `redacted`. SRD and homebrew features read
- * exactly as before.
+ * A feature's description for the DM, whole (fieldText). Text copied from an imported book (ref.textCopied) is
+ * wrapped as one passage, after any cut at SHEET_TEXT_MAX, so exports can remove all of it (spec §7.2); a
+ * placeholder (text left out of a save) says how to get it back. A ruling the DM wrote over a pulled placeholder
+ * shows as written, though its ref still says `redacted`.
  */
 function featureDescription(f: Feature): string {
   const d = f.description?.trim();
   if (!d) return '';
-  if (!f.ref?.textCopied) return `: ${truncate(d, 200)}`;
+  if (!f.ref?.textCopied) return `: ${fieldText(d)}`;
   if (copiedTextMissing(f)) {
     return `: (text from the player's book “${f.ref.sourceTitle}” isn't on this device — call get_character_sheet after they import it, or rule from the name)`;
   }
-  return `: ${wrapImported(f.ref.sourceTitle, truncate(d, 200))}`;
+  const { kept, left } = capped(tidy(d));
+  return `: ${indented(wrapImported(f.ref.sourceTitle, kept))}${leftOut(left)}`;
 }
 
 function featureLine(f: Feature): string {
@@ -266,18 +316,19 @@ function equipmentLines(c: Character): string[] {
   return ['### Equipment', items, coins];
 }
 
+/** What the player wrote about the hero, whole: the DM's main material for the story. */
 function personalityLines(c: Character): string[] {
   const p = c.personality ?? {};
-  const fields: Array<[string, string | undefined, number]> = [
-    ['Traits', p.traits, 200],
-    ['Ideals', p.ideals, 200],
-    ['Bonds', p.bonds, 200],
-    ['Flaws', p.flaws, 200],
-    ['Appearance', p.appearance, 200],
-    ['Backstory', p.backstory, 500],
-    ['Player notes', c.notes, 300],
+  const fields: Array<[string, string | undefined]> = [
+    ['Traits', p.traits],
+    ['Ideals', p.ideals],
+    ['Bonds', p.bonds],
+    ['Flaws', p.flaws],
+    ['Appearance', p.appearance],
+    ['Backstory', p.backstory],
+    ['Player notes', c.notes],
   ];
-  const lines = fields.flatMap(([label, value, max]) => (value?.trim() ? [`- ${label}: ${truncate(value, max)}`] : []));
+  const lines = fields.flatMap(([label, value]) => (value?.trim() ? [`- ${label}: ${fieldText(value)}`] : []));
   return lines.length ? ['### Personality', ...lines] : [];
 }
 
@@ -300,8 +351,8 @@ function transformationLines(c: Character): string[] {
   if (all.length === 0) return [];
   const active = all.filter((t) => t.status === 'active').map((t) => {
     const meta = [t.stage, t.origin === 'accepted' ? 'chosen' : 'imposed', `since session ${t.startedSession}`].filter(Boolean).join('; ');
-    const ends = t.howItEnds?.trim() ? ` How it could end: ${truncate(t.howItEnds, 200)}` : '';
-    return `- **${t.name}** (${meta}): ${truncate(t.summary, 240)}${ends}`;
+    const ends = t.howItEnds?.trim() ? ` How it could end: ${fieldText(t.howItEnds)}` : '';
+    return `- **${t.name}** (${meta}): ${fieldText(t.summary)}${ends}`;
   });
   const ended = all.filter((t) => t.status === 'ended').map((t) => `${t.name}${t.endedSession ? ` (ended in session ${t.endedSession})` : ''}`);
   return ['### Transformations', ...active, ...(ended.length ? [`- Ended: ${ended.join(', ')}`] : [])];
