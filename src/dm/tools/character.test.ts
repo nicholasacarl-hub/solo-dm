@@ -292,6 +292,31 @@ describe('update_character links names to the rules index and builder data', () 
   });
 });
 
+describe('what the DM reads back about AC and saves after its own changes', () => {
+  it("armor_class: an AC the gear doesn't give says the DM set it; one the gear gives gets the gear's formula back", async () => {
+    const h = setup();
+    expect((await h.run('update_character', { armor_class: 15, reason: 'Mage Armor' })).isError).toBeUndefined();
+    expect(h.sheet()).toMatchObject({ armorClass: 15, acFormula: 'set by the DM: Mage Armor' });
+    expect(characterSheetText(h.sheet())).toContain('**AC** 15 (set by the DM: Mage Armor)');
+    // Mage Armor ends: back to what the gear gives (unarmored, 10 + DEX), with its formula.
+    expect((await h.run('update_character', { armor_class: 12 })).isError).toBeUndefined();
+    expect(h.sheet()).toMatchObject({ armorClass: 12, acFormula: '10 + DEX 2' });
+    expect((await h.run('update_character', { armor_class: 14 })).isError).toBeUndefined();
+    expect(h.sheet().acFormula).toBe('set by the DM');
+  });
+
+  it('says when what every save includes changes (SRD 5.2.1 Cloak of Protection: +1 to saving throws while attuned)', async () => {
+    const h = setup();
+    await h.run('update_character', { inventory_add: [{ name: 'Cloak of Protection', quantity: 1, magic: true }] });
+    const on = await h.run('update_character', { inventory_update: [{ name: 'Cloak of Protection', attuned: true }] });
+    expect(on.content).toContain('Saving throws now include Cloak of Protection +1.');
+    const off = await h.run('update_character', { inventory_update: [{ name: 'Cloak of Protection', attuned: false }] });
+    expect(off.content).toContain('Saving throws no longer include Cloak of Protection +1.');
+    // Nothing about saves when they don't change.
+    expect((await h.run('update_character', { hp: { change: -1 } })).content).not.toContain('Saving throws');
+  });
+});
+
 describe('get_character_sheet', () => {
   // Invented: three paragraphs of backstory and long ideals, past the old 500- and 200-character cuts.
   const BACKSTORY = [
@@ -383,6 +408,151 @@ describe("book text the DM names on the sheet keeps its book's ref (exports repl
     expect(c.features.find((f) => f.name === 'Ability Score Improvement')?.ref).toBeUndefined();
     const text = exported(c);
     for (const marker of GLOAMWOOD_MARKERS) expect(text).not.toContain(marker);
+  });
+
+  describe("free text that repeats a book's spell or item is marked copied, wherever the DM puts it (spec §7.1)", () => {
+    // Invented book text; the Ember Burst line shares a sentence with the SRD's Fireball (SAMPLE_RULES).
+    const CHOIR = `A choir of ash rises around you and sings until the end of your next turn. ${GLOAMWOOD_MARKERS[3]} Each creature of your choice that hears it has Disadvantage on its next attack roll.`;
+    const LANTERN = `This lantern burns without oil and never gutters in the wind. ${GLOAMWOOD_MARKERS[5]} While it is lit, Invisible creatures within its light shed a pale glow of their own.`;
+    const SRD_LINE = 'Each creature in a 20-foot-radius Sphere makes a Dexterity saving throw, taking 8d6 Fire damage';
+    const book = (name: string, kind: CompendiumEntry['kind'], text: string, data: Record<string, unknown> = {}, id = gloamwoodEntryId(name)) => ({ ...entry(id, name, kind, data), text });
+    // Stock wording two book weapons print alike; the SRD's Opportunity Attacks rule (SAMPLE_RULES) reprinted in a book
+    // spell; a book's typographic apostrophes.
+    const STOCK = 'You gain a +1 bonus to attack and damage rolls made with this magic weapon.';
+    const OA = 'You can make an Opportunity Attack when a creature that you can see leaves your reach using its action, Bonus Action, Reaction, or one of its speeds.';
+    const CALM = 'You can’t be Charmed while it’s attuned to you, and the amulet’s wearer doesn’t need to sleep.';
+    const rules = [
+      ...RULES.filter((e) => e.name !== 'Ashen Choir' && e.name !== 'Lantern of Hollow Light'),
+      book('Ashen Choir', 'spell', CHOIR, { level: 2 }),
+      book('Ember Burst', 'spell', `Embers burst at a point you choose. ${SRD_LINE} on a failed save.`, { level: 3 }, 'lib:gloam:900'),
+      book('Lantern of Hollow Light', 'magic-item', LANTERN, { rarity: 'uncommon', attunement: true }),
+      book('Grudgewick Axe', 'magic-item', `${STOCK} The axe remembers every grudge and mutters them at night.`, {}, 'lib:gloam:901'),
+      book('Moonwick Blade', 'magic-item', `${STOCK} ${GLOAMWOOD_MARKERS[1]} Its edge shines like the moon on still water.`, {}, 'lib:gloam:902'),
+      book('Binding Ash', 'spell', `Ash binds a foe in place. ${OA}`, { level: 1 }, 'lib:gloam:903'),
+      book('Moth-Calm Amulet', 'magic-item', CALM, {}, 'lib:gloam:904'),
+    ];
+    const spellOf = (h: ReturnType<typeof setup>, name: string) => h.sheet().spellcasting?.spells.find((s) => s.name === name);
+    const itemOf = (h: ReturnType<typeof setup>, name: string) => h.sheet().inventory.find((i) => i.name === name);
+    const own = 'Once per dawn, at the old shrine, without a slot.';
+
+    it("spells_add notes: a book's words on its own spell or on any other mark the ref copied; SRD wording and the DM's words don't", async () => {
+      const h = setup({ rules });
+      const out = await h.run('update_character', {
+        spells_add: [
+          { name: 'Ashen Choir', level: 2, notes: CHOIR.slice(0, 120) },
+          { name: 'Hymn of Ash', level: 2, notes: `Granted by the choir: ${CHOIR}` },
+          { name: 'Fireball', level: 3, notes: SRD_LINE },
+          { name: 'Sleep', level: 1, notes: own },
+        ],
+      });
+      expect(out.isError).toBeUndefined();
+      const by = (name: string) => h.sheet().spellcasting?.spells.find((s) => s.name === name);
+      expect(by('Ashen Choir')).toMatchObject({ id: gloamwoodEntryId('Ashen Choir'), ref: { entryName: 'Ashen Choir', textCopied: true } });
+      expect(by('Ashen Choir')?.ref?.textHash).not.toBe('');
+      expect(by('Hymn of Ash')).toMatchObject({ ref: { kind: 'spell', entryName: 'Ashen Choir', sourceTitle: GLOAMWOOD_TITLE, textCopied: true } });
+      expect(by('Fireball')?.ref).toBeUndefined();
+      expect(by('Sleep')?.ref).toBeUndefined();
+      // The DM's sheet wraps the copied notes, and an export keeps only the DM's own.
+      expect(characterSheetText(h.sheet())).toContain(`- Hymn of Ash: <imported-content source="${GLOAMWOOD_TITLE}">`);
+      const text = exported(h.sheet());
+      expect(text).not.toContain(GLOAMWOOD_MARKERS[3]);
+      expect(text).toContain(own);
+      expect(text).toContain(SRD_LINE);
+    });
+
+    it("an item's description: a book's item's words on a custom or an SRD item take that item's ref; the DM's words don't", async () => {
+      const h = setup({ rules, character: fighter() });
+      const out = await h.run('update_character', {
+        inventory_add: [
+          { name: 'Pale Lantern', quantity: 1, description: `My grandmother's. ${LANTERN}` },
+          { name: 'Rope', quantity: 1, description: LANTERN.slice(0, 100) },
+          { name: 'Odd Rock', quantity: 1, description: own },
+        ],
+      });
+      expect(out.isError).toBeUndefined();
+      const by = (name: string) => h.sheet().inventory.find((i) => i.name === name);
+      expect(by('Pale Lantern')).toMatchObject({ description: `My grandmother's. ${LANTERN}`, ref: { kind: 'magic-item', entryName: 'Lantern of Hollow Light', textCopied: true } });
+      expect(by('Pale Lantern')?.bonuses).toBeUndefined(); // marked, not linked: the DM's item keeps its own numbers
+      expect(by('Rope')).toMatchObject({ compendiumId: 'srd:item:rope', ref: { entryName: 'Lantern of Hollow Light', textCopied: true } });
+      expect(by('Odd Rock')?.ref).toBeUndefined();
+      // inventory_update: the same words given later.
+      expect((await h.run('update_character', { inventory_update: [{ name: 'Odd Rock', description: LANTERN }] })).isError).toBeUndefined();
+      expect(by('Odd Rock')).toMatchObject({ description: LANTERN, ref: { entryName: 'Lantern of Hollow Light', textCopied: true } });
+      const text = exported(h.sheet());
+      expect(text).not.toContain(GLOAMWOOD_MARKERS[5]);
+    });
+
+    it('a spell re-added without notes (to unprepare it) keeps its notes, and so their copy mark (addSpell merges)', async () => {
+      const h = setup({ rules });
+      await h.run('update_character', { spells_add: [{ name: 'Ashen Choir', level: 2, notes: CHOIR.slice(0, 120) }] });
+      await h.run('update_character', { spells_add: [{ name: 'Ashen Choir', level: 2, prepared: false }] });
+      expect(spellOf(h, 'Ashen Choir')).toMatchObject({ prepared: false, notes: CHOIR.slice(0, 120), ref: { textCopied: true } });
+      expect(exported(h.sheet())).not.toContain(GLOAMWOOD_MARKERS[3]);
+    });
+
+    it("reads a copy across kinds: a scroll quoting a book's spell, a spell's notes quoting a book's item", async () => {
+      const h = setup({ rules });
+      await h.run('update_character', {
+        inventory_add: [{ name: 'Spell Scroll (Ashen Choir)', quantity: 1, magic: true, description: `Reading it casts the spell: ${CHOIR}` }],
+        spells_add: [{ name: 'Faerie Fire', level: 1, notes: `From the lantern: ${LANTERN}` }],
+      });
+      expect(itemOf(h, 'Spell Scroll (Ashen Choir)')?.ref).toMatchObject({ kind: 'spell', entryName: 'Ashen Choir', textCopied: true });
+      expect(spellOf(h, 'Faerie Fire')?.ref).toMatchObject({ kind: 'magic-item', entryName: 'Lantern of Hollow Light', textCopied: true });
+      const text = exported(h.sheet());
+      for (const marker of [GLOAMWOOD_MARKERS[3], GLOAMWOOD_MARKERS[5]]) expect(text).not.toContain(marker);
+    });
+
+    it('leaves stock wording the books print under several names to the DM, and credits a real copy to its own entry', async () => {
+      const h = setup({ rules, character: fighter() });
+      await h.run('update_character', {
+        inventory_add: [
+          { name: "Grandfather's Axe", quantity: 1, magic: true, description: STOCK },
+          { name: 'Moon Sword', quantity: 1, magic: true, description: `${STOCK} ${GLOAMWOOD_MARKERS[1]} Its edge shines like the moon on still water.` },
+        ],
+      });
+      expect(itemOf(h, "Grandfather's Axe")?.ref).toBeUndefined();
+      expect(itemOf(h, 'Moon Sword')?.ref).toMatchObject({ entryName: 'Moonwick Blade', textCopied: true });
+    });
+
+    it("reads a book's typographic apostrophes and the DM's plain ones alike", async () => {
+      const h = setup({ rules, character: fighter() });
+      await h.run('update_character', { inventory_add: [{ name: 'Calm Charm', quantity: 1, description: CALM.replace(/’/g, "'") }] });
+      expect(itemOf(h, 'Calm Charm')?.ref).toMatchObject({ entryName: 'Moth-Calm Amulet', textCopied: true });
+    });
+
+    it('leaves SRD wording alone: on a linked book spell, and an SRD rule a book spell reprints', async () => {
+      const h = setup({ rules });
+      await h.run('update_character', {
+        spells_add: [
+          { name: 'Ember Burst', level: 3, notes: `${SRD_LINE}; I rule it also lights dry grass.` },
+          { name: 'Fireball', level: 3, notes: `As with any reach: ${OA}` },
+        ],
+      });
+      expect(spellOf(h, 'Ember Burst')?.ref).toMatchObject({ entryName: 'Ember Burst', textCopied: false });
+      expect(spellOf(h, 'Fireball')?.ref).toBeUndefined();
+    });
+
+    it('marks a text under 60 characters on one run of the book, and needs two in a longer one', async () => {
+      const h = setup({ rules });
+      await h.run('update_character', {
+        spells_add: [
+          { name: 'Hymn of Embers', level: 2, notes: CHOIR.slice(0, 50) },
+          { name: 'Hymn of Smoke', level: 2, notes: `${CHOIR.slice(0, 45)} and then the hymn goes quiet for good.` },
+        ],
+      });
+      expect(spellOf(h, 'Hymn of Embers')?.ref?.entryName).toBe('Ashen Choir');
+      expect(spellOf(h, 'Hymn of Smoke')?.ref).toBeUndefined();
+    });
+
+    it('reads nothing as copied without the index, or from a text under 40 characters', async () => {
+      const h = setup({ rules: rules.filter((e) => !e.id.startsWith('lib:')) });
+      await h.run('update_character', { spells_add: [{ name: 'Hymn of Ash', level: 2, notes: CHOIR }], inventory_add: [{ name: 'Pale Lantern', quantity: 1, description: LANTERN }] });
+      expect(h.sheet().spellcasting?.spells.find((s) => s.name === 'Hymn of Ash')?.ref).toBeUndefined();
+      expect(h.sheet().inventory.find((i) => i.name === 'Pale Lantern')?.ref).toBeUndefined();
+      const short = setup({ rules });
+      await short.run('update_character', { inventory_add: [{ name: 'Pale Lantern', quantity: 1, description: 'This lantern burns without oil.' }] });
+      expect(short.sheet().inventory.find((i) => i.name === 'Pale Lantern')?.ref).toBeUndefined();
+    });
   });
 
   it('a refused call quotes long strings by their length, never their words', async () => {

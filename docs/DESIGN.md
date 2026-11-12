@@ -87,7 +87,19 @@ prompt's snapshot and `get_character_sheet`. The numbers are compact; every text
 player wrote (traits, ideals, bonds, flaws, appearance, backstory, notes), each feature's rules text, a
 transformation's summary and way back, the description of an item no rules entry describes (a custom
 item, or the DM's words on a book's item, wrapped like copied text) and a spell's notes (the DM's, or the
-builder's on a feat's or species' spell). Paragraphs and lists are kept and indented under their bullet; a Markdown heading inside a field
+builder's on a feat's or species' spell). Numbers name their sources where a condition may matter: the AC formula
+names each item it counts, the Saving throws line what every save includes (`saveBonusSources`: a Ring or Cloak of
+Protection, an item's bonus the app read as always on, Aura of Protection), and an active item's attack and damage
+bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Magic items")
+leave the rest to the DM: a bonus an item's text gives only sometimes, a condition that stops a counted one, those
+attack and damage bonuses, and any bonus of an SRD or homebrew item (the app reads no text there; it counts only the
+Ring and Cloak of Protection, Bracers of Defense and a "+N" armor or shield by name), applied by adjusting the AC or DC it passes (and the damage it applies) and told to the
+player in a line; the order of truth says an item's own text (or a recorded ruling) beats a number the app worked
+out from it, and the player's inventory says the DM adds those bonuses, so nobody adds them twice. An AC the DM sets
+by hand (`armor_class`, for Mage Armor) gets the formula "set by the DM: <reason>" rather than keeping the old one's
+items, and a change in what every save includes is announced in the tool's result and in the player's equip and
+attune notices ("saving throws now include …"), since the frozen sheet's line dates from the start of the session.
+Paragraphs and lists are kept and indented under their bullet; a Markdown heading inside a field
 becomes a bold line, so it can't pass for a section of the sheet. A field is cut only past 20,000
 characters (`SHEET_TEXT_MAX`, far above any real sheet: the longest SRD feature is about 4,300, Wizard
 Spellcasting, and a level-20 SRD character's features 8,000–15,000 in all), at a paragraph, line or word
@@ -396,7 +408,10 @@ the item worn, held, carried or attuned. Anything else is left out with a note (
 the app doesn't apply it (the DM can)"), and a Claude reading that applies such a bonus gets "…check it". The
 reader fails closed, so a shape it can't read is noted rather than applied: a conditional bonus applied silently
 changes combat without the player knowing, while an always-on bonus left out shows its note and the DM can still
-apply it. It reads the item's own name with it, and judges:
+apply it. **The reader is frozen**: it changes only for outright bugs (a crash, a hang, a bonus taken from another
+item or sentence, a note that misstates what the app applies), not to learn more wordings. A condition it misses is
+the DM's to honor, from the sheet's named sources and the item's text (see "The hero's sheet" above), and ROADMAP.md
+lists the shapes it is known to misjudge. It reads the item's own name with it, and judges:
 
 - **Paragraphs.** List items, headings and bold-only label lines are paragraphs of their own. A paragraph with no
   closing punctuation goes on into the next when that one starts in lower case, with "(" or a dash, or when the
@@ -621,7 +636,19 @@ with the note outside the wrapper), so the DM's frozen prompt can be redacted wh
 one of the book's parts or feats (`features_add`, `level_up` extras) gets that part's ref when its
 description repeats the part's words (a 40-character run), unless the SRD prints the same name; the DM's
 own words under such a name stay its own, so exports keep them and restore never writes the book's text
-over them. A `level_up` extra naming a copied feature the sheet already has (a name the SRD doesn't print)
+over them. A spell's notes (`spells_add`) or an item's description (`inventory_add`, `inventory_update`) that repeats
+a book's spell or item (either way round: a scroll quoting a spell, notes quoting an item), whatever name it is
+given, takes that entry's ref marked copied: two of those 40-character runs (the only one, in a text under 60
+characters) found in one entry's own words — not in the SRD's text of any kind, whose words are anyone's to keep,
+and not stock wording the books print under several names — compared with typographic quotes and dashes made plain.
+A quote shorter than about 80 characters inside the DM's own words can escape (one aligned run), as can a text
+written before this version. The sheet then wraps the text and exports replace it, as for the book's own item,
+while the DM's own notes stay its own (the check reads the book text, joined once per rules index: about 70 ms for a
+few large books, then milliseconds a call); a spell re-added without notes keeps its notes' mark. On the player's
+inventory such a ref only marks the words: an SRD or homebrew item still shows its own entry. While a book is in play
+(a ref on the sheet, or a book passage in the transcript), exports also replace every text field and long string of
+a call the app refused, whatever the tool, as the refusal's preview quotes them, and a description or note in an
+earlier call that the sheet no longer holds under that name (removed, renamed, stacked or rewritten). A memory excerpt (`search_memory`) that starts inside a quoted book passage opens its wrapper again. A `level_up` extra naming a copied feature the sheet already has (a name the SRD doesn't print)
 adds no second copy, and the result says it was kept as it is; and a call the schema refuses quotes every
 text field (and any long string) by its length, never its words.
 Exports and GitHub saves (`exportCampaignBundleWithReport`) replace copied descriptions — and the DM's
@@ -649,7 +676,9 @@ Invariants, checked in CI (the definition of done):
   rules index contents, an SRD character's sheet text, the DM system prompt and the DM request bodies
   are byte-identical to before (`src/dm/requestBytes.test.ts` pins the request bytes). The sheet has
   since carried long text whole (above); a sheet whose texts are all one line and within the old
-  limits reads byte for byte as before (`sheet-srd-character.md`).
+  limits reads byte for byte as before (`sheet-srd-character.md`). The DM instructions have since gained the
+  "Magic items" line (and its exceptions in the order of truth and table talk), and the Saving throws line names
+  what every save includes (a Ring or Cloak of Protection, Aura of Protection), so those sheets and the prompt differ.
 - **One deliberate `DM_TOOLS` change** in this release (above), reviewed with its cost; otherwise
   `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
 - **Privacy.** No marker sentence of the test book appears in any exported bundle (the e2e test). Every

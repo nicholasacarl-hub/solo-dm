@@ -60,16 +60,20 @@ The first version of structured imports deliberately leaves these out:
   "Structure as…" on the book page).
 - **Editing a book's text** in the app, and re-importing a new copy of a book while keeping review decisions.
 - **Per-campaign book selection** (today every switched-on book applies to every campaign).
-- **Item mechanics**: a magic weapon's +N on attacks, charges, spell attack and save DC bonuses from items, and
-  enforcing attunement limits.
+- **Item mechanics**: a magic weapon's +N on attacks (the DM adds it: a book weapon's is tagged "not counted by the
+  app" on the DM's sheet, an SRD "+1 Longsword" carries no numbers to tag), charges, spell attack and save DC bonuses
+  from items, and enforcing attunement limits.
 - **Monster detail**: structured actions and legendary actions, and senses on the battle map (the DM reads them from
   the text today).
-- **Book text the DM echoes into free text**: words from the player's book that the DM copies into a spell's notes, a
-  custom item's description, or a tool call the app refuses for a feature that never reaches the sheet aren't
-  marked as copied, so exports keep them; a memory excerpt that starts inside a quoted book passage carries its words
-  without the marker.
+- **Book text the DM repeats elsewhere**: the book's words in the journal, quests, recaps or narration, in a feature
+  the DM names otherwise than the book does, or in a quote shorter than about 80 characters among the DM's own words
+  (a text under 60 characters counts only when its first 40 are the book's) aren't marked as copied, so exports keep
+  them; nor is text written before this version. Spell notes, item descriptions, refused calls and calls whose text
+  has left the sheet are covered.
 
-Known limits of the offline reader (the book page's *Structure as…* and a Claude reading cover each):
+Known limits of the offline reader (the book page's *Structure as…* and a Claude reading cover each). The magic-item
+bonus reader is frozen except for outright bugs: the misjudged shapes below stay, and the DM honors a condition from
+the item's text, since the sheet names the item behind each AC and save bonus:
 
 - **Converter layouts read as rules on a fresh import** (kept when an earlier version stored them): web pages' spell
   cards in divs converted by pandoc's gfm or commonmark writer, a card outside a table with pipes, a GFM table with no

@@ -4,6 +4,7 @@ vi.mock('@/engine', () => import('../testing/fakeEngine'));
 vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
+import { redactImported, wrapImported } from '@/lib/importedContent';
 import { sampleCombat } from '@/test/fixtures';
 import type { LogEntry, ToolLogEntry } from '@/types';
 import type { CompendiumEntry } from '@/types';
@@ -671,6 +672,18 @@ describe('journal, quests, clocks, scene, oracle, memory', () => {
     expect(exact).toContain('Tam has told no one at all.');
     const partial = (await h.run('search_memory', { query: 'oath dragon' })).content;
     expect(partial).not.toContain('Tam has told no one at all.');
+  });
+
+  it('keeps an excerpt that starts inside a quoted book passage wrapped, so a copy removes the quote', async () => {
+    const h = setup();
+    // Invented: a lore entry whose details quote a long passage the DM looked up.
+    const quote = `${'The wardens of the old road kept their own counsel and their own lamps. '.repeat(4)}The ferry bell rings once for every soul the river keeps.`;
+    const details = `Notes from the archive. ${wrapImported('The Gloamwood Almanac', quote)} We should ask Old Tam.`;
+    await h.run('update_journal', { entries: [{ kind: 'lore', name: 'River Lore', summary: 'What the archive says.', details }] });
+    const found = (await h.run('search_memory', { query: 'ferry bell' })).content;
+    expect(found).toContain('ferry bell rings once');
+    expect(found).toMatch(/<imported-content source="The Gloamwood Almanac"> …/);
+    expect(redactImported(found)).not.toContain('ferry bell');
   });
 
   it('finds an entry by its exact name whatever its words: a short name, other spacing or case', async () => {

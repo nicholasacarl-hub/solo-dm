@@ -214,6 +214,7 @@ export const fakeEngine = {
   },
   effectiveSpeed: (c: Character) => Math.max(0, c.speed - 5 * c.exhaustion),
   computeArmorClass,
+  saveSourcesChangeText: () => null,
   rollRequestModifier: (c: Character, req: { rollType: string; skill?: Skill; ability?: Ability; attackName?: string }) => {
     const penalty = -2 * c.exhaustion;
     if (req.rollType === 'skill' && req.skill) return { modifier: skillMod(c, req.skill) + penalty, label: `${req.skill} check` };

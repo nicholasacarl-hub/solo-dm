@@ -336,10 +336,62 @@ describe('items and spells the rules entries do not describe', () => {
     expect(redactImported(sheet)).not.toContain(GLOAMWOOD_MARKERS[6]);
   });
 
+  it("wraps notes that repeat a book's words like copied text, and leaves out notes a save pulled", () => {
+    const base = mira().spellcasting!;
+    const notes = `Sung at dusk. ${GLOAMWOOD_MARKERS[3]}`;
+    const choir = { id: 'lib:gloam:40', name: 'Ashen Choir', level: 2 as const, prepared: true, source: 'Granted in play', notes, ref: importedRef({ kind: 'spell', entryName: 'Ashen Choir', part: undefined, level: undefined }) };
+    const sheet = characterSheetText(mira({ spellcasting: { ...base, spells: [...base.spells, choir] } }));
+    expect(sheet).toContain(`  - Ashen Choir: <imported-content source="${GLOAMWOOD_TITLE}">\n    ${notes}\n    </imported-content>`);
+    expect(redactImported(sheet)).not.toContain(GLOAMWOOD_MARKERS[3]);
+    const pulled = { ...choir, notes: importedPlaceholder(GLOAMWOOD_TITLE), ref: { ...choir.ref, redacted: true as const } };
+    expect(characterSheetText(mira({ spellcasting: { ...base, spells: [...base.spells, pulled] } }))).not.toContain('- Ashen Choir:');
+  });
+
   it('shows the notes the DM wrote on a spell it granted, under its level', () => {
     const base = mira().spellcasting!;
     const scale = { id: 'sp-scale-shield', name: 'Shield', level: 1 as const, prepared: true, source: 'Granted in play', notes: 'Granted by the black scale:\n  once per dawn without a slot.' };
     const sheet = characterSheetText(mira({ spellcasting: { ...base, spells: [...base.spells, scale] } }));
     expect(sheet).toMatch(/- Level 1: [^\n]*Shield \(Granted in play\)[^\n]*\n {2}- Shield: Granted by the black scale: once per dawn without a slot\./);
+  });
+});
+
+describe('magic item bonuses on the DM sheet (SRD 5.2.1 Attunement; Cloak of Protection)', () => {
+  const fen = {
+    id: 'i-fen',
+    name: 'Cloak of the Fen',
+    quantity: 1,
+    category: 'magic-item' as const,
+    magic: true,
+    requiresAttunement: true,
+    attuned: true,
+    bonuses: { savingThrows: 1 },
+  };
+  const blade = {
+    id: 'i-blade',
+    name: 'Ember Blade',
+    quantity: 1,
+    category: 'magic-item' as const,
+    magic: true,
+    equipped: true,
+    bonuses: { attack: 1, damage: 1 },
+  };
+
+  it('names what every save includes, so the DM can set a bonus aside when its condition does not hold', () => {
+    const cloak = { id: 'i-cloak', name: 'Cloak of Protection', quantity: 1, magic: true, attuned: true };
+    const sheet = characterSheetText(mira({ inventory: [cloak, fen] }));
+    expect(sheet).toMatch(/\*\*Saving throws:\*\* STR \+1 ·[^\n]* \(each includes Cloak of Protection \+1, Cloak of the Fen \+1\)\n/);
+    // Nothing to name: the line is as before.
+    expect(characterSheetText(mira({ inventory: [] }))).toMatch(/\*\*Saving throws:\*\* [^\n]*CHA [+-]\d\n/);
+  });
+
+  it("tags a carried item's attack and damage bonuses as not counted by the app, and an unattuned one's not at all", () => {
+    expect(characterSheetText(mira({ inventory: [blade] }))).toContain('Ember Blade (equipped, magic, +1 to attack and damage rolls with it, not counted by the app)');
+    const uneven = { ...blade, bonuses: { attack: 2, damage: 1 } };
+    expect(characterSheetText(mira({ inventory: [uneven] }))).toContain('Ember Blade (equipped, magic, +2 to attack rolls, +1 to damage rolls with it, not counted by the app)');
+    // Carried but not marked equipped (as the DM's inventory_add and the builder leave a weapon): still the DM's to add.
+    const { equipped: _e, ...carried } = blade;
+    expect(characterSheetText(mira({ inventory: [carried] }))).toContain('Ember Blade (magic, +1 to attack and damage rolls with it, not counted by the app)');
+    // Needs attunement and isn't attuned: its bonuses don't work, so the sheet says nothing of them.
+    expect(characterSheetText(mira({ inventory: [{ ...blade, requiresAttunement: true }] }))).toContain('Ember Blade (equipped, magic)');
   });
 });

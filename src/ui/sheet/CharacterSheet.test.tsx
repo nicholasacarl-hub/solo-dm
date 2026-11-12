@@ -3,7 +3,9 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generatePortrait } from '@/images';
 import { useGame } from '@/state/gameStore';
+import { importedPlaceholder } from '@/lib/importedContent';
 import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
+import { GLOAMWOOD_TITLE, importedRef } from '@/test/structuredFixtures';
 import type { Feature, Transformation } from '@/types';
 import { builderFixture } from '@/ui/builder/testing/builderFixture';
 import { clearRolls, queueRolls } from '@/ui/builder/testing/fakeEngine';
@@ -84,6 +86,30 @@ describe('CharacterSheet', () => {
     expect(notices()).toEqual(['Player unprepared Magic Missile']);
     await user.click(screen.getByRole('button', { name: 'Shield' }));
     expect(await screen.findByText(/an imperceptible barrier of magical force/i)).toBeInTheDocument();
+  });
+
+  it("shows a spell's notes under its row and above its rules text, as the DM sees them", async () => {
+    const user = userEvent.setup();
+    const hero = sampleCharacter();
+    const notes = 'Granted by the moth shrine: cast once at dusk without a slot.';
+    const pulled = { notes: importedPlaceholder(GLOAMWOOD_TITLE), ref: { ...importedRef({ kind: 'spell', entryName: 'Sleep', part: undefined, level: undefined }), redacted: true as const } };
+    const spells = hero.spellcasting!.spells.map((s) => (s.name === 'Shield' ? { ...s, notes: `  ${notes}\n` } : s.name === 'Sleep' ? { ...s, ...pulled } : s));
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...hero, spellcasting: { ...hero.spellcasting!, spells } } });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    const row = screen.getByRole('button', { name: 'Shield' }).closest('li')!;
+    expect(within(row).getByText(notes)).toBeInTheDocument();
+    // A spell without notes gets no notes line.
+    expect(screen.getByRole('button', { name: 'Magic Missile' }).closest('li')!.querySelectorAll('p')).toHaveLength(0);
+    // Notes a save left out (they quoted a book) read plainly, not as the DM's placeholder sentence.
+    expect(within(screen.getByRole('button', { name: 'Sleep' }).closest('li')!).getByText('Notes left out of this save (they quoted “The Gloamwood Almanac”).')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Shield' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(notes)).toBeInTheDocument();
+    expect(within(dialog).getByText('Notes:')).toBeInTheDocument();
+    const rules = await within(dialog).findByText(/an imperceptible barrier of magical force/i);
+    // Above the rules text.
+    expect(within(dialog).getByText('Notes:').compareDocumentPosition(rules) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('spends Heroic Inspiration and sets exhaustion', async () => {

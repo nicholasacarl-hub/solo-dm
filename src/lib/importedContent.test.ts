@@ -1,5 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import { bookFingerprint, closeCutWrapper, copiedTextMissing, importedPlaceholder, isImportedPlaceholder, redactImported, staleRedaction, textFingerprint, wrapImported } from './importedContent';
+import {
+  bookFingerprint,
+  closeCutWrapper,
+  copiedTextMissing,
+  importedPlaceholder,
+  isImportedPlaceholder,
+  redactImported,
+  staleRedaction,
+  textFingerprint,
+  wrapImported,
+  wrapperOpenAt,
+} from './importedContent';
 
 describe('textFingerprint', () => {
   it('is FNV-1a 64 (standard test vectors), as 16 hex chars', () => {
@@ -52,6 +63,24 @@ describe('closeCutWrapper', () => {
     const whole = `${wrapImported('Book', 'One.')} and after.`;
     expect(closeCutWrapper(whole)).toBe(whole);
     expect(closeCutWrapper('No wrapper at all…')).toBe('No wrapper at all…');
+  });
+});
+
+describe('wrapperOpenAt', () => {
+  it('gives the opening marker of the passage a cut starts inside, so the excerpt from there stays wrapped', () => {
+    const text = `Lore. ${wrapImported('Book', 'The ledger under the floor keeps every name.')} After the quote.`;
+    const inside = text.indexOf('ledger');
+    expect(wrapperOpenAt(text, inside)).toBe('<imported-content source="Book"> ');
+    // Inside the opening marker itself, too.
+    expect(wrapperOpenAt(text, text.indexOf('source='))).toBe('<imported-content source="Book"> ');
+    const excerpt = closeCutWrapper(`${wrapperOpenAt(text, inside)}…${text.slice(inside, inside + 20)}…`);
+    expect(redactImported(excerpt)).toBe(importedPlaceholder('Book'));
+    // Before the passage, after it, at its closing marker, at the start, and with no passage at all: nothing.
+    expect(wrapperOpenAt(text, 2)).toBe('');
+    expect(wrapperOpenAt(text, text.indexOf('After'))).toBe('');
+    expect(wrapperOpenAt(text, text.indexOf('</imported-content>') + 3)).toBe('');
+    expect(wrapperOpenAt(text, 0)).toBe('');
+    expect(wrapperOpenAt('Plain words only.', 5)).toBe('');
   });
 });
 

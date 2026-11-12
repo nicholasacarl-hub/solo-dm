@@ -118,6 +118,28 @@ describe('buildSystemPrompt', () => {
     }
   });
 
+  it("leaves a magic item's conditions and uncounted bonuses to the DM's judgment, applied through the numbers it passes", () => {
+    const rolls = section(DM_INSTRUCTIONS, '## Rolls and rulings');
+    const items = rolls.split('\n').find((line) => line.startsWith('- Magic items:')) ?? '';
+    for (const phrase of [
+      'the app counts only the item bonuses that the AC formula and the Saving throws line name',
+      'an attack or damage bonus (the item\'s tag says "not counted by the app")',
+      "one from an SRD or homebrew item's text",
+      'one its text gives only in some situations',
+      "a counted one whose condition doesn't hold",
+      'Adjust the number you pass by it',
+      'without giving away a hidden DC or AC',
+      'add a damage bonus to the damage you apply',
+      'tell the player in a line',
+      'get_entry',
+    ]) {
+      expect(items, phrase).toContain(phrase);
+    }
+    // The order of truth and table talk leave a number the app worked out to the text it came from.
+    expect(DM_INSTRUCTIONS).toContain("When sources disagree, the earlier one wins, except that a rule's, feature's or item's own text, or a ruling you recorded, beats a number the app worked out from it (see Magic items).");
+    expect(section(DM_INSTRUCTIONS, '## Table talk')).toContain('A number the app worked out is different: if they point to a condition it missed');
+  });
+
   it('renders the campaign: table rules, safety, chronicle, hero, quests, journal, clocks, homebrew, library, scene', () => {
     const text = buildSystemPrompt(input());
     expect(text).toContain('- Name: The Drowned Lantern');

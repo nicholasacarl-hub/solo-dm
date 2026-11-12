@@ -1,11 +1,11 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { importedPlaceholder, wrapImported } from '@/lib/importedContent';
 import { GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, importedRef, TEXT } from '@/test/structuredFixtures';
-import type { Feature, InventoryItem, TranscriptMessage } from '@/types';
+import type { Feature, InventoryItem, KnownSpell, TranscriptMessage } from '@/types';
 import { exportCampaignBundle, exportCampaignBundleWithReport, parseCampaignBundle } from '@/storage';
 import { serializeBundle } from './backup';
 import { db } from './db';
-import { redactCopiedImports } from './redact';
+import { REFUSED_CALL_TEXT, redactCopiedImports, STALE_CALL_TEXT } from './redact';
 import { campaignGraph, resetDatabase } from './testData';
 import type { CampaignData } from './types';
 
@@ -49,7 +49,12 @@ function graph(): CampaignData {
   if (!character) throw new Error('no character');
   return {
     ...g,
-    character: { ...character, features: [...character.features, emberWard, mothsGrace], inventory: [...character.inventory, lantern, hookstaff] },
+    character: {
+      ...character,
+      // Second Wind as the accepted level_up below added it: a call's words the sheet still holds stay in the copy.
+      features: [...character.features, emberWard, mothsGrace, { id: 'f-wind', name: 'Second Wind', source: 'class', description: 'Regain HP.' }],
+      inventory: [...character.inventory, lantern, hookstaff],
+    },
     transcript: [
       ...g.transcript,
       toolUse('lv', 'level_up', { class_name: 'Fighter', new_features: [{ name: 'Ember Ward', description: EMBER_WARD }, { name: 'Second Wind', description: 'Regain HP.' }] }),
@@ -107,6 +112,112 @@ describe('redactCopiedImports (spec §7.3)', () => {
     const { data, report } = redactCopiedImports({ ...g, character: { ...(g.character as NonNullable<CampaignData['character']>), features: [left], inventory: [] }, transcript: [] });
     expect(data.character?.features[0].ref?.redacted).toBe(true);
     expect(report.passages).toBe(0);
+  });
+});
+
+describe("a spell's notes in a book's words, and refused calls' text, leave the copy", () => {
+  const choirRef = importedRef({ entryId: 'lib:gloam:40', kind: 'spell', entryName: 'Ashen Choir', part: undefined, level: undefined });
+  const choir: KnownSpell = { id: 'lib:gloam:40', name: 'Ashen Choir', level: 2, prepared: true, source: 'Granted in play', notes: `Sung at dusk. ${GLOAMWOOD_MARKERS[3]}`, ref: choirRef };
+  const linkedOnly: KnownSpell = { ...choir, id: 'lib:gloam:41', name: 'Cinder Mote', notes: 'Cast it only at the old forge.', ref: { ...choirRef, entryName: 'Cinder Mote', textCopied: false, textHash: '' } };
+  const own: KnownSpell = { id: 'sp-own', name: 'Glimmer Song', level: 1, prepared: true, source: 'Granted in play', notes: 'Once per dawn, without a slot.' };
+  const toolResult = (id: string, isError: boolean): TranscriptMessage => ({
+    id: `r-${id}`,
+    sessionId: 'a-sess-2',
+    seq: 11,
+    param: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `tu-${id}`, content: 'Nothing changed.', ...(isError ? { is_error: true } : {}) }] },
+    createdAt: 2,
+  });
+  const withSpells = (spells: KnownSpell[], transcript: TranscriptMessage[]): CampaignData => {
+    const g = graph();
+    const c = g.character!;
+    return { ...g, character: { ...c, spellcasting: { ...(c.spellcasting ?? { ability: 'int', slots: {}, concentratingOn: null }), spells } }, transcript: [...g.transcript, ...transcript] };
+  };
+  const input = (data: CampaignData, id: string) => (data.transcript.find((m) => m.id === id)?.param.content as { type: string; input?: Record<string, unknown> }[])[1].input;
+
+  it("replaces notes the DM tools marked as a book's words, on the sheet and in its spells_add input; other notes stay", () => {
+    const g = withSpells([choir, linkedOnly, own], [
+      toolUse('sp', 'update_character', {
+        spells_add: [
+          { name: 'Ashen Choir', level: 2, notes: choir.notes },
+          { name: 'Glimmer Song', level: 1, notes: own.notes },
+        ],
+      }),
+    ]);
+    const { data, report } = redactCopiedImports(g);
+    const spells = data.character?.spellcasting?.spells ?? [];
+    expect(spells.find((s) => s.name === 'Ashen Choir')).toMatchObject({ notes: importedPlaceholder(GLOAMWOOD_TITLE), ref: { redacted: true, textCopied: true } });
+    expect(spells.find((s) => s.name === 'Cinder Mote')).toEqual(linkedOnly);
+    expect(spells.find((s) => s.name === 'Glimmer Song')).toEqual(own);
+    expect(input(data, 'sp')).toEqual({
+      spells_add: [
+        { name: 'Ashen Choir', level: 2, notes: importedPlaceholder(GLOAMWOOD_TITLE) },
+        { name: 'Glimmer Song', level: 1, notes: own.notes },
+      ],
+    });
+    expect(JSON.stringify(data)).not.toContain(GLOAMWOOD_MARKERS[3]);
+    expect(report.passages).toBe(6 + 2);
+  });
+
+  it("replaces every text field and long string of a call the app refused while a book is in play, whatever the tool; an accepted call's words stay", () => {
+    const long = `Sung at dusk, the hymn goes on. ${GLOAMWOOD_MARKERS[3]} `.repeat(3);
+    const refusedInput = {
+      features_add: [{ name: 'Lantern Lore', description: `The wick binds the hour. ${GLOAMWOOD_MARKERS[6]}` }],
+      inventory_add: [{ name: 'Moth Lamp', quantity: 1, description: 'A lamp of paper moths.' }],
+      // The schema refused it for a key spells_add doesn't have: the export knows no echo field here.
+      spells_add: [{ name: 'Hymn of Ash', level: 2, description: `Granted at the shrine. ${GLOAMWOOD_MARKERS[3]}` }],
+      reason: long,
+    };
+    const journal = { entries: [{ kind: 'lore', name: 'The Hymn', details: `The book says: ${GLOAMWOOD_MARKERS[3]}` }] };
+    const accepted = { features_add: [{ name: 'Thorn Hide', description: 'Your skin grows thorns.' }] };
+    const g = withSpells([], [
+      toolUse('no', 'update_character', refusedInput),
+      toolResult('no', true),
+      toolUse('jn', 'update_journal', journal),
+      toolResult('jn', true),
+      toolUse('ok', 'update_character', accepted),
+      toolResult('ok', false),
+    ]);
+    const thorn = { id: 'f-thorn', name: 'Thorn Hide', source: 'feat' as const, description: 'Your skin grows thorns.' };
+    const { data } = redactCopiedImports({ ...g, character: { ...g.character!, features: [...g.character!.features, thorn] } });
+    expect(input(data, 'no')).toEqual({
+      features_add: [{ name: 'Lantern Lore', description: REFUSED_CALL_TEXT }],
+      inventory_add: [{ name: 'Moth Lamp', quantity: 1, description: REFUSED_CALL_TEXT }],
+      spells_add: [{ name: 'Hymn of Ash', level: 2, description: REFUSED_CALL_TEXT }],
+      reason: REFUSED_CALL_TEXT,
+    });
+    expect(input(data, 'jn')).toEqual({ entries: [{ kind: 'lore', name: 'The Hymn', details: REFUSED_CALL_TEXT }] });
+    expect(input(data, 'ok')).toEqual(accepted);
+    for (const marker of [GLOAMWOOD_MARKERS[3], GLOAMWOOD_MARKERS[6]]) expect(JSON.stringify(data)).not.toContain(marker);
+  });
+
+  it("replaces a call's text the sheet no longer holds under that name: a spell or item since removed, or a misnamed update", () => {
+    const own: KnownSpell = { id: 'sp-own', name: 'Glimmer Song', level: 1, prepared: true, source: 'Granted in play', notes: 'Once per dawn, without a slot.' };
+    const g = withSpells([own], [
+      // Hymn of Ash (with the book's words, but under a name no book spell has) has since been removed from the sheet.
+      toolUse('gone', 'update_character', { spells_add: [{ name: 'Hymn of Ash', level: 2, notes: `Granted at the shrine. ${GLOAMWOOD_MARKERS[3]}` }, { name: 'Glimmer Song', level: 1, notes: own.notes }] }),
+      toolResult('gone', false),
+      // A misspelled name the engine matched to nothing (the call still went through for its other parts).
+      toolUse('typo', 'update_character', { inventory_update: [{ name: 'Pale Lanturn', description: `Its light: ${GLOAMWOOD_MARKERS[5]}` }] }),
+      toolResult('typo', false),
+    ]);
+    const { data } = redactCopiedImports(g);
+    expect(input(data, 'gone')).toEqual({ spells_add: [{ name: 'Hymn of Ash', level: 2, notes: STALE_CALL_TEXT }, { name: 'Glimmer Song', level: 1, notes: own.notes }] });
+    expect(input(data, 'typo')).toEqual({ inventory_update: [{ name: 'Pale Lanturn', description: STALE_CALL_TEXT }] });
+    for (const marker of [GLOAMWOOD_MARKERS[3], GLOAMWOOD_MARKERS[5]]) expect(JSON.stringify(data)).not.toContain(marker);
+  });
+
+  it('leaves a refused call alone in a campaign no book is part of (the same object, as before)', () => {
+    const plain = campaignGraph('b');
+    const g = { ...plain, transcript: [...plain.transcript, toolUse('no', 'update_character', { features_add: [{ name: 'Thorn Hide', description: 'Your skin grows thorns.' }] }), toolResult('no', true)] };
+    expect(redactCopiedImports(g).data).toBe(g);
+  });
+
+  it('counts a book looked up in the transcript as in play, though nothing on the sheet came from one', () => {
+    const plain = campaignGraph('b');
+    const lookup: TranscriptMessage = { ...toolResult('lk', false), param: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu-lk', content: wrapImported(GLOAMWOOD_TITLE, 'Book words.') }] } };
+    const g = { ...plain, transcript: [...plain.transcript, lookup, toolUse('no', 'level_up', { class_name: 'Wizard', new_features: [{ name: 'Wick Sense', description: GLOAMWOOD_MARKERS[6] }] }), toolResult('no', true)] };
+    const { data } = redactCopiedImports(g);
+    expect(input(data, 'no')).toEqual({ class_name: 'Wizard', new_features: [{ name: 'Wick Sense', description: REFUSED_CALL_TEXT }] });
   });
 });
 
@@ -216,7 +327,8 @@ describe('P2: the DM’s inventory_update words about a book item leave exports'
   it('P2: an entry finds its item as the engine does ("Lantern"); a stacked add’s words go too, and plain items keep theirs', () => {
     const { data, report } = redactCopiedImports(
       withItems(
-        [linkedLantern(), hookstaff],
+        // The plain Robe as the update below left it.
+        [linkedLantern(), hookstaff, { id: 'i-robe', name: 'Robe', quantity: 1, description: 'Patched at both elbows.' }],
         [
           toolUse('upd', 'update_character', {
             inventory_update: [

@@ -6,7 +6,7 @@ import { consultOracle, sceneCheck } from '@/engine';
 import type { ClockUpsert, JournalUpsert, QuestUpsert } from '@/state/gameStore';
 import type { Clock, JournalEntry, Quest, QuestObjective, Scene } from '@/types';
 import { nameKey } from '@/lib/id';
-import { closeCutWrapper } from '@/lib/importedContent';
+import { closeCutWrapper, wrapperOpenAt } from '@/lib/importedContent';
 import { safeEnd } from '@/lib/text';
 import { truncate } from '../narration';
 import type { ToolInput } from './definitions';
@@ -353,11 +353,11 @@ function snippet(text: string, words: string[]): string {
   const lower = text.toLowerCase();
   const hits = words.map((w) => lower.indexOf(w)).filter((i) => i >= 0);
   const at = hits.length ? Math.min(...hits) : 0;
-  // Both ends at whole characters (never half an emoji), and a cut inside a wrapped passage closed again.
+  // Both ends at whole characters (never half an emoji), and a cut inside a wrapped passage opened or closed again.
   const start = safeEnd(text, Math.max(0, at - 120));
   const end = safeEnd(text, start + 420);
   const piece = text.slice(start, end).replace(/\s+/g, ' ').trim();
-  return closeCutWrapper(`${start > 0 ? '…' : ''}${piece}${end < text.length ? '…' : ''}`);
+  return closeCutWrapper(`${wrapperOpenAt(text, start)}${start > 0 ? '…' : ''}${piece}${end < text.length ? '…' : ''}`);
 }
 
 export async function searchMemoryTool(input: ToolInput<'search_memory'>, ctx: ToolContext): Promise<ToolOutcome> {

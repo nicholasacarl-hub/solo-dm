@@ -579,6 +579,7 @@ export const sceneCheck: typeof Engine.sceneCheck = (tension) => {
 
 export const CONDITIONS = {} as typeof Engine.CONDITIONS;
 
+export const saveSourcesChangeText: typeof Engine.saveSourcesChangeText = () => null;
 export const characterStatusLine: typeof Engine.characterStatusLine = (c) =>
   `${c.name} (${c.classes.map((k) => `${k.name} ${k.level}`).join(' / ')}) · HP ${c.hp.current}/${c.hp.max}${c.hp.temp ? ` (+${c.hp.temp} temp)` : ''} · AC ${c.armorClass}${c.conditions.length ? ` · Conditions: ${c.conditions.map((x) => conditionName(x.id)).join(', ')}` : ''}`;
 export const characterSheetText: typeof Engine.characterSheetText = (c) =>

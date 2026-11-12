@@ -19,6 +19,7 @@ import {
   initiativeModifier,
   passivePerception,
   proficiencyBonus,
+  saveBonusSources,
   savingThrowModifier,
   skillModifier,
   speedDetails,
@@ -28,7 +29,7 @@ import {
 } from './rules';
 import { ordinal } from './spellcasting';
 import { activeTransformations } from './transform';
-import { formatInt } from './util';
+import { formatInt, toInt } from './util';
 
 const SLOT_LEVELS: readonly SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
@@ -222,8 +223,11 @@ function vitalsLines(c: Character): string[] {
 function abilityLines(c: Character): string[] {
   const scores = ABILITIES.map((a) => `${a.toUpperCase()} ${c.abilityScores[a]} (${formatModifier(abilityModifier(c.abilityScores[a]))})`);
   const saves = ABILITIES.map((a) => `${a.toUpperCase()} ${formatModifier(savingThrowModifier(c, a))}${c.savingThrows.includes(a) ? ' (prof)' : ''}`);
+  // What every save adds, by name, so the DM can set one aside when a condition in an item's text doesn't hold.
+  const sources = saveBonusSources(c).map((s) => `${s.name} ${formatModifier(s.bonus)}`);
+  const included = sources.length ? ` (each includes ${sources.join(', ')})` : '';
   const skills = SKILLS.map((s) => `${SKILL_NAMES[s]} ${formatModifier(skillModifier(c, s))}${PROF_LABEL[c.skills[s] ?? 0] ?? ''}`);
-  return [`**Abilities:** ${scores.join(' · ')}`, `**Saving throws:** ${saves.join(' · ')}`, `**Skills:** ${skills.join(' · ')}`];
+  return [`**Abilities:** ${scores.join(' · ')}`, `**Saving throws:** ${saves.join(' · ')}${included}`, `**Skills:** ${skills.join(' · ')}`];
 }
 
 function proficiencyLine(c: Character): string {
@@ -288,10 +292,22 @@ function spellcastingLines(c: Character): string[] {
   }
   const lines = [...byLevel.entries()].flatMap(([level, spells]) => [
     `- ${level === 0 ? 'Cantrips' : `Level ${level}`}: ${spells.map((s) => `${s.name}${spellTags(s, classNames)}`).join(', ')}`,
-    // A spell's notes (the DM's spells_add notes, the builder's notes on a feat's or a species' spell), on one line under its level.
-    ...spells.flatMap((s) => (s.notes?.trim() ? [`  - ${s.name}: ${s.notes.replace(/\s+/g, ' ').trim()}`] : [])),
+    ...spells.flatMap((s) => spellNotesLine(s) ?? []),
   ]);
   return ['### Spellcasting', header.join(' · '), ...lines];
+}
+
+/**
+ * A spell's notes (the DM's spells_add notes, the builder's notes on a feat's or a species' spell), on one line under
+ * its level. Notes that repeat a book's words (ref.textCopied) are wrapped like copied text, so exports remove them;
+ * notes a save left out are not shown (the book can't give back the DM's words).
+ */
+function spellNotesLine(s: KnownSpell): string | null {
+  const notes = s.notes?.replace(/\s+/g, ' ').trim();
+  if (!notes) return null;
+  if (!s.ref?.textCopied) return `  - ${s.name}: ${notes}`;
+  if (copiedTextMissing({ description: notes, ref: s.ref })) return null;
+  return `  - ${s.name}: ${wrapImported(s.ref.sourceTitle, notes).split('\n').join('\n    ')}`;
 }
 
 const RECHARGE_TEXT: Record<string, string> = { short: 'short rest', long: 'long rest', dawn: 'dawn', turn: 'turn', none: 'total' };
@@ -327,12 +343,27 @@ function adaptationLines(c: Character): string[] {
   return notes.length ? ['### Older-edition options (app notes)', ...notes.map((n) => `- ${n}`)] : [];
 }
 
+/**
+ * "+1 to attack and damage rolls with it, not counted by the app": a magic item's attack and damage bonuses, which the
+ * engine never adds to the hero's attacks (the DM adds them), or null when it has none or needs an attunement it
+ * lacks. A weapon the hero carries counts whether or not the sheet marks it equipped: the DM sees when it is wielded.
+ */
+function uncountedBonusText(i: InventoryItem): string | null {
+  const attack = Math.max(0, toInt(i.bonuses?.attack));
+  const damage = Math.max(0, toInt(i.bonuses?.damage));
+  if ((!attack && !damage) || (i.requiresAttunement && !i.attuned)) return null;
+  const rolls =
+    attack === damage ? `${formatModifier(attack)} to attack and damage rolls` : [attack ? `${formatModifier(attack)} to attack rolls` : '', damage ? `${formatModifier(damage)} to damage rolls` : ''].filter(Boolean).join(', ');
+  return `${rolls} with it, not counted by the app`;
+}
+
 function itemText(i: InventoryItem): string {
   const tags = [
     i.equipped ? 'equipped' : '',
     i.attuned ? 'attuned' : '',
     i.magic && !i.attuned ? 'magic' : '',
     i.charges ? `${i.charges.max - i.charges.used}/${i.charges.max} charges` : '',
+    uncountedBonusText(i) ?? '',
   ].filter(Boolean);
   return `${i.name}${i.quantity > 1 ? ` ×${i.quantity}` : ''}${tags.length ? ` (${tags.join(', ')})` : ''}`;
 }
@@ -359,6 +390,20 @@ function equipmentLines(c: Character): string[] {
   const items = c.inventory.length ? c.inventory.map(itemText).join(' · ') : 'nothing';
   const described = c.inventory.flatMap((i) => itemDescriptionLine(i) ?? []);
   return ['### Equipment', items, ...described, coins];
+}
+
+/**
+ * "Saving throws now include Cloak of the Fen +1": what every save adds (saveBonusSources) after a change that altered
+ * it, for a tool result or a notice; null when it didn't change. The frozen sheet's Saving throws line dates from the
+ * start of the session, so this is how the DM hears of a bonus it may need to set aside mid-session (its "Magic items"
+ * rule).
+ */
+export function saveSourcesChangeText(before: Character, after: Character): string | null {
+  const list = (c: Character) => saveBonusSources(c).map((s) => `${s.name} ${formatModifier(s.bonus)}`).join(', ');
+  const was = list(before);
+  const now = list(after);
+  if (was === now) return null;
+  return now ? `Saving throws now include ${now}` : `Saving throws no longer include ${was}`;
 }
 
 /** What the player wrote about the hero, whole: the DM's main material for the story. */

@@ -14,13 +14,15 @@ describe('sheet gear changes keep AC in step', () => {
   it('attuning a Ring of Protection raises AC and says so', () => {
     const r = itemAttuneChange(withRing(), 'ring', true);
     expect(r.character.armorClass).toBe(13);
-    expect(r.notice).toMatch(/attuned to Ring of Protection \(AC 12 → 13\)/);
+    // The save bonus too: the DM's sheet from the start of the session doesn't have it.
+    expect(r.notice).toBe('Player attuned to Ring of Protection (AC 12 → 13; saving throws now include Ring of Protection +1)');
   });
 
-  it('ending attunement lowers it again', () => {
+  it('ending attunement lowers it again, and says the save bonus is gone', () => {
     const attuned = itemAttuneChange(withRing(), 'ring', true).character;
     const r = itemAttuneChange(attuned, 'ring', false);
     expect(r.character.armorClass).toBe(12);
+    expect(r.notice).toBe('Player ended attunement to Ring of Protection (AC 13 → 12; saving throws no longer include Ring of Protection +1)');
   });
 
   it('equipping non-armor gear leaves an unchanged AC alone', () => {

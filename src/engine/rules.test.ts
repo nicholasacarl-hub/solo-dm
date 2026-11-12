@@ -22,6 +22,7 @@ import {
   proficiencyBonus,
   rollRequestExpression,
   rollRequestModifier,
+  saveBonusSources,
   savingThrowModifier,
   skillModifier,
   speedDetails,
@@ -570,6 +571,38 @@ describe('structured magic item bonuses (SRD 5.2.1 Attunement; Ring of Protectio
     expect(savingThrowModifier(c, 'wis')).toBe(savingThrowModifier(bare([]), 'wis') + 1);
     // Two of the same item don't stack.
     expect(computeArmorClass(bare([ring({ attuned: true }), ring({ id: 'ring-2', attuned: true })])).ac).toBe(13);
+  });
+
+  it('names every save bonus it counts (saveBonusSources), and the save modifiers add exactly those', () => {
+    // SRD 5.2.1 Magic Items, Cloak of Protection: "+1 bonus to Armor Class and saving throws while you wear this cloak"
+    // (counted by name); an imported item's structured bonus (counted once, while it works); Aura of Protection
+    // (Paladin level 6: +CHA, minimum +1, while not Incapacitated).
+    const cloak: InventoryItem = { id: 'c', name: 'Cloak of Protection', quantity: 1, magic: true, attuned: true };
+    const fen = ring({ id: 'fen', name: 'Cloak of the Fen', attuned: true, bonuses: { savingThrows: 2 } });
+    const paladin = (inventory: InventoryItem[], patch: Partial<Character> = {}) =>
+      mira({
+        inventory,
+        features: [],
+        abilityScores: { str: 16, dex: 10, con: 14, int: 8, wis: 10, cha: 16 },
+        savingThrows: ['wis', 'cha'],
+        classes: [{ classId: 'srd:class:paladin', name: 'Paladin', level: 6, hitDie: 10, casterType: 'half', spellcastingAbility: 'cha' }],
+        ...patch,
+      });
+    // Two of each: a magic item's bonus doesn't stack with another copy of itself.
+    const c = paladin([cloak, { ...cloak, id: 'c-2' }, fen, { ...fen, id: 'fen-2' }]);
+    expect(saveBonusSources(c)).toEqual([
+      { name: 'Cloak of Protection', bonus: 1 },
+      { name: 'Cloak of the Fen', bonus: 2 },
+      { name: 'Aura of Protection', bonus: 3 },
+    ]);
+    expect(savingThrowModifier(c, 'str')).toBe(3 + 1 + 2 + 3);
+    expect(deathSaveModifier(c)).toBe(1 + 2 + 3);
+    expect(rollRequestModifier(c, { rollType: 'save', revealDc: false, advantage: 'normal', reason: 'any save' }).modifier).toBe(1 + 2 + 3);
+    // Not attuned, taken off, Incapacitated: none of them count, and none is named.
+    const off = paladin([{ ...cloak, attuned: false }, { ...fen, equipped: false }], { conditions: [{ id: 'stunned' }] });
+    expect(saveBonusSources(off)).toEqual([]);
+    expect(savingThrowModifier(off, 'str')).toBe(3);
+    expect(saveBonusSources(bare([]))).toEqual([]);
   });
 
   it('respects "only without armor (and shield)"', () => {
