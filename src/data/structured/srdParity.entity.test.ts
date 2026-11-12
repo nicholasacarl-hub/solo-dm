@@ -412,5 +412,6 @@ describe('SRD parity (magic item bonuses)', () => {
     expect(wrong).toEqual([]);
     // Some heights cut an item before a capital ("Armor" | "Class", "a magic" | "Quarterstaff").
     expect(capitalCuts).toBeGreaterThanOrEqual(2);
-  });
+    // A sweep of 69 whole-book layouts, not a speed budget: about 3 s here, more on a shared CI runner.
+  }, 30_000);
 });
