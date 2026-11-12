@@ -426,10 +426,10 @@ describe("book text the DM names on the sheet keeps its book's ref (exports repl
       book('Ashen Choir', 'spell', CHOIR, { level: 2 }),
       book('Ember Burst', 'spell', `Embers burst at a point you choose. ${SRD_LINE} on a failed save.`, { level: 3 }, 'lib:gloam:900'),
       book('Lantern of Hollow Light', 'magic-item', LANTERN, { rarity: 'uncommon', attunement: true }),
-      book('Grudge Axe', 'magic-item', `${STOCK} The axe remembers every grudge and mutters them at night.`, {}, 'lib:gloam:901'),
-      book('Moonblade', 'magic-item', `${STOCK} ${GLOAMWOOD_MARKERS[1]} Its edge shines like the moon on still water.`, {}, 'lib:gloam:902'),
+      book('Grudgewick Axe', 'magic-item', `${STOCK} The axe remembers every grudge and mutters them at night.`, {}, 'lib:gloam:901'),
+      book('Moonwick Blade', 'magic-item', `${STOCK} ${GLOAMWOOD_MARKERS[1]} Its edge shines like the moon on still water.`, {}, 'lib:gloam:902'),
       book('Binding Ash', 'spell', `Ash binds a foe in place. ${OA}`, { level: 1 }, 'lib:gloam:903'),
-      book('Amulet of Calm', 'magic-item', CALM, {}, 'lib:gloam:904'),
+      book('Moth-Calm Amulet', 'magic-item', CALM, {}, 'lib:gloam:904'),
     ];
     const spellOf = (h: ReturnType<typeof setup>, name: string) => h.sheet().spellcasting?.spells.find((s) => s.name === name);
     const itemOf = (h: ReturnType<typeof setup>, name: string) => h.sheet().inventory.find((i) => i.name === name);
@@ -511,13 +511,13 @@ describe("book text the DM names on the sheet keeps its book's ref (exports repl
         ],
       });
       expect(itemOf(h, "Grandfather's Axe")?.ref).toBeUndefined();
-      expect(itemOf(h, 'Moon Sword')?.ref).toMatchObject({ entryName: 'Moonblade', textCopied: true });
+      expect(itemOf(h, 'Moon Sword')?.ref).toMatchObject({ entryName: 'Moonwick Blade', textCopied: true });
     });
 
     it("reads a book's typographic apostrophes and the DM's plain ones alike", async () => {
       const h = setup({ rules, character: fighter() });
       await h.run('update_character', { inventory_add: [{ name: 'Calm Charm', quantity: 1, description: CALM.replace(/’/g, "'") }] });
-      expect(itemOf(h, 'Calm Charm')?.ref).toMatchObject({ entryName: 'Amulet of Calm', textCopied: true });
+      expect(itemOf(h, 'Calm Charm')?.ref).toMatchObject({ entryName: 'Moth-Calm Amulet', textCopied: true });
     });
 
     it('leaves SRD wording alone: on a linked book spell, and an SRD rule a book spell reprints', async () => {
