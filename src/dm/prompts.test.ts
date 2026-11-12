@@ -122,7 +122,7 @@ describe('buildSystemPrompt', () => {
     const rolls = section(DM_INSTRUCTIONS, '## Rolls and rulings');
     const bonuses = rolls.split('\n').find((line) => line.startsWith('- Bonuses:')) ?? '';
     for (const phrase of [
-      'the app counts only what the sheet names: ability and proficiency on attacks, the AC formula\'s parts, what the Saving throws line lists, the Defenses line and the Advantage sources above',
+      'the app counts only what the sheet names: ability and proficiency on attacks, the AC formula\'s parts, what the Saving throws line lists, the Skills line\'s totals (Thaumaturge and Magician included), the Defenses line and the Advantage sources above',
       'cover (Half +2, Three-Quarters +5 to AC and Dexterity saves), a fighting style (Archery), a spell (Bless, Shield)',
       'an attack or damage bonus, tagged "not counted by the app"',
       "one from an SRD or homebrew item's text",
@@ -150,6 +150,10 @@ describe('buildSystemPrompt', () => {
     expect(advantage).toContain('the app applies only what it tracks, and names it in the result');
     expect(advantage).toContain('Pass anything else before the roll: a trait or feature (Gnomish Cunning, Danger Sense, Dwarven Resilience)');
     expect(advantage).toContain("Cover isn't Advantage: it adds to AC and Dexterity saves (see Bonuses).");
+    // Invisible's Advantage is applied on every attack, so the DM cancels it against a creature that sees the hero; a
+    // Blinded or Deafened hero's sight or hearing checks are only noted, so the DM fails them without a roll.
+    expect(advantage).toContain('Invisible\'s Advantage on every attack (against a creature that can see the hero, pass "disadvantage" to cancel it)');
+    expect(advantage).toContain("A Blinded or Deafened hero's sight or hearing checks are only noted after the roll: call those failed without rolling.");
     expect(advantage).not.toMatch(/already applies their own conditions, armor and traits/);
   });
 
@@ -158,11 +162,15 @@ describe('buildSystemPrompt', () => {
     // A damage roll's expression replaces the sheet attack's dice (the dice dialog uses it first).
     expect(rolls).toContain('for extra damage on a sheet attack — Sneak Attack, Divine Smite, a +1 weapon — the whole damage, the sheet\'s dice and modifier plus the extra, "1d6+3+2d6"');
     expect(rolls).toContain("the app applies the Defenses line's resistances, immunities and vulnerabilities and says so, so pass the damage before them; halve for any other resistance, such as Rage, yourself");
+    expect(rolls).toContain("a Light weapon's extra attack adds no ability modifier unless it's negative or the hero has Two-Weapon Fighting");
+    expect(rolls).toContain('(the app adds ability and proficiency: raise the dc by the Proficiency Bonus if the hero isn\'t proficient with it');
+    expect(rolls).toContain('a hit of two damage types is still one call: apply the Defenses line to each part yourself, pass the total without damage_type, and say what you halved');
     expect(rolls).toContain('unless the sheet gives a free casting they use (Magic Initiate, a lineage spell, Favored Enemy');
     expect(rolls).toContain("they cast it as a Ritual, or it comes from a scroll or an item's charges");
     expect(rolls).toContain('while they could cast Shield (prepared, with a slot or a free casting left)');
     expect(rolls).toContain('(kind "ruling", naming the item when it\'s about one)');
     expect(section(DM_INSTRUCTIONS, '## Memory and bookkeeping')).toContain('- Item charges: for an item with charges, add a feature named for it (features_add, source "item", uses_max = its charges, recharge "none")');
+    expect(section(DM_INSTRUCTIONS, '## Memory and bookkeeping')).toContain('uses_max stops at 20: for an item with more, keep the count in its description (inventory_update) or its journal entry');
     expect(DM_INSTRUCTIONS).toContain('if you find one you narrated but never recorded, make the call now and say so in a brief aside');
   });
 

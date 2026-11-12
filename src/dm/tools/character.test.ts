@@ -340,6 +340,17 @@ describe("conditions by the DM's own name (SRD 5.2.1 Rules Glossary conditions)"
     expect(immune.sheet().conditions).toEqual([{ id: 'Charm of Warding' }]);
   });
 
+  it('never reads a boon that mentions Exhaustion as levels of it (SRD 5.2.1 Exhaustion: six levels kill)', async () => {
+    const h = setup();
+    const out = await h.run('update_character', { conditions_add: [{ condition: 'Ward against Exhaustion', source: 'Fey boon' }] });
+    expect(h.sheet().exhaustion).toBe(0);
+    expect(h.sheet().conditions).toEqual([{ id: 'Ward against Exhaustion', source: 'Fey boon' }]);
+    expect(out.content).toContain('Kept "Ward against Exhaustion" as a homebrew condition: no Exhaustion rules apply.');
+    await h.run('update_character', { conditions_remove: ['Ward against Exhaustion'] });
+    expect(h.sheet().conditions).toEqual([]);
+    expect(h.sheet().exhaustion).toBe(0);
+  });
+
   it('keeps what worked: standard names in any case, their noun forms, a detail as the source, Exhaustion, removal by name', async () => {
     const h = setup();
     const out = await h.run('update_character', {

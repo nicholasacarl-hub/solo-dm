@@ -473,24 +473,36 @@ function changeHp(state: CombatState, input: UpdateInput, kind: 'damage' | 'heal
 function changeConditions(state: CombatState, input: UpdateInput): CombatChange {
   const target = requireTarget(state, input.target, 'conditions');
   refuseHero(target, 'conditions');
-  // As the engine removes the hero's: a name the creature has is removed as named, any other as the condition it is.
-  const has = (name: string) => target.conditions.some((c) => conditionKey(c.id) === conditionKey(name));
-  const removed = new Set((input.conditions_remove ?? []).map((name) => (has(name) ? name.trim() : conditionIdOf(name))));
-  const removedKeys = new Set([...removed].map(conditionKey));
+  if (!input.conditions_add?.length && !input.conditions_remove?.length) {
+    throw new ToolInputError('update_combat conditions needs conditions_add or conditions_remove.');
+  }
+  // As the engine removes the hero's: a condition the creature has by that name, else the standard condition the name
+  // strictly is, if the creature has it. A name that finds nothing removes nothing and says so to the DM only; the
+  // summary and the player's log name what was removed as it was stored, never the DM's typed details.
+  const find = (key: string) => target.conditions.find((c) => conditionKey(c.id) === key);
+  const removed: ActiveCondition[] = [];
+  const missed: string[] = [];
+  for (const name of input.conditions_remove ?? []) {
+    const hit = find(conditionKey(name)) ?? find(conditionKey(conditionIdOf(name)));
+    if (!hit) missed.push(name.trim());
+    else if (!removed.includes(hit)) removed.push(hit);
+  }
+  const removedKeys = new Set(removed.map((c) => conditionKey(c.id)));
   const added = toConditions(input.conditions_add);
   const addedKeys = new Set(added.map((c) => conditionKey(c.id)));
   const conditions = [...target.conditions.filter((c) => !removedKeys.has(conditionKey(c.id)) && !addedKeys.has(conditionKey(c.id))), ...added];
   const parts = [
     added.length ? `+${added.map((c) => c.id).join(', +')}` : '',
-    removed.size ? `−${[...removed].join(', −')}` : '',
+    removed.length ? `−${removed.map((c) => c.id).join(', −')}` : '',
   ].filter(Boolean);
-  if (parts.length === 0) throw new ToolInputError('update_combat conditions needs conditions_add or conditions_remove.');
-  const summary = `${target.name}: ${parts.join(' ')}`;
+  const has = target.conditions.length ? ` (it has ${target.conditions.map((c) => c.id).join(', ')})` : '';
+  const misses = missed.map((name) => `Not removed: ${target.name} has no "${name}"${has}.`);
+  const summary = parts.length ? `${target.name}: ${parts.join(' ')}` : `${target.name}: no change`;
   return {
-    state: updateCombatant(state, target.id, { conditions }),
+    state: parts.length ? updateCombatant(state, target.id, { conditions }) : state,
     summary,
-    log: target.hidden ? null : summary,
-    notes: keptHomebrewLines(input.conditions_add, conditions),
+    log: target.hidden || !parts.length ? null : summary,
+    notes: [...misses, ...keptHomebrewLines(input.conditions_add, conditions)],
   };
 }
 

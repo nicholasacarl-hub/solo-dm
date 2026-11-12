@@ -241,6 +241,23 @@ describe("update_combat conditions by the DM's own name (SRD 5.2.1 Rules Glossar
     await h.run('update_combat', { action: 'conditions', target: 'Bandit 2', conditions_remove: ['Fear'] });
     expect(named(h.s().combat, 'Bandit 2')?.conditions).toEqual([]);
   });
+
+  it("reports only what it removed, by the stored name: a name the creature doesn't have is a DM-only note, never the player's log", async () => {
+    const combat = sampleCombat();
+    combat.combatants[1].conditions = [{ id: 'unconscious', source: 'Sleep' }, { id: 'Hexed', source: 'the Hag hiding in the mist' }];
+    const h = setup({ state: { combat } });
+    const logged = () => toolLines(h.s().log).map((l) => l.summary);
+    // The DM's line prints "Hexed (the Hag hiding in the mist)": copied back, it still finds nothing, and says so to the DM only.
+    const out = await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_remove: ["KO'd", 'Hexed (the Hag hiding in the mist)'] });
+    expect(out.content).toContain('Bandit 1: no change');
+    expect(out.content).toContain(`Not removed: Bandit 1 has no "KO'd" (it has unconscious, Hexed).`);
+    expect(named(h.s().combat, 'Bandit 1')?.conditions).toHaveLength(2);
+    expect(logged().join('\n')).not.toMatch(/Hag|KO'd|Hexed/);
+    // A standard name the creature has, typed any way, is removed and logged by its stored name.
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_remove: ['Unconscious', 'hexed'] });
+    expect(named(h.s().combat, 'Bandit 1')?.conditions).toEqual([]);
+    expect(logged().at(-1)).toBe('Bandit 1: −unconscious, −Hexed');
+  });
 });
 
 describe('update_combat on a battle map', () => {

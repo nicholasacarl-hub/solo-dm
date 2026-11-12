@@ -83,18 +83,15 @@ describe('CombatTracker', () => {
     expect(rows[3]).toHaveTextContent('Defeated');
   });
 
-  it("keeps a creature's condition duration and source (the DM's words) off the player's tracker; the hero's own show", () => {
+  it("keeps a creature's condition duration and source (the DM's words) off the player's tracker", () => {
     const combat = sampleCombat();
-    const fear = { id: 'frightened', duration: '1 minute', source: 'the wraith hiding in the rafters' };
-    combat.combatants = combat.combatants.map((c) => (c.name === 'Bandit 1' || c.isPlayer ? { ...c, conditions: [fear] } : c));
+    const fear = { id: 'prone', duration: '1 minute', source: 'the wraith hiding in the rafters' };
+    combat.combatants = combat.combatants.map((c) => (c.name === 'Bandit 1' ? { ...c, conditions: [fear] } : c));
     seedGame({ combat });
     render(<CombatTracker />);
-    const rows = initiativeRows();
-    const chip = (row: HTMLElement) => within(row).getByText('Frightened');
-    const bandit = rows.find((r) => r.textContent?.includes('Bandit 1'))!;
-    const hero = rows.find((r) => r.textContent?.includes('(you)'))!;
-    expect(chip(bandit).getAttribute('title') ?? '').not.toMatch(/wraith|1 minute/);
-    expect(chip(hero).getAttribute('title')).toMatch(/Duration: 1 minute · From the wraith hiding in the rafters$/);
+    const bandit = initiativeRows().find((r) => r.textContent?.includes('Bandit 1'))!;
+    // The rules summary stays; the DM's words don't.
+    expect(within(bandit).getByText('Prone')).toHaveAttribute('title', 'You are on the ground.');
   });
 
   it("shows the hero's AC from the sheet, which can change mid-fight (srd:spell:shield-of-faith), not the copy from the fight's start", () => {

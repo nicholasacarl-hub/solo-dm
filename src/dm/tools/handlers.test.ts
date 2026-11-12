@@ -389,6 +389,21 @@ describe('rests and leveling', () => {
     expect(asked).toEqual([]);
     expect(h.s().log).toHaveLength(0);
     expect(h.s().character?.hp.current).toBe(0);
+    // The way back works: healed to 1 HP, the hero can rest.
+    expect((await h.run('update_character', { hp: { kind: 'healing', amount: 1 }, reason: '1d4 hours later' })).isError).toBeUndefined();
+    const rested = await h.run('take_rest', { kind: 'long' });
+    expect(rested.isError).toBeUndefined();
+    expect(h.s().character?.hp.current).toBe(h.s().character?.hp.max);
+  });
+
+  it('gives a dying hero (not Stable) the death-save path instead, never the Stable recovery (SRD 5.2.1 Stabilizing a Character)', async () => {
+    const h = setup();
+    await h.s().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 0 }, deathSaves: { successes: 1, failures: 2, stable: false, dead: false }, conditions: [{ id: 'unconscious' }] }));
+    const out = await h.run('take_rest', { kind: 'long' });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('The hero is dying, not Stable: death saving throws go on (request_player_roll "death-save")');
+    expect(out.content).not.toContain('1d4 hours');
+    expect(h.s().log).toHaveLength(0);
   });
 
   it('refuses the dead any rest, logging nothing', async () => {
