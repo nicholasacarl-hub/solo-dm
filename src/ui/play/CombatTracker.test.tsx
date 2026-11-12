@@ -83,6 +83,20 @@ describe('CombatTracker', () => {
     expect(rows[3]).toHaveTextContent('Defeated');
   });
 
+  it("keeps a creature's condition duration and source (the DM's words) off the player's tracker; the hero's own show", () => {
+    const combat = sampleCombat();
+    const fear = { id: 'frightened', duration: '1 minute', source: 'the wraith hiding in the rafters' };
+    combat.combatants = combat.combatants.map((c) => (c.name === 'Bandit 1' || c.isPlayer ? { ...c, conditions: [fear] } : c));
+    seedGame({ combat });
+    render(<CombatTracker />);
+    const rows = initiativeRows();
+    const chip = (row: HTMLElement) => within(row).getByText('Frightened');
+    const bandit = rows.find((r) => r.textContent?.includes('Bandit 1'))!;
+    const hero = rows.find((r) => r.textContent?.includes('(you)'))!;
+    expect(chip(bandit).getAttribute('title') ?? '').not.toMatch(/wraith|1 minute/);
+    expect(chip(hero).getAttribute('title')).toMatch(/Duration: 1 minute · From the wraith hiding in the rafters$/);
+  });
+
   it("shows the hero's AC from the sheet, which can change mid-fight (srd:spell:shield-of-faith), not the copy from the fight's start", () => {
     // The fixture fight's copy of the hero says AC 12; Shield of Faith has made the sheet's 14.
     seedGame({ character: sampleCharacter({ armorClass: 14 }) });

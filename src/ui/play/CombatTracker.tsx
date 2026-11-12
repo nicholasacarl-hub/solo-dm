@@ -243,7 +243,7 @@ const CombatantRow = memo(function CombatantRow({
           <ul aria-label="Conditions" className="mt-1.5 flex flex-wrap gap-1">
             {c.conditions.map((cond) => (
               <li key={cond.id}>
-                <ConditionChip condition={cond} />
+                <ConditionChip condition={cond} details={c.isPlayer} />
               </li>
             ))}
           </ul>
@@ -291,14 +291,18 @@ function HealthLine({ hp, hidden }: { hp: HitPoints; hidden: boolean }) {
   );
 }
 
-function ConditionChip({ condition }: { condition: ActiveCondition }) {
+/**
+ * A condition on a tracker row. Its duration and source, which the DM wrote, show only on the hero's own row: on a
+ * creature's they could name a hidden one or give away the DM's plans; the rules summary shows on every row.
+ */
+function ConditionChip({ condition, details }: { condition: ActiveCondition; details: boolean }) {
   const info = CONDITIONS[condition.id as ConditionId] as (typeof CONDITIONS)[ConditionId] | undefined;
   const name = info?.name ?? capitalize(condition.id);
   const level = condition.level ? ` ${condition.level}` : '';
   const title = [
     info?.summary,
-    condition.duration && `Duration: ${condition.duration}`,
-    condition.source && `From ${condition.source}`,
+    details && condition.duration && `Duration: ${condition.duration}`,
+    details && condition.source && `From ${condition.source}`,
   ]
     .filter(Boolean)
     .join(' · ');
