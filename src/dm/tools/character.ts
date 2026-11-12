@@ -45,7 +45,7 @@ import {
 } from '@/engine';
 import type { RulesIndex } from '@/data';
 import { withAdaptationNotes } from '@/data/options/adaptationNotes';
-import { inventoryFromEntry } from '@/data/options/inventory';
+import { entryRef, inventoryFromEntry } from '@/data/options/inventory';
 import { gainedFeatures } from '@/data/options/leveling';
 import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
 import { classByName, classOptionFor, optionSourceLabel, subclassOptionFor } from '@/data/options/resolve';
@@ -55,12 +55,14 @@ import { textFingerprint } from '@/lib/importedContent';
 import {
   ABILITY_NAMES,
   SKILL_NAMES,
+  SRD_SOURCE_ID,
   type BuilderData,
   type Campaign,
   type Character,
   type ClassLevel,
   type ClassOption,
   type CompendiumEntry,
+  type ContentKind,
   type Currency,
   type EquipmentOption,
   type Feature,
@@ -156,13 +158,17 @@ interface Links {
   items: (Omit<InventoryItem, 'id'> | null)[];
   /** Per spells_add entry: the spell entry its exact name resolves to, or null. */
   spells: (CompendiumEntry | null)[];
+  /** Per spells_add entry: the book's spell whose words its notes repeat (bookCopy), or null. */
+  spellCopies: (CompendiumEntry | null)[];
+  /** Per inventory_update entry: the ref of the book's item whose words its description repeats, or null. */
+  updateCopies: (ImportedRef | null)[];
   /** Per features_add entry: the ref of the one imported feat with that name, or null. */
   feats: (ImportedRef | null)[];
   /** The merged equipment catalog, for Armor Class ([] when it couldn't load: the SRD armor table). */
   catalog: readonly EquipmentOption[];
 }
 
-const NO_LINKS: Links = { items: [], spells: [], feats: [], catalog: [] };
+const NO_LINKS: Links = { items: [], spells: [], spellCopies: [], updateCopies: [], feats: [], catalog: [] };
 
 async function loadIndexOrNull(ctx: ToolContext): Promise<RulesIndex | null> {
   try {
@@ -222,6 +228,87 @@ function sharesWords(description: string, partText: string): boolean {
   return false;
 }
 
+/** The plain text of the imported entries of some kinds, joined, with where each starts; and the SRD's text of those kinds. */
+interface KindText {
+  book: string;
+  starts: number[];
+  entries: CompendiumEntry[];
+  srd: string;
+}
+
+/** Built once per index: a library change builds a new index, and so a new text. */
+const kindTexts = new WeakMap<RulesIndex, Map<string, KindText>>();
+
+function kindText(index: RulesIndex, kinds: readonly ContentKind[]): KindText {
+  const key = kinds.join(' ');
+  let byKinds = kindTexts.get(index);
+  if (!byKinds) kindTexts.set(index, (byKinds = new Map()));
+  const cached = byKinds.get(key);
+  if (cached) return cached;
+  const all = kinds.flatMap((kind) => index.list({ kind }));
+  const entries = all.filter((e) => e.id.startsWith('lib:'));
+  const starts: number[] = [];
+  let at = 0;
+  const texts = entries.map((e) => {
+    const plain = plainWords(e.text);
+    starts.push(at);
+    at += plain.length + 1;
+    return plain;
+  });
+  // plainWords leaves no line break, so no run spans two entries.
+  const built = { book: texts.join('\n'), starts, entries, srd: all.filter((e) => e.sourceId === SRD_SOURCE_ID).map((e) => plainWords(e.text)).join('\n') };
+  byKinds.set(key, built);
+  return built;
+}
+
+/**
+ * The imported entry of these kinds whose words the DM's free text repeats (spec §7.1): two of the runs of 40
+ * characters sharesWords reads (the only one, under 60 characters) are in that entry and not in the SRD's text of
+ * those kinds, whose words are anyone's to keep. A spell's notes are read against the books' spells, an item's
+ * description against their items, so the ref names what the text came from. Null for the DM's own words, for SRD
+ * wording, and without an index.
+ */
+function bookCopy(text: string | undefined, index: RulesIndex | null, kinds: readonly ContentKind[]): CompendiumEntry | null {
+  const dm = plainWords(text ?? '');
+  if (!index || dm.length < 40) return null;
+  const book = kindText(index, kinds);
+  if (!book.entries.length) return null;
+  const needed = dm.length < 60 ? 1 : 2;
+  let first = -1;
+  let found = 0;
+  for (let i = 0; i + 40 <= dm.length && found < needed; i += 20) {
+    const run = dm.slice(i, i + 40);
+    const at = book.book.indexOf(run);
+    if (at < 0 || book.srd.includes(run)) continue;
+    if (first < 0) first = at;
+    found += 1;
+  }
+  if (found < needed) return null;
+  // The entry the first run is in: the last one that starts at or before it.
+  let lo = 0;
+  let hi = book.starts.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (book.starts[mid] <= first) lo = mid;
+    else hi = mid - 1;
+  }
+  return book.entries[lo];
+}
+
+const ITEM_KINDS: readonly ContentKind[] = ['item', 'magic-item'];
+
+/** The ref marking an item's description as the words of the book's item it repeats (bookCopy), or null. */
+function itemCopyRef(description: string | undefined, index: RulesIndex | null): ImportedRef | null {
+  const copy = bookCopy(description, index, ITEM_KINDS);
+  const ref = copy ? entryRef(copy, copy.kind === 'item' ? 'item' : 'magic-item') : undefined;
+  return ref && description ? { ...ref, textCopied: true, textHash: textFingerprint(description) } : null;
+}
+
+/** An inventory_add item as the DM gave it (no entry of that exact name to link). */
+function givenItem(item: NonNullable<ToolInput<'update_character'>['inventory_add']>[number]): Omit<InventoryItem, 'id'> {
+  return { name: item.name, quantity: item.quantity, ...defined({ description: item.description, category: item.category, magic: item.magic, weight: item.weight }) };
+}
+
 /** Name keys the SRD prints for a class or subclass feature, a species trait or lineage, a background feature or a feat. */
 function srdNameKeys(data: BuilderData | null): Set<string> {
   const keys = new Set<string>();
@@ -262,16 +349,30 @@ async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolConte
   const items = input.inventory_add ?? [];
   const spells = input.spells_add ?? [];
   const feats = input.features_add ?? [];
-  if (!items.length && !spells.length && !feats.length && !mayChangeArmorClass(input)) return NO_LINKS;
+  const updates = input.inventory_update ?? [];
+  const described = updates.some((u) => u.description);
+  if (!items.length && !spells.length && !feats.length && !described && !mayChangeArmorClass(input)) return NO_LINKS;
   const campaign = ctx.deps.store().campaign;
-  const [data, index] = await Promise.all([loadBuilderOrNull(ctx), items.length || spells.length ? loadIndexOrNull(ctx) : Promise.resolve(null)]);
+  const [data, index] = await Promise.all([loadBuilderOrNull(ctx), items.length || spells.length || described ? loadIndexOrNull(ctx) : Promise.resolve(null)]);
   const catalog = data?.equipment ?? [];
+  const linkedSpells = spells.map((spell) => exactEntry(index, campaign, spell.name, 'spell'));
   return {
     items: items.map((item) => {
       const entry = exactEntry(index, campaign, item.name, 'magic-item') ?? exactEntry(index, campaign, item.name, 'item');
-      return entry ? linkedItem(item, entry, catalog) : null;
+      const linked = entry ? linkedItem(item, entry, catalog) : null;
+      if (linked?.ref) return linked;
+      // No book's item by that name: a description that repeats one's words still leaves exports (spec §7.1).
+      const ref = itemCopyRef(item.description, index);
+      return ref ? { ...(linked ?? givenItem(item)), ref } : linked;
     }),
-    spells: spells.map((spell) => exactEntry(index, campaign, spell.name, 'spell')),
+    spells: linkedSpells,
+    spellCopies: spells.map((spell, i) => {
+      if (!spell.notes?.trim()) return null;
+      const linked = linkedSpells[i];
+      if (linked?.id.startsWith('lib:') && sharesWords(spell.notes, linked.text)) return linked;
+      return bookCopy(spell.notes, index, ['spell']);
+    }),
+    updateCopies: updates.map((u) => itemCopyRef(u.description, index)),
     feats: feats.map((f) => featRef(f.name, data) ?? bookPartRef(f.name, f.description, data)),
     catalog,
   };
@@ -281,23 +382,18 @@ function inventorySteps(input: ToolInput<'update_character'>, links: Links): ((c
   const steps: ((c: Character) => EngineResult)[] = [];
   for (const item of input.inventory_remove ?? []) steps.push((c) => removeItem(c, item.name, item.quantity));
   (input.inventory_add ?? []).forEach((item, i) => {
-    const add: Omit<InventoryItem, 'id'> = links.items[i] ?? { name: item.name, quantity: item.quantity, ...defined({
-      description: item.description,
-      category: item.category,
-      magic: item.magic,
-      weight: item.weight,
-    }) };
+    const add: Omit<InventoryItem, 'id'> = links.items[i] ?? givenItem(item);
     steps.push((c) => addItem(c, add));
   });
-  for (const item of input.inventory_update ?? []) {
+  (input.inventory_update ?? []).forEach((item, i) => {
     const patch = defined({
       equipped: item.equipped,
       attuned: item.attuned,
       quantity: item.quantity,
       description: item.description,
     });
-    steps.push((c) => updateItem(c, item.name, itemUpdatePatch(c, item.name, patch)));
-  }
+    steps.push((c) => updateItem(c, item.name, itemUpdatePatch(c, item.name, patch, links.updateCopies[i] ?? null)));
+  });
   return steps;
 }
 
@@ -306,12 +402,13 @@ type ItemPatch = Partial<Omit<InventoryItem, 'id'>>;
 /**
  * An inventory_update patch. A description the DM gives an item from a book is its words about that entry
  * (spec §7.1), as with inventory_add (linkedItem): the ref marks them copied, so exports leave them out on the
- * sheet's word alone, even once the transcript no longer holds the call that wrote them. A `redacted` left by
- * a pulled save goes: the words are new. The item is found by name as updateItem finds it.
+ * sheet's word alone, even once the transcript no longer holds the call that wrote them. So is one that repeats a
+ * book's item's words on any other item (`copy`, from bookCopy), which then takes that item's ref. A `redacted`
+ * left by a pulled save goes: the words are new. The item is found by name as updateItem finds it.
  */
-function itemUpdatePatch(c: Character, name: string, patch: ItemPatch): ItemPatch {
+function itemUpdatePatch(c: Character, name: string, patch: ItemPatch, copy: ImportedRef | null): ItemPatch {
   if (!patch.description) return patch;
-  const ref = matchByName(c.inventory, name, (i) => i.name).match?.ref;
+  const ref = matchByName(c.inventory, name, (i) => i.name).match?.ref ?? copy;
   if (!ref) return patch;
   const { redacted: _left, ...kept } = ref;
   return { ...patch, ref: { ...kept, textCopied: true, textHash: textFingerprint(patch.description) } };
@@ -320,15 +417,23 @@ function itemUpdatePatch(c: Character, name: string, patch: ItemPatch): ItemPatc
 /**
  * A spells_add spell. When its exact name resolves to a spell the DM may consult, it takes that entry's
  * id (so the sheet's text and the map's area presets find it), its ritual and concentration flags, and
- * for a book's spell a ref (nothing copied). Otherwise it is added as given, as before.
+ * for a book's spell a ref (nothing copied). Otherwise it is added as given, as before. Notes that repeat a
+ * book's spell's words (`copy`, from bookCopy) mark the ref copied, the book's spell's ref when it has none,
+ * so exports leave them out; the DM's own notes stay its own.
  */
-function addedSpell(spell: NonNullable<ToolInput<'update_character'>['spells_add']>[number], entry: CompendiumEntry | null): Omit<KnownSpell, 'id'> & { id?: string } {
+function addedSpell(
+  spell: NonNullable<ToolInput<'update_character'>['spells_add']>[number],
+  entry: CompendiumEntry | null,
+  copy: CompendiumEntry | null,
+): Omit<KnownSpell, 'id'> & { id?: string } {
   const base = { name: spell.name, level: spell.level, prepared: spell.prepared ?? true, source: spell.source ?? 'Granted in play' };
-  if (!entry) return { ...base, ...defined({ ritual: spell.ritual, concentration: spell.concentration, notes: spell.notes }) };
+  const linkRef = entry ? spellEntryRef(entry) : undefined;
+  const copyRef = copy && spell.notes ? (linkRef ?? spellEntryRef(copy)) : undefined;
+  const ref = copyRef ? { ...copyRef, textCopied: true, textHash: textFingerprint(spell.notes ?? '') } : linkRef;
+  if (!entry) return { ...base, ...defined({ ritual: spell.ritual, concentration: spell.concentration, notes: spell.notes }), ...(ref ? { ref } : {}) };
   const flag = (value: unknown, given: boolean | undefined) => (typeof value === 'boolean' ? value : given);
   const ritual = flag(entry.data?.ritual, spell.ritual);
   const concentration = flag(entry.data?.concentration, spell.concentration);
-  const ref = spellEntryRef(entry);
   return {
     id: entry.id,
     ...base,
@@ -353,7 +458,7 @@ function spellSteps(input: ToolInput<'update_character'>, links: Links): ((c: Ch
   }
   for (const name of input.spells_remove ?? []) steps.push((c) => removeSpell(c, name));
   (input.spells_add ?? []).forEach((spell, i) => {
-    const add = addedSpell(spell, links.spells[i] ?? null);
+    const add = addedSpell(spell, links.spells[i] ?? null, links.spellCopies[i] ?? null);
     steps.push((c) => addSpell(c, add));
   });
   return steps;

@@ -293,10 +293,22 @@ function spellcastingLines(c: Character): string[] {
   }
   const lines = [...byLevel.entries()].flatMap(([level, spells]) => [
     `- ${level === 0 ? 'Cantrips' : `Level ${level}`}: ${spells.map((s) => `${s.name}${spellTags(s, classNames)}`).join(', ')}`,
-    // A spell's notes (the DM's spells_add notes, the builder's notes on a feat's or a species' spell), on one line under its level.
-    ...spells.flatMap((s) => (s.notes?.trim() ? [`  - ${s.name}: ${s.notes.replace(/\s+/g, ' ').trim()}`] : [])),
+    ...spells.flatMap((s) => spellNotesLine(s) ?? []),
   ]);
   return ['### Spellcasting', header.join(' · '), ...lines];
+}
+
+/**
+ * A spell's notes (the DM's spells_add notes, the builder's notes on a feat's or a species' spell), on one line under
+ * its level. Notes that repeat a book's words (ref.textCopied) are wrapped like copied text, so exports remove them;
+ * notes a save left out are not shown (the book can't give back the DM's words).
+ */
+function spellNotesLine(s: KnownSpell): string | null {
+  const notes = s.notes?.replace(/\s+/g, ' ').trim();
+  if (!notes) return null;
+  if (!s.ref?.textCopied) return `  - ${s.name}: ${notes}`;
+  if (copiedTextMissing({ description: notes, ref: s.ref })) return null;
+  return `  - ${s.name}: ${wrapImported(s.ref.sourceTitle, notes).split('\n').join('\n    ')}`;
 }
 
 const RECHARGE_TEXT: Record<string, string> = { short: 'short rest', long: 'long rest', dawn: 'dawn', turn: 'turn', none: 'total' };

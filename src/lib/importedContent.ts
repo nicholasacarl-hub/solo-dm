@@ -33,6 +33,21 @@ export function closeCutWrapper(text: string): string {
   return open >= 0 && !text.includes(CLOSE, open) ? `${text} ${CLOSE}` : text;
 }
 
+/**
+ * The opening marker (and a space) of the wrapped passage a cut at `at` starts inside: one opened before `at` and not
+ * yet closed there, a cut inside its opening marker included. '' when the cut is outside every passage. An excerpt
+ * from `at` on, prefixed with it (and closed by closeCutWrapper), stays wrapped, so a copy removes that passage.
+ */
+export function wrapperOpenAt(text: string, at: number): string {
+  if (at <= 0) return '';
+  const open = text.lastIndexOf(OPEN, at - 1);
+  if (open < 0) return '';
+  const close = text.indexOf(CLOSE, open);
+  if (close >= 0 && close < at) return '';
+  const tag = /^<imported-content source="[^"]*">/.exec(text.slice(open, open + 300));
+  return `${tag ? tag[0] : `${OPEN} source="">`} `;
+}
+
 /** True when the text contains wrapped imported content. */
 export function hasImported(text: string): boolean {
   return text.includes(OPEN);

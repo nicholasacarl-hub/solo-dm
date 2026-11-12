@@ -1,34 +1,44 @@
 /**
- * Export redaction of book text copied onto a character (spec §7.3, pure): ref'd descriptions become
- * the placeholder sentence (ref.redacted = true) and the DM's tool_use inputs that echo them are
+ * Export redaction of book text copied onto a character (spec §7.3, pure): ref'd descriptions and spell notes
+ * become the placeholder sentence (ref.redacted = true) and the DM's tool_use inputs that echo them are
  * replaced too — in the export copy only (rule 1: the stored campaign and transcript never change).
  * redactImportedDeep (backup.ts) then removes every wrapped lookup passage.
  *
- * Names stay (option, feature and item names, book titles), as they always have in saves; only text
+ * Names stay (option, feature, item and spell names, book titles), as they always have in saves; only text
  * copied from a book — or the DM's words about such an entry (ref.textCopied) — leaves the copy.
  * Whatever the DM writes about an item from a book is its words about that entry (§7.1): an
  * inventory_add or inventory_update description of one leaves the transcript copy, and so does that
  * description on the sheet, even where the item was linked without one (its ref still says nothing copied).
+ * A spell's notes leave it when they repeat a book's words (the DM tools mark them). A call the app refused
+ * never reached the sheet, so nothing there marks its text: while a book is in play, every description and
+ * note in it leaves the copy.
  */
 import { matchByName } from '@/engine/util';
 import { nameKey } from '@/lib/id';
-import { importedPlaceholder, isImportedPlaceholder } from '@/lib/importedContent';
-import type { Character, Feature, InventoryItem, TranscriptMessage } from '@/types';
+import { hasImported, importedPlaceholder, isImportedPlaceholder } from '@/lib/importedContent';
+import type { Character, Feature, InventoryItem, KnownSpell, TranscriptMessage } from '@/types';
 import type { CampaignData } from './types';
 
 export interface ExportReport { books: string[]; passages: number }
 
-type EchoKind = 'feature' | 'item';
+type EchoKind = 'feature' | 'item' | 'spell';
 
 /**
- * DM tool inputs that can carry a feature's or an item's text: tool → list field → what its entries
- * (name + description) describe. A feature entry names its feature exactly (addFeature); an item entry
- * finds its item as the engine does (updateItem: "Lantern" is the Lantern of Hollow Light).
+ * DM tool inputs that can carry a feature's, an item's or a spell's text: tool → list field → what its entries
+ * (a name and its text) describe. A feature entry names its feature exactly (addFeature); an item entry
+ * finds its item as the engine does (updateItem: "Lantern" is the Lantern of Hollow Light); a spell entry names
+ * its spell (addSpell).
  */
 const ECHOING_INPUTS: Readonly<Record<string, Readonly<Record<string, EchoKind>>>> = {
   level_up: { new_features: 'feature' },
-  update_character: { features_add: 'feature', inventory_add: 'item', inventory_update: 'item' },
+  update_character: { features_add: 'feature', inventory_add: 'item', inventory_update: 'item', spells_add: 'spell' },
 };
+
+/** Each kind's text field in those entries. */
+const TEXT_FIELD: Readonly<Record<EchoKind, 'description' | 'notes'>> = { feature: 'description', item: 'description', spell: 'notes' };
+
+/** What stands in an export for the text of a call the app refused. */
+export const REFUSED_CALL_TEXT = '[Text of a call the app refused was left out of this copy.]';
 
 type Described = Pick<Feature, 'name' | 'description' | 'ref'> | Pick<InventoryItem, 'name' | 'description' | 'ref'>;
 
@@ -46,6 +56,9 @@ export function redactCopiedImports(data: CampaignData): { data: CampaignData; r
   /** nameKey → book title of every feature whose copied text left the copy. */
   const redactedFeatures = new Map<string, string>();
   const inventory = data.character?.inventory ?? [];
+  /** nameKey → book title of every spell whose notes are a book's words (on the sheet now, or left out before). */
+  const copiedSpells = new Map<string, string>();
+  for (const sp of data.character?.spellcasting?.spells ?? []) if (sp.ref?.textCopied) copiedSpells.set(nameKey(sp.name), sp.ref.sourceTitle);
   /** The item a DM tool entry names, when it is one from a book. */
   const bookItem = (name: string): InventoryItem | undefined => {
     const item = matchByName(inventory, name, (i) => i.name).match;
@@ -85,11 +98,21 @@ export function redactCopiedImports(data: CampaignData): { data: CampaignData; r
   // Copied when the ref says so, or when the DM gave the item this very description in a tool call.
   const redactItem = (i: InventoryItem): InventoryItem =>
     redactOne(i, Boolean(i.ref?.textCopied || (i.description && dmWords.get(i.id)?.has(i.description.trim()))));
+  // A spell's notes: copied when its ref says so (the DM tools mark notes that repeat a book's words).
+  const redactSpell = (sp: KnownSpell): KnownSpell => {
+    if (!sp.ref?.textCopied) return sp;
+    const out = redactOne({ name: sp.name, description: sp.notes, ref: sp.ref }, true);
+    return out.description === sp.notes && out.ref === sp.ref ? sp : { ...sp, notes: out.description, ref: out.ref };
+  };
 
-  const character = data.character ? redactCharacter(data.character, redactFeature, redactItem) : data.character;
-  const titleOf = (kind: EchoKind, name: string) => (kind === 'feature' ? redactedFeatures.get(nameKey(name)) : bookItemTitle(name));
-  const echoesToFind = redactedFeatures.size > 0 || inventory.some((i) => i.ref);
-  const transcript = echoesToFind ? data.transcript.map((m) => redactToolInputs(m, titleOf, leftOut)) : data.transcript;
+  const character = data.character ? redactCharacter(data.character, redactFeature, redactItem, redactSpell) : data.character;
+  const titleOf = (kind: EchoKind, name: string) =>
+    kind === 'feature' ? redactedFeatures.get(nameKey(name)) : kind === 'spell' ? copiedSpells.get(nameKey(name)) : bookItemTitle(name);
+  // A refused call's text, only while a book is in play: something on the sheet came from one, or the DM looked one up.
+  const booksInPlay = sheetFromBooks(data.character) || data.transcript.some(looksUpBook);
+  const refused = booksInPlay ? refusedCalls(data.transcript) : new Set<string>();
+  const echoesToFind = redactedFeatures.size > 0 || copiedSpells.size > 0 || inventory.some((i) => i.ref) || refused.size > 0;
+  const transcript = echoesToFind ? data.transcript.map((m) => redactToolInputs(m, titleOf, leftOut, refused)) : data.transcript;
 
   const changed = character !== data.character || transcript.some((m, i) => m !== data.transcript[i]);
   return {
@@ -98,19 +121,50 @@ export function redactCopiedImports(data: CampaignData): { data: CampaignData; r
   };
 }
 
-function redactCharacter(c: Character, redactFeature: (f: Feature) => Feature, redactItem: (i: InventoryItem) => InventoryItem): Character {
+function redactCharacter(
+  c: Character,
+  redactFeature: (f: Feature) => Feature,
+  redactItem: (i: InventoryItem) => InventoryItem,
+  redactSpell: (s: KnownSpell) => KnownSpell,
+): Character {
   const features = c.features.map(redactFeature);
   const inventory = c.inventory.map(redactItem);
-  const same = features.every((f, i) => f === c.features[i]) && inventory.every((x, i) => x === c.inventory[i]);
-  return same ? c : { ...c, features, inventory };
+  const known = c.spellcasting?.spells ?? [];
+  const spells = known.map(redactSpell);
+  const same = features.every((f, i) => f === c.features[i]) && inventory.every((x, i) => x === c.inventory[i]) && spells.every((s, i) => s === known[i]);
+  if (same) return c;
+  return { ...c, features, inventory, ...(c.spellcasting ? { spellcasting: { ...c.spellcasting, spells } } : {}) };
+}
+
+/** Something on the sheet came from one of the player's books. */
+function sheetFromBooks(c: Character | null): boolean {
+  if (!c) return false;
+  return c.features.some((f) => f.ref) || c.inventory.some((i) => i.ref) || (c.spellcasting?.spells ?? []).some((s) => s.ref);
+}
+
+/** A user message whose tool results quote a book (the DM looked one up). */
+function looksUpBook(m: TranscriptMessage): boolean {
+  if (m.param.role !== 'user' || !Array.isArray(m.param.content)) return false;
+  return m.param.content.some((b) => b.type === 'tool_result' && hasImported(typeof b.content === 'string' ? b.content : JSON.stringify(b.content ?? '')));
+}
+
+/** The tool_use ids whose calls the app refused (an is_error result). */
+function refusedCalls(transcript: readonly TranscriptMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const m of transcript) {
+    if (m.param.role !== 'user' || !Array.isArray(m.param.content)) continue;
+    for (const b of m.param.content) if (b.type === 'tool_result' && b.is_error) ids.add(b.tool_use_id);
+  }
+  return ids;
 }
 
 interface Echo { name: string; description: string }
 
-/** A tool-input list entry that names something and gives it text, or null. */
-function echoOf(entry: unknown): Echo | null {
+/** A tool-input list entry that names something and gives it text (in `field`), or null. */
+function echoOf(entry: unknown, field: 'description' | 'notes' = 'description'): Echo | null {
   if (!entry || typeof entry !== 'object') return null;
-  const { name, description } = entry as { name?: unknown; description?: unknown };
+  const { name } = entry as { name?: unknown };
+  const description = (entry as Record<string, unknown>)[field];
   if (typeof name !== 'string' || typeof description !== 'string' || !hasText(description)) return null;
   return { name, description };
 }
@@ -132,17 +186,23 @@ function itemEchoes(transcript: readonly TranscriptMessage[]): Echo[] {
       if (!echoing) return [];
       return echoing.fields.flatMap(([field, kind]) => {
         const list = echoing.input[field];
-        return kind === 'item' && Array.isArray(list) ? list.map(echoOf).filter((e): e is Echo => e !== null) : [];
+        return kind === 'item' && Array.isArray(list) ? list.map((entry: unknown) => echoOf(entry)).filter((e): e is Echo => e !== null) : [];
       });
     }),
   );
 }
 
 /**
- * An assistant message whose level_up / update_character inputs echo a redacted feature's text or describe
- * an item from a book, copied with those descriptions replaced.
+ * An assistant message whose level_up / update_character inputs echo a redacted feature's text, describe
+ * an item from a book or give a book's words as a spell's notes, copied with those texts replaced; in a call the
+ * app refused (`refused`), every text is replaced.
  */
-function redactToolInputs(m: TranscriptMessage, titleOf: (kind: EchoKind, name: string) => string | undefined, counted: (title: string) => void): TranscriptMessage {
+function redactToolInputs(
+  m: TranscriptMessage,
+  titleOf: (kind: EchoKind, name: string) => string | undefined,
+  counted: (title: string) => void,
+  refused: ReadonlySet<string>,
+): TranscriptMessage {
   const content = assistantBlocks(m);
   if (!content) return m;
   let changed = false;
@@ -153,15 +213,20 @@ function redactToolInputs(m: TranscriptMessage, titleOf: (kind: EchoKind, name: 
     const { input } = echoing;
     let inputChanged = false;
     const nextInput: Record<string, unknown> = { ...input };
+    const wasRefused = refused.has((block as { id?: string }).id ?? '');
     for (const [field, kind] of echoing.fields) {
       const list = input[field];
       if (!Array.isArray(list)) continue;
+      const text = TEXT_FIELD[kind];
       const next = list.map((item: unknown) => {
-        const echo = echoOf(item);
-        const title = echo ? titleOf(kind, echo.name) : undefined;
-        if (!title) return item;
-        counted(title);
-        return { ...(item as object), description: importedPlaceholder(title) };
+        const echo = echoOf(item, text);
+        if (!echo) return item;
+        const title = titleOf(kind, echo.name);
+        if (title) {
+          counted(title);
+          return { ...(item as object), [text]: importedPlaceholder(title) };
+        }
+        return wasRefused ? { ...(item as object), [text]: REFUSED_CALL_TEXT } : item;
       });
       if (next.some((x, i) => x !== list[i])) {
         nextInput[field] = next;

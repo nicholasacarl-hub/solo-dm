@@ -336,6 +336,17 @@ describe('items and spells the rules entries do not describe', () => {
     expect(redactImported(sheet)).not.toContain(GLOAMWOOD_MARKERS[6]);
   });
 
+  it("wraps notes that repeat a book's words like copied text, and leaves out notes a save pulled", () => {
+    const base = mira().spellcasting!;
+    const notes = `Sung at dusk. ${GLOAMWOOD_MARKERS[3]}`;
+    const choir = { id: 'lib:gloam:40', name: 'Ashen Choir', level: 2 as const, prepared: true, source: 'Granted in play', notes, ref: importedRef({ kind: 'spell', entryName: 'Ashen Choir', part: undefined, level: undefined }) };
+    const sheet = characterSheetText(mira({ spellcasting: { ...base, spells: [...base.spells, choir] } }));
+    expect(sheet).toContain(`  - Ashen Choir: <imported-content source="${GLOAMWOOD_TITLE}">\n    ${notes}\n    </imported-content>`);
+    expect(redactImported(sheet)).not.toContain(GLOAMWOOD_MARKERS[3]);
+    const pulled = { ...choir, notes: importedPlaceholder(GLOAMWOOD_TITLE), ref: { ...choir.ref, redacted: true as const } };
+    expect(characterSheetText(mira({ spellcasting: { ...base, spells: [...base.spells, pulled] } }))).not.toContain('- Ashen Choir:');
+  });
+
   it('shows the notes the DM wrote on a spell it granted, under its level', () => {
     const base = mira().spellcasting!;
     const scale = { id: 'sp-scale-shield', name: 'Shield', level: 1 as const, prepared: true, source: 'Granted in play', notes: 'Granted by the black scale:\n  once per dawn without a slot.' };
