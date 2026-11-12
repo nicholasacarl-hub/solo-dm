@@ -16,7 +16,8 @@ export function wrapImported(sourceName: string, text: string): string {
   return `${OPEN} source="${safeName}">\n${safeText}\n${CLOSE}`;
 }
 
-const PATTERN = /<imported-content source="([^"]*)">[\s\S]*?<\/imported-content>/g;
+// A wrapper left open (its text cut before the closing marker) runs to the end of its string.
+const PATTERN = /<imported-content source="([^"]*)">[\s\S]*?(?:<\/imported-content>|$)/g;
 
 /** Replace every wrapped block with a short placeholder naming the source. */
 export function redactImported(text: string): string {

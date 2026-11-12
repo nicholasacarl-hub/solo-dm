@@ -69,7 +69,8 @@ export function formatIssues(error: z.ZodError): string {
 }
 
 function preview(input: unknown): string {
-  const json = JSON.stringify(input) ?? 'undefined';
+  // A long string (a description, rules text) can be book text the DM copied: quote its length, not its words.
+  const json = JSON.stringify(input, (_key, value: unknown) => (typeof value === 'string' && value.length > 120 ? `(${value.length} characters)` : value)) ?? 'undefined';
   return json.length > 600 ? `${json.slice(0, 600)}…` : json;
 }
 

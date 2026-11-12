@@ -38,15 +38,6 @@ export function listJoin(items: readonly string[]): string {
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
-/** Shorten text at a word boundary, adding an ellipsis when cut. */
-export function truncate(text: string, max: number): string {
-  const clean = text.replace(/\s+/g, ' ').trim();
-  if (clean.length <= max) return clean;
-  const cut = clean.slice(0, max);
-  const lastSpace = cut.lastIndexOf(' ');
-  return `${(lastSpace > max * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[\s,;:.-]+$/, '')}…`;
-}
-
 // ---------------------------------------------------------------------------
 // Fuzzy name matching (features, items, spells, attacks, combatants)
 // ---------------------------------------------------------------------------

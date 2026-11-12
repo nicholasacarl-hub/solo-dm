@@ -61,4 +61,10 @@ describe('truncate', () => {
     expect(truncate('The quick brown fox jumps over the lazy dog', 20)).toBe('The quick brown fox…');
     expect(truncate('short', 20)).toBe('short');
   });
+
+  it('never cuts between the halves of an emoji', () => {
+    const cut = truncate('🐉'.repeat(40), 20);
+    expect(cut).toBe(`${'🐉'.repeat(9)}…`);
+    expect(cut).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
 });

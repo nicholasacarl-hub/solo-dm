@@ -11,6 +11,7 @@
  * Owner: E2.
  */
 import { nameKey } from '@/lib/id';
+import { safeEnd } from '@/lib/text';
 import type {
   CompendiumEntry,
   Excerpt,
@@ -86,7 +87,7 @@ export function warning(code: WarningCode, severity: RecordWarning['severity'], 
 /** Quote an app-side value in a message (names and short excerpts only), trimmed. */
 export const quote = (text: string, max = 60): string => {
   const t = text.replace(/\s+/g, ' ').trim();
-  return `“${t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t}”`;
+  return `“${t.length > max ? `${t.slice(0, safeEnd(t, max - 1)).trimEnd()}…` : t}”`;
 };
 
 /** A "…Text" excerpt that isn't in the source text: `warn` `ungrounded` on the data field it fills. */

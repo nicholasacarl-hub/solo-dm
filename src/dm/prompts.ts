@@ -317,7 +317,8 @@ function journalLine(j: JournalEntry): string {
   const status = j.status?.trim() ? ` (${j.status.trim()})` : '';
   const secret = j.secret ? ' [SECRET — the hero does not know this]' : '';
   const tags = j.tags.length ? ` Also: ${[...j.tags].sort(byText).join(', ')}.` : '';
-  const details = j.details?.trim() ? ` ${truncate(j.details, 300)}` : '';
+  const cut = (j.details ?? '').replace(/\s+/g, ' ').trim().length > 300 ? ` (search_memory "${j.name}" has all of it)` : '';
+  const details = j.details?.trim() ? ` ${truncate(j.details, 300)}${cut}` : '';
   return `- ${j.name}${status}${secret}: ${j.summary.trim()}${details}${tags}`;
 }
 

@@ -35,6 +35,15 @@ describe('wrapImported', () => {
   });
 });
 
+describe('redactImported', () => {
+  it('removes a wrapper left open (its text cut before the closing marker) to the end of its string', () => {
+    const open = `Before. <imported-content source="Book">\nThe secret ledger under the floor`;
+    expect(redactImported(open)).toBe(`Before. ${importedPlaceholder('Book')}`);
+    const closed = `${wrapImported('Book', 'One.')} Between. ${wrapImported('Book', 'Two.')}`;
+    expect(redactImported(closed)).toBe(`${importedPlaceholder('Book')} Between. ${importedPlaceholder('Book')}`);
+  });
+});
+
 describe('importedPlaceholder', () => {
   it('is exactly the sentence redactImported leaves', () => {
     expect(redactImported(wrapImported('The "Gloam" <Book>', 'secret text'))).toBe(importedPlaceholder('The "Gloam" <Book>'));

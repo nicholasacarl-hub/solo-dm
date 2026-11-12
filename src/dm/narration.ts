@@ -3,6 +3,8 @@
  * the end-of-session text into the recap and the DM's private notes.
  */
 
+import { safeEnd } from '@/lib/text';
+
 const CHOICES_BLOCK = /```[ \t]*choices[^\n]*\n([\s\S]*?)(?:\n?```[ \t]*|$)/gi;
 const CHOICES_OPEN = /```[ \t]*choices\b/i;
 const MAX_CHOICES = 4;
@@ -91,7 +93,8 @@ export function parseWrapUp(raw: string): SessionWrapUp {
 export function truncate(text: string, max: number): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   if (clean.length <= max) return clean;
-  const cut = clean.slice(0, max - 1);
-  const space = clean[max - 1] === ' ' ? cut.length : cut.lastIndexOf(' ');
+  // Never inside an emoji: a lone half of a surrogate pair isn't valid text in a request.
+  const cut = clean.slice(0, safeEnd(clean, max - 1));
+  const space = clean[cut.length] === ' ' ? cut.length : cut.lastIndexOf(' ');
   return `${(space > max * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
 }

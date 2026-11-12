@@ -209,6 +209,34 @@ function featRef(name: string, data: BuilderData | null): ImportedRef | null {
   return matches.length === 1 ? (matches[0].ref ?? null) : null;
 }
 
+/**
+ * The ref of the one book part named like a DM's feature entry that is not a feat: an imported class's or
+ * subclass's feature, a species' trait or lineage, a background's feature. The DM's words about it then leave
+ * exports and restore refills the book's text, as for a feat (featRef).
+ */
+function bookPartRef(name: string, data: BuilderData | null): ImportedRef | null {
+  const key = nameKey(name);
+  const refs: ImportedRef[] = [];
+  let srd = false;
+  // A name the SRD prints too ("Ability Score Improvement", "Darkvision") stays the DM's own.
+  const take = (n: string, ref: ImportedRef | undefined, book: boolean) => {
+    if (nameKey(n) !== key) return;
+    if (!book) srd = true;
+    else if (ref?.textCopied) refs.push(ref);
+  };
+  for (const cls of data?.classes ?? []) {
+    for (const f of cls.features) take(f.name, f.ref, Boolean(cls.source));
+    for (const sub of cls.subclasses) for (const f of sub.features) take(f.name, f.ref, Boolean(sub.source));
+  }
+  for (const sp of data?.species ?? []) {
+    for (const t of sp.traits) take(t.name, t.ref, Boolean(sp.source));
+    for (const l of sp.lineages ?? []) take(l.name, l.ref, Boolean(sp.source));
+  }
+  for (const bg of data?.backgrounds ?? []) if (bg.legacyFeature) take(bg.legacyFeature.name, bg.legacyFeature.ref, Boolean(bg.source));
+  for (const f of data?.feats ?? []) if (!f.source) take(f.name, undefined, false);
+  return !srd && refs.length === 1 ? refs[0] : null;
+}
+
 async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolContext): Promise<Links> {
   const items = input.inventory_add ?? [];
   const spells = input.spells_add ?? [];
@@ -223,7 +251,7 @@ async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolConte
       return entry ? linkedItem(item, entry, catalog) : null;
     }),
     spells: spells.map((spell) => exactEntry(index, campaign, spell.name, 'spell')),
-    feats: feats.map((f) => featRef(f.name, data)),
+    feats: feats.map((f) => featRef(f.name, data) ?? bookPartRef(f.name, data)),
     catalog,
   };
 }
@@ -708,16 +736,24 @@ function planFromData(c: Character, data: BuilderData, input: ToolInput<'level_u
   return { option, existing, classLevel, sub, subclassChosenNow, features, tie: ties.filter(Boolean).join(' ') || null };
 }
 
-/** The DM's new_features as sheet features (as today), minus those the data adds with the book's text. */
-function dmFeatures(input: ToolInput<'level_up'>, level: number, plan: DataLevel | null): { features: Omit<Feature, 'id'>[]; replaced: string[] } {
-  const fromData = new Set((plan?.features ?? []).map((f) => nameKey(f.name)));
-  const all = (input.new_features ?? []).map((f) => ({
-    name: f.name,
-    description: f.description,
-    source: 'class' as const,
-    sourceName: `${input.class_name} ${level + 1}`,
-    ...(f.uses_max ? { uses: { max: f.uses_max, used: 0 as const, recharge: f.recharge ?? ('long' as const) } } : {}),
-  }));
+/**
+ * The DM's new_features as sheet features (as today), minus those the data adds with the book's text and those
+ * already on the sheet with a book's text (a second, ref-less copy would carry the book's words out in exports).
+ * A book part the DM names gets its ref (bookPartRef), so its words leave exports too.
+ */
+function dmFeatures(input: ToolInput<'level_up'>, level: number, plan: DataLevel | null, have: readonly Feature[], data: BuilderData | null): { features: Omit<Feature, 'id'>[]; replaced: string[] } {
+  const fromData = new Set([...(plan?.features ?? []).map((f) => nameKey(f.name)), ...have.filter((f) => f.ref?.textCopied).map((f) => nameKey(f.name))]);
+  const all = (input.new_features ?? []).map((f) => {
+    const ref = featRef(f.name, data) ?? bookPartRef(f.name, data);
+    return {
+      name: f.name,
+      description: f.description,
+      source: 'class' as const,
+      sourceName: `${input.class_name} ${level + 1}`,
+      ...(f.uses_max ? { uses: { max: f.uses_max, used: 0 as const, recharge: f.recharge ?? ('long' as const) } } : {}),
+      ...(ref ? { ref } : {}),
+    };
+  });
   return { features: all.filter((f) => !fromData.has(nameKey(f.name))), replaced: all.filter((f) => fromData.has(nameKey(f.name))).map((f) => f.name) };
 }
 
@@ -751,7 +787,7 @@ function dataLevelOptions(plan: DataLevel, data: BuilderData, input: ToolInput<'
 function bookLines(plan: DataLevel | null, replaced: string[], spells: { added: string[]; missing: string[] }): string[] {
   if (!plan) return [];
   const lines: string[] = [];
-  const fromBooks = plan.features.filter((f) => f.ref).map((f) => `- ${f.name} (${f.ref?.sourceTitle}) — its text is on the sheet`);
+  const fromBooks = plan.features.filter((f) => f.ref).map((f) => `- ${f.name} (${f.ref?.sourceTitle}) — get_character_sheet has its text`);
   if (fromBooks.length) lines.push("Features from the player's books (added with their text):", ...fromBooks);
   if (replaced.length) lines.push(`Used the book's text instead of your description for: ${replaced.join(', ')}.`);
   if (plan.tie) lines.push(plan.tie);
@@ -777,7 +813,7 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   const plan = data ? planFromData(before, data, input) : null;
   const index = plan?.sub?.source && plan.sub.alwaysPreparedSpells?.length ? await loadIndexOrNull(ctx) : null;
   const findSpell = (name: string) => exactEntry(index, campaign, name, 'spell') ?? undefined;
-  const { features: extra, replaced } = dmFeatures(input, level, plan);
+  const { features: extra, replaced } = dmFeatures(input, level, plan, before.features, data);
   const spells = { added: [] as string[], missing: [] as string[] };
   const change = await mutateCharacter(ctx, (c) => {
     const r = levelUp(c, {

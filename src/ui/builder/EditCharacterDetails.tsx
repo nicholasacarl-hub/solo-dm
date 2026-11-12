@@ -43,7 +43,8 @@ export function detailsChange(c: Character, value: DetailsValue): SheetChange {
       portrait: value.portrait || c.portrait,
       personality,
     },
-    notice: `Player edited their character details: ${changed.join(', ')}`,
+    // The personality text itself is on the sheet the DM can pull up (one line: notices are parsed back line by line).
+    notice: `Player edited their character details: ${changed.join(', ')}${PERSONALITY_KEYS.some((k) => (personality[k] ?? '') !== (c.personality[k] ?? '')) ? ' (get_character_sheet has the new text)' : ''}`,
   };
 }
 

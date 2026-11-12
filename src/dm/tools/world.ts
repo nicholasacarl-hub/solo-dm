@@ -371,7 +371,8 @@ export async function searchMemoryTool(input: ToolInput<'search_memory'>, ctx: T
   }
   return ok(
     ranked
-      .map(({ doc }) => `- ${doc.title} (${doc.label}${doc.secret ? ', secret' : ''}): ${snippet(doc.text, words)}`)
+      // An entry the query names exactly comes back whole (the prompt's journal cuts long details).
+      .map(({ doc }) => `- ${doc.title} (${doc.label}${doc.secret ? ', secret' : ''}): ${doc.title.trim().toLowerCase() === phrase ? doc.text.trim().replace(/\n/g, '\n  ') : snippet(doc.text, words)}`)
       .join('\n'),
   );
 }

@@ -130,7 +130,7 @@ describe('characterSheetText', () => {
     const long = Array.from({ length: 30 }, () => para).join('\n\n'); // 30,028 characters
     const kept = Array.from({ length: 19 }, () => para).join('\n\n  '); // the 19 paragraphs that end before 20,000
     expect(characterSheetText(mira({ personality: { backstory: long } }))).toContain(
-      `- Backstory: ${kept} [11,011 more characters are too long for this sheet; ask the player if you need the rest]`,
+      `- Backstory: ${kept} [the last 11,009 characters didn't fit on this sheet; ask the player if you need them]`,
     );
   });
 
@@ -139,7 +139,8 @@ describe('characterSheetText', () => {
     const kept = sheet.split('- Backstory: ')[1].split(' [')[0];
     expect(kept.length).toBe(SHEET_TEXT_MAX - 1);
     expect(kept).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
-    expect(sheet).toContain(' [4,002 more characters are too long for this sheet;');
+    // 2,001 dragons are left out: counted as characters, not as UTF-16 units.
+    expect(sheet).toContain(" [the last 2,001 characters didn't fit on this sheet;");
   });
 
   it('stays linear on a pathological paste', () => {
@@ -147,7 +148,21 @@ describe('characterSheetText', () => {
     const start = performance.now();
     const sheet = characterSheetText(mira({ personality: { backstory: paste } }));
     expect(performance.now() - start).toBeLessThan(1000);
-    expect(sheet).toMatch(/- Backstory: x\n {2}y y y .* \[\d{3},\d{3} more characters are too long for this sheet/);
+    expect(sheet).toMatch(/- Backstory: x\n {2}y y y .* \[the last \d{3},\d{3} characters didn't fit on this sheet/);
+  });
+
+  it("turns a heading inside a field into a bold line, so it can't pass for a section of the sheet", () => {
+    const backstory = '## Childhood\nGrew up on the flats.\n\n### Quests\nFind the dragon.';
+    const sheet = characterSheetText(mira({ personality: { backstory } }));
+    expect(sheet).toContain('- Backstory: **Childhood**\n  Grew up on the flats.\n\n  **Quests**\n  Find the dragon.');
+    expect(sheet).not.toMatch(/^ *#+ (Childhood|Quests)/m);
+    // "#hashtag" and a lone "#" aren't headings.
+    expect(characterSheetText(mira({ personality: { bonds: '#oathbound to the #lighthouse' } }))).toContain('- Bonds: #oathbound to the #lighthouse');
+  });
+
+  it('reads a vertical tab, form feed or line separator as a line break, and a paragraph separator as a blank line', () => {
+    const backstory = 'One.\vTwo.\fThree.\u2028Four.\u2029Five.';
+    expect(characterSheetText(mira({ personality: { backstory } }))).toContain('- Backstory: One.\n  Two.\n  Three.\n  Four.\n\n  Five.');
   });
 
   it("shows a feature's rules text whole, its paragraphs and table kept", () => {
@@ -195,9 +210,10 @@ describe('book text copied onto the sheet (structured imports, spec §7.2)', () 
     const para = `${'banked heat '.repeat(83)}${GLOAMWOOD_MARKERS[0]}`; // about 1,040 characters
     const huge = { ...emberWard, description: Array.from({ length: 25 }, () => para).join('\n\n') };
     const sheet = characterSheetText(mira({ features: [huge] }));
-    expect(sheet).toMatch(/\n {2}<\/imported-content> \[\d{1},\d{3} more characters are too long for this sheet; ask the player if you need the rest\]/);
+    // Book text points to the book, not to the player (who might paste the book's words into the chat).
+    expect(sheet).toMatch(/\n {2}<\/imported-content> \[the last \d,\d{3} characters of the book's text didn't fit on this sheet; rule from what is here, or read the entry with get_entry\]/);
     const redacted = redactImported(sheet);
-    expect(redacted).toMatch(/- \*\*Ember Ward\*\* \(Ember Warden 3\): \[Text from the player's imported book "[^"]+" was left out of this copy\.\] \[\d,\d{3} more characters/);
+    expect(redacted).toMatch(/- \*\*Ember Ward\*\* \(Ember Warden 3\): \[Text from the player's imported book "[^"]+" was left out of this copy\.\] \[the last \d,\d{3} characters of the book's text/);
     expect(redacted).not.toContain(GLOAMWOOD_MARKERS[0]);
     expect(redacted).not.toContain('banked heat');
   });
@@ -265,5 +281,42 @@ describe('transformations in the DM-facing text', () => {
     const howItEnds = `${'Find the sire in the drowned chapel and drink from the font. '.repeat(5)}`.slice(0, 300).trim();
     const long = { ...turned, transformations: turned.transformations?.map((t) => ({ ...t, summary, howItEnds })) };
     expect(characterSheetText(long)).toContain(`(Fledgling; imposed; since session 2): ${summary.trim()} How it could end: ${howItEnds}`);
+  });
+});
+
+describe('items and spells the rules entries do not describe', () => {
+  const blades = {
+    id: 'i-blades',
+    name: 'Chained Twin Blades',
+    quantity: 1,
+    equipped: true,
+    description: 'Two hooked blades joined by a length of black chain.\n\nThe smith who taught him to throw them forged the chain from his first sword.',
+  };
+  const robe = { id: 'i-robe', name: 'Robe', quantity: 1, compendiumId: 'srd:item:robe', description: 'A long robe.' };
+  const charm = { id: 'i-charm', name: 'Tide Charm', quantity: 1, homebrewId: 'hb:tide-charm', description: 'Homebrew text.' };
+
+  it("shows a custom item's description whole, under the items, and leaves SRD and homebrew items to get_entry", () => {
+    const sheet = characterSheetText(mira({ inventory: [robe, blades, charm] }));
+    expect(sheet).toContain(
+      'Robe · Chained Twin Blades (equipped) · Tide Charm\n- **Chained Twin Blades**: Two hooked blades joined by a length of black chain.\n\n  The smith who taught him to throw them forged the chain from his first sword.\n**Coins:**',
+    );
+    expect(sheet).not.toContain('A long robe.');
+    expect(sheet).not.toContain('Homebrew text.');
+  });
+
+  it("wraps the DM's words on a book's item like copied text, and leaves the app's own words on one to get_entry", () => {
+    const lantern = { id: 'i-lantern', name: 'Lantern of Hollow Light', quantity: 1, description: `The wick never burns down. ${GLOAMWOOD_MARKERS[6]}`, ref: importedRef() };
+    const plain = { ...lantern, id: 'i-plain', name: 'Plain Lantern', description: 'From your book.', ref: importedRef({ textCopied: false }) };
+    const sheet = characterSheetText(mira({ inventory: [lantern, plain] }));
+    expect(sheet).toContain(`- **Lantern of Hollow Light**: <imported-content source="${GLOAMWOOD_TITLE}">\n  The wick never burns down. ${GLOAMWOOD_MARKERS[6]}\n  </imported-content>`);
+    expect(sheet).not.toContain('From your book.');
+    expect(redactImported(sheet)).not.toContain(GLOAMWOOD_MARKERS[6]);
+  });
+
+  it('shows the notes the DM wrote on a spell it granted, under its level', () => {
+    const base = mira().spellcasting!;
+    const scale = { id: 'sp-scale-shield', name: 'Shield', level: 1 as const, prepared: true, source: 'Granted in play', notes: 'Granted by the black scale:\n  once per dawn without a slot.' };
+    const sheet = characterSheetText(mira({ spellcasting: { ...base, spells: [...base.spells, scale] } }));
+    expect(sheet).toMatch(/- Level 1: [^\n]*Shield \(Granted in play\)[^\n]*\n {2}- Shield: Granted by the black scale: once per dawn without a slot\./);
   });
 });

@@ -4,6 +4,7 @@
  */
 import { ABILITIES, SKILLS, SKILL_NAMES, type Character, type Feature, type InventoryItem, type KnownSpell, type SpellSlotLevel } from '@/types';
 import { copiedTextMissing, wrapImported } from '@/lib/importedContent';
+import { codePoints, safeEnd } from '@/lib/text';
 import { formatCurrency, totalGp } from './character';
 import { conditionName } from './conditions';
 import { xpSummary } from './progression';
@@ -33,35 +34,40 @@ const SLOT_LEVELS: readonly SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 /**
  * The most of one free-text field the DM's sheet carries: a personality field, the player's notes, a feature's
- * rules text. Real sheets stay far below it (a long backstory runs a few thousand characters, the longest SRD
- * feature about 3,000); it only keeps a pasted book from swelling every request of a session, and past it the
- * sheet says how much it left out. The frozen prompt and get_character_sheet render the same text.
+ * rules text, an item's description. Real sheets stay far below it (a long backstory runs a few thousand
+ * characters, the longest SRD feature about 4,300: Wizard Spellcasting); it only keeps a pasted book from
+ * swelling every request of a session, and past it the sheet says how much it left out. The frozen prompt and
+ * get_character_sheet render the same text.
  */
 export const SHEET_TEXT_MAX = 20_000;
 
 /**
- * Text as written: lines and paragraphs kept (a run of blank lines becomes one), a line's indent kept, runs of
- * spaces after a word and trailing spaces gone. Linear in the text (no pattern that backtracks over a long run).
+ * Text as written: lines and paragraphs kept (a run of blank lines becomes one; a vertical tab, form feed or line
+ * separator is a line break, a paragraph separator a blank line), a line's indent kept, runs of spaces after a word
+ * and trailing spaces gone. A Markdown heading inside the text becomes a bold line, so it can't read as a section of
+ * the sheet or the prompt around it. Linear in the text (no pattern that backtracks over a long run).
  */
 function tidy(text: string): string {
   return text
-    .replace(/\r\n?/g, '\n')
+    .replace(/\r\n?|[\v\f\u2028]/g, '\n')
+    .replace(/\u2029/g, '\n\n')
     .split('\n')
-    .map((line) => line.replace(/(\S)[^\S\n]+/g, '$1 ').trimEnd())
+    .map((line) => line.replace(/(\S)[^\S\n]+/g, '$1 ').trimEnd().replace(/^([^\S\n]*)#{1,6}[^\S\n]+(\S.*)$/, '$1**$2**'))
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
-/** The text cut at SHEET_TEXT_MAX, at a paragraph, line or word end near it, and how many characters that left out. */
+/**
+ * The text cut at SHEET_TEXT_MAX, at a paragraph, line or word end near it and never between the halves of an
+ * emoji, and how many characters (code points) that left out.
+ */
 function capped(text: string): { kept: string; left: number } {
   if (text.length <= SHEET_TEXT_MAX) return { kept: text, left: 0 };
   const head = text.slice(0, SHEET_TEXT_MAX);
   const end = [head.lastIndexOf('\n\n'), head.lastIndexOf('\n'), head.lastIndexOf(' ')].find((i) => i > SHEET_TEXT_MAX * 0.8) ?? SHEET_TEXT_MAX;
-  // Never between the halves of a surrogate pair (an emoji in a run with no spaces): a lone half isn't valid text.
-  const at = end > 0 && /[\uD800-\uDBFF]/.test(text[end - 1]) ? end - 1 : end;
-  const kept = head.slice(0, at).trimEnd();
-  return { kept, left: text.length - kept.length };
+  const kept = text.slice(0, safeEnd(text, end)).trimEnd();
+  return { kept, left: codePoints(text.slice(kept.length).trim()) };
 }
 
 /** Every line after the first indented two spaces, so a multi-line text stays inside its list item. */
@@ -72,9 +78,15 @@ function indented(text: string): string {
     .join('\n');
 }
 
-/** What a cut field says after its text. */
-function leftOut(left: number): string {
-  return left > 0 ? ` [${formatInt(left)} more characters are too long for this sheet; ask the player if you need the rest]` : '';
+/**
+ * What a cut field says after its text. A book's text points to the book, not to the player: a player who pasted
+ * the rest into the chat would put the book's words in the transcript, unwrapped.
+ */
+function leftOut(left: number, book = false): string {
+  if (left <= 0) return '';
+  return book
+    ? ` [the last ${formatInt(left)} characters of the book's text didn't fit on this sheet; rule from what is here, or read the entry with get_entry]`
+    : ` [the last ${formatInt(left)} characters didn't fit on this sheet; ask the player if you need them]`;
 }
 
 /** A free-text field for a list item, whole up to SHEET_TEXT_MAX; a one-line text is formatted as it always was. */
@@ -262,9 +274,11 @@ function spellcastingLines(c: Character): string[] {
   for (const spell of [...sc.spells].sort((a, b) => a.level - b.level || byName(a, b))) {
     byLevel.set(spell.level, [...(byLevel.get(spell.level) ?? []), spell]);
   }
-  const lines = [...byLevel.entries()].map(
-    ([level, spells]) => `- ${level === 0 ? 'Cantrips' : `Level ${level}`}: ${spells.map((s) => `${s.name}${spellTags(s, classNames)}`).join(', ')}`,
-  );
+  const lines = [...byLevel.entries()].flatMap(([level, spells]) => [
+    `- ${level === 0 ? 'Cantrips' : `Level ${level}`}: ${spells.map((s) => `${s.name}${spellTags(s, classNames)}`).join(', ')}`,
+    // What the DM wrote about a spell it granted (spells_add notes, 400 characters at most), whole, under its level.
+    ...spells.flatMap((s) => (s.notes?.trim() ? [`  - ${s.name}: ${s.notes.replace(/\s+/g, ' ').trim()}`] : [])),
+  ]);
   return ['### Spellcasting', header.join(' · '), ...lines];
 }
 
@@ -284,7 +298,7 @@ function featureDescription(f: Feature): string {
     return `: (text from the player's book “${f.ref.sourceTitle}” isn't on this device — call get_character_sheet after they import it, or rule from the name)`;
   }
   const { kept, left } = capped(tidy(d));
-  return `: ${indented(wrapImported(f.ref.sourceTitle, kept))}${leftOut(left)}`;
+  return `: ${indented(wrapImported(f.ref.sourceTitle, kept))}${leftOut(left, true)}`;
 }
 
 function featureLine(f: Feature): string {
@@ -311,11 +325,28 @@ function itemText(i: InventoryItem): string {
   return `${i.name}${i.quantity > 1 ? ` ×${i.quantity}` : ''}${tags.length ? ` (${tags.join(', ')})` : ''}`;
 }
 
+/**
+ * An item's description when no rules entry the DM can read supplies it, whole: a custom item the player or the DM
+ * made (no compendium or homebrew entry, no book), or the DM's own words on a book's item (ref.textCopied), wrapped
+ * like copied text. SRD, homebrew and book items are read with get_entry.
+ */
+function itemDescriptionLine(i: InventoryItem): string | null {
+  const d = i.description?.trim();
+  if (!d) return null;
+  if (i.ref) {
+    if (!i.ref.textCopied || copiedTextMissing(i)) return null;
+    const { kept, left } = capped(tidy(d));
+    return `- **${i.name}**: ${indented(wrapImported(i.ref.sourceTitle, kept))}${leftOut(left, true)}`;
+  }
+  return i.compendiumId || i.homebrewId ? null : `- **${i.name}**: ${fieldText(d)}`;
+}
+
 function equipmentLines(c: Character): string[] {
   const gp = totalGp(c.currency);
   const coins = `**Coins:** ${formatCurrency(c.currency)}${gp > 0 ? ` (${Number.isInteger(gp) ? gp : gp.toFixed(2)} gp total)` : ''}`;
   const items = c.inventory.length ? c.inventory.map(itemText).join(' · ') : 'nothing';
-  return ['### Equipment', items, coins];
+  const described = c.inventory.flatMap((i) => itemDescriptionLine(i) ?? []);
+  return ['### Equipment', items, ...described, coins];
 }
 
 /** What the player wrote about the hero, whole: the DM's main material for the story. */

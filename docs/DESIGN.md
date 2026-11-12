@@ -84,12 +84,20 @@ preserved thinking valid.
 
 **The hero's sheet** (`characterSheetText`, src/engine/summary.ts) is one rendering for the frozen
 prompt's snapshot and `get_character_sheet`. The numbers are compact; every text is whole: what the
-player wrote (traits, ideals, bonds, flaws, appearance, backstory, notes), each feature's rules text,
-and a transformation's summary and way back, with paragraphs and lists kept and indented under their
-bullet. A field is cut only past 20,000 characters (`SHEET_TEXT_MAX`, far above any real sheet: the
-longest SRD feature is about 3,000, a level-20 SRD character's features 6,000–13,000 in all), and then
-the sheet says how much it left out and to ask the player. A personality edit mid-session reaches the DM
-as a one-line notice quoting its opening and pointing to `get_character_sheet` for the whole text.
+player wrote (traits, ideals, bonds, flaws, appearance, backstory, notes), each feature's rules text, a
+transformation's summary and way back, the description of an item no rules entry describes (a custom
+item, or the DM's words on a book's item, wrapped like copied text) and the DM's notes on a spell it
+granted. Paragraphs and lists are kept and indented under their bullet; a Markdown heading inside a field
+becomes a bold line, so it can't pass for a section of the sheet. A field is cut only past 20,000
+characters (`SHEET_TEXT_MAX`, far above any real sheet: the longest SRD feature is about 4,300, Wizard
+Spellcasting, and a level-20 SRD character's features 8,000–15,000 in all), at a paragraph, line or word
+end and never inside an emoji; the sheet then says how many characters it left out, and to ask the player
+(for book text: to rule from what is there or read the entry). The sheet's text boxes tell the player when
+a field passes that length. Edits mid-session reach the DM as one-line notices (they are parsed back line
+by line): a personality or notes edit quotes its opening and points to `get_character_sheet` for the
+whole text, as do a details edit and a rebuild. Every cut the DM's text goes through (notices, journal
+lines, the sheet) ends at a whole character, so no request carries half an emoji. A journal line cut at 300
+characters points to `search_memory`, which returns an entry whole when the query is its name.
 
 **Ending a session** (player clicks End Session, or the DM suggests it, or the context passes the
 soft limit): the app appends a wrap-up instruction; the DM records any missing journal/quest updates
@@ -605,7 +613,11 @@ byte-identical.
 lineages, feats, a background's feature; the DM's words about an imported entry) carries an
 `ImportedRef`: the book's title and fingerprint, the option and part, where the text sits and its hash.
 The sheet text wraps each copied description whole, as one passage (cut only past `SHEET_TEXT_MAX`,
-with the note outside the wrapper), so the DM's frozen prompt can be redacted whole.
+with the note outside the wrapper), so the DM's frozen prompt can be redacted whole; a wrapper left open
+(its closing marker cut off) is redacted to the end of its text. A feature the DM adds by the name of one
+of the book's parts (`features_add`, `level_up` extras) gets that part's ref, unless the SRD prints the
+same name; naming a copied feature the sheet already has adds no second copy; and a call the schema
+refuses quotes its long strings by their length, never their words.
 Exports and GitHub saves (`exportCampaignBundleWithReport`) replace copied descriptions — and the DM's
 `level_up` / `update_character` inputs that echo them — with a placeholder sentence (the stored campaign
 and transcript are never changed), then remove every wrapped passage; the download toast says what was
