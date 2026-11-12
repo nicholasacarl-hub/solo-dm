@@ -6,9 +6,10 @@ vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
 import { createRulesIndex } from '@/data/search';
 import { materializeEntries } from '@/data/structured/materialize';
-import { redactImported } from '@/lib/importedContent';
+import { SHEET_TEXT_MAX } from '@/engine';
+import { redactImported, wrapImported } from '@/lib/importedContent';
 import { gloamwoodEntries, gloamwoodRecords, gloamwoodSource, GLOAMWOOD_TITLE } from '@/test/structuredFixtures';
-import type { CompendiumEntry } from '@/types';
+import { HOMEBREW_SOURCE_ID, type CompendiumEntry } from '@/types';
 import { deps, resetDmDeps, setDmDeps } from '../deps';
 import { setupHarness } from '../testing/harness';
 import type { ToolContext } from './context';
@@ -66,13 +67,19 @@ describe('get_entry and lookup_rules for reviewed imports (spec §6.7)', () => {
   });
 
   it('keeps the stats line and text within the per-entry and per-call budgets', async () => {
-    const huge: CompendiumEntry = { ...SRD_GOBLIN, id: 'lib:gloam:999', sourceId: 'gloam', sourceName: GLOAMWOOD_TITLE, name: 'Endless Drake', text: 'Long text. '.repeat(1500), data: { recordId: 'rec:x', size: 'Large', type: 'Dragon', ac: 17, hp: 52, adaptations: [] } };
+    // Past the sheet's field limit, so get_entry cuts it too.
+    const huge: CompendiumEntry = { ...SRD_GOBLIN, id: 'lib:gloam:999', sourceId: 'gloam', sourceName: GLOAMWOOD_TITLE, name: 'Endless Drake', text: 'Long text. '.repeat(2500), data: { recordId: 'rec:x', size: 'Large', type: 'Dragon', ac: 17, hp: 52, adaptations: [] } };
     const h = setup([huge]);
     const entry = await h.run('get_entry', { name: 'Endless Drake' });
     const inner = entry.content.replace(/^<imported-content[^>]*>\n/, '').replace(/\n<\/imported-content>$/, '');
     expect(inner).toContain('Reviewed stats: Large Dragon · AC 17 · HP 52');
     const body = inner.slice(inner.indexOf('Reviewed stats'));
-    expect(body.length).toBeLessThanOrEqual(RULES_OUTPUT_LIMIT + 80);
+    expect(body.length).toBeLessThanOrEqual(SHEET_TEXT_MAX + 80);
+    // The cut says how much is missing; a second get_entry would give the same text, so it doesn't send the DM there.
+    const kept = body.slice(body.indexOf('\n\n') + 2, body.lastIndexOf('\n'));
+    const left = huge.text.slice(kept.length).trim().length;
+    expect(body.endsWith(`\n[the last ${left.toLocaleString('en-US')} characters didn't fit; rule from what is here]`)).toBe(true);
+    expect(entry.content).not.toContain('use get_entry');
     const search = await h.run('lookup_rules', { query: 'Endless Drake', kinds: ['monster'], limit: 1 });
     const block = search.content.slice(search.content.indexOf('Reviewed stats'));
     expect(block.length).toBeLessThanOrEqual(RULES_HIT_LIMIT + 120);
@@ -85,6 +92,37 @@ describe('get_entry and lookup_rules for reviewed imports (spec §6.7)', () => {
     expect(out.content).toContain('Also named this: Ember Warden (Gloamwood Notes). Use lookup_rules to read them.');
     const alone = await h.run('get_entry', { name: 'Glimmerwing Drake' });
     expect(alone.content).not.toContain('Also named this');
+  });
+});
+
+describe("get_entry reads one entry whole up to the sheet's field limit (SHEET_TEXT_MAX)", () => {
+  const homebrew = (name: string, text: string): CompendiumEntry => ({ id: `hb:${name}`, sourceId: HOMEBREW_SOURCE_ID, sourceName: 'Homebrew', kind: 'rule', name, text });
+
+  it("returns a subsystem longer than lookup_rules' 6,000 characters whole", async () => {
+    const text = Array.from({ length: 90 }, (_, i) => `${i + 1}. A rule of the invented marsh-crossing subsystem, with a small detail of its own for the table.`).join('\n');
+    expect(text.length).toBeGreaterThan(RULES_OUTPUT_LIMIT);
+    const h = setup([homebrew('Marsh Crossing', text)]);
+    const out = await h.run('get_entry', { name: 'Marsh Crossing' });
+    expect(out.content).toContain(text);
+    expect(out.content).not.toContain("didn't fit");
+    const search = await h.run('lookup_rules', { query: 'Marsh Crossing', limit: 1 });
+    expect(search.content).toContain('…(truncated — use get_entry for the full text)');
+  });
+
+  it('cuts past it never inside an emoji, and closes a quoted book passage before the note', async () => {
+    const emoji = homebrew('Dragon Tally', `${'x'.repeat(SHEET_TEXT_MAX - 1)}🐉 tail`);
+    const quoted = homebrew('Almanac Excerpts', `${'House rule. '.repeat(100)}${wrapImported(GLOAMWOOD_TITLE, 'Quoted book words. '.repeat(1500))}\nAfter the quote.`);
+    const h = setup([emoji, quoted]);
+    const cut = await h.run('get_entry', { name: 'Dragon Tally' });
+    expect(cut.content.endsWith(`xxx\n[the last 6 characters didn't fit; rule from what is here]`)).toBe(true);
+    expect(cut.content).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+
+    const out = await h.run('get_entry', { name: 'Almanac Excerpts' });
+    expect(out.content).toMatch(/Quoted book wo[a-z.]* <\/imported-content>\n\[the last [\d,]+ characters didn't fit; rule from what is here\]$/);
+    // A copy replaces the passage only: the house rules and the note stay, no book words do.
+    const copy = redactImported(out.content);
+    expect(copy).toContain(`House rule. [Text from the player's imported book "${GLOAMWOOD_TITLE}" was left out of this copy.]\n[the last`);
+    expect(copy).not.toContain('Quoted book words');
   });
 });
 

@@ -2,8 +2,10 @@
  * What a tool handler receives, plus helpers shared by the handlers: precondition checks,
  * atomic character updates, and log lines.
  */
+import { conditionKey, conditionName, matchStandardCondition, normalizeConditionId } from '@/engine';
 import type { DmPhase, GameStore } from '@/state/gameStore';
 import type {
+  ActiveCondition,
   Campaign,
   Character,
   CombatState,
@@ -155,6 +157,23 @@ export function warningsOf(events: readonly GameEvent[]): GameEvent[] {
 
 export function changesOf(events: readonly GameEvent[]): GameEvent[] {
   return events.filter((e) => e.type !== 'warning');
+}
+
+/**
+ * A line for each added name kept as a homebrew condition although a condition's word is in it ("Protection from
+ * Poison"): the DM's name decides (the engine's strict match), and the DM sees that no rules of that condition
+ * apply and how to apply them. Only names among the creature's conditions `after` the change count, so an add the
+ * engine refused gets no line.
+ */
+export function keptHomebrewLines(added: readonly { condition: string }[] | undefined, after: readonly ActiveCondition[]): string[] {
+  const lines = (added ?? []).flatMap(({ condition }) => {
+    const name = condition.trim();
+    const word = matchStandardCondition(name) ? null : normalizeConditionId(name);
+    if (!word || !after.some((c) => conditionKey(c.id) === conditionKey(name))) return [];
+    const standard = conditionName(word);
+    return [`Kept "${name}" as a homebrew condition: no ${standard} rules apply. To apply ${standard}, add "${standard}".`];
+  });
+  return [...new Set(lines)];
 }
 
 /** Copy of an object without its undefined values (so upserts never blank existing fields). */

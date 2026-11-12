@@ -212,6 +212,37 @@ describe('update_combat: hidden creatures (D41)', () => {
   });
 });
 
+describe("update_combat conditions by the DM's own name (SRD 5.2.1 Rules Glossary conditions)", () => {
+  it('keeps a name with a condition word inside it as homebrew, tells the DM (not the player), and removes by name', async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    const out = await h.run('update_combat', {
+      action: 'conditions',
+      target: 'Bandit 1',
+      conditions_add: [{ condition: 'Mark of the Invisible Hand', source: 'Thieves guild tattoo' }, { condition: 'Blindness' }],
+    });
+    expect(named(h.s().combat, 'Bandit 1')?.conditions).toEqual([{ id: 'Mark of the Invisible Hand', source: 'Thieves guild tattoo' }, { id: 'blinded' }]);
+    expect(out.content).toContain(
+      'Bandit 1: +Mark of the Invisible Hand, +blinded\nKept "Mark of the Invisible Hand" as a homebrew condition: no Invisible rules apply. To apply Invisible, add "Invisible".\n',
+    );
+    expect(toolLines(h.s().log).at(-1)?.summary).toBe('Bandit 1: +Mark of the Invisible Hand, +blinded');
+    // Removals compare as the engine does: case aside, and a homebrew name never takes the condition it mentions.
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_add: [{ condition: 'Invisible' }] });
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_remove: ['mark of the invisible hand', 'BLINDED'] });
+    expect(named(h.s().combat, 'Bandit 1')?.conditions).toEqual([{ id: 'invisible' }]);
+  });
+
+  it('removes a name the creature has as named, before reading it as a standard condition', async () => {
+    const combat = sampleCombat();
+    // An older save's homebrew "Fear" beside a real Frightened ("Fear" names Frightened now).
+    combat.combatants[2].conditions = [{ id: 'Fear', source: 'older save' }, { id: 'frightened' }];
+    const h = setup({ state: { combat } });
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 2', conditions_remove: ['Fear'] });
+    expect(named(h.s().combat, 'Bandit 2')?.conditions).toEqual([{ id: 'frightened' }]);
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 2', conditions_remove: ['Fear'] });
+    expect(named(h.s().combat, 'Bandit 2')?.conditions).toEqual([]);
+  });
+});
+
 describe('update_combat on a battle map', () => {
   it('places newcomers where asked, or arriving at the edge farthest from the hero', async () => {
     const h = setup({ state: { combat: sampleMappedCombat() } });

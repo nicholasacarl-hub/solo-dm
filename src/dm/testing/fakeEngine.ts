@@ -13,7 +13,6 @@ import {
   type Character,
   type Combatant,
   type CombatState,
-  type ConditionId,
   type D20TestResult,
   type DieRoll,
   type GameEvent,
@@ -38,6 +37,11 @@ export {
   transformationFeatures,
   transformationGrants,
 } from '@/engine/transform';
+// Condition names run the real matchers (pure): the DM tools decide by them whether a name is a standard condition.
+import { matchStandardCondition } from '@/engine/conditions';
+export { conditionKey, matchStandardCondition, normalizeConditionId } from '@/engine/conditions';
+// get_entry's budget is the sheet's real field limit.
+export { SHEET_TEXT_MAX } from '@/engine/summary';
 // The battle-map modules run the real engine too (pure; they use the real ./combat and ./conditions inside).
 import * as realCombat from '@/engine/combat';
 export * from '@/engine/grid';
@@ -351,21 +355,24 @@ export const recordDeathSave: typeof Engine.recordDeathSave = (c, natural) => {
   return { character: { ...c, deathSaves: ds }, events: [ev('death-save', `Death save: ${outcome}`)], outcome };
 };
 
-export const normalizeConditionId: typeof Engine.normalizeConditionId = (input) => {
-  const key = input.trim().toLowerCase().replace(/^knocked\s+/, '');
-  const ids: ConditionId[] = ['blinded', 'charmed', 'deafened', 'exhaustion', 'frightened', 'grappled', 'incapacitated', 'invisible', 'paralyzed', 'petrified', 'poisoned', 'prone', 'restrained', 'stunned', 'unconscious'];
-  return ids.find((id) => id === key) ?? null;
-};
 export const conditionName: typeof Engine.conditionName = (id) => id.charAt(0).toUpperCase() + id.slice(1);
 
-export const addCondition: typeof Engine.addCondition = (c, condition: ActiveCondition) => ({
-  character: { ...c, conditions: [...c.conditions.filter((x) => x.id !== condition.id), condition] },
-  events: [ev('condition-added', `${conditionName(condition.id)} added`)],
-});
-export const removeCondition: typeof Engine.removeCondition = (c, id) =>
-  c.conditions.some((x) => x.id === id)
+/** As the real engine: a standard name ("Poisoned") becomes its id, any other name is kept as a homebrew condition. */
+const conditionIdOf = (name: string): string => matchStandardCondition(name)?.id ?? name.trim();
+
+export const addCondition: typeof Engine.addCondition = (c, condition: ActiveCondition) => {
+  const id = conditionIdOf(condition.id);
+  return {
+    character: { ...c, conditions: [...c.conditions.filter((x) => x.id !== id), { ...condition, id }] },
+    events: [ev('condition-added', `${conditionName(id)} added`)],
+  };
+};
+export const removeCondition: typeof Engine.removeCondition = (c, name) => {
+  const id = c.conditions.some((x) => x.id === name) ? name : conditionIdOf(name);
+  return c.conditions.some((x) => x.id === id)
     ? { character: { ...c, conditions: c.conditions.filter((x) => x.id !== id) }, events: [ev('condition-removed', `${conditionName(id)} removed`)] }
     : warn(c, `${conditionName(id)} was not active`);
+};
 export const changeExhaustion: typeof Engine.changeExhaustion = (c, delta) => {
   const exhaustion = Math.max(0, Math.min(6, c.exhaustion + delta));
   return { character: { ...c, exhaustion }, events: [ev('exhaustion-changed', `Exhaustion ${c.exhaustion} → ${exhaustion}`)] };

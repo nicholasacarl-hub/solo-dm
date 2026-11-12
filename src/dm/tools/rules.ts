@@ -9,9 +9,11 @@
 import type { RulesIndex, SearchHit } from '@/data';
 import { isReviewedImport } from '@/data/structured/materialize';
 import { statsLine } from '@/data/structured/statsLine';
+import { SHEET_TEXT_MAX } from '@/engine';
+import { formatInt } from '@/engine/util';
 import { nameKey } from '@/lib/id';
-import { wrapImported } from '@/lib/importedContent';
-import { safeEnd } from '@/lib/text';
+import { closeCutWrapper, wrapImported } from '@/lib/importedContent';
+import { codePoints, safeEnd } from '@/lib/text';
 import {
   HOMEBREW_SOURCE_ID,
   SRD_SOURCE_ID,
@@ -31,7 +33,10 @@ function isSpoiler(entries: readonly CompendiumEntry[], kinds?: readonly string[
   return entries.some((e) => SPOILER_KINDS.has(e.kind) || e.sourceId === HOMEBREW_SOURCE_ID) || (kinds ?? []).some((k) => SPOILER_KINDS.has(k as ContentKind));
 }
 
-/** Total characters of rules text returned per call, and per entry. */
+/**
+ * lookup_rules: total characters of rules text returned per call, and per entry. get_entry reads one entry whole up to
+ * SHEET_TEXT_MAX, as the hero's sheet carries a field (a long magic item, a homebrew subsystem).
+ */
 export const RULES_OUTPUT_LIMIT = 6000;
 export const RULES_HIT_LIMIT = 1800;
 
@@ -109,11 +114,23 @@ async function loadIndex(ctx: ToolContext): Promise<RulesIndex> {
   }
 }
 
-function clip(text: string, max: number): string {
+/** lookup_rules' note after a cut: the whole entry is one get_entry away. */
+const searchCutNote = (): string => '…(truncated — use get_entry for the full text)';
+
+/** get_entry's note after a cut: calling again gives the same text, so it says how much is missing, not where to look. */
+const entryCutNote = (left: number): string => `[the last ${formatInt(left)} characters didn't fit; rule from what is here]`;
+
+/**
+ * The text cut near `max` (at a line end when one is close, never between the halves of an emoji), then the note with
+ * how many characters it left out. A cut inside a passage quoted from a book closes it first, so a copy leaves out that
+ * passage only.
+ */
+function clip(text: string, max: number, note: (left: number) => string = searchCutNote): string {
   if (text.length <= max) return text;
   const cut = text.slice(0, safeEnd(text, max));
   const para = cut.lastIndexOf('\n');
-  return `${(para > max * 0.7 ? cut.slice(0, para) : cut).trimEnd()}\n…(truncated — use get_entry for the full text)`;
+  const kept = (para > max * 0.7 ? cut.slice(0, para) : cut).trimEnd();
+  return `${closeCutWrapper(kept)}\n${note(codePoints(text.slice(kept.length).trim()))}`;
 }
 
 function entryHeading(entry: CompendiumEntry): string {
@@ -123,10 +140,10 @@ function entryHeading(entry: CompendiumEntry): string {
 }
 
 /** The entry's text clipped so its stats line (reviewed imports) and the text share one budget. */
-function statsAndText(entry: CompendiumEntry, budget: number): string[] {
+function statsAndText(entry: CompendiumEntry, budget: number, note?: (left: number) => string): string[] {
   const stats = statsLine(entry);
   const room = stats ? Math.max(400, budget - stats.length - 1) : budget;
-  return [stats, clip(entry.text, room)];
+  return [stats, clip(entry.text, room, note)];
 }
 
 function formatHits(hits: readonly SearchHit[]): string {
@@ -178,7 +195,7 @@ export async function getEntryTool(input: ToolInput<'get_entry'>, ctx: ToolConte
     return ok(`No entry named "${input.name}"${kind ? ` (${kind})` : ''}.${names ? ` Closest matches: ${names}.` : ''}`);
   }
   await logTool(ctx, 'get_entry', 'rules', `Looked up: ${found.name}`, { secret: isSpoiler([found]) });
-  const body = [`# ${entryHeading(found)}`, found.summary ?? '', ...statsAndText(found, RULES_OUTPUT_LIMIT)].filter(Boolean);
+  const body = [`# ${entryHeading(found)}`, found.summary ?? '', ...statsAndText(found, SHEET_TEXT_MAX, entryCutNote)].filter(Boolean);
   const hb = found as Partial<HomebrewEntry>;
   if (hb.balanceNotes) body.push(`Balance notes: ${hb.balanceNotes}`);
   const others = sameNamed(index, found, campaign);

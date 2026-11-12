@@ -214,7 +214,11 @@ const SYNONYMS: ReadonlyArray<[RegExp, ConditionId]> = [
   [/\bstun(?:ned)?\b/, 'stunned'],
 ];
 
-/** Map free text ("Poisoned", "knocked prone") to a standard condition id, or null. */
+/**
+ * The standard condition whose word appears anywhere in free text ("Protection from Poison": poisoned), or null.
+ * Too loose to decide what a name is (adding and removing use matchStandardCondition); it spots the condition word
+ * in a name that stays homebrew, so the DM can be told no rules of that condition apply.
+ */
 export function normalizeConditionId(input: string): ConditionId | null {
   const text = (typeof input === 'string' ? input : '').toLowerCase().replace(/[_-]+/g, ' ').trim();
   if (!text) return null;
@@ -227,11 +231,16 @@ export function normalizeConditionId(input: string): ConditionId | null {
   return best?.id ?? null;
 }
 
-/** Whole-input aliases accepted when adding or removing conditions. */
+/**
+ * Whole-input aliases accepted when adding or removing conditions, among them the noun and adjective forms a DM
+ * writes for a condition ("Blindness", "Sleeping", "Terrified").
+ */
 const ALIASES: Record<string, ConditionId> = {
   blind: 'blinded',
+  blindness: 'blinded',
   charm: 'charmed',
   deaf: 'deafened',
+  deafness: 'deafened',
   exhausted: 'exhaustion',
   fatigue: 'exhaustion',
   fatigued: 'exhaustion',
@@ -239,6 +248,7 @@ const ALIASES: Record<string, ConditionId> = {
   scared: 'frightened',
   fear: 'frightened',
   frighten: 'frightened',
+  terrified: 'frightened',
   grapple: 'grappled',
   grabbed: 'grappled',
   incapacitate: 'incapacitated',
@@ -246,10 +256,13 @@ const ALIASES: Record<string, ConditionId> = {
   paralysis: 'paralyzed',
   paralysed: 'paralyzed',
   petrify: 'petrified',
+  petrification: 'petrified',
   poison: 'poisoned',
   restrain: 'restrained',
   stun: 'stunned',
   asleep: 'unconscious',
+  sleeping: 'unconscious',
+  unconsciousness: 'unconscious',
   'knocked out': 'unconscious',
   'knocked unconscious': 'unconscious',
   'knocked prone': 'prone',
@@ -257,18 +270,27 @@ const ALIASES: Record<string, ConditionId> = {
 };
 
 /**
+ * Words that start a condition with a detail after them: each condition's name ("Frightened of the dragon"), and
+ * "exhausted", the usual way to write Exhaustion with its cause ("Exhausted (forced march)").
+ */
+const LEADING_WORDS: ReadonlyArray<readonly [string, ConditionId]> = [
+  ...CONDITION_IDS.map((id) => [id, id] as const),
+  ['exhausted', 'exhaustion'],
+];
+
+/**
  * Stricter than normalizeConditionId, for adding/removing conditions: the input must BE a condition
- * ("Poisoned", "knocked prone") or start with a condition's full name ("Frightened of the dragon"),
- * so homebrew names like "Poison Mist" stay homebrew. `detail` is any trailing text.
+ * ("Poisoned", "knocked prone") or start with a condition's full name ("Frightened of the dragon") or
+ * "Exhausted", so homebrew names like "Poison Mist" stay homebrew. `detail` is any trailing text.
  */
 export function matchStandardCondition(input: string): { id: ConditionId; detail: string } | null {
   const key = (typeof input === 'string' ? input : '').toLowerCase().replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!key) return null;
   if (STANDARD.has(key)) return { id: key as ConditionId, detail: '' };
   if (ALIASES[key]) return { id: ALIASES[key], detail: '' };
-  for (const id of CONDITION_IDS) {
-    if (key.startsWith(id) && /^[\s(:,-]/.test(key.slice(id.length))) {
-      const detail = input.trim().slice(id.length).replace(/^[\s(:,-]+|[\s)]+$/g, '');
+  for (const [word, id] of LEADING_WORDS) {
+    if (key.startsWith(word) && /^[\s(:,-]/.test(key.slice(word.length))) {
+      const detail = input.trim().slice(word.length).replace(/^[\s(:,-]+|[\s)]+$/g, '');
       return { id, detail };
     }
   }
