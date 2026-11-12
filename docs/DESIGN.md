@@ -105,8 +105,8 @@ by hand (`armor_class`, for Mage Armor) gets the formula "set by the DM: <reason
 items, and a change in what every save includes is announced in the tool's result and in the player's equip and
 attune notices ("saving throws now include …"), since the frozen sheet's line dates from the start of the session.
 Those notices, and removing an item from the sheet (which keeps the AC in step as unequipping it would), end with
-`syncArmorClass`'s warning when it keeps an AC set by hand or meets armor it can't identify; the player sees the same
-words as a toast, and the AC stays the DM's to set.
+`syncArmorClass`'s warning when it keeps an AC set by hand or meets armor it can't identify; the player, who can't set
+the AC on the sheet, gets a plain toast ("Your AC stays 15: … your DM will be told"), and the AC stays the DM's to set.
 Paragraphs and lists are kept and indented under their bullet; a Markdown heading inside a field
 becomes a bold line, so it can't pass for a section of the sheet. A field is cut only past 20,000
 characters (`SHEET_TEXT_MAX`, far above any real sheet: the longest SRD feature is about 4,300, Wizard
@@ -164,7 +164,7 @@ tool_result so Claude can correct itself.
 | `resolve_area` | Areas of effect (sphere, cylinder, cone, line, cube, emanation, listed squares): who is caught, with cover; lasting areas become terrain (difficult, obscured, hazard). |
 | `check_map` | Read-only: measure distance, line of sight and cover, plan a path, preview an area, or draw the map. |
 | `lookup_rules` | Search SRD 5.2.1 + enabled imports + homebrew. |
-| `get_entry` | Full text of one spell / monster / item / feature by name (reviewed imports add their stats line; other entries with the same name are listed). |
+| `get_entry` | Full text of one spell / monster / item / feature by name (reviewed imports add their stats line; other entries with the same name are listed). Up to 20,000 characters (`SHEET_TEXT_MAX`); a longer entry says how much didn't fit, to rule from what is there. |
 | `get_character_sheet` | Full current sheet. |
 | `create_homebrew` / `update_homebrew` | Create or modify homebrew (refused when the campaign disables homebrew). |
 | `update_journal` | Upsert NPCs, locations, factions, lore, secrets (DM-only when `secret`). |
@@ -249,6 +249,16 @@ The `<game_state>` block appended to each player message contains: the character
 the scene, the combat summary (if any), open clocks, and **entity cards** — short journal entries
 for any known NPC / place / faction / item whose name (or tag alias) appears in the player's message
 or in the DM's previous narration. This is cheap retrieval that prevents contradictions.
+
+The combat summary (here, in combat tool results and in the frozen prompt's combat section) and the player's
+tracker show the hero's AC from the sheet, never the copy `start_combat` stored, so Shield of Faith or Mage Armor
+mid-fight shows at once. Conditions show the duration and source the DM gave them ("Frightened (until the end of
+your next turn; Banshee)", each part clipped near 60 characters) on the status line, the sheet and the DM's combat
+lines; the player's log and tracker keep bare names, so a source can't name a hidden creature. A condition name is
+matched strictly (with whole-input aliases such as "blindness" and "exhausted …"): an effect the DM names itself
+("Protection from Poison", "Charm of Warding") stays its own condition with no standard rules, and the result says
+so and how to apply the standard one. `take_rest` refuses a dead hero or one below 1 HP before logging anything or
+opening the Hit Dice dialog, and points to the SRD's Stabilizing path (1 HP after 1d4 hours).
 
 ### Player-side controls that talk to the DM
 
