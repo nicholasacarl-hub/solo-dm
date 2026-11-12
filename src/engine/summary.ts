@@ -57,7 +57,9 @@ function tidy(text: string): string {
 function capped(text: string): { kept: string; left: number } {
   if (text.length <= SHEET_TEXT_MAX) return { kept: text, left: 0 };
   const head = text.slice(0, SHEET_TEXT_MAX);
-  const at = [head.lastIndexOf('\n\n'), head.lastIndexOf('\n'), head.lastIndexOf(' ')].find((i) => i > SHEET_TEXT_MAX * 0.8) ?? SHEET_TEXT_MAX;
+  const end = [head.lastIndexOf('\n\n'), head.lastIndexOf('\n'), head.lastIndexOf(' ')].find((i) => i > SHEET_TEXT_MAX * 0.8) ?? SHEET_TEXT_MAX;
+  // Never between the halves of a surrogate pair (an emoji in a run with no spaces): a lone half isn't valid text.
+  const at = end > 0 && /[\uD800-\uDBFF]/.test(text[end - 1]) ? end - 1 : end;
   const kept = head.slice(0, at).trimEnd();
   return { kept, left: text.length - kept.length };
 }

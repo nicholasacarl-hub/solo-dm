@@ -134,6 +134,14 @@ describe('characterSheetText', () => {
     );
   });
 
+  it('never cuts between the halves of an emoji in a run with no spaces', () => {
+    const sheet = characterSheetText(mira({ personality: { backstory: `a${'🐉'.repeat(12_000)}` } }));
+    const kept = sheet.split('- Backstory: ')[1].split(' [')[0];
+    expect(kept.length).toBe(SHEET_TEXT_MAX - 1);
+    expect(kept).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    expect(sheet).toContain(' [4,002 more characters are too long for this sheet;');
+  });
+
   it('stays linear on a pathological paste', () => {
     const paste = `${' '.repeat(200_000)}x\n${'y '.repeat(200_000)}\n${'\n'.repeat(100_000)}z${'\t '.repeat(100_000)}`;
     const start = performance.now();
