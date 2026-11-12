@@ -539,15 +539,19 @@ export const damageCombatant: typeof Engine.damageCombatant = (s, id, amount) =>
 export const healCombatant: typeof Engine.healCombatant = (s, id, amount) => changeHp(s, id, amount);
 export const healthDescriptor: typeof Engine.healthDescriptor = (hp: HitPoints) =>
   hp.current <= 0 ? 'down' : hp.current <= hp.max / 4 ? 'critical' : hp.current <= hp.max / 2 ? 'bloodied' : hp.current < hp.max ? 'scratched' : 'unhurt';
-/** A simplified format; like the real one, the player's view leaves hidden creatures out and the DM's tags them. */
+/**
+ * A simplified format; like the real one, the player's view leaves hidden creatures out and the DM's tags them, and
+ * the hero's line shows the AC the caller passes (the sheet's), never the tracker's copy.
+ */
 export const summarizeCombat: typeof Engine.summarizeCombat = (s, opts) =>
   [
     `Round ${s.round}`,
     ...s.combatants.flatMap((c, i) => {
       if (opts?.forPlayer && c.hidden) return [];
+      const ac = c.isPlayer && opts?.heroAc !== undefined ? ` · AC ${opts.heroAc}` : '';
       const hp = c.hp ? (opts?.forPlayer && c.hideHp ? healthDescriptor(c.hp) : `HP ${c.hp.current}/${c.hp.max}`) : '';
       const hidden = !opts?.forPlayer && c.hidden ? ' [hidden]' : '';
-      return [`${i === s.turnIndex ? '▶' : ' '} ${c.initiative} ${c.name}${hidden}${hp ? ` · ${hp}` : ''}${c.defeated ? ' (down)' : ''}`];
+      return [`${i === s.turnIndex ? '▶' : ' '} ${c.initiative} ${c.name}${hidden}${ac}${hp ? ` · ${hp}` : ''}${c.defeated ? ' (down)' : ''}`];
     }),
   ].join('\n');
 

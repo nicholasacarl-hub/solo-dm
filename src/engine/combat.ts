@@ -7,7 +7,7 @@
 import type { Combatant, CombatState, GameEvent, HitPoints } from '@/types';
 import { nameKey } from '@/lib/id';
 import { playerTurnIndex } from './battleMap';
-import { conditionName } from './conditions';
+import { conditionDetails, conditionName } from './conditions';
 import { gameEvent, matchByName, toInt, warning } from './util';
 
 function compareCombatants(a: Combatant, b: Combatant): number {
@@ -229,16 +229,19 @@ function sideLabel(c: Combatant, forPlayer: boolean): string {
   return c.side;
 }
 
-function conditionText(c: Combatant): string {
-  return c.conditions.map((x) => `${conditionName(x.id)}${x.level ? ` ${x.level}` : ''}`).join(', ');
+/** The DM's view adds each condition's duration and source; the player's keeps bare names (a source may name a hidden creature). */
+function conditionText(c: Combatant, forPlayer: boolean): string {
+  return c.conditions.map((x) => `${conditionName(x.id)}${x.level ? ` ${x.level}` : ''}${forPlayer ? '' : conditionDetails(x)}`).join(', ');
 }
 
-function combatantLine(c: Combatant, position: number, current: boolean, forPlayer: boolean): string {
+function combatantLine(c: Combatant, position: number, current: boolean, forPlayer: boolean, heroAc: number | undefined): string {
   const bits = [`Init ${c.initiative}`];
+  // The hero's AC is the sheet's: the copy start_combat stored goes stale when a spell or a shield changes it mid-fight.
+  const ac = c.isPlayer ? heroAc : c.ac;
   // A creature whose HP the DM hides keeps its AC hidden from the player too.
-  if (c.ac !== undefined && !(forPlayer && c.hideHp && !c.isPlayer)) bits.push(`AC ${c.ac}`);
+  if (ac !== undefined && !(forPlayer && c.hideHp && !c.isPlayer)) bits.push(`AC ${ac}`);
   if (c.hp) bits.push(hpText(c, c.hp, forPlayer));
-  const conditions = conditionText(c);
+  const conditions = conditionText(c, forPlayer);
   if (conditions) bits.push(conditions);
   if (c.defeated) bits.push('defeated');
   // The stat block behind a name is DM knowledge (a "Hooded Stranger" may be a Vampire Spawn).
@@ -253,11 +256,12 @@ function combatantLine(c: Combatant, position: number, current: boolean, forPlay
 /**
  * Text summary of the tracker: round, turn order with initiative, HP, AC, conditions.
  * forPlayer = true is safe to show the player: no stat block names or DM notes, for hideHp
- * combatants a health descriptor instead of exact HP and no AC, and no hidden combatants at all —
- * during a hidden creature's turn the last visible creature before it reads as current (D42).
+ * combatants a health descriptor instead of exact HP and no AC, no conditions' durations or sources, and no hidden
+ * combatants at all — during a hidden creature's turn the last visible creature before it reads as current (D42).
  * The DM's view tags hidden combatants "[hidden]".
+ * heroAc is the hero's AC from the sheet (character.armorClass); without it the hero's line shows no AC.
  */
-export function summarizeCombat(state: CombatState, opts: { forPlayer?: boolean } = {}): string {
+export function summarizeCombat(state: CombatState, opts: { forPlayer?: boolean; heroAc?: number } = {}): string {
   if (!state.active) return `Combat ended${state.encounterName ? `: ${state.encounterName}` : ''}.`;
   const forPlayer = !!opts.forPlayer;
   let current = currentCombatant(state);
@@ -268,6 +272,6 @@ export function summarizeCombat(state: CombatState, opts: { forPlayer?: boolean 
   }
   const header = `Combat${state.encounterName ? `: ${state.encounterName}` : ''} — round ${state.round}${current ? `, ${current.name}'s turn` : ''}`;
   const shown = state.combatants.map((c, i) => ({ c, i })).filter(({ c }) => !(forPlayer && c.hidden));
-  const lines = shown.map(({ c, i }, n) => combatantLine(c, n + 1, i === currentIndex, forPlayer));
+  const lines = shown.map(({ c, i }, n) => combatantLine(c, n + 1, i === currentIndex, forPlayer, opts.heroAc));
   return [header, ...lines].join('\n');
 }

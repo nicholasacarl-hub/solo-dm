@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CONDITION_IDS } from '@/types';
-import { CONDITIONS, conditionName, matchStandardCondition, normalizeConditionId } from './conditions';
+import { CONDITIONS, conditionDetails, conditionName, matchStandardCondition, normalizeConditionId } from './conditions';
 
 describe('CONDITIONS (SRD 5.2.1 Rules Glossary)', () => {
   it('covers all 15 conditions with a summary and effects', () => {
@@ -61,5 +61,34 @@ describe('conditionName', () => {
     expect(conditionName('dazed')).toBe('Dazed');
     expect(conditionName('Hexed by Morgra')).toBe('Hexed by Morgra');
     expect(conditionName('covered-in-oil')).toBe('Covered in oil');
+  });
+});
+
+describe('conditionDetails (SRD 5.2.1 srd:rule:condition: various rules define how a condition ends)', () => {
+  it('gives the duration, then the source, and nothing for a condition set without them', () => {
+    expect(conditionDetails({ id: 'frightened', duration: 'until the end of your next turn', source: 'Banshee' })).toBe(
+      ' (until the end of your next turn; Banshee)',
+    );
+    expect(conditionDetails({ id: 'restrained', duration: 'until freed' })).toBe(' (until freed)');
+    expect(conditionDetails({ id: 'Hexed', source: 'Morgra' })).toBe(' (Morgra)');
+    expect(conditionDetails({ id: 'prone' })).toBe('');
+    expect(conditionDetails({ id: 'poisoned', duration: '  ', source: '' })).toBe('');
+  });
+
+  it('leaves Exhaustion to its level', () => {
+    expect(conditionDetails({ id: 'exhaustion', level: 2, source: 'the forced march' })).toBe('');
+  });
+
+  it('keeps each part on one line, cut near 60 characters at a word end and never inside an emoji', () => {
+    expect(conditionDetails({ id: 'charmed', source: 'the hag\n\nMorgra' })).toBe(' (the hag Morgra)');
+    const long = conditionDetails({
+      id: 'Cursed',
+      duration: 'until the drowned bell in the lighthouse tolls three times at midnight',
+      source: 'the hag Morgra and her shell charm that sings a drowned 🐉 song at dusk',
+    });
+    expect(long).toBe(' (until the drowned bell in the lighthouse tolls three times…; the hag Morgra and her shell charm that sings a drowned 🐉…)');
+    const dragons = conditionDetails({ id: 'Dazzled', source: '🐉'.repeat(40) });
+    expect(dragons).toBe(` (${'🐉'.repeat(29)}…)`);
+    expect(dragons).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
   });
 });

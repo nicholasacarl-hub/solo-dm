@@ -64,6 +64,7 @@ export interface Combatant {
   isPlayer: boolean;
   initiative: number;
   initiativeBonus: number;
+  /** The hero's is the sheet's AC when the fight started: show Character.armorClass instead, which stays current. */
   ac?: number;
   /** Undefined for the player character. */
   hp?: HitPoints;

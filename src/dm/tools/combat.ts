@@ -336,10 +336,11 @@ export async function startCombatTool(input: StartInput, ctx: ToolContext): Prom
   const title = input.encounter_name ?? 'Combat';
   const visible = state.combatants.filter((c) => !c.hidden).length;
   const mapLine = state.map ? `\nBattle map: ${state.map.name ? `${state.map.name} ` : ''}(${state.map.width}×${state.map.height})` : '';
+  const heroAc = character.armorClass;
   await logTool(ctx, 'start_combat', 'combat', `Combat started: ${title} (${visible} combatants)`, {
-    detail: `${summarizeCombat(state, { forPlayer: true })}${mapLine}`,
+    detail: `${summarizeCombat(state, { forPlayer: true, heroAc })}${mapLine}`,
   });
-  const out = [`Combat started: ${title}.`, ...lines, '', summarizeCombat(state), turnLine(state)];
+  const out = [`Combat started: ${title}.`, ...lines, '', summarizeCombat(state, { heroAc }), turnLine(state)];
   out.push(...plan.notes);
   if (state.map) out.push('', describeMapSetup(state, character, { placed, stats: groups.map((g) => g.stats) }));
   return ok(out.join('\n'));
@@ -572,7 +573,7 @@ export async function updateCombatTool(input: UpdateInput, ctx: ToolContext): Pr
   const log = change.log === undefined ? change.summary : change.log;
   if (log) await logTool(ctx, 'update_combat', ICON[input.action] ?? 'combat', log, { secret: change.secret });
 
-  const lines = [change.summary, ...(change.notes ?? []), '', summarizeCombat(change.state)];
+  const lines = [change.summary, ...(change.notes ?? []), '', summarizeCombat(change.state, { heroAc: hero?.armorClass })];
   if (input.action !== 'next_turn') lines.push(turnLine(change.state));
   const mapLine = turnStartLine(before, change.state, hero);
   if (mapLine) lines.push(mapLine);

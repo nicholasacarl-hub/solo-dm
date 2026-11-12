@@ -101,7 +101,7 @@ export function buildGameState(input: GameStateInput): string {
   lines.push(`Hero: ${input.character ? characterStatusLine(input.character) : '(no character sheet yet)'}`);
   lines.push(`Scene: ${formatScene(input.campaign.scene)} · Tension ${input.campaign.tension}/9`);
   if (input.combat?.active) {
-    lines.push(`Combat:\n${summarizeCombat(input.combat).trim()}`);
+    lines.push(`Combat:\n${summarizeCombat(input.combat, { heroAc: input.character?.armorClass }).trim()}`);
     // The battle map: positions, reach, the current turn and the player's unseen moves (spec §5.4).
     if (input.combat.map) lines.push(...mapStateLines(input.combat, input.character, input.answered ?? ((seq) => isSeqAnswered([], seq))));
   }

@@ -48,6 +48,12 @@ describe('buildGameState', () => {
     expect(buildGameState(input({ combat: sampleCombat() }))).toMatch(/Combat:\nRound 2/);
   });
 
+  it("gives the hero's AC in the combat summary from the sheet, not the tracker's copy from the start of the fight", () => {
+    // The fight's copy of the hero says AC 12; armor_class 15 (Mage Armor) changed the sheet mid-fight.
+    const block = buildGameState(input({ character: sampleCharacter({ armorClass: 15 }), combat: sampleCombat() }));
+    expect(block.split('\n').find((line) => line.includes('Mira Voss ·'))).toBe('  17 Mira Voss · AC 15');
+  });
+
   it('adds cards for journal entries named in the player text or the last narration, secrets marked', () => {
     const block = buildGameState(
       input({ playerText: 'I ask Tam about Keeper Halvard.', previousNarration: 'The drowned lantern burns green.' }),

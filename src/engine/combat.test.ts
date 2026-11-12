@@ -164,14 +164,43 @@ describe('summarizeCombat', () => {
   });
 
   it('hides hidden HP, and the AC of creatures with hidden HP, from the player', () => {
-    const text = summarizeCombat(sampleCombat(), { forPlayer: true });
+    const text = summarizeCombat(sampleCombat(), { forPlayer: true, heroAc: 12 });
     expect(text).toContain('Bandit 1 (enemy) · Init 14 · bloodied');
     expect(text).not.toContain('4/11');
     expect(text).not.toContain('AC 12 · bloodied');
     expect(text).toContain('Old Tam (ally) · Init 5 · AC 11 · HP 9/9');
     expect(text).toContain('1. Mira Voss (you) · Init 17 · AC 12');
-    expect(summarizeCombat(sampleCombat())).toContain('1. Mira Voss (PC) · Init 17 · AC 12');
+    expect(summarizeCombat(sampleCombat(), { heroAc: 12 })).toContain('1. Mira Voss (PC) · Init 17 · AC 12');
     expect(summarizeCombat({ ...sampleCombat(), active: false })).toBe('Combat ended: Ambush on the docks.');
+  });
+
+  it("shows the hero's AC from the sheet, never the copy start_combat took (srd:spell:shield-of-faith: +2 AC mid-fight)", () => {
+    // The tracker's copy of the hero says AC 12; Shield of Faith has made the sheet's 14.
+    const heroLine = (text: string) => text.split('\n').find((line) => line.includes('Mira Voss'));
+    expect(heroLine(summarizeCombat(sampleCombat(), { heroAc: 14 }))).toBe('  1. Mira Voss (PC) · Init 17 · AC 14');
+    expect(heroLine(summarizeCombat(sampleCombat(), { forPlayer: true, heroAc: 14 }))).toBe('  1. Mira Voss (you) · Init 17 · AC 14');
+    // Without the sheet's AC the hero's line shows none rather than a stale one; other creatures keep their own.
+    expect(heroLine(summarizeCombat(sampleCombat()))).toBe('  1. Mira Voss (PC) · Init 17');
+    expect(summarizeCombat(sampleCombat(), { heroAc: 14 })).toContain('Old Tam (ally) · Init 5 · AC 11 · HP 9/9');
+  });
+
+  it("gives the DM each creature's condition with the duration and source it was set with (SRD 5.2.1 srd:rule:condition)", () => {
+    const state = sampleCombat();
+    state.combatants[1] = {
+      ...state.combatants[1],
+      conditions: [
+        { id: 'frightened', duration: '1 minute (save at the end of each turn)', source: 'Cutthroat' },
+        { id: 'exhaustion', level: 2, source: 'the forced march' },
+      ],
+    };
+    const dm = summarizeCombat(state);
+    expect(dm).toContain('Bandit 1 (enemy) · Init 14 · AC 12 · HP 4/11 · Frightened (1 minute (save at the end of each turn); Cutthroat), Exhaustion 2');
+    // A condition set without details reads as before.
+    expect(dm).toContain('Bandit 2 (enemy) · Init 9 · AC 12 · HP 11/11 · Prone');
+    // The player's view keeps bare names: a source may name a creature the hero hasn't seen.
+    const player = summarizeCombat(state, { forPlayer: true });
+    expect(player).toContain('Bandit 1 (enemy) · Init 14 · bloodied · Frightened, Exhaustion 2');
+    expect(player).not.toMatch(/Cutthroat|1 minute|forced march/);
   });
 
   it('never names the stat block behind a disguise in the player view', () => {
@@ -234,7 +263,7 @@ describe('Reactions come back when a turn starts (SRD 5.2.1 srd:rule:reaction: "
 describe('summarizeCombat and hidden combatants (D41, D42)', () => {
   it('B13: the player’s view leaves the Cutthroat out; the DM’s tags it [hidden]', () => {
     const state = sampleMappedCombat();
-    const player = summarizeCombat(state, { forPlayer: true });
+    const player = summarizeCombat(state, { forPlayer: true, heroAc: 12 });
     expect(player).not.toMatch(/Cutthroat/);
     expect(player.split('\n')).toEqual([
       "Combat: Ambush in the warehouse — round 2, Bandit 1's turn",

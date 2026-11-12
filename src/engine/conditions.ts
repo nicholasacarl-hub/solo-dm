@@ -2,7 +2,8 @@
  * The 2024 conditions (SRD 5.2.1 Rules Glossary), summarized for the sheet and the DM.
  * Effects are paraphrased from the glossary entries.
  */
-import { CONDITION_IDS, type ConditionId } from '@/types';
+import { safeEnd } from '@/lib/text';
+import { CONDITION_IDS, type ActiveCondition, type ConditionId } from '@/types';
 
 export interface ConditionInfo {
   id: ConditionId;
@@ -288,4 +289,28 @@ export function conditionName(id: string): string {
   if (!raw) return 'Unknown condition';
   // Keep the author's casing for homebrew names; otherwise capitalize the first letter.
   return /[A-Z]/.test(raw) ? raw : raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+/** About the most of a condition's duration, and of its source, that a line for the DM shows. */
+const DETAIL_MAX = 60;
+
+/** The text on one line; past `max`, cut at a word end when there is one, and never inside an emoji. */
+function clipped(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return flat;
+  const head = flat.slice(0, safeEnd(flat, max - 1));
+  const space = flat[head.length] === ' ' ? head.length : head.lastIndexOf(' ');
+  return `${(space > max * 0.6 ? head.slice(0, space) : head).trimEnd()}…`;
+}
+
+/**
+ * " (until the end of your next turn; Banshee)": the duration and source a condition was set with, for the DM's
+ * lines (a status line, the sheet, the combat summary), so turns after the one that set it still know how it ends
+ * (SRD 5.2.1 srd:rule:condition: various rules define how a condition ends). Each part is one line, clipped to about
+ * DETAIL_MAX characters. "" when it has neither, and for Exhaustion, whose level is what its line shows.
+ */
+export function conditionDetails(condition: ActiveCondition): string {
+  if (conditionKey(condition.id) === 'exhaustion') return '';
+  const parts = [condition.duration, condition.source].flatMap((p) => (typeof p === 'string' && p.trim() ? [clipped(p, DETAIL_MAX)] : []));
+  return parts.length ? ` (${parts.join('; ')})` : '';
 }

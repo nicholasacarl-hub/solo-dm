@@ -122,7 +122,13 @@ export function CombatTracker({ className }: { className?: string }) {
       )}
       <ol aria-label="Initiative order" className="divide-y divide-border">
         {tracker.rows.map((row) => (
-          <CombatantRow key={row.combatant.id} row={row} onMap={onMap} playerHp={row.combatant.isPlayer ? (hero?.hp ?? null) : null} />
+          <CombatantRow
+            key={row.combatant.id}
+            row={row}
+            onMap={onMap}
+            playerHp={row.combatant.isPlayer ? (hero?.hp ?? null) : null}
+            playerAc={row.combatant.isPlayer ? (hero?.armorClass ?? null) : null}
+          />
         ))}
       </ol>
     </section>
@@ -146,16 +152,20 @@ const CombatantRow = memo(function CombatantRow({
   row: { combatant: c, current, unseen, place },
   onMap,
   playerHp,
+  playerAc,
 }: {
   row: TrackerRow;
   onMap: boolean;
   playerHp: HitPoints | null;
+  playerAc: number | null;
 }) {
   const touch = useIsTouch();
   const highlighted = usePlayView((s) => s.highlightedId === c.id);
   /** "Show on map" marked this creature: leaving the row keeps it marked until something else is highlighted. */
   const shown = useRef(false);
   const hp = c.isPlayer ? playerHp : (c.hp ?? null);
+  // The hero's AC comes from the sheet too: the combatant's copy dates from the start of the fight.
+  const ac = c.isPlayer ? playerAc : (c.ac ?? null);
   // The DM hides this creature's numbers (the default for enemies): its exact HP and its AC, which
   // would give away a disguised creature's stat block or how hard it is to hit.
   const numbersHidden = !c.isPlayer && c.hideHp === true;
@@ -239,11 +249,11 @@ const CombatantRow = memo(function CombatantRow({
           </ul>
         )}
       </div>
-      {c.ac !== undefined && !numbersHidden && (
+      {ac !== null && !numbersHidden && (
         <span className="mt-0.5 flex shrink-0 items-center gap-1 text-xs text-muted" title="Armor Class">
           <Shield className="size-3.5" aria-hidden />
           <span className="sr-only">Armor Class </span>
-          {c.ac}
+          {ac}
         </span>
       )}
       {onMap && position && (

@@ -395,7 +395,7 @@ function sceneSection(c: Campaign): string {
 function combatSection(combat: CombatState | null, character: Character | null): string | null {
   if (!combat?.active) return null;
   const layout = layoutForPrompt(combat, character);
-  return `## Combat in progress\n${summarizeCombat(combat).trim()}${layout ? `\n${layout}` : ''}`;
+  return `## Combat in progress\n${summarizeCombat(combat, { heroAc: character?.armorClass }).trim()}${layout ? `\n${layout}` : ''}`;
 }
 
 /** The full system prompt for a session. Pure and deterministic. */

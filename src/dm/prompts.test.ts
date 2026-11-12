@@ -216,6 +216,12 @@ describe('buildSystemPrompt', () => {
     expect(text).toContain('Bandit 1');
   });
 
+  it("freezes the hero's AC from the sheet into \"Combat in progress\", not the tracker's copy from the start of the fight", () => {
+    // The fight's copy of the hero says AC 12; a shield donned mid-fight made the sheet's 14.
+    const fight = section(buildSystemPrompt(input({ character: sampleCharacter({ armorClass: 14 }), combat: sampleCombat() })), '## Combat in progress');
+    expect(fight.split('\n').find((line) => line.includes('Mira Voss ·'))).toBe('  17 Mira Voss · AC 14');
+  });
+
   it('handles a brand-new campaign without a character or history', () => {
     const text = buildSystemPrompt(
       input({ character: null, sessions: [], quests: [], journal: [], clocks: [], homebrew: [], sessionNumber: 1 }),

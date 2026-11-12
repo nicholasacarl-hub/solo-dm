@@ -6,7 +6,7 @@ import { ABILITIES, SKILLS, SKILL_NAMES, type Character, type Feature, type Inve
 import { closeCutWrapper, copiedTextMissing, wrapImported } from '@/lib/importedContent';
 import { codePoints, safeEnd } from '@/lib/text';
 import { formatCurrency, totalGp } from './character';
-import { conditionName } from './conditions';
+import { conditionDetails, conditionName } from './conditions';
 import { xpSummary } from './progression';
 import {
   abilityModifier,
@@ -148,9 +148,10 @@ function hitDiceText(c: Character): string | null {
   return c.hitDice.map((h) => `${h.total - h.spent}/${h.total} d${h.die}`).join(', ');
 }
 
+/** "Frightened (until the end of your next turn; Banshee), Prone": with the details each was set with. */
 function conditionsText(c: Character): string | null {
   if (c.conditions.length === 0) return null;
-  return c.conditions.map((x) => conditionName(x.id)).join(', ');
+  return c.conditions.map((x) => `${conditionName(x.id)}${conditionDetails(x)}`).join(', ');
 }
 
 /**

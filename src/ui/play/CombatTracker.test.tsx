@@ -2,7 +2,8 @@ import './testing/setup';
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { sampleCombat, sampleMappedCombat } from '@/test/fixtures';
+import { useGame } from '@/state/gameStore';
+import { sampleCharacter, sampleCombat, sampleMappedCombat } from '@/test/fixtures';
 import type { CombatState } from '@/types';
 import { CombatTracker } from './CombatTracker';
 import { BattleBar } from './map';
@@ -80,6 +81,24 @@ describe('CombatTracker', () => {
     expect(within(rows[2]).getByText('Prone')).toHaveAttribute('title', 'You are on the ground.');
     expect(rows[0]).toHaveTextContent('Armor Class 12');
     expect(rows[3]).toHaveTextContent('Defeated');
+  });
+
+  it("shows the hero's AC from the sheet, which can change mid-fight (srd:spell:shield-of-faith), not the copy from the fight's start", () => {
+    // The fixture fight's copy of the hero says AC 12; Shield of Faith has made the sheet's 14.
+    seedGame({ character: sampleCharacter({ armorClass: 14 }) });
+    render(<CombatTracker />);
+    expect(initiativeRows()[0]).toHaveTextContent('Armor Class 14');
+    // A shield donned mid-fight shows at once, as the row's HP already does.
+    act(() => useGame.setState((s) => ({ character: s.character && { ...s.character, armorClass: 16 } })));
+    expect(initiativeRows()[0]).toHaveTextContent('Armor Class 16');
+    expect(initiativeRows()[0]).not.toHaveTextContent('Armor Class 12');
+  });
+
+  it("shows no AC for the hero without a sheet rather than the fight's old copy", () => {
+    seedGame({ character: null });
+    render(<CombatTracker />);
+    expect(initiativeRows()[0]).not.toHaveTextContent('Armor Class');
+    expect(initiativeRows()[3]).toHaveTextContent('Armor Class 11');
   });
 
   it("hides the AC of creatures whose numbers the DM keeps hidden (a disguised foe's stat block)", () => {

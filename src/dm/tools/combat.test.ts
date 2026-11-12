@@ -388,6 +388,23 @@ describe('start_combat and update_combat add: numbers from the stat block (spec 
   });
 });
 
+describe("the hero's AC in combat results", () => {
+  it("is the sheet's after a mid-fight change (armor_class for Mage Armor), not the copy start_combat took", async () => {
+    const heroLine = (text = '') => text.split('\n').find((line) => line.includes('Mira Voss ·'));
+    fakeDice.queue(15, 11);
+    const h = setup();
+    const start = await h.run('start_combat', { combatants: [{ name: 'Bandit', side: 'enemy', ac: 12, hp_max: 11, initiative_bonus: 1 }] });
+    expect(heroLine(start.content)).toBe('▶ 17 Mira Voss · AC 12');
+    expect(heroLine(toolLines(h.s().log).find((l) => l.tool === 'start_combat')?.detail)).toBe('▶ 17 Mira Voss · AC 12');
+
+    await h.run('update_character', { armor_class: 15, reason: 'Mage Armor' });
+    const next = await h.run('update_combat', { action: 'next_turn' });
+    expect(heroLine(next.content)).toBe('  17 Mira Voss · AC 15');
+    // Nothing syncs the tracker's copy: every view reads the sheet.
+    expect(named(h.s().combat, 'Mira Voss')?.ac).toBe(12);
+  });
+});
+
 describe('end_combat', () => {
   it('lists the final positions the player could see, and the map goes with the fight', async () => {
     const h = setup({ state: { combat: sampleMappedCombat() } });
