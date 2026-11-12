@@ -92,11 +92,14 @@ builder's on a feat's or species' spell). A book's item linked without the DM's 
 `get_entry`, then the app's numbers-only line (`describeOption`), so the sheet says which items to read. Numbers name their sources where a condition may matter: the AC formula
 names each item it counts, the Saving throws line what every save includes (`saveBonusSources`: a Ring or Cloak of
 Protection, an item's bonus the app read as always on, Aura of Protection), and an active item's attack and damage
-bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Magic items")
-leave the rest to the DM: a bonus an item's text gives only sometimes, a condition that stops a counted one, those
+bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Bonuses") say
+the app counts only what the sheet names (attack ability and proficiency, the AC formula, the Saving throws line, the
+Defenses line, the Advantage sources the Advantage line lists) and leave the rest to the DM: cover, a fighting style,
+a spell such as Bless, and for items a bonus an item's text gives only sometimes, a condition that stops a counted one, those
 attack and damage bonuses, and any bonus of an SRD or homebrew item (the app reads no text there; it counts only the
-Ring and Cloak of Protection, Bracers of Defense and a "+N" armor or shield by name), applied by adjusting the AC or DC it passes (and the damage it applies) and told to the
-player in a line; the order of truth says an item's own text (or a recorded ruling) beats a number the app worked
+Ring and Cloak of Protection, Bracers of Defense and a "+N" armor or shield by name), applied by adjusting the AC or
+DC it passes (extra damage goes in the damage roll's `expression`; a die such as Bless's is rolled first) and told to
+the player in a line; the order of truth says an item's own text (or a recorded ruling) beats a number the app worked
 out from it, and the player's inventory says the DM adds those bonuses, so nobody adds them twice. An AC the DM sets
 by hand (`armor_class`, for Mage Armor) gets the formula "set by the DM: <reason>" rather than keeping the old one's
 items, and a change in what every save includes is announced in the tool's result and in the player's equip and
@@ -682,8 +685,12 @@ Invariants, checked in CI (the definition of done):
   are byte-identical to before (`src/dm/requestBytes.test.ts` pins the request bytes). The sheet has
   since carried long text whole (above); a sheet whose texts are all one line and within the old
   limits reads byte for byte as before (`sheet-srd-character.md`). The DM instructions have since gained the
-  "Magic items" line (and its exceptions in the order of truth and table talk), and the Saving throws line names
-  what every save includes (a Ring or Cloak of Protection, Aura of Protection), so those sheets and the prompt differ.
+  "Bonuses" line (and its exceptions in the order of truth and table talk), an exact Advantage line (what the app
+  applies to the hero's rolls; cover isn't Advantage), free castings and rituals beside spell slots, extra damage in a
+  sheet attack's `expression`, damage to the hero passed before the Defenses line's resistances, item charges kept as
+  a feature with uses, rulings that name an item, rulings kept when homebrew is off, and a missed tool call made late
+  and said aloud; and the Saving throws line names what every save includes (a Ring or Cloak of Protection, Aura of
+  Protection), so those sheets and the prompt differ.
 - **One deliberate `DM_TOOLS` change** in this release (above), reviewed with its cost; otherwise
   `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
 - **Privacy.** No marker sentence of the test book appears in any exported bundle (the e2e test). Every

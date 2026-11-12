@@ -404,7 +404,7 @@ function equipmentLines(c: Character): string[] {
 /**
  * "Saving throws now include Cloak of the Fen +1": what every save adds (saveBonusSources) after a change that altered
  * it, for a tool result or a notice; null when it didn't change. The frozen sheet's Saving throws line dates from the
- * start of the session, so this is how the DM hears of a bonus it may need to set aside mid-session (its "Magic items"
+ * start of the session, so this is how the DM hears of a bonus it may need to set aside mid-session (its "Bonuses"
  * rule).
  */
 export function saveSourcesChangeText(before: Character, after: Character): string | null {

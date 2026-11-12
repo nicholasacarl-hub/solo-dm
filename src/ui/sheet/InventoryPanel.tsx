@@ -56,7 +56,7 @@ function bonusLines(item: InventoryItem): string[] {
   const bonuses = item.bonuses;
   if (!bonuses) return [];
   const applied = describeBonuses({ ...bonuses, attack: undefined, damage: undefined });
-  // The app doesn't add these to the hero's rolls; the DM does (its "Magic items" rule), so the player mustn't add them too.
+  // The app doesn't add these to the hero's rolls; the DM does (its "Bonuses" rule), so the player mustn't add them too.
   const rolls = describeBonuses({ attack: bonuses.attack, damage: bonuses.damage }).map((t) => `${t} — your DM adds it`);
   return [...applied, ...rolls];
 }
