@@ -578,7 +578,7 @@ function handSetFormula(reason: string | undefined): string {
 /**
  * armor_class: an AC the gear and features don't give (Mage Armor, Shield of Faith) gets a formula saying the DM set
  * it, so the sheet never shows the old formula's items and armor under a number they don't add up to (the DM's
- * "Magic items" rule reads the formula); an AC they do give gets their formula back.
+ * "Bonuses" rule reads the formula); an AC they do give gets their formula back.
  */
 function statSteps(input: ToolInput<'update_character'>, catalog: readonly EquipmentOption[] = []): ((c: Character) => EngineResult)[] {
   const steps: ((c: Character) => EngineResult)[] = [];
