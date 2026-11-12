@@ -61,12 +61,16 @@ function bonusLines(item: InventoryItem): string[] {
   return [...applied, ...rolls];
 }
 
-/** The index entry an item's text comes from: its book's (by ref) or an index-only magic item's. */
+/**
+ * The index entry an item's text comes from: its book's (by ref) or an index-only magic item's. The item's own entry
+ * comes first: on an SRD or homebrew item, a ref only marks the DM's words as a book's (a book's item has
+ * compendiumId === ref.entryId); on a custom item it names the entry those words came from.
+ */
 function itemEntry(item: InventoryItem, index: ReturnType<typeof useRulesIndex>): CompendiumEntry | undefined {
   if (!index) return undefined;
-  const id = item.ref?.entryId ?? item.compendiumId;
+  const id = item.compendiumId ?? item.ref?.entryId;
   const entry = id ? index.get(id) : undefined;
-  if (item.ref) return entry;
+  if (item.ref && id === item.ref.entryId) return entry;
   return entry?.kind === 'magic-item' ? entry : undefined;
 }
 
@@ -92,8 +96,9 @@ function ItemDetails({ item }: { item: InventoryItem }) {
   const index = useRulesIndex();
   const entry = itemEntry(item, index);
   const own = item.description && !isImportedPlaceholder(item.description) ? item.description : '';
-  // A book's item whose entry the index doesn't have: say where its text is (switched off, or not on this device).
-  const bookRef = item.ref && !entry && index ? item.ref : null;
+  // A book's item (or a custom one in a book's words) whose entry the index doesn't have: say where its text is
+  // (switched off, or not on this device). Not for an SRD item whose description merely quotes a book.
+  const bookRef = item.ref && !entry && index && (!item.compendiumId || item.compendiumId === item.ref.entryId) ? item.ref : null;
   const lines = [attunementLine(item), ...bonusLines(item)].filter((l): l is string => Boolean(l));
   if (!own && !entry && !bookRef && !lines.length) return null;
   return (

@@ -10,8 +10,9 @@
  * inventory_add or inventory_update description of one leaves the transcript copy, and so does that
  * description on the sheet, even where the item was linked without one (its ref still says nothing copied).
  * A spell's notes leave it when they repeat a book's words (the DM tools mark them). A call the app refused
- * never reached the sheet, so nothing there marks its text: while a book is in play, every description and
- * note in it leaves the copy.
+ * never reached the sheet, so nothing there marks its text: while a book is in play, every text field and long string
+ * in it leaves the copy, whatever the tool (as the refusal's own preview quotes them, handlers.ts). So does, while a book is in play, a call's text the sheet no longer holds under that
+ * name (the spell or item was removed, renamed, stacked onto another or rewritten): nothing marks it any more.
  */
 import { matchByName } from '@/engine/util';
 import { nameKey } from '@/lib/id';
@@ -39,6 +40,27 @@ const TEXT_FIELD: Readonly<Record<EchoKind, 'description' | 'notes'>> = { featur
 
 /** What stands in an export for the text of a call the app refused. */
 export const REFUSED_CALL_TEXT = '[Text of a call the app refused was left out of this copy.]';
+/** Keys whose values the refusal preview quotes by length (src/dm/tools/handlers.ts TEXT_KEYS; keep in step), and its long-string bound. */
+const REFUSED_TEXT_KEYS = new Set(['description', 'notes', 'details', 'text', 'summary']);
+const REFUSED_LONG = 120;
+
+/** A refused call's input with every text field and long string replaced, whatever its shape; unchanged parts shared. */
+function refusedInput(value: unknown, key = ''): unknown {
+  if (typeof value === 'string') return REFUSED_TEXT_KEYS.has(key) || value.length > REFUSED_LONG ? REFUSED_CALL_TEXT : value;
+  if (Array.isArray(value)) {
+    const next = value.map((v) => refusedInput(v));
+    return next.some((v, i) => v !== value[i]) ? next : value;
+  }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const entries = Object.entries(record).map(([k, v]) => [k, refusedInput(v, k)] as const);
+    return entries.some(([k, v]) => v !== record[k]) ? Object.fromEntries(entries) : value;
+  }
+  return value;
+}
+
+/** What stands in an export for a call's text that the sheet no longer holds. */
+export const STALE_CALL_TEXT = '[Text no longer on the sheet was left out of this copy.]';
 
 type Described = Pick<Feature, 'name' | 'description' | 'ref'> | Pick<InventoryItem, 'name' | 'description' | 'ref'>;
 
@@ -111,8 +133,10 @@ export function redactCopiedImports(data: CampaignData): { data: CampaignData; r
   // A refused call's text, only while a book is in play: something on the sheet came from one, or the DM looked one up.
   const booksInPlay = sheetFromBooks(data.character) || data.transcript.some(looksUpBook);
   const refused = booksInPlay ? refusedCalls(data.transcript) : new Set<string>();
-  const echoesToFind = redactedFeatures.size > 0 || copiedSpells.size > 0 || inventory.some((i) => i.ref) || refused.size > 0;
-  const transcript = echoesToFind ? data.transcript.map((m) => redactToolInputs(m, titleOf, leftOut, refused)) : data.transcript;
+  // A call's text the sheet still holds under that name is accounted for above; anything else, while a book is in play, goes.
+  const onSheet = (kind: EchoKind, name: string, text: string) => !booksInPlay || sheetHolds(data.character, kind, name, text);
+  const echoesToFind = booksInPlay || redactedFeatures.size > 0 || copiedSpells.size > 0 || inventory.some((i) => i.ref);
+  const transcript = echoesToFind ? data.transcript.map((m) => redactToolInputs(m, titleOf, leftOut, refused, onSheet)) : data.transcript;
 
   const changed = character !== data.character || transcript.some((m, i) => m !== data.transcript[i]);
   return {
@@ -146,6 +170,19 @@ function sheetFromBooks(c: Character | null): boolean {
 function looksUpBook(m: TranscriptMessage): boolean {
   if (m.param.role !== 'user' || !Array.isArray(m.param.content)) return false;
   return m.param.content.some((b) => b.type === 'tool_result' && hasImported(typeof b.content === 'string' ? b.content : JSON.stringify(b.content ?? '')));
+}
+
+/** The sheet still holds this text under this name: a feature's description, an item's (found as the engine finds it), a spell's notes. */
+function sheetHolds(c: Character | null, kind: EchoKind, name: string, text: string): boolean {
+  if (!c) return false;
+  const same = (x: string | undefined) => x?.trim() === text.trim();
+  if (kind === 'item') {
+    // Found as the engine finds it; a name that now fits several items holds the text if any of them does.
+    return matchByName(c.inventory, name, (i) => i.name).candidates.some((i) => same(i.description));
+  }
+  const key = nameKey(name);
+  if (kind === 'spell') return (c.spellcasting?.spells ?? []).some((s) => nameKey(s.name) === key && same(s.notes));
+  return c.features.some((f) => nameKey(f.name) === key && same(f.description));
 }
 
 /** The tool_use ids whose calls the app refused (an is_error result). */
@@ -202,18 +239,24 @@ function redactToolInputs(
   titleOf: (kind: EchoKind, name: string) => string | undefined,
   counted: (title: string) => void,
   refused: ReadonlySet<string>,
+  onSheet: (kind: EchoKind, name: string, text: string) => boolean,
 ): TranscriptMessage {
   const content = assistantBlocks(m);
   if (!content) return m;
   let changed = false;
   const blocks = content.map((block) => {
     if (block.type !== 'tool_use') return block;
+    if (refused.has(block.id)) {
+      const input = refusedInput(block.input);
+      if (input === block.input) return block;
+      changed = true;
+      return { ...block, input };
+    }
     const echoing = echoingInput(block);
     if (!echoing) return block;
     const { input } = echoing;
     let inputChanged = false;
     const nextInput: Record<string, unknown> = { ...input };
-    const wasRefused = refused.has((block as { id?: string }).id ?? '');
     for (const [field, kind] of echoing.fields) {
       const list = input[field];
       if (!Array.isArray(list)) continue;
@@ -226,7 +269,7 @@ function redactToolInputs(
           counted(title);
           return { ...(item as object), [text]: importedPlaceholder(title) };
         }
-        return wasRefused ? { ...(item as object), [text]: REFUSED_CALL_TEXT } : item;
+        return onSheet(kind, echo.name, echo.description) ? item : { ...(item as object), [text]: STALE_CALL_TEXT };
       });
       if (next.some((x, i) => x !== list[i])) {
         nextInput[field] = next;

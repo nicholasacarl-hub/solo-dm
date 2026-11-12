@@ -588,7 +588,8 @@ describe('structured magic item bonuses (SRD 5.2.1 Attunement; Ring of Protectio
         classes: [{ classId: 'srd:class:paladin', name: 'Paladin', level: 6, hitDie: 10, casterType: 'half', spellcastingAbility: 'cha' }],
         ...patch,
       });
-    const c = paladin([cloak, fen, { ...fen, id: 'fen-2' }]);
+    // Two of each: a magic item's bonus doesn't stack with another copy of itself.
+    const c = paladin([cloak, { ...cloak, id: 'c-2' }, fen, { ...fen, id: 'fen-2' }]);
     expect(saveBonusSources(c)).toEqual([
       { name: 'Cloak of Protection', bonus: 1 },
       { name: 'Cloak of the Fen', bonus: 2 },

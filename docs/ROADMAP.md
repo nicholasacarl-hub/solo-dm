@@ -60,14 +60,16 @@ The first version of structured imports deliberately leaves these out:
   "Structure as…" on the book page).
 - **Editing a book's text** in the app, and re-importing a new copy of a book while keeping review decisions.
 - **Per-campaign book selection** (today every switched-on book applies to every campaign).
-- **Item mechanics**: a magic weapon's +N on attacks (the DM's sheet tags it "not counted by the app" and the DM adds
-  it), charges, spell attack and save DC bonuses from items, and enforcing attunement limits.
+- **Item mechanics**: a magic weapon's +N on attacks (the DM adds it: a book weapon's is tagged "not counted by the
+  app" on the DM's sheet, an SRD "+1 Longsword" carries no numbers to tag), charges, spell attack and save DC bonuses
+  from items, and enforcing attunement limits.
 - **Monster detail**: structured actions and legendary actions, and senses on the battle map (the DM reads them from
   the text today).
 - **Book text the DM repeats elsewhere**: the book's words in the journal, quests, recaps or narration, in a feature
-  the DM names otherwise than the book does, in a phrase shorter than 40 characters, or in a call whose spell, item
-  or feature has left the sheet since aren't marked as copied, so exports keep them (spell notes, item descriptions
-  and refused calls are covered).
+  the DM names otherwise than the book does, or in a quote shorter than about 80 characters among the DM's own words
+  (a text under 60 characters counts only when its first 40 are the book's) aren't marked as copied, so exports keep
+  them; nor is text written before this version. Spell notes, item descriptions, refused calls and calls whose text
+  has left the sheet are covered.
 
 Known limits of the offline reader (the book page's *Structure as…* and a Claude reading cover each). The magic-item
 bonus reader is frozen except for outright bugs: the misjudged shapes below stay, and the DM honors a condition from

@@ -107,7 +107,9 @@ describe('CharacterSheet', () => {
     const dialog = await screen.findByRole('dialog');
     expect(within(dialog).getByText(notes)).toBeInTheDocument();
     expect(within(dialog).getByText('Notes:')).toBeInTheDocument();
-    expect(await within(dialog).findByText(/an imperceptible barrier of magical force/i)).toBeInTheDocument();
+    const rules = await within(dialog).findByText(/an imperceptible barrier of magical force/i);
+    // Above the rules text.
+    expect(within(dialog).getByText('Notes:').compareDocumentPosition(rules) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it('spends Heroic Inspiration and sets exhaustion', async () => {

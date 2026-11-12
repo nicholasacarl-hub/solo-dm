@@ -637,13 +637,18 @@ one of the book's parts or feats (`features_add`, `level_up` extras) gets that p
 description repeats the part's words (a 40-character run), unless the SRD prints the same name; the DM's
 own words under such a name stay its own, so exports keep them and restore never writes the book's text
 over them. A spell's notes (`spells_add`) or an item's description (`inventory_add`, `inventory_update`) that repeats
-a book's spell or item, whatever name it is given, takes that entry's ref marked copied: two of those 40-character
-runs (the only one, in a text under 60 characters) found in the book's spells or items and not in the SRD's, whose
-words are anyone's to keep. The sheet then wraps the text and exports replace it, as for the book's own item, while
-the DM's own notes stay its own (the check reads each kind's book text, joined once per rules index: about 70 ms
-for a few large books, then milliseconds a call). A call the app refused never reached the sheet, so while a book is
-in play (a ref on the sheet, or a book passage in the transcript) exports replace every description and note in
-it. A memory excerpt (`search_memory`) that starts inside a quoted book passage opens its wrapper again. A `level_up` extra naming a copied feature the sheet already has (a name the SRD doesn't print)
+a book's spell or item (either way round: a scroll quoting a spell, notes quoting an item), whatever name it is
+given, takes that entry's ref marked copied: two of those 40-character runs (the only one, in a text under 60
+characters) found in one entry's own words — not in the SRD's text of any kind, whose words are anyone's to keep,
+and not stock wording the books print under several names — compared with typographic quotes and dashes made plain.
+A quote shorter than about 80 characters inside the DM's own words can escape (one aligned run), as can a text
+written before this version. The sheet then wraps the text and exports replace it, as for the book's own item,
+while the DM's own notes stay its own (the check reads the book text, joined once per rules index: about 70 ms for a
+few large books, then milliseconds a call); a spell re-added without notes keeps its notes' mark. On the player's
+inventory such a ref only marks the words: an SRD or homebrew item still shows its own entry. While a book is in play
+(a ref on the sheet, or a book passage in the transcript), exports also replace every text field and long string of
+a call the app refused, whatever the tool, as the refusal's preview quotes them, and a description or note in an
+earlier call that the sheet no longer holds under that name (removed, renamed, stacked or rewritten). A memory excerpt (`search_memory`) that starts inside a quoted book passage opens its wrapper again. A `level_up` extra naming a copied feature the sheet already has (a name the SRD doesn't print)
 adds no second copy, and the result says it was kept as it is; and a call the schema refuses quotes every
 text field (and any long string) by its length, never its words.
 Exports and GitHub saves (`exportCampaignBundleWithReport`) replace copied descriptions — and the DM's
@@ -671,7 +676,9 @@ Invariants, checked in CI (the definition of done):
   rules index contents, an SRD character's sheet text, the DM system prompt and the DM request bodies
   are byte-identical to before (`src/dm/requestBytes.test.ts` pins the request bytes). The sheet has
   since carried long text whole (above); a sheet whose texts are all one line and within the old
-  limits reads byte for byte as before (`sheet-srd-character.md`).
+  limits reads byte for byte as before (`sheet-srd-character.md`). The DM instructions have since gained the
+  "Magic items" line (and its exceptions in the order of truth and table talk), and the Saving throws line names
+  what every save includes (a Ring or Cloak of Protection, Aura of Protection), so those sheets and the prompt differ.
 - **One deliberate `DM_TOOLS` change** in this release (above), reviewed with its cost; otherwise
   `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
 - **Privacy.** No marker sentence of the test book appears in any exported bundle (the e2e test). Every

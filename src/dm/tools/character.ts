@@ -216,8 +216,20 @@ function featRef(name: string, data: BuilderData | null): ImportedRef | null {
   return matches.length === 1 ? (matches[0].ref ?? null) : null;
 }
 
-/** Lower case, emphasis marks gone, whitespace collapsed: text compared for shared words. */
-const plainWords = (text: string) => text.toLowerCase().replace(/[_*`]/g, '').replace(/\s+/g, ' ').trim();
+/**
+ * Lower case, emphasis marks gone, typographic quotes and dashes made plain (an imported book keeps "’" where the DM's
+ * tool input types "'"), whitespace collapsed: text compared for shared words.
+ */
+const plainWords = (text: string) =>
+  text
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[‘’ʼ]/g, "'")
+    .replace(/[“”]/g, '"')
+    .replace(/[–—]/g, '-')
+    .replace(/[_*`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 
 /** The DM's description repeats the book part's words: a run of 40 characters of it is in the part's text. */
 function sharesWords(description: string, partText: string): boolean {
@@ -229,25 +241,32 @@ function sharesWords(description: string, partText: string): boolean {
   return false;
 }
 
-/** The plain text of the imported entries of some kinds, joined, with where each starts; and the SRD's text of those kinds. */
-interface KindText {
-  book: string;
+/** The plain text of the imported entries of some kinds, joined, with where each starts. */
+interface BookText {
+  text: string;
   starts: number[];
   entries: CompendiumEntry[];
-  srd: string;
 }
 
-/** Built once per index: a library change builds a new index, and so a new text. */
-const kindTexts = new WeakMap<RulesIndex, Map<string, KindText>>();
+/** Per index (a library change builds a new one): the SRD's plain text, and each kind list's book text. */
+const indexTexts = new WeakMap<RulesIndex, { srd: string; books: Map<string, BookText> }>();
 
-function kindText(index: RulesIndex, kinds: readonly ContentKind[]): KindText {
+function textsOf(index: RulesIndex): { srd: string; books: Map<string, BookText> } {
+  let texts = indexTexts.get(index);
+  if (!texts) {
+    // Every SRD entry, whatever its kind: SRD wording a book reprints (a rule inside a spell) is anyone's to keep.
+    const srd = index.list({ sourceId: SRD_SOURCE_ID }).map((e) => plainWords(e.text)).join('\n');
+    indexTexts.set(index, (texts = { srd, books: new Map() }));
+  }
+  return texts;
+}
+
+function bookText(index: RulesIndex, kinds: readonly ContentKind[]): BookText {
+  const { books } = textsOf(index);
   const key = kinds.join(' ');
-  let byKinds = kindTexts.get(index);
-  if (!byKinds) kindTexts.set(index, (byKinds = new Map()));
-  const cached = byKinds.get(key);
+  const cached = books.get(key);
   if (cached) return cached;
-  const all = kinds.flatMap((kind) => index.list({ kind }));
-  const entries = all.filter((e) => e.id.startsWith('lib:'));
+  const entries = kinds.flatMap((kind) => index.list({ kind })).filter((e) => e.id.startsWith('lib:'));
   const starts: number[] = [];
   let at = 0;
   const texts = entries.map((e) => {
@@ -257,52 +276,87 @@ function kindText(index: RulesIndex, kinds: readonly ContentKind[]): KindText {
     return plain;
   });
   // plainWords leaves no line break, so no run spans two entries.
-  const built = { book: texts.join('\n'), starts, entries, srd: all.filter((e) => e.sourceId === SRD_SOURCE_ID).map((e) => plainWords(e.text)).join('\n') };
-  byKinds.set(key, built);
+  const built = { text: texts.join('\n'), starts, entries };
+  books.set(key, built);
   return built;
 }
 
-/**
- * The imported entry of these kinds whose words the DM's free text repeats (spec §7.1): two of the runs of 40
- * characters sharesWords reads (the only one, under 60 characters) are in that entry and not in the SRD's text of
- * those kinds, whose words are anyone's to keep. A spell's notes are read against the books' spells, an item's
- * description against their items, so the ref names what the text came from. Null for the DM's own words, for SRD
- * wording, and without an index.
- */
-function bookCopy(text: string | undefined, index: RulesIndex | null, kinds: readonly ContentKind[]): CompendiumEntry | null {
-  const dm = plainWords(text ?? '');
-  if (!index || dm.length < 40) return null;
-  const book = kindText(index, kinds);
-  if (!book.entries.length) return null;
-  const needed = dm.length < 60 ? 1 : 2;
-  let first = -1;
-  let found = 0;
-  for (let i = 0; i + 40 <= dm.length && found < needed; i += 20) {
-    const run = dm.slice(i, i + 40);
-    const at = book.book.indexOf(run);
-    if (at < 0 || book.srd.includes(run)) continue;
-    if (first < 0) first = at;
-    found += 1;
-  }
-  if (found < needed) return null;
-  // The entry the first run is in: the last one that starts at or before it.
+/** The entry a position in a book text falls in: the last one that starts at or before it. */
+function entryAt(book: BookText, pos: number): CompendiumEntry {
   let lo = 0;
   let hi = book.starts.length - 1;
   while (lo < hi) {
     const mid = (lo + hi + 1) >> 1;
-    if (book.starts[mid] <= first) lo = mid;
+    if (book.starts[mid] <= pos) lo = mid;
     else hi = mid - 1;
   }
   return book.entries[lo];
 }
 
-const ITEM_KINDS: readonly ContentKind[] = ['item', 'magic-item'];
+/**
+ * Where a run of the DM's text sits in one book entry's own words, or -1: absent from the books, printed in the SRD
+ * (anyone's to keep), or boilerplate the books print under several names ("a +1 bonus to attack and damage rolls made
+ * with this magic weapon"), which says nothing about which entry the DM copied.
+ */
+function ownRunAt(run: string, book: BookText, srd: string): number {
+  const at = book.text.indexOf(run);
+  if (at < 0 || srd.includes(run)) return -1;
+  const name = nameKey(entryAt(book, at).name);
+  for (let next = book.text.indexOf(run, at + 1), n = 0; next >= 0 && n < 8; next = book.text.indexOf(run, next + 1), n++) {
+    if (nameKey(entryAt(book, next).name) !== name) return -1;
+  }
+  return at;
+}
 
-/** The ref marking an item's description as the words of the book's item it repeats (bookCopy), or null. */
+/**
+ * The imported entry of these kinds whose own words the DM's free text repeats (spec §7.1): two of the runs of 40
+ * characters sharesWords reads (the only one, under 60 characters), each in that entry's words alone (ownRunAt). Null
+ * for the DM's own words, stock wording and SRD wording, and without an index.
+ */
+function bookCopy(text: string | undefined, index: RulesIndex | null, kinds: readonly ContentKind[]): CompendiumEntry | null {
+  const dm = plainWords(text ?? '');
+  if (!index || dm.length < 40) return null;
+  const book = bookText(index, kinds);
+  if (!book.entries.length) return null;
+  const { srd } = textsOf(index);
+  const needed = dm.length < 60 ? 1 : 2;
+  let first = -1;
+  let found = 0;
+  for (let i = 0; i + 40 <= dm.length && found < needed; i += 20) {
+    const at = ownRunAt(dm.slice(i, i + 40), book, srd);
+    if (at < 0) continue;
+    if (first < 0) first = at;
+    found += 1;
+  }
+  return found < needed ? null : entryAt(book, first);
+}
+
+/** The DM's notes repeat a linked book spell's own words: one 40-character run of them (as sharesWords) the SRD doesn't print. */
+function sharesBookWords(text: string, entryText: string, index: RulesIndex | null): boolean {
+  const dm = plainWords(text);
+  const book = plainWords(entryText);
+  if (!dm || !book) return false;
+  const srd = index ? textsOf(index).srd : '';
+  const own = (run: string) => book.includes(run) && !srd.includes(run);
+  if (dm.length <= 40) return own(dm);
+  for (let i = 0; i + 40 <= dm.length; i += 20) if (own(dm.slice(i, i + 40))) return true;
+  return false;
+}
+
+/** What a scroll, a wand or a granted spell may quote: the books' spells and items, either way round. */
+const ITEM_KINDS: readonly ContentKind[] = ['item', 'magic-item', 'spell'];
+const SPELL_KINDS: readonly ContentKind[] = ['spell', 'item', 'magic-item'];
+
+/** A copy's ref: the book entry its words came from (a spell's ref shape for a spell), marked copied. */
+function copyRefOf(copy: CompendiumEntry, text: string): ImportedRef | null {
+  const ref = copy.kind === 'spell' ? spellEntryRef(copy) : entryRef(copy, copy.kind === 'item' ? 'item' : 'magic-item');
+  return ref ? { ...ref, textCopied: true, textHash: textFingerprint(text) } : null;
+}
+
+/** The ref marking an item's description as the words of the book's entry it repeats (bookCopy), or null. */
 function itemCopyRef(description: string | undefined, index: RulesIndex | null): ImportedRef | null {
   const copy = bookCopy(description, index, ITEM_KINDS);
-  const ref = copy ? entryRef(copy, copy.kind === 'item' ? 'item' : 'magic-item') : undefined;
-  return ref && description ? { ...ref, textCopied: true, textHash: textFingerprint(description) } : null;
+  return copy && description ? copyRefOf(copy, description) : null;
 }
 
 /** An inventory_add item as the DM gave it (no entry of that exact name to link). */
@@ -370,8 +424,8 @@ async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolConte
     spellCopies: spells.map((spell, i) => {
       if (!spell.notes?.trim()) return null;
       const linked = linkedSpells[i];
-      if (linked?.id.startsWith('lib:') && sharesWords(spell.notes, linked.text)) return linked;
-      return bookCopy(spell.notes, index, ['spell']);
+      if (linked?.id.startsWith('lib:') && sharesBookWords(spell.notes, linked.text, index)) return linked;
+      return bookCopy(spell.notes, index, SPELL_KINDS);
     }),
     updateCopies: updates.map((u) => itemCopyRef(u.description, index)),
     feats: feats.map((f) => featRef(f.name, data) ?? bookPartRef(f.name, f.description, data)),
@@ -419,8 +473,8 @@ function itemUpdatePatch(c: Character, name: string, patch: ItemPatch, copy: Imp
  * A spells_add spell. When its exact name resolves to a spell the DM may consult, it takes that entry's
  * id (so the sheet's text and the map's area presets find it), its ritual and concentration flags, and
  * for a book's spell a ref (nothing copied). Otherwise it is added as given, as before. Notes that repeat a
- * book's spell's words (`copy`, from bookCopy) mark the ref copied, the book's spell's ref when it has none,
- * so exports leave them out; the DM's own notes stay its own.
+ * book entry's words (`copy`: its own spell's, or another spell's or an item's, from bookCopy) mark the ref copied —
+ * that entry's ref when the spell has none — so exports leave them out; the DM's own notes stay its own.
  */
 function addedSpell(
   spell: NonNullable<ToolInput<'update_character'>['spells_add']>[number],
@@ -429,8 +483,8 @@ function addedSpell(
 ): Omit<KnownSpell, 'id'> & { id?: string } {
   const base = { name: spell.name, level: spell.level, prepared: spell.prepared ?? true, source: spell.source ?? 'Granted in play' };
   const linkRef = entry ? spellEntryRef(entry) : undefined;
-  const copyRef = copy && spell.notes ? (linkRef ?? spellEntryRef(copy)) : undefined;
-  const ref = copyRef ? { ...copyRef, textCopied: true, textHash: textFingerprint(spell.notes ?? '') } : linkRef;
+  const marked = copy && spell.notes ? (linkRef ? { ...linkRef, textCopied: true, textHash: textFingerprint(spell.notes) } : copyRefOf(copy, spell.notes)) : null;
+  const ref = marked ?? linkRef;
   if (!entry) return { ...base, ...defined({ ritual: spell.ritual, concentration: spell.concentration, notes: spell.notes }), ...(ref ? { ref } : {}) };
   const flag = (value: unknown, given: boolean | undefined) => (typeof value === 'boolean' ? value : given);
   const ritual = flag(entry.data?.ritual, spell.ritual);
@@ -460,7 +514,12 @@ function spellSteps(input: ToolInput<'update_character'>, links: Links): ((c: Ch
   for (const name of input.spells_remove ?? []) steps.push((c) => removeSpell(c, name));
   (input.spells_add ?? []).forEach((spell, i) => {
     const add = addedSpell(spell, links.spells[i] ?? null, links.spellCopies[i] ?? null);
-    steps.push((c) => addSpell(c, add));
+    steps.push((c) => {
+      // addSpell merges into a spell already on the sheet: re-added without notes (to change prepared or level), it keeps
+      // its notes, so it keeps their copy mark too.
+      const had = c.spellcasting?.spells.find((s) => nameKey(s.name) === nameKey(spell.name))?.ref;
+      return addSpell(c, !spell.notes && had?.textCopied ? { ...add, ref: had } : add);
+    });
   });
   return steps;
 }

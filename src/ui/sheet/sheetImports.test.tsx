@@ -187,6 +187,25 @@ describe('items from the player’s books (SRD 5.2.1 Attunement)', () => {
     expect(within(row('Ember Blade')).getByText('+1 to attack and damage rolls — your DM adds it')).toBeInTheDocument();
   });
 
+  it("shows an SRD item's own entry, not the book entry its DM-written description quotes (the ref only marks the words)", async () => {
+    const user = userEvent.setup();
+    const potion: CompendiumEntry = { id: 'srd:magic-item:potion-of-healing', sourceId: 'srd-5.2.1', sourceName: 'SRD 5.2.1', kind: 'magic-item', name: 'Potion of Healing', text: 'You regain 2d4 + 2 Hit Points when you drink this potion.' };
+    mocks.entries = [LANTERN, CLOAK_ENTRY, potion];
+    const copyRef = { ...importedRef(), entryId: LANTERN.id, kind: 'magic-item' as const, entryName: LANTERN.name, textCopied: true, textHash: 'h' };
+    const quoted = item({ name: 'Potion of Healing', magic: true, compendiumId: potion.id, description: 'The DM quoted the lantern here.', ref: copyRef });
+    const custom = item({ name: 'Pale Lantern', magic: true, description: 'My grandmother’s, in the book’s words.', ref: copyRef });
+    start({ inventory: [quoted, custom] });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Inventory/ }));
+    const row = (name: string) => screen.getByText(name).closest('li') as HTMLElement;
+    await user.click(within(row('Potion of Healing')).getByText('Details'));
+    expect(within(row('Potion of Healing')).getByText('You regain 2d4 + 2 Hit Points when you drink this potion.')).toBeInTheDocument();
+    expect(within(row('Potion of Healing')).queryByText('This lantern burns without oil.')).toBeNull();
+    // A custom item in a book's words shows the entry those words came from.
+    await user.click(within(row('Pale Lantern')).getByText('Details'));
+    expect(within(row('Pale Lantern')).getByText('This lantern burns without oil.')).toBeInTheDocument();
+  });
+
   it('P3: an item’s own words over a pulled placeholder show under Details despite a stale ref.redacted; the placeholder never does', async () => {
     const user = userEvent.setup();
     const RULING = 'DM ruling: the lantern lights only while its bearer whispers.';
