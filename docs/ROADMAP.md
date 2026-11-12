@@ -64,6 +64,10 @@ The first version of structured imports deliberately leaves these out:
   enforcing attunement limits.
 - **Monster detail**: structured actions and legendary actions, and senses on the battle map (the DM reads them from
   the text today).
+- **Book text the DM echoes into free text**: words from the player's book that the DM copies into a spell's notes, a
+  custom item's description, or a tool call the app refuses for a feature that never reaches the sheet aren't
+  marked as copied, so exports keep them; a memory excerpt that starts inside a quoted book passage carries its words
+  without the marker.
 
 Known limits of the offline reader (the book page's *Structure as…* and a Claude reading cover each):
 

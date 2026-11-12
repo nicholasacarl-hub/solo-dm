@@ -98,7 +98,7 @@ export function CharacterBuilderScreen() {
     await setCharacter(built);
     await updateCampaign({ status: 'active' });
     if (character && campaign.activeSessionId) {
-      queueDmNotice(`Player rebuilt their character from scratch: ${built.name}, ${built.species} ${classSummary(built)} (level 1). Treat the new sheet as canon.`);
+      queueDmNotice(`Player rebuilt their character from scratch: ${built.name}, ${built.species} ${classSummary(built)} (level 1). Treat the new sheet as canon: get_character_sheet has it.`);
     }
     navigate(`/play/${id}`);
   };

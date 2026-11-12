@@ -11,6 +11,7 @@ import { isReviewedImport } from '@/data/structured/materialize';
 import { statsLine } from '@/data/structured/statsLine';
 import { nameKey } from '@/lib/id';
 import { wrapImported } from '@/lib/importedContent';
+import { safeEnd } from '@/lib/text';
 import {
   HOMEBREW_SOURCE_ID,
   SRD_SOURCE_ID,
@@ -110,7 +111,7 @@ async function loadIndex(ctx: ToolContext): Promise<RulesIndex> {
 
 function clip(text: string, max: number): string {
   if (text.length <= max) return text;
-  const cut = text.slice(0, max);
+  const cut = text.slice(0, safeEnd(text, max));
   const para = cut.lastIndexOf('\n');
   return `${(para > max * 0.7 ? cut.slice(0, para) : cut).trimEnd()}\n…(truncated — use get_entry for the full text)`;
 }

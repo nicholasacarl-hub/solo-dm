@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bookFingerprint, copiedTextMissing, importedPlaceholder, isImportedPlaceholder, redactImported, staleRedaction, textFingerprint, wrapImported } from './importedContent';
+import { bookFingerprint, closeCutWrapper, copiedTextMissing, importedPlaceholder, isImportedPlaceholder, redactImported, staleRedaction, textFingerprint, wrapImported } from './importedContent';
 
 describe('textFingerprint', () => {
   it('is FNV-1a 64 (standard test vectors), as 16 hex chars', () => {
@@ -32,6 +32,26 @@ describe('wrapImported', () => {
 
   it('leaves ordinary text alone', () => {
     expect(wrapImported('Book', 'Plain <b>text</b>.')).toBe('<imported-content source="Book">\nPlain <b>text</b>.\n</imported-content>');
+  });
+});
+
+describe('redactImported', () => {
+  it('removes a wrapper left open (its text cut before the closing marker) to the end of its string', () => {
+    const open = `Before. <imported-content source="Book">\nThe secret ledger under the floor`;
+    expect(redactImported(open)).toBe(`Before. ${importedPlaceholder('Book')}`);
+    const closed = `${wrapImported('Book', 'One.')} Between. ${wrapImported('Book', 'Two.')}`;
+    expect(redactImported(closed)).toBe(`${importedPlaceholder('Book')} Between. ${importedPlaceholder('Book')}`);
+  });
+});
+
+describe('closeCutWrapper', () => {
+  it('closes a wrapper a cut left open, so a copy removes that passage and nothing after it', () => {
+    const cut = `Lore: <imported-content source="Book">\nThe ledger under the floor…`;
+    expect(closeCutWrapper(cut)).toBe(`${cut} </imported-content>`);
+    expect(redactImported(`${closeCutWrapper(cut)}\nThe next journal line.`)).toBe(`Lore: ${importedPlaceholder('Book')}\nThe next journal line.`);
+    const whole = `${wrapImported('Book', 'One.')} and after.`;
+    expect(closeCutWrapper(whole)).toBe(whole);
+    expect(closeCutWrapper('No wrapper at all…')).toBe('No wrapper at all…');
   });
 });
 

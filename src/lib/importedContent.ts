@@ -16,11 +16,21 @@ export function wrapImported(sourceName: string, text: string): string {
   return `${OPEN} source="${safeName}">\n${safeText}\n${CLOSE}`;
 }
 
-const PATTERN = /<imported-content source="([^"]*)">[\s\S]*?<\/imported-content>/g;
+// A wrapper left open (its text cut before the closing marker) runs to the end of its string.
+const PATTERN = /<imported-content source="([^"]*)">[\s\S]*?(?:<\/imported-content>|$)/g;
 
 /** Replace every wrapped block with a short placeholder naming the source. */
 export function redactImported(text: string): string {
   return text.replace(PATTERN, (_match, source: string) => `[Text from the player's imported book "${source}" was left out of this copy.]`);
+}
+
+/**
+ * Text cut inside a wrapped passage (its closing marker cut off) closed again, so a copy removes that passage and
+ * nothing after it: redactImported runs a wrapper left open to the end of its string.
+ */
+export function closeCutWrapper(text: string): string {
+  const open = text.lastIndexOf(OPEN);
+  return open >= 0 && !text.includes(CLOSE, open) ? `${text} ${CLOSE}` : text;
 }
 
 /** True when the text contains wrapped imported content. */

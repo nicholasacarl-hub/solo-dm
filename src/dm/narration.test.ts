@@ -61,4 +61,16 @@ describe('truncate', () => {
     expect(truncate('The quick brown fox jumps over the lazy dog', 20)).toBe('The quick brown fox…');
     expect(truncate('short', 20)).toBe('short');
   });
+
+  it('closes a wrapped passage it cuts inside, so a copy removes only that passage', () => {
+    const text = `Notes: <imported-content source="Book">\n${'The ledger under the floor. '.repeat(20)}\n</imported-content> The rest.`;
+    const cut = truncate(text, 120);
+    expect(cut.endsWith('… </imported-content>')).toBe(true);
+  });
+
+  it('never cuts between the halves of an emoji', () => {
+    const cut = truncate('🐉'.repeat(40), 20);
+    expect(cut).toBe(`${'🐉'.repeat(9)}…`);
+    expect(cut).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+  });
 });

@@ -6,7 +6,7 @@ import { useEffect, useId, useState } from 'react';
 import type { Character, Personality } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
 import { Textarea } from '@/ui/components/ui';
-import { PERSONALITY_LABELS, notesChange, personalityChange } from './sheetChanges';
+import { PERSONALITY_LABELS, dmSheetLengthHint, notesChange, personalityChange } from './sheetChanges';
 import { SheetSection } from './SheetParts';
 import type { SheetChange } from './useSheetActions';
 
@@ -27,6 +27,8 @@ function EditableText({
 }) {
   const [draft, setDraft] = useState(value);
   const id = useId();
+  const hintId = useId();
+  const hint = dmSheetLengthHint(draft);
   useEffect(() => setDraft(value), [value]);
   return (
     <div className="flex flex-col gap-1">
@@ -42,8 +44,14 @@ function EditableText({
         onBlur={() => {
           if (draft !== value) onSave(draft);
         }}
+        aria-describedby={hint ? hintId : undefined}
         className="min-h-0 text-sm"
       />
+      {hint && (
+        <p id={hintId} className="text-xs text-muted">
+          {hint}
+        </p>
+      )}
     </div>
   );
 }

@@ -655,4 +655,28 @@ describe('journal, quests, clocks, scene, oracle, memory', () => {
     const h = setup();
     expect((await h.run('get_character_sheet', {})).content).toContain('# Mira Voss');
   });
+
+  it("returns a journal entry whole when the query names it, though the prompt's journal line cuts long details", async () => {
+    const h = setup();
+    const details = [
+      "Corvin swore on his mother's lamp to find the dragon whose scale he carries.",
+      'He means to drink from its hoard-spring and become a dragon himself, whatever it costs.',
+      'His chained blades grow hot whenever they come near the hoard under the old quarry.',
+      'He keeps a ledger of every rumor of wings: the drowned bell at Kettleford, the ash on the north road, the shepherd who saw a shadow cross the moon. '.repeat(3),
+      'He has told no one but Old Tam about the quarry, and Tam has told no one at all.',
+    ].join('\n\n');
+    await h.run('update_journal', { entries: [{ kind: 'lore', name: "Corvin's Oath", summary: 'What the hero swore at twelve.', details }] });
+    const exact = (await h.run('search_memory', { query: "corvin's oath" })).content;
+    expect(exact).toContain('the hoard under the old quarry.');
+    expect(exact).toContain('Tam has told no one at all.');
+    const partial = (await h.run('search_memory', { query: 'oath dragon' })).content;
+    expect(partial).not.toContain('Tam has told no one at all.');
+  });
+
+  it('finds an entry by its exact name whatever its words: a short name, other spacing or case', async () => {
+    const h = setup();
+    await h.run('update_journal', { entries: [{ kind: 'npc', name: 'Ix', summary: 'A moth spirit.', details: 'Ix lives in the lantern.' }] });
+    expect((await h.run('search_memory', { query: 'ix' })).content).toContain('- Ix (NPC): A moth spirit.\n  Ix lives in the lantern.');
+    expect((await h.run('search_memory', { query: '  OLD   tam ' })).content).toMatch(/^- Old Tam \(NPC, ally\)/);
+  });
 });

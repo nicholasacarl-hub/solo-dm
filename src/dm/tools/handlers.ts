@@ -4,6 +4,7 @@
  * Invalid input never reaches a handler.
  */
 import type { z } from 'zod';
+import { safeEnd } from '@/lib/text';
 import { DmCancelledError, isAbortError } from '../errors';
 import { getCharacterSheetTool, levelUpTool, takeRestTool, updateCharacterTool } from './character';
 import { endCombatTool, startCombatTool, updateCombatTool } from './combat';
@@ -68,9 +69,16 @@ export function formatIssues(error: z.ZodError): string {
     .join('; ');
 }
 
+/** Input fields that hold prose (a description, notes): quoted by their length at any size. */
+const TEXT_KEYS = new Set(['description', 'notes', 'details', 'text', 'summary']);
+
 function preview(input: unknown): string {
-  const json = JSON.stringify(input) ?? 'undefined';
-  return json.length > 600 ? `${json.slice(0, 600)}…` : json;
+  // A long string, or any text field, can be book text the DM copied (a short book trait too): quote its length,
+  // not its words. The cut ends at a whole character.
+  const json =
+    JSON.stringify(input, (key, value: unknown) => (typeof value === 'string' && (value.length > 120 || TEXT_KEYS.has(key)) ? `(${value.length} characters)` : value)) ??
+    'undefined';
+  return json.length > 600 ? `${json.slice(0, safeEnd(json, 600))}…` : json;
 }
 
 async function dispatch<N extends ToolName>(name: N, rawInput: unknown, ctx: ToolContext): Promise<ToolOutcome> {

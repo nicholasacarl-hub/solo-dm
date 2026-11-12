@@ -3,7 +3,8 @@
  * Keep them compact and deterministic (stable ordering) — they feed the prompt cache.
  */
 import { ABILITIES, SKILLS, SKILL_NAMES, type Character, type Feature, type InventoryItem, type KnownSpell, type SpellSlotLevel } from '@/types';
-import { copiedTextMissing, wrapImported } from '@/lib/importedContent';
+import { closeCutWrapper, copiedTextMissing, wrapImported } from '@/lib/importedContent';
+import { codePoints, safeEnd } from '@/lib/text';
 import { formatCurrency, totalGp } from './character';
 import { conditionName } from './conditions';
 import { xpSummary } from './progression';
@@ -27,9 +28,84 @@ import {
 } from './rules';
 import { ordinal } from './spellcasting';
 import { activeTransformations } from './transform';
-import { truncate } from './util';
+import { formatInt } from './util';
 
 const SLOT_LEVELS: readonly SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
+
+/**
+ * The most of one free-text field the DM's sheet carries: a personality field, the player's notes, a feature's
+ * rules text, an item's description. Real sheets stay far below it (a long backstory runs a few thousand
+ * characters, the longest SRD feature about 4,300: Wizard Spellcasting); it only keeps a pasted book from
+ * swelling every request of a session, and past it the sheet says how much it left out. The frozen prompt and
+ * get_character_sheet render the same text.
+ */
+export const SHEET_TEXT_MAX = 20_000;
+
+/**
+ * Text as written: lines and paragraphs kept (a run of blank lines becomes one; a vertical tab, form feed or line
+ * separator is a line break, a paragraph separator a blank line), a line's indent kept, runs of spaces after a word
+ * and trailing spaces gone. A Markdown heading inside the text becomes a bold line, so it can't read as a section of
+ * the sheet or the prompt around it. Linear in the text (no pattern that backtracks over a long run).
+ */
+function tidy(text: string): string {
+  return text
+    .replace(/\r\n?|[\v\f\u2028]/g, '\n')
+    .replace(/\u2029/g, '\n\n')
+    .split('\n')
+    .map((line) => line.replace(/(\S)[^\S\n]+/g, '$1 ').trimEnd().replace(/^([^\S\n]*)#{1,6}[^\S\n]+(\S.*)$/, '$1**$2**'))
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+/**
+ * The text cut at SHEET_TEXT_MAX, at a paragraph, line or word end near it and never between the halves of an
+ * emoji, and how many characters (code points) that left out.
+ */
+function capped(text: string): { kept: string; left: number } {
+  if (text.length <= SHEET_TEXT_MAX) return { kept: text, left: 0 };
+  const head = text.slice(0, SHEET_TEXT_MAX);
+  const end = [head.lastIndexOf('\n\n'), head.lastIndexOf('\n'), head.lastIndexOf(' ')].find((i) => i > SHEET_TEXT_MAX * 0.8) ?? SHEET_TEXT_MAX;
+  const kept = text.slice(0, safeEnd(text, end)).trimEnd();
+  return { kept, left: codePoints(text.slice(kept.length).trim()) };
+}
+
+/** Every line after the first indented two spaces, so a multi-line text stays inside its list item. */
+function indented(text: string): string {
+  return text
+    .split('\n')
+    .map((line, i) => (i === 0 || line === '' ? line : `  ${line}`))
+    .join('\n');
+}
+
+/**
+ * What a cut field says after its text. A book's text points to the book, not to the player: a player who pasted
+ * the rest into the chat would put the book's words in the transcript, unwrapped.
+ */
+function leftOut(left: number, book = false): string {
+  if (left <= 0) return '';
+  return book
+    ? ` [the last ${formatInt(left)} characters of the book's text didn't fit on this sheet; rule from what is here, or read the entry with get_entry]`
+    : ` [the last ${formatInt(left)} characters didn't fit on this sheet; ask the player if you need them]`;
+}
+
+/**
+ * A free-text field for a list item, whole up to SHEET_TEXT_MAX; a one-line text is formatted as it always was. A
+ * cut inside a passage the field quotes from a book (its wrapper) closes it, so a copy leaves out that passage only.
+ */
+function fieldText(text: string): string {
+  const { kept, left } = capped(tidy(text));
+  return `${indented(left ? closeCutWrapper(kept) : kept)}${leftOut(left)}`;
+}
+
+/**
+ * Whether the DM's sheet cuts this field (past SHEET_TEXT_MAX once tidied, as the sheet measures it). Tidying at
+ * most doubles a text (a paragraph separator becomes a blank line), so a text half that long is never cut.
+ */
+export function sheetCutsText(text: string | undefined): boolean {
+  if (!text || text.length * 2 <= SHEET_TEXT_MAX) return false;
+  return capped(tidy(text)).left > 0;
+}
 
 function classText(c: Character): string {
   if (c.classes.length === 0) return 'no class yet';
@@ -210,29 +286,31 @@ function spellcastingLines(c: Character): string[] {
   for (const spell of [...sc.spells].sort((a, b) => a.level - b.level || byName(a, b))) {
     byLevel.set(spell.level, [...(byLevel.get(spell.level) ?? []), spell]);
   }
-  const lines = [...byLevel.entries()].map(
-    ([level, spells]) => `- ${level === 0 ? 'Cantrips' : `Level ${level}`}: ${spells.map((s) => `${s.name}${spellTags(s, classNames)}`).join(', ')}`,
-  );
+  const lines = [...byLevel.entries()].flatMap(([level, spells]) => [
+    `- ${level === 0 ? 'Cantrips' : `Level ${level}`}: ${spells.map((s) => `${s.name}${spellTags(s, classNames)}`).join(', ')}`,
+    // A spell's notes (the DM's spells_add notes, the builder's notes on a feat's or a species' spell), on one line under its level.
+    ...spells.flatMap((s) => (s.notes?.trim() ? [`  - ${s.name}: ${s.notes.replace(/\s+/g, ' ').trim()}`] : [])),
+  ]);
   return ['### Spellcasting', header.join(' · '), ...lines];
 }
 
 const RECHARGE_TEXT: Record<string, string> = { short: 'short rest', long: 'long rest', dawn: 'dawn', turn: 'turn', none: 'total' };
 
 /**
- * A feature's description for the DM. Text copied from an imported book (ref.textCopied) is wrapped AFTER
- * truncating, so the closing marker survives the 200-character cut and exports can remove the whole passage
- * (spec §7.2); a placeholder (text left out of a save) says how to get it back. A ruling the DM wrote over a
- * pulled placeholder shows as written, though its ref still says `redacted`. SRD and homebrew features read
- * exactly as before.
+ * A feature's description for the DM, whole (fieldText). Text copied from an imported book (ref.textCopied) is
+ * wrapped as one passage, after any cut at SHEET_TEXT_MAX, so exports can remove all of it (spec §7.2); a
+ * placeholder (text left out of a save) says how to get it back. A ruling the DM wrote over a pulled placeholder
+ * shows as written, though its ref still says `redacted`.
  */
 function featureDescription(f: Feature): string {
   const d = f.description?.trim();
   if (!d) return '';
-  if (!f.ref?.textCopied) return `: ${truncate(d, 200)}`;
+  if (!f.ref?.textCopied) return `: ${fieldText(d)}`;
   if (copiedTextMissing(f)) {
     return `: (text from the player's book “${f.ref.sourceTitle}” isn't on this device — call get_character_sheet after they import it, or rule from the name)`;
   }
-  return `: ${wrapImported(f.ref.sourceTitle, truncate(d, 200))}`;
+  const { kept, left } = capped(tidy(d));
+  return `: ${indented(wrapImported(f.ref.sourceTitle, kept))}${leftOut(left, true)}`;
 }
 
 function featureLine(f: Feature): string {
@@ -259,25 +337,43 @@ function itemText(i: InventoryItem): string {
   return `${i.name}${i.quantity > 1 ? ` ×${i.quantity}` : ''}${tags.length ? ` (${tags.join(', ')})` : ''}`;
 }
 
+/**
+ * An item's description when no rules entry the DM can read supplies it, whole: a custom item the player or the DM
+ * made (no compendium or homebrew entry, no book), or the DM's own words on a book's item (ref.textCopied), wrapped
+ * like copied text. SRD, homebrew and book items are read with get_entry.
+ */
+function itemDescriptionLine(i: InventoryItem): string | null {
+  const d = i.description?.trim();
+  if (!d) return null;
+  if (i.ref) {
+    if (!i.ref.textCopied || copiedTextMissing(i)) return null;
+    const { kept, left } = capped(tidy(d));
+    return `- **${i.name}**: ${indented(wrapImported(i.ref.sourceTitle, kept))}${leftOut(left, true)}`;
+  }
+  return i.compendiumId || i.homebrewId ? null : `- **${i.name}**: ${fieldText(d)}`;
+}
+
 function equipmentLines(c: Character): string[] {
   const gp = totalGp(c.currency);
   const coins = `**Coins:** ${formatCurrency(c.currency)}${gp > 0 ? ` (${Number.isInteger(gp) ? gp : gp.toFixed(2)} gp total)` : ''}`;
   const items = c.inventory.length ? c.inventory.map(itemText).join(' · ') : 'nothing';
-  return ['### Equipment', items, coins];
+  const described = c.inventory.flatMap((i) => itemDescriptionLine(i) ?? []);
+  return ['### Equipment', items, ...described, coins];
 }
 
+/** What the player wrote about the hero, whole: the DM's main material for the story. */
 function personalityLines(c: Character): string[] {
   const p = c.personality ?? {};
-  const fields: Array<[string, string | undefined, number]> = [
-    ['Traits', p.traits, 200],
-    ['Ideals', p.ideals, 200],
-    ['Bonds', p.bonds, 200],
-    ['Flaws', p.flaws, 200],
-    ['Appearance', p.appearance, 200],
-    ['Backstory', p.backstory, 500],
-    ['Player notes', c.notes, 300],
+  const fields: Array<[string, string | undefined]> = [
+    ['Traits', p.traits],
+    ['Ideals', p.ideals],
+    ['Bonds', p.bonds],
+    ['Flaws', p.flaws],
+    ['Appearance', p.appearance],
+    ['Backstory', p.backstory],
+    ['Player notes', c.notes],
   ];
-  const lines = fields.flatMap(([label, value, max]) => (value?.trim() ? [`- ${label}: ${truncate(value, max)}`] : []));
+  const lines = fields.flatMap(([label, value]) => (value?.trim() ? [`- ${label}: ${fieldText(value)}`] : []));
   return lines.length ? ['### Personality', ...lines] : [];
 }
 
@@ -300,8 +396,8 @@ function transformationLines(c: Character): string[] {
   if (all.length === 0) return [];
   const active = all.filter((t) => t.status === 'active').map((t) => {
     const meta = [t.stage, t.origin === 'accepted' ? 'chosen' : 'imposed', `since session ${t.startedSession}`].filter(Boolean).join('; ');
-    const ends = t.howItEnds?.trim() ? ` How it could end: ${truncate(t.howItEnds, 200)}` : '';
-    return `- **${t.name}** (${meta}): ${truncate(t.summary, 240)}${ends}`;
+    const ends = t.howItEnds?.trim() ? ` How it could end: ${fieldText(t.howItEnds)}` : '';
+    return `- **${t.name}** (${meta}): ${fieldText(t.summary)}${ends}`;
   });
   const ended = all.filter((t) => t.status === 'ended').map((t) => `${t.name}${t.endedSession ? ` (ended in session ${t.endedSession})` : ''}`);
   return ['### Transformations', ...active, ...(ended.length ? [`- Ended: ${ended.join(', ')}`] : [])];

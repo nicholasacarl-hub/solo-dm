@@ -219,6 +219,16 @@ function withModes(transformations: TransformationsMode | undefined, illustratio
   return buildSystemPrompt(input({ campaign: { ...base, settings: { ...base.settings, transformations } }, illustrations }));
 }
 
+describe('journal lines', () => {
+  it('points to search_memory for the rest of details the line cuts, and only then', () => {
+    const [tam, ...rest] = sampleJournal();
+    const long = { ...tam, details: `${'He mends nets by the harbor every morning and watches the lantern. '.repeat(6)}The end.` };
+    const prompt = buildSystemPrompt(input({ journal: [long, ...rest] }));
+    expect(prompt).toContain(`… (search_memory "Old Tam" has all of it)`);
+    expect(buildSystemPrompt(input())).not.toContain('has all of it');
+  });
+});
+
 describe('homebrew on the fly', () => {
   it('encourages improvising homebrew within the campaign setting, balanced, announced and saved', () => {
     const homebrew = section(DM_INSTRUCTIONS, '## Homebrew');

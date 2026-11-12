@@ -4,6 +4,7 @@
  * Pure functions, no I/O.
  */
 import type { Campaign, Character, ImageSubject } from '@/types';
+import { safeEnd } from '@/lib/text';
 
 // ---------------------------------------------------------------------------
 // Art styles
@@ -87,7 +88,7 @@ const MAX_AVOID = 400;
 
 function clip(text: string, max: number): string {
   const t = text.replace(/\s+/g, ' ').trim();
-  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+  return t.length > max ? `${t.slice(0, safeEnd(t, max - 1)).trimEnd()}…` : t;
 }
 
 function sentence(text: string): string {

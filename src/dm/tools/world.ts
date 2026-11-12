@@ -6,6 +6,8 @@ import { consultOracle, sceneCheck } from '@/engine';
 import type { ClockUpsert, JournalUpsert, QuestUpsert } from '@/state/gameStore';
 import type { Clock, JournalEntry, Quest, QuestObjective, Scene } from '@/types';
 import { nameKey } from '@/lib/id';
+import { closeCutWrapper } from '@/lib/importedContent';
+import { safeEnd } from '@/lib/text';
 import { truncate } from '../narration';
 import type { ToolInput } from './definitions';
 import {
@@ -351,17 +353,24 @@ function snippet(text: string, words: string[]): string {
   const lower = text.toLowerCase();
   const hits = words.map((w) => lower.indexOf(w)).filter((i) => i >= 0);
   const at = hits.length ? Math.min(...hits) : 0;
-  const start = Math.max(0, at - 120);
-  const piece = text.slice(start, start + 420).replace(/\s+/g, ' ').trim();
-  return `${start > 0 ? '…' : ''}${piece}${start + 420 < text.length ? '…' : ''}`;
+  // Both ends at whole characters (never half an emoji), and a cut inside a wrapped passage closed again.
+  const start = safeEnd(text, Math.max(0, at - 120));
+  const end = safeEnd(text, start + 420);
+  const piece = text.slice(start, end).replace(/\s+/g, ' ').trim();
+  return closeCutWrapper(`${start > 0 ? '…' : ''}${piece}${end < text.length ? '…' : ''}`);
 }
 
 export async function searchMemoryTool(input: ToolInput<'search_memory'>, ctx: ToolContext): Promise<ToolOutcome> {
   const words = terms(input.query);
   const phrase = input.query.trim().toLowerCase();
-  if (words.length === 0) return ok('Give a more specific query (names, places, keywords).');
-  const ranked = memoryDocs(ctx)
-    .map((doc) => ({ doc, score: score(doc, words, phrase) }))
+  const docs = memoryDocs(ctx);
+  // An entry the query names exactly (case and spacing aside: "Ix", "李白" too) comes first and whole: the prompt's
+  // journal lines point here for details they cut.
+  const plain = (text: string) => text.trim().replace(/\s+/g, ' ').toLowerCase();
+  const named = (title: string) => plain(title) === plain(input.query);
+  if (words.length === 0 && !docs.some((d) => named(d.title))) return ok('Give a more specific query (names, places, keywords).');
+  const ranked = docs
+    .map((doc) => ({ doc, score: score(doc, words, phrase) + (named(doc.title) ? 1000 : 0) }))
     .filter((r) => r.score > 0)
     .sort((a, b) => b.score - a.score || a.doc.title.localeCompare(b.doc.title))
     .slice(0, input.limit ?? 6);
@@ -371,7 +380,7 @@ export async function searchMemoryTool(input: ToolInput<'search_memory'>, ctx: T
   }
   return ok(
     ranked
-      .map(({ doc }) => `- ${doc.title} (${doc.label}${doc.secret ? ', secret' : ''}): ${snippet(doc.text, words)}`)
+      .map(({ doc }) => `- ${doc.title} (${doc.label}${doc.secret ? ', secret' : ''}): ${named(doc.title) ? doc.text.trim().replace(/\n/g, '\n  ') : snippet(doc.text, words)}`)
       .join('\n'),
   );
 }

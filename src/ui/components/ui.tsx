@@ -198,7 +198,10 @@ export function Field({
       {error ? (
         <p className="text-xs text-danger">{error}</p>
       ) : hint ? (
-        <p className="text-xs text-muted">{hint}</p>
+        // `${htmlFor}-hint`: a control can name its hint in aria-describedby.
+        <p id={htmlFor ? `${htmlFor}-hint` : undefined} className="text-xs text-muted">
+          {hint}
+        </p>
       ) : null}
     </div>
   );

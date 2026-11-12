@@ -3,6 +3,7 @@ import { Dices } from 'lucide-react';
 import { cryptoRng } from '@/engine';
 import type { Personality } from '@/types';
 import { Button, Field, Input, Select, Textarea } from '@/ui/components/ui';
+import { dmSheetLengthHint } from '@/ui/sheet/sheetChanges';
 import { StepHeader, SubHeading } from '../BuilderParts';
 import { ALIGNMENTS, defaultPortrait, suggestName } from '../flavor';
 import { picks } from '../logic';
@@ -81,22 +82,36 @@ export function DetailsFields({
       <div className="flex flex-col gap-2">
         <SubHeading>Personality</SubHeading>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          {PERSONALITY_FIELDS.map((f) => (
-            <Field key={f.key} label={f.label} htmlFor={`${personalityId}-${f.key}`}>
-              <Textarea
-                id={`${personalityId}-${f.key}`}
-                rows={2}
-                value={value.personality[f.key] ?? ''}
-                placeholder={f.placeholder}
-                onChange={(e) => setPersonality(f.key, e.target.value)}
-                className="min-h-0"
-              />
-            </Field>
-          ))}
+          {PERSONALITY_FIELDS.map((f) => {
+            const hint = dmSheetLengthHint(value.personality[f.key]);
+            return (
+              <Field key={f.key} label={f.label} htmlFor={`${personalityId}-${f.key}`} hint={hint}>
+                <Textarea
+                  id={`${personalityId}-${f.key}`}
+                  aria-describedby={hint ? `${personalityId}-${f.key}-hint` : undefined}
+                  rows={2}
+                  value={value.personality[f.key] ?? ''}
+                  placeholder={f.placeholder}
+                  onChange={(e) => setPersonality(f.key, e.target.value)}
+                  className="min-h-0"
+                />
+              </Field>
+            );
+          })}
         </div>
       </div>
-      <Field label="Backstory" htmlFor={ids.backstory} hint="A few lines is plenty — the DM will weave it into the story.">
-        <Textarea id={ids.backstory} rows={5} value={value.personality.backstory ?? ''} onChange={(e) => setPersonality('backstory', e.target.value)} />
+      <Field
+        label="Backstory"
+        htmlFor={ids.backstory}
+        hint={dmSheetLengthHint(value.personality.backstory) ?? 'As long or short as you like — the DM reads all of it and weaves it into the story.'}
+      >
+        <Textarea
+          id={ids.backstory}
+          aria-describedby={`${ids.backstory}-hint`}
+          rows={5}
+          value={value.personality.backstory ?? ''}
+          onChange={(e) => setPersonality('backstory', e.target.value)}
+        />
       </Field>
     </div>
   );

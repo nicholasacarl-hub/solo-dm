@@ -13,10 +13,13 @@ import {
   recordDeathSave,
   removeCondition,
   restoreSlot,
+  SHEET_TEXT_MAX,
   setConcentration,
+  sheetCutsText,
   setTempHp,
   spendSlot,
 } from '@/engine';
+import { safeEnd } from '@/lib/text';
 import type {
   Character,
   Currency,
@@ -34,9 +37,13 @@ function firstWarning(events: GameEvent[]): string | undefined {
   return events.find((e) => e.type === 'warning')?.message;
 }
 
+/** The text on one line, quoted; past `max`, cut at a word end when there is one, and never inside an emoji. */
 function quote(text: string, max = 60): string {
   const flat = text.replace(/\s+/g, ' ').trim();
-  return `“${flat.length > max ? `${flat.slice(0, max - 1)}…` : flat}”`;
+  if (flat.length <= max) return `“${flat}”`;
+  const head = flat.slice(0, safeEnd(flat, max - 1));
+  const space = head.lastIndexOf(' ');
+  return `“${(space > max * 0.6 ? head.slice(0, space) : head).trimEnd()}…”`;
 }
 
 // ---------------------------------------------------------------------------
@@ -277,15 +284,36 @@ export const PERSONALITY_LABELS: Record<keyof Personality, string> = {
   backstory: 'Backstory',
 };
 
+/**
+ * Under a field the DM's sheet can't carry whole (past SHEET_TEXT_MAX, where the sheet cuts it and tells the DM),
+ * so the player knows: undefined for any real text.
+ */
+export function dmSheetLengthHint(text: string | undefined): string | undefined {
+  return sheetCutsText(text)
+    ? `The DM's sheet carries the first ${SHEET_TEXT_MAX.toLocaleString('en-US')} characters of this; past that it tells the DM the rest is left out.`
+    : undefined;
+}
+
+/** The opening a personality notice quotes; past it, the notice says the whole text is on the sheet. */
+const NOTICE_QUOTE = 60;
+
 export function personalityChange(c: Character, field: keyof Personality, value: string): SheetChange {
   const text = value.trim();
   if ((c.personality[field] ?? '') === text) return unchanged(c);
   const personality = { ...c.personality, [field]: text || undefined };
   const label = PERSONALITY_LABELS[field].toLowerCase();
-  return { character: { ...c, personality }, notice: text ? `Player updated their ${label}: ${quote(text)}` : `Player cleared their ${label}` };
+  // One line (notices are parsed back line by line): the opening, and where the DM reads the rest.
+  const more = text.replace(/\s+/g, ' ').length > NOTICE_QUOTE ? ' (its opening; get_character_sheet has the whole text)' : '';
+  return { character: { ...c, personality }, notice: text ? `Player updated their ${label}: ${quote(text, NOTICE_QUOTE)}${more}` : `Player cleared their ${label}` };
 }
 
+/** The same shape as a personality edit: the sheet carries the notes to the DM whole. */
 export function notesChange(c: Character, value: string): SheetChange {
   if (c.notes === value) return unchanged(c);
-  return { character: { ...c, notes: value }, notice: 'Player edited their private notes on the sheet' };
+  const text = value.trim();
+  const more = text.replace(/\s+/g, ' ').length > NOTICE_QUOTE ? ' (its opening; get_character_sheet has the whole text)' : '';
+  return {
+    character: { ...c, notes: value },
+    notice: text ? `Player updated their notes on the sheet: ${quote(text, NOTICE_QUOTE)}${more}` : 'Player cleared their notes on the sheet',
+  };
 }

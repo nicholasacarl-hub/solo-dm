@@ -17,6 +17,10 @@ import { characterSheetText, levelUp, weaponCritRange } from '@/engine';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef, TEXT } from '@/test/structuredFixtures';
 import type { BuilderData, Character, ClassLevel, ClassOption, CompendiumEntry, SubclassOption } from '@/types';
+import { redactImportedDeep } from '@/storage/backup';
+import { redactCopiedImports } from '@/storage/redact';
+import { campaignGraph } from '@/storage/testData';
+import type { CampaignData } from '@/storage/types';
 import { deps, resetDmDeps } from '../deps';
 import { SAMPLE_RULES } from '../testing/fakeData';
 import { setupHarness, type HarnessOptions } from '../testing/harness';
@@ -92,7 +96,7 @@ describe('level_up from the merged builder data', () => {
     // The SRD Fighter's own level-3 feature stays the DM's to add, as today.
     expect(c.features.some((f) => f.name === 'Fighter Subclass')).toBe(false);
     // The result names the features and their book, never their text.
-    expect(out.content).toContain('- Ember Ward (The Gloamwood Almanac) — its text is on the sheet');
+    expect(out.content).toContain('- Ember Ward (The Gloamwood Almanac) — get_character_sheet has its text');
     expect(out.content).toContain("Used the book's text instead of your description for: Ember Ward.");
     for (const marker of GLOAMWOOD_MARKERS) expect(out.content).not.toContain(marker);
     // The catalog reaches the engine (AC after the level).
@@ -160,7 +164,7 @@ describe('level_up from the merged builder data', () => {
       expect(c.classes[0]).toMatchObject({ level: 7, subclass: 'Champion', subclassId: bookChampion.id, subclassRef });
       expect(c.features.map((f) => f.name)).toEqual(['Lantern Stride']);
       expect(weaponCritRange(c)).toBe(20);
-      expect(out.content).toContain('- Lantern Stride (The Gloamwood Almanac) — its text is on the sheet');
+      expect(out.content).toContain('- Lantern Stride (The Gloamwood Almanac) — get_character_sheet has its text');
     });
 
     it('a new name two subclasses share takes the SRD one, says so, and keeps no book ref on it', async () => {
@@ -285,5 +289,116 @@ describe('update_character links names to the rules index and builder data', () 
     const lantern = h.sheet().features.find((f) => f.name === 'Lantern Bearer');
     expect(lantern).toMatchObject({ description: 'The DM sums up the feat.', ref: { kind: 'feat', entryName: 'Lantern Bearer', textCopied: true } });
     expect(h.sheet().features.find((f) => f.name === 'Alert')?.ref).toBeUndefined();
+  });
+});
+
+describe('get_character_sheet', () => {
+  // Invented: three paragraphs of backstory and long ideals, past the old 500- and 200-character cuts.
+  const BACKSTORY = [
+    'Kestrel Vane grew up on the salt flats east of Harrowmere, where the caravans stop only to water their oxen. His mother traded rope and lamp oil; his father was a story she told on cold nights.',
+    "At twelve he found a dragon's shed scale half buried in the flats, warm as a hearthstone in his hand. He swore an oath over it: one day he will become a dragon himself, scales and wings and all.",
+    'He fights with twin hooked blades joined by a length of black chain, a gift from the smith who taught him to throw them.',
+  ];
+  const IDEALS =
+    'Transformation. Anything worth having is worth changing yourself to reach, and a person who stays the same out of fear has already lost. Freedom. No chain holds me that I did not forge myself. Loyalty to the few who stayed.';
+  const SPELLCASTING = [
+    'You can cast sorcerer spells using Charisma. You know four cantrips and two level 1 spells of your choice from the Sorcerer spell list, and you regain all expended spell slots when you finish a Long Rest.',
+    'You can use an Arcane Focus as a Spellcasting Focus for your sorcerer spells. Whenever you gain a Sorcerer level, you can replace one spell you know with another of a level for which you have spell slots.',
+  ];
+
+  it("returns the player's long text and each feature's text whole, as the frozen prompt renders it", async () => {
+    const base = sampleCharacter();
+    const character: Character = {
+      ...base,
+      personality: { ...base.personality, backstory: BACKSTORY.join('\n\n'), ideals: IDEALS },
+      features: [{ id: 'f-sc', name: 'Spellcasting', source: 'class', sourceName: 'Sorcerer 1', description: SPELLCASTING.join('\n\n') }],
+    };
+    const h = setup({ character });
+    const out = await h.run('get_character_sheet', {});
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toBe(characterSheetText(h.sheet()));
+    expect(out.content).toContain(`- Backstory: ${BACKSTORY.join('\n\n  ')}`);
+    expect(out.content).toContain(`- Ideals: ${IDEALS}`);
+    expect(out.content).toContain(`- **Spellcasting** (Sorcerer 1): ${SPELLCASTING.join('\n\n  ')}`);
+    expect(out.content).not.toContain('…');
+  });
+});
+
+describe("book text the DM names on the sheet keeps its book's ref (exports replace it)", () => {
+  // The export pipeline (backup.ts) over a campaign holding this character.
+  const exported = (character: Character) => {
+    const g = campaignGraph('p');
+    const data: CampaignData = { ...g, character: { ...character, id: g.character!.id, campaignId: g.campaign.id } };
+    return JSON.stringify(redactImportedDeep(redactCopiedImports(data).data));
+  };
+  const mothkin = EXPECTED_MERGED.species.find((s) => s.name === 'Mothkin')!;
+  const duskSight = mothkin.traits.find((t) => t.name === 'Dusk Sight')!;
+  const fighter = () => hero({ classId: FIGHTER.id, name: 'Fighter', level: 2, hitDie: 10 });
+
+  it('level_up: naming a copied feature already on the sheet adds no second, ref-less copy', async () => {
+    const dusk = { id: 'f-dusk', name: 'Dusk Sight', source: 'species' as const, sourceName: 'Mothkin', description: duskSight.description, ref: duskSight.ref };
+    const h = setup({ character: { ...fighter(), features: [dusk] } });
+    const out = await h.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Dusk Sight', description: duskSight.description }] });
+    expect(out.isError).toBeUndefined();
+    expect(h.sheet().features.filter((f) => f.name === 'Dusk Sight')).toEqual([expect.objectContaining({ ref: duskSight.ref })]);
+    expect(out.content).toContain("Already on the sheet with the book's text, kept as they are (uses included): Dusk Sight.");
+    expect(exported(h.sheet())).not.toContain(GLOAMWOOD_MARKERS[2]);
+  });
+
+  it("level_up still adds an extra under a name the SRD prints too, or when the book data didn't load", async () => {
+    const wick = EXPECTED_MERGED.classes.find((c) => c.name === 'Wickwright')!;
+    const asi = wick.features.find((f) => f.name === 'Ability Score Improvement')!;
+    const copied = { id: 'f-asi', name: asi.name, source: 'class' as const, sourceName: 'Wickwright 4', description: asi.description, ref: asi.ref };
+    const extra = { name: 'Ability Score Improvement', description: 'Fighter 4: +2 Strength.' };
+    const withData = setup({ character: { ...fighter(), features: [copied] } });
+    expect((await withData.run('level_up', { class_name: 'Fighter', new_features: [extra] })).isError).toBeUndefined();
+    expect(withData.sheet().features.filter((f) => f.name === 'Ability Score Improvement')).toHaveLength(2);
+    const dusk = { id: 'f-dusk', name: 'Dusk Sight', source: 'species' as const, sourceName: 'Mothkin', description: duskSight.description, ref: duskSight.ref };
+    const noData = setup({ character: { ...fighter(), features: [dusk] }, builderData: null });
+    expect((await noData.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Dusk Sight', description: 'I see in the dark now.' }] })).isError).toBeUndefined();
+    expect(noData.sheet().features.filter((f) => f.name === 'Dusk Sight')).toHaveLength(2);
+  });
+
+  it("leaves the DM's own words under a book part's name as the DM's: no ref, so exports keep them and restore never overwrites them", async () => {
+    const own = 'You see through magical darkness within 10 feet of you.';
+    const h = setup({ character: fighter() });
+    expect((await h.run('update_character', { features_add: [{ name: 'Dusk Sight', description: own, source: 'species' }] })).isError).toBeUndefined();
+    expect((await h.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Smoke Step', description: 'Once per turn you step through smoke.' }] })).isError).toBeUndefined();
+    const c = h.sheet();
+    expect(c.features.find((f) => f.name === 'Dusk Sight')?.ref).toBeUndefined();
+    expect(c.features.find((f) => f.name === 'Smoke Step')?.ref).toBeUndefined();
+    expect(exported(c)).toContain(own);
+  });
+
+  it("features_add and level_up extras that name one of the book's parts get its ref; a name the SRD prints too stays the DM's", async () => {
+    const wick = EXPECTED_MERGED.classes.find((c) => c.name === 'Wickwright')!.features.find((f) => f.name === 'Wick Sense')!;
+    const smoke = EMBER.features.find((f) => f.name === 'Smoke Step')!;
+    const h = setup({ character: fighter() });
+    expect((await h.run('update_character', { features_add: [{ name: 'Wick Sense', description: wick.description, source: 'class' }] })).isError).toBeUndefined();
+    expect((await h.run('update_character', { features_add: [{ name: 'Ability Score Improvement', description: 'Strength +2.', source: 'class' }] })).isError).toBeUndefined();
+    expect((await h.run('level_up', { class_name: 'Fighter', subclass: 'Ember Warden', new_features: [{ name: 'Smoke Step', description: smoke.description }] })).isError).toBeUndefined();
+    const c = h.sheet();
+    expect(c.features.find((f) => f.name === 'Wick Sense')?.ref?.textCopied).toBe(true);
+    expect(c.features.find((f) => f.name === 'Smoke Step')?.ref?.textCopied).toBe(true);
+    expect(c.features.find((f) => f.name === 'Ability Score Improvement')?.ref).toBeUndefined();
+    const text = exported(c);
+    for (const marker of GLOAMWOOD_MARKERS) expect(text).not.toContain(marker);
+  });
+
+  it('a refused call quotes long strings by their length, never their words', async () => {
+    const long = `${'Lantern clause binds the wick to the hour of dusk. '.repeat(45)}${GLOAMWOOD_MARKERS[0]}`;
+    const h = setup({ character: fighter() });
+    const out = await h.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Lantern Lore', description: long }] });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain(`(${long.length} characters)`);
+    expect(out.content).not.toContain('Lantern clause');
+  });
+
+  it('a refused call quotes even a short description by its length', async () => {
+    const h = setup({ character: fighter() });
+    const out = await h.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Thorn Hide', description: 'Your skin grows thorns.', uses_max: 'twice' }] });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('(23 characters)');
+    expect(out.content).not.toContain('Your skin grows thorns.');
   });
 });
