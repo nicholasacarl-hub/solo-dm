@@ -12,6 +12,7 @@
  */
 import {
   addCombatant,
+  conditionKey,
   createBattleMap,
   createCombat,
   currentCombatant,
@@ -21,8 +22,8 @@ import {
   healCombatant,
   healthDescriptor,
   initiativeModifier,
+  matchStandardCondition,
   nextTurn,
-  normalizeConditionId,
   placeCombatants,
   removeCombatant,
   rollD20Test,
@@ -57,6 +58,7 @@ import {
   defined,
   eventLines,
   fail,
+  keptHomebrewLines,
   logTool,
   mutateCharacter,
   mutateCombat,
@@ -371,9 +373,17 @@ function hpText(c: Combatant | undefined, forPlayer: boolean): string {
   return `HP ${c.hp.current}/${c.hp.max}`;
 }
 
+/**
+ * A DM-named condition: the standard one the name is by the engine's strict match ("Poisoned", "Grappled by the
+ * ogre"), else the DM's own name as a homebrew condition ("Mark of the Invisible Hand" gives no Invisible rules).
+ */
+function conditionIdOf(name: string): string {
+  return matchStandardCondition(name)?.id ?? name.trim();
+}
+
 function toConditions(list: UpdateInput['conditions_add']): ActiveCondition[] {
   return (list ?? []).map((c) => ({
-    id: normalizeConditionId(c.condition) ?? c.condition.trim(),
+    id: conditionIdOf(c.condition),
     ...defined({ source: c.source, duration: c.duration }),
   }));
 }
@@ -462,17 +472,25 @@ function changeHp(state: CombatState, input: UpdateInput, kind: 'damage' | 'heal
 function changeConditions(state: CombatState, input: UpdateInput): CombatChange {
   const target = requireTarget(state, input.target, 'conditions');
   refuseHero(target, 'conditions');
-  const removed = new Set((input.conditions_remove ?? []).map((c) => normalizeConditionId(c) ?? c.trim()));
+  // As the engine removes the hero's: a name the creature has is removed as named, any other as the condition it is.
+  const has = (name: string) => target.conditions.some((c) => conditionKey(c.id) === conditionKey(name));
+  const removed = new Set((input.conditions_remove ?? []).map((name) => (has(name) ? name.trim() : conditionIdOf(name))));
+  const removedKeys = new Set([...removed].map(conditionKey));
   const added = toConditions(input.conditions_add);
-  const addedIds = new Set(added.map((c) => c.id));
-  const conditions = [...target.conditions.filter((c) => !removed.has(c.id) && !addedIds.has(c.id)), ...added];
+  const addedKeys = new Set(added.map((c) => conditionKey(c.id)));
+  const conditions = [...target.conditions.filter((c) => !removedKeys.has(conditionKey(c.id)) && !addedKeys.has(conditionKey(c.id))), ...added];
   const parts = [
     added.length ? `+${added.map((c) => c.id).join(', +')}` : '',
     removed.size ? `−${[...removed].join(', −')}` : '',
   ].filter(Boolean);
   if (parts.length === 0) throw new ToolInputError('update_combat conditions needs conditions_add or conditions_remove.');
   const summary = `${target.name}: ${parts.join(' ')}`;
-  return { state: updateCombatant(state, target.id, { conditions }), summary, log: target.hidden ? null : summary };
+  return {
+    state: updateCombatant(state, target.id, { conditions }),
+    summary,
+    log: target.hidden ? null : summary,
+    notes: keptHomebrewLines(input.conditions_add, conditions),
+  };
 }
 
 /** Removing a creature drops a stop it made or reacted to (the move can't be repeated any more). */

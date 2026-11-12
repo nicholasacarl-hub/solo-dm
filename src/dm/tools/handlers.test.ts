@@ -367,6 +367,38 @@ describe('rests and leveling', () => {
     expect(h.s().character?.hp.current).toBe(17);
   });
 
+  it('refuses a rest below 1 HP before any log line or Hit Dice dialog, with the way back (SRD 5.2.1 Stabilizing a Character)', async () => {
+    const h = setup({ campaignSettings: { playerRollMode: 'prompt' } });
+    await h.s().updateCharacter((c) => ({
+      ...c,
+      hp: { ...c.hp, current: 0 },
+      deathSaves: { successes: 3, failures: 1, stable: true, dead: false },
+      conditions: [{ id: 'unconscious' }],
+    }));
+    const asked: string[] = [];
+    autoRespond(h.store, (req) => {
+      asked.push(req.kind);
+      return req.kind === 'short-rest' ? { kind: 'short-rest', response: { spent: [] } } : null;
+    });
+    const wayBack = "A Stable hero who isn't healed regains 1 HP after 1d4 hours: roll_dice 1d4 for the hours, update_character hp healing 1, then take_rest.";
+    expect(await h.run('take_rest', { kind: 'short', reason: 'Camp in the ruins' })).toEqual({
+      isError: true,
+      content: `A Short Rest needs at least 1 HP (SRD 5.2.1). ${wayBack}`,
+    });
+    expect(await h.run('take_rest', { kind: 'long' })).toEqual({ isError: true, content: `A Long Rest needs at least 1 HP (SRD 5.2.1). ${wayBack}` });
+    expect(asked).toEqual([]);
+    expect(h.s().log).toHaveLength(0);
+    expect(h.s().character?.hp.current).toBe(0);
+  });
+
+  it('refuses the dead any rest, logging nothing', async () => {
+    const h = setup();
+    await h.s().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 0 }, deathSaves: { successes: 0, failures: 3, stable: false, dead: true } }));
+    expect(await h.run('take_rest', { kind: 'long' })).toEqual({ isError: true, content: "The hero is dead; the dead don't rest." });
+    expect(await h.run('take_rest', { kind: 'short' })).toEqual({ isError: true, content: "The hero is dead; the dead don't rest." });
+    expect(h.s().log).toHaveLength(0);
+  });
+
   it('reports the limited-use features whose uses grew with the level', async () => {
     const h = setup();
     await h.s().updateCharacter((c) => ({

@@ -52,6 +52,34 @@ describe('matchStandardCondition', () => {
     expect(matchStandardCondition('Poison Mist')).toBeNull();
     expect(matchStandardCondition('Charm of Warding')).toBeNull();
   });
+
+  it('takes the noun and adjective forms of the SRD 5.2.1 Rules Glossary condition names as those conditions', () => {
+    expect(matchStandardCondition('Blindness')).toEqual({ id: 'blinded', detail: '' });
+    expect(matchStandardCondition('deafness')).toEqual({ id: 'deafened', detail: '' });
+    expect(matchStandardCondition('Sleeping')).toEqual({ id: 'unconscious', detail: '' });
+    expect(matchStandardCondition('Unconsciousness')).toEqual({ id: 'unconscious', detail: '' });
+    expect(matchStandardCondition('Petrification')).toEqual({ id: 'petrified', detail: '' });
+    expect(matchStandardCondition('Terrified')).toEqual({ id: 'frightened', detail: '' });
+    // Exhaustion written with its cause, as a condition's name takes a detail.
+    expect(matchStandardCondition('Exhausted (forced march)')).toEqual({ id: 'exhaustion', detail: 'forced march' });
+    expect(matchStandardCondition('Exhausted from the climb')).toEqual({ id: 'exhaustion', detail: 'from the climb' });
+    expect(matchStandardCondition('Exhaustion 2')).toEqual({ id: 'exhaustion', detail: '2' });
+  });
+
+  it("keeps a name with a condition's word inside it as homebrew; normalizeConditionId still spots the word", () => {
+    const named: [string, string][] = [
+      ['Protection from Poison', 'poisoned'],
+      ['See Invisibility', 'invisible'],
+      ['Mark of the Invisible Hand', 'invisible'],
+      ['Sleeping Curse', 'unconscious'],
+      ['Blindness Ward', 'blinded'],
+      ["KO'd", 'unconscious'],
+    ];
+    for (const [name, word] of named) {
+      expect(matchStandardCondition(name)).toBeNull();
+      expect(normalizeConditionId(name)).toBe(word);
+    }
+  });
 });
 
 describe('conditionName', () => {

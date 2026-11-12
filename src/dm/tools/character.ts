@@ -28,7 +28,7 @@ import {
   saveSourcesChangeText,
   gainXp,
   levelUp,
-  normalizeConditionId,
+  matchStandardCondition,
   removeCondition,
   removeItem,
   removeSpell,
@@ -85,6 +85,7 @@ import {
   defined,
   eventLines,
   fail,
+  keptHomebrewLines,
   logTool,
   mutateCharacter,
   ok,
@@ -130,8 +131,9 @@ function chain(c: Character, steps: ((c: Character) => EngineResult)[]): EngineR
   return { character, events };
 }
 
-function conditionId(name: string): string {
-  return normalizeConditionId(name) ?? name.trim();
+/** A name the DM gave for Exhaustion ("Exhaustion", "Exhausted (forced march)"): it changes the level instead. */
+function isExhaustion(name: string): boolean {
+  return matchStandardCondition(name)?.id === 'exhaustion';
 }
 
 function hpSection(hp: NonNullable<ToolInput<'update_character'>['hp']>, reason?: string): Section {
@@ -545,20 +547,23 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
   return steps;
 }
 
+/**
+ * The engine gets the DM's own name and matches it strictly: "Poisoned" or "Frightened of the dragon" is that
+ * condition (the detail its source), while "Protection from Poison" stays a homebrew condition by that name.
+ */
 function conditionSteps(input: ToolInput<'update_character'>): ((c: Character) => EngineResult)[] {
   const steps: ((c: Character) => EngineResult)[] = [];
   let exhaustion = input.exhaustion_change ?? 0;
   for (const name of input.conditions_remove ?? []) {
-    if (conditionId(name) === 'exhaustion') exhaustion -= 1;
-    else steps.push((c) => removeCondition(c, conditionId(name)));
+    if (isExhaustion(name)) exhaustion -= 1;
+    else steps.push((c) => removeCondition(c, name.trim()));
   }
   for (const cond of input.conditions_add ?? []) {
-    const id = conditionId(cond.condition);
-    if (id === 'exhaustion') {
+    if (isExhaustion(cond.condition)) {
       exhaustion += 1;
       continue;
     }
-    steps.push((c) => addCondition(c, { id, ...defined({ source: cond.source, duration: cond.duration }) }));
+    steps.push((c) => addCondition(c, { id: cond.condition.trim(), ...defined({ source: cond.source, duration: cond.duration }) }));
   }
   if (exhaustion !== 0) steps.push((c) => changeExhaustion(c, exhaustion));
   return steps;
@@ -764,6 +769,8 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   await logSections(ctx, results, input.reason);
 
   const lines = results.flatMap((r) => eventLines(r.events)).filter(Boolean);
+  // For the DM only (the player's log keeps the change itself).
+  lines.push(...keptHomebrewLines(input.conditions_add, change.character.conditions));
   const saves = saveSourcesChangeText(before, change.character);
   if (saves) lines.push(`${saves}.`);
   const campaign = ctx.deps.store().campaign;
@@ -869,8 +876,22 @@ async function longRest(ctx: ToolContext, reason?: string): Promise<ToolOutcome>
   return ok([summary, ...eventLines(change.events), `Status: ${characterStatusLine(change.character)}`].join('\n'));
 }
 
+/**
+ * Why the hero can't start this rest, or null. A rest needs at least 1 HP (SRD 5.2.1 Short Rest, Long Rest), so the
+ * refusal comes before any log line or Hit Dice dialog, with the way back for a Stable hero: one who isn't healed
+ * regains 1 HP after 1d4 hours (SRD 5.2.1 Stabilizing a Character).
+ */
+function restRefusal(c: Character, kind: ToolInput<'take_rest'>['kind']): string | null {
+  if (c.deathSaves.dead) return "The hero is dead; the dead don't rest.";
+  if (c.hp.current >= 1) return null;
+  const rest = kind === 'short' ? 'A Short Rest' : 'A Long Rest';
+  return `${rest} needs at least 1 HP (SRD 5.2.1). A Stable hero who isn't healed regains 1 HP after 1d4 hours: roll_dice 1d4 for the hours, update_character hp healing 1, then take_rest.`;
+}
+
 export async function takeRestTool(input: ToolInput<'take_rest'>, ctx: ToolContext): Promise<ToolOutcome> {
   if (ctx.deps.store().combat?.active) return fail('The hero cannot rest during combat. End the combat first.');
+  const refusal = restRefusal(requireCharacter(ctx.deps.store()), input.kind);
+  if (refusal) return fail(refusal);
   return input.kind === 'short' ? shortRest(ctx, input.reason) : longRest(ctx, input.reason);
 }
 
