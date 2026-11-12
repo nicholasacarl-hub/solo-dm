@@ -292,6 +292,31 @@ describe('update_character links names to the rules index and builder data', () 
   });
 });
 
+describe('what the DM reads back about AC and saves after its own changes', () => {
+  it("armor_class: an AC the gear doesn't give says the DM set it; one the gear gives gets the gear's formula back", async () => {
+    const h = setup();
+    expect((await h.run('update_character', { armor_class: 15, reason: 'Mage Armor' })).isError).toBeUndefined();
+    expect(h.sheet()).toMatchObject({ armorClass: 15, acFormula: 'set by the DM: Mage Armor' });
+    expect(characterSheetText(h.sheet())).toContain('**AC** 15 (set by the DM: Mage Armor)');
+    // Mage Armor ends: back to what the gear gives (unarmored, 10 + DEX), with its formula.
+    expect((await h.run('update_character', { armor_class: 12 })).isError).toBeUndefined();
+    expect(h.sheet()).toMatchObject({ armorClass: 12, acFormula: '10 + DEX 2' });
+    expect((await h.run('update_character', { armor_class: 14 })).isError).toBeUndefined();
+    expect(h.sheet().acFormula).toBe('set by the DM');
+  });
+
+  it('says when what every save includes changes (SRD 5.2.1 Cloak of Protection: +1 to saving throws while attuned)', async () => {
+    const h = setup();
+    await h.run('update_character', { inventory_add: [{ name: 'Cloak of Protection', quantity: 1, magic: true }] });
+    const on = await h.run('update_character', { inventory_update: [{ name: 'Cloak of Protection', attuned: true }] });
+    expect(on.content).toContain('Saving throws now include Cloak of Protection +1.');
+    const off = await h.run('update_character', { inventory_update: [{ name: 'Cloak of Protection', attuned: false }] });
+    expect(off.content).toContain('Saving throws no longer include Cloak of Protection +1.');
+    // Nothing about saves when they don't change.
+    expect((await h.run('update_character', { hp: { change: -1 } })).content).not.toContain('Saving throws');
+  });
+});
+
 describe('get_character_sheet', () => {
   // Invented: three paragraphs of backstory and long ideals, past the old 500- and 200-character cuts.
   const BACKSTORY = [

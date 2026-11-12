@@ -7,6 +7,7 @@ import {
   applyDamage,
   applyHealing,
   changeExhaustion,
+  saveSourcesChangeText,
   syncArmorClass,
   conditionName,
   ordinal,
@@ -193,8 +194,10 @@ export function featureUseChange(c: Character, featureId: string, spend: boolean
  */
 function withAc(before: Character, after: Character, catalog: EquipmentOption[] | null): { character: Character; acNote: string } {
   const { character } = syncArmorClass(before, after, catalog ?? []);
-  if (character.armorClass === before.armorClass) return { character, acNote: '' };
-  return { character, acNote: ` (AC ${before.armorClass} → ${character.armorClass})` };
+  // And what every save includes (a Cloak of Protection, an item's bonus the app read), when that changed too.
+  const saves = saveSourcesChangeText(before, character);
+  const notes = [character.armorClass === before.armorClass ? '' : `AC ${before.armorClass} → ${character.armorClass}`, saves ? saves.replace(/^S/, 's') : ''].filter(Boolean);
+  return { character, acNote: notes.length ? ` (${notes.join('; ')})` : '' };
 }
 
 function mapItem(c: Character, itemId: string, patch: Partial<InventoryItem>): Character {

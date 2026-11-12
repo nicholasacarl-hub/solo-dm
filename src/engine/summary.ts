@@ -393,6 +393,20 @@ function equipmentLines(c: Character): string[] {
   return ['### Equipment', items, ...described, coins];
 }
 
+/**
+ * "Saving throws now include Cloak of the Fen +1": what every save adds (saveBonusSources) after a change that altered
+ * it, for a tool result or a notice; null when it didn't change. The frozen sheet's Saving throws line dates from the
+ * start of the session, so this is how the DM hears of a bonus it may need to set aside mid-session (its "Magic items"
+ * rule).
+ */
+export function saveSourcesChangeText(before: Character, after: Character): string | null {
+  const list = (c: Character) => saveBonusSources(c).map((s) => `${s.name} ${formatModifier(s.bonus)}`).join(', ');
+  const was = list(before);
+  const now = list(after);
+  if (was === now) return null;
+  return now ? `Saving throws now include ${now}` : `Saving throws no longer include ${was}`;
+}
+
 /** What the player wrote about the hero, whole: the DM's main material for the story. */
 function personalityLines(c: Character): string[] {
   const p = c.personality ?? {};

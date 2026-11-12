@@ -133,6 +133,9 @@ describe('buildSystemPrompt', () => {
     ]) {
       expect(items, phrase).toContain(phrase);
     }
+    // The order of truth and table talk leave a number the app worked out to the text it came from.
+    expect(DM_INSTRUCTIONS).toContain("When sources disagree, the earlier one wins, except that a rule's, feature's or item's own text, or a ruling you recorded, beats a number the app worked out from it (see Magic items).");
+    expect(section(DM_INSTRUCTIONS, '## Table talk')).toContain('A number the app worked out is different: if they point to a condition it missed');
   });
 
   it('renders the campaign: table rules, safety, chronicle, hero, quests, journal, clocks, homebrew, library, scene', () => {

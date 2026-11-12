@@ -25,6 +25,7 @@ import {
   characterLevel,
   characterSheetText,
   characterStatusLine,
+  saveSourcesChangeText,
   gainXp,
   levelUp,
   normalizeConditionId,
@@ -509,11 +510,26 @@ function statEvent(message: string): GameEvent {
   return { type: 'combat', message };
 }
 
-function statSteps(input: ToolInput<'update_character'>): ((c: Character) => EngineResult)[] {
+/** The formula of an AC the DM set by hand ("set by the DM: Mage Armor"), from the call's reason. */
+function handSetFormula(reason: string | undefined): string {
+  const why = reason?.replace(/\s+/g, ' ').trim();
+  return why ? `set by the DM: ${truncate(why, 60)}` : 'set by the DM';
+}
+
+/**
+ * armor_class: an AC the gear and features don't give (Mage Armor, Shield of Faith) gets a formula saying the DM set
+ * it, so the sheet never shows the old formula's items and armor under a number they don't add up to (the DM's
+ * "Magic items" rule reads the formula); an AC they do give gets their formula back.
+ */
+function statSteps(input: ToolInput<'update_character'>, catalog: readonly EquipmentOption[] = []): ((c: Character) => EngineResult)[] {
   const steps: ((c: Character) => EngineResult)[] = [];
   if (input.armor_class !== undefined) {
     const ac = input.armor_class;
-    steps.push((c) => ({ character: { ...c, armorClass: ac }, events: [statEvent(`AC ${c.armorClass} → ${ac}`)] }));
+    steps.push((c) => {
+      const gear = computeArmorClass(c, catalog);
+      const acFormula = gear.ac === ac ? gear.formula : handSetFormula(input.reason);
+      return { character: { ...c, armorClass: ac, acFormula }, events: [statEvent(`AC ${c.armorClass} → ${ac}`)] };
+    });
   }
   if (input.speed !== undefined) {
     const speed = input.speed;
@@ -640,7 +656,7 @@ function buildSections(input: ToolInput<'update_character'>, links: Links = NO_L
     ]);
   }
   add('level', proficiencySteps(input));
-  add('info', statSteps(input));
+  add('info', statSteps(input, links.catalog));
   return sections;
 }
 
@@ -689,6 +705,8 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   await logSections(ctx, results, input.reason);
 
   const lines = results.flatMap((r) => eventLines(r.events)).filter(Boolean);
+  const saves = saveSourcesChangeText(before, change.character);
+  if (saves) lines.push(`${saves}.`);
   const campaign = ctx.deps.store().campaign;
   if (input.xp_gain !== undefined && campaign && !campaign.settings.milestoneLeveling && xpToNextLevel(change.character) === 0) {
     lines.push('The hero has enough XP to level up: call level_up at a fitting moment.');
@@ -990,6 +1008,8 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   const lines = [summary, ...eventLines(change.events), ...books];
   if (uses.length) lines.push('Limited-use features that grew with the level (already on the sheet):', ...uses.map((u) => `- ${u}`));
   if (change.reminders.length) lines.push('Choices the player still needs to make:', ...change.reminders.map((r) => `- ${r}`));
+  const saves = saveSourcesChangeText(before, change.character);
+  if (saves) lines.push(`${saves}.`);
   lines.push(`Status: ${characterStatusLine(change.character)}`);
   return ok(lines.join('\n'));
 }

@@ -93,7 +93,12 @@ Protection, an item's bonus the app read as always on, Aura of Protection), and 
 bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Magic items")
 leave the rest to the DM: a bonus an item's text gives only sometimes, a condition that stops a counted one, and those
 attack and damage bonuses, applied by adjusting the AC or DC it passes (and the damage it applies) and told to the
-player in a line. Paragraphs and lists are kept and indented under their bullet; a Markdown heading inside a field
+player in a line; the order of truth says an item's own text (or a recorded ruling) beats a number the app worked
+out from it, and the player's inventory says the DM adds those bonuses, so nobody adds them twice. An AC the DM sets
+by hand (`armor_class`, for Mage Armor) gets the formula "set by the DM: <reason>" rather than keeping the old one's
+items, and a change in what every save includes is announced in the tool's result and in the player's equip and
+attune notices ("saving throws now include …"), since the frozen sheet's line dates from the start of the session.
+Paragraphs and lists are kept and indented under their bullet; a Markdown heading inside a field
 becomes a bold line, so it can't pass for a section of the sheet. A field is cut only past 20,000
 characters (`SHEET_TEXT_MAX`, far above any real sheet: the longest SRD feature is about 4,300, Wizard
 Spellcasting, and a level-20 SRD character's features 8,000–15,000 in all), at a paragraph, line or word

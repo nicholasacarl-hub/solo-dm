@@ -165,7 +165,7 @@ describe('items from the player’s books (SRD 5.2.1 Attunement)', () => {
     await user.click(within(row).getByRole('button', { name: 'Attune to Mothsilk Cloak' }));
     expect(sheet().armorClass).toBe(13);
     expect(savingThrowModifier(sheet(), 'wis')).toBe(saveBefore + 1);
-    expect(vi.mocked(useGame.getState().queueDmNotice).mock.calls.at(-1)?.[0]).toBe('Player attuned to Mothsilk Cloak (AC 12 → 13)');
+    expect(vi.mocked(useGame.getState().queueDmNotice).mock.calls.at(-1)?.[0]).toBe('Player attuned to Mothsilk Cloak (AC 12 → 13; saving throws now include Mothsilk Cloak +1)');
   });
 
   it('reads "Requires attunement (by a Wizard)" and shows the book’s text live, or where it is', async () => {
@@ -184,7 +184,7 @@ describe('items from the player’s books (SRD 5.2.1 Attunement)', () => {
     expect(await within(row('Gloam Lamp')).findByText(`From “${GLOAMWOOD_TITLE}”, which isn't on this device.`)).toBeInTheDocument();
     // An item that says it doesn't need attunement has no Attune button.
     expect(within(row('Gloam Lamp')).queryByRole('button', { name: /Attune/ })).toBeNull();
-    expect(within(row('Ember Blade')).getByText('+1 to attack and damage rolls — add it to your rolls')).toBeInTheDocument();
+    expect(within(row('Ember Blade')).getByText('+1 to attack and damage rolls — your DM adds it')).toBeInTheDocument();
   });
 
   it('P3: an item’s own words over a pulled placeholder show under Details despite a stale ref.redacted; the placeholder never does', async () => {
