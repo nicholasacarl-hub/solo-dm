@@ -258,7 +258,8 @@ lines; the player's log and tracker keep bare names, so a source can't name a hi
 matched strictly (with whole-input aliases such as "blindness" and "exhausted …"): an effect the DM names itself
 ("Protection from Poison", "Charm of Warding") stays its own condition with no standard rules, and the result says
 so and how to apply the standard one. `take_rest` refuses a dead hero or one below 1 HP before logging anything or
-opening the Hit Dice dialog, and points to the SRD's Stabilizing path (1 HP after 1d4 hours).
+opening the Hit Dice dialog, and points to the SRD's way back: death saving throws for a dying hero, 1 HP after
+1d4 hours for a Stable one.
 
 ### Player-side controls that talk to the DM
 
