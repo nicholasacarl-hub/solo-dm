@@ -370,19 +370,27 @@ function itemText(i: InventoryItem): string {
 }
 
 /**
- * An item's description when no rules entry the DM can read supplies it, whole: a custom item the player or the DM
- * made (no compendium or homebrew entry, no book), or the DM's own words on a book's item (ref.textCopied), wrapped
- * like copied text. SRD, homebrew and book items are read with get_entry.
+ * An item's description, whole, wherever someone other than the app may have written it: a custom item the player or
+ * the DM made, the DM's words on an SRD magic item or a homebrew item (the app writes none there), or the DM's own words
+ * on a book's item (ref.textCopied), wrapped like copied text. A book's item linked without the DM's words (the builder,
+ * the sheet's Add item form, inventory_add) gets a line naming the book and get_entry, then its app-written line,
+ * numbers only: nothing else on the sheet says which items to read, and with the book switched off that line is all
+ * there is. Non-magic SRD gear is left to get_entry: its description may be the SRD's own text, which the app copied
+ * (so the DM's words on plain gear stay off the sheet; its rulings go to the journal).
  */
 function itemDescriptionLine(i: InventoryItem): string | null {
   const d = i.description?.trim();
+  // Linked, not described: the description is describeOption's (inventoryFromOption, inventoryFromEntry), never the
+  // book's words, so it needs no wrapper; the DM's words on the item would have marked the ref copied.
+  if (i.ref && !i.ref.textCopied) return `- **${i.name}** (${i.ref.sourceTitle}; read it with get_entry)${d ? `: ${fieldText(d)}` : ''}`;
   if (!d) return null;
   if (i.ref) {
-    if (!i.ref.textCopied || copiedTextMissing(i)) return null;
+    if (copiedTextMissing(i)) return null;
     const { kept, left } = capped(tidy(d));
     return `- **${i.name}**: ${indented(wrapImported(i.ref.sourceTitle, kept))}${leftOut(left, true)}`;
   }
-  return i.compendiumId || i.homebrewId ? null : `- **${i.name}**: ${fieldText(d)}`;
+  if (i.compendiumId && !i.compendiumId.startsWith('hb:') && !i.magic) return null;
+  return `- **${i.name}**: ${fieldText(d)}`;
 }
 
 function equipmentLines(c: Character): string[] {

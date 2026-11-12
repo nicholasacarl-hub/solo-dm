@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { sampleCharacter } from '@/test/fixtures';
 import { SHEET_TEXT_MAX } from '@/engine';
-import { dmSheetLengthHint, itemAttuneChange, itemEquipChange, notesChange, personalityChange } from './sheetChanges';
+import type { InventoryItem } from '@/types';
+import { dmSheetLengthHint, itemAttuneChange, itemEquipChange, notesChange, personalityChange, removeItemChange } from './sheetChanges';
 
 // SRD 5.2.1 Magic Items: Ring of Protection — "+1 bonus to AC and saving throws" while attuned.
 describe('sheet gear changes keep AC in step', () => {
@@ -30,6 +31,62 @@ describe('sheet gear changes keep AC in step', () => {
     const r = itemEquipChange(c, 'item-spellbook', true, null);
     expect(r.character.armorClass).toBe(c.armorClass);
     expect(r.notice).not.toMatch(/AC/);
+  });
+});
+
+// The AC an equip, attune or removal can't settle on its own: the player sees why in a toast, and the DM, whose ruling it
+// is, reads the same words at the end of the notice's one line (notices are parsed back line by line).
+describe('sheet gear changes pass on what syncArmorClass warns', () => {
+  const shield: InventoryItem = { id: 'shield', name: 'Shield', quantity: 1, category: 'shield' };
+
+  // SRD 5.2.1 Spells: Mage Armor (base AC 13 + Dexterity modifier) isn't counted by the app, so the DM set the AC by hand;
+  // Equipment: a Shield adds 2.
+  it('keeps an AC set by hand (Mage Armor) when a Shield goes on, and says what gear now gives', () => {
+    const c = sampleCharacter({ armorClass: 15, armorTraining: ['Shields'], inventory: [shield] });
+    const r = itemEquipChange(c, 'shield', true, null);
+    expect(r.character.armorClass).toBe(15);
+    const kept =
+      'AC kept at 15: it differs from the 12 that gear and features gave, so it may include a spell such as Mage Armor or a manual change. Gear and features now give AC 14 (10 + DEX 2 + Shield 2); update the AC if that is right.';
+    expect(r.warning).toBe(kept);
+    expect(r.notice).toBe(`Player equipped Shield — ${kept}`);
+  });
+
+  // SRD 5.2.1 Magic Items: Cloak of Protection — +1 to AC and saving throws while attuned.
+  it('keeps the saving-throw note in its parentheses and the warning after it when an attunement meets a hand-set AC', () => {
+    const cloak: InventoryItem = { id: 'cloak', name: 'Cloak of Protection', quantity: 1, magic: true, category: 'magic-item' };
+    const r = itemAttuneChange(sampleCharacter({ armorClass: 15, inventory: [cloak] }), 'cloak', true);
+    expect(r.character.armorClass).toBe(15);
+    expect(r.warning).toMatch(/^AC kept at 15: .*Gear and features now give AC 13 \(10 \+ DEX 2 \+ Cloak of Protection 1\); update the AC if that is right\.$/);
+    expect(r.notice).toBe(`Player attuned to Cloak of Protection (saving throws now include Cloak of Protection +1) — ${r.warning}`);
+  });
+
+  it('says so when the player puts on armor whose stats the app does not know', () => {
+    const hauberk: InventoryItem = { id: 'hauberk', name: 'Saltglass Hauberk', quantity: 1, category: 'armor' };
+    const c = sampleCharacter({ armorTraining: ['Light armor', 'Medium armor', 'Heavy armor', 'Shields'], inventory: [hauberk] });
+    const r = itemEquipChange(c, 'hauberk', true, null);
+    expect(r.character.armorClass).toBe(12);
+    const unknown = "AC kept at 12: Saltglass Hauberk's armor stats are unknown, so set the AC by hand.";
+    expect(r.warning).toBe(unknown);
+    expect(r.notice).toBe(`Player equipped Saltglass Hauberk — ${unknown}`);
+  });
+
+  it('lowers the AC when the player removes the Shield they wear, and says so; other gear goes as before', () => {
+    const c = sampleCharacter({ armorClass: 14, armorTraining: ['Shields'], inventory: [{ ...shield, equipped: true }, ...sampleCharacter().inventory] });
+    const r = removeItemChange(c, 'shield');
+    expect(r.character.armorClass).toBe(12);
+    expect(r.character.acFormula).toBe('10 + DEX 2');
+    expect(r.notice).toBe('Player removed Shield from their inventory (AC 14 → 12)');
+    expect(r.warning).toBeUndefined();
+    expect(removeItemChange(c, 'item-robe')).toMatchObject({ notice: 'Player removed Robe from their inventory', character: { armorClass: 14 } });
+  });
+
+  it('keeps a hand-set AC when the worn Shield is removed, and passes on the warning', () => {
+    const c = sampleCharacter({ armorClass: 17, armorTraining: ['Shields'], inventory: [{ ...shield, equipped: true }] });
+    const r = removeItemChange(c, 'shield');
+    expect(r.character.armorClass).toBe(17);
+    expect(r.warning).toMatch(/^AC kept at 17: it differs from the 14 that gear and features gave, .* Gear and features now give AC 12 \(10 \+ DEX 2\); update the AC if that is right\.$/);
+    expect(r.notice).toBe(`Player removed Shield from their inventory — ${r.warning}`);
+    expect(r.notice).not.toContain('\n');
   });
 });
 

@@ -190,14 +190,19 @@ export function featureUseChange(c: Character, featureId: string, spend: boolean
 /**
  * Keep AC in step with gear: armor and shields, and also items such as a Ring or Cloak of Protection
  * or Bracers of Defense. syncArmorClass keeps an AC set by hand (Mage Armor...) and falls back to the
- * SRD armor table when the catalog hasn't loaded.
+ * SRD armor table when the catalog hasn't loaded. Its warning (an AC set by hand kept while gear now gives
+ * another, or armor whose stats are unknown) is the player's toast and ends the DM's notice: nothing else
+ * tells either of them the AC may now be wrong, and the ruling is the DM's.
  */
-function withAc(before: Character, after: Character, catalog: EquipmentOption[] | null): { character: Character; acNote: string } {
-  const { character } = syncArmorClass(before, after, catalog ?? []);
+function withAc(before: Character, after: Character, catalog: EquipmentOption[] | null): { character: Character; acNote: string; warning?: string } {
+  const { character, events } = syncArmorClass(before, after, catalog ?? []);
   // And what every save includes (a Cloak of Protection, an item's bonus the app read), when that changed too.
   const saves = saveSourcesChangeText(before, character);
   const notes = [character.armorClass === before.armorClass ? '' : `AC ${before.armorClass} → ${character.armorClass}`, saves ? saves.replace(/^S/, 's') : ''].filter(Boolean);
-  return { character, acNote: notes.length ? ` (${notes.join('; ')})` : '' };
+  const warning = firstWarning(events);
+  // On the notice's one line (notices are parsed back line by line); the AC formula it quotes names other items too.
+  const kept = warning ? ` — ${warning.replace(/\s+/g, ' ')}` : '';
+  return { character, acNote: `${notes.length ? ` (${notes.join('; ')})` : ''}${kept}`, warning };
 }
 
 function mapItem(c: Character, itemId: string, patch: Partial<InventoryItem>): Character {
@@ -225,8 +230,8 @@ export function itemEquipChange(c: Character, itemId: string, equipped: boolean,
   if (equipped && (item.category === 'armor' || item.category === 'shield')) {
     next = { ...next, inventory: next.inventory.map((i) => (i.id !== itemId && i.category === item.category && i.equipped ? { ...i, equipped: false } : i)) };
   }
-  const { character, acNote } = withAc(c, next, catalog);
-  return { character, notice: `Player ${equipped ? 'equipped' : 'unequipped'} ${item.name}${acNote}` };
+  const { character, acNote, warning } = withAc(c, next, catalog);
+  return { character, notice: `Player ${equipped ? 'equipped' : 'unequipped'} ${item.name}${acNote}`, warning };
 }
 
 export const MAX_ATTUNED = 3;
@@ -241,19 +246,23 @@ export function itemAttuneChange(
   if (!item || Boolean(item.attuned) === attuned) return unchanged(c);
   const count = c.inventory.filter((i) => i.attuned).length;
   if (attuned && count >= MAX_ATTUNED) return unchanged(c, `You can be attuned to at most ${MAX_ATTUNED} magic items.`);
-  const { character, acNote } = withAc(c, mapItem(c, itemId, { attuned }), catalog);
+  const { character, acNote, warning } = withAc(c, mapItem(c, itemId, { attuned }), catalog);
   return {
     character,
     notice: `${attuned ? `Player attuned to ${item.name}` : `Player ended attunement to ${item.name}`}${acNote}`,
+    warning,
   };
 }
 
-export function removeItemChange(c: Character, itemId: string): SheetChange {
+/** Taking worn armor, a Shield or an attuned protection item off the sheet changes the AC as unequipping it would. */
+export function removeItemChange(c: Character, itemId: string, catalog: EquipmentOption[] | null = null): SheetChange {
   const item = c.inventory.find((i) => i.id === itemId);
   if (!item) return unchanged(c);
+  const { character, acNote, warning } = withAc(c, { ...c, inventory: c.inventory.filter((i) => i.id !== itemId) }, catalog);
   return {
-    character: { ...c, inventory: c.inventory.filter((i) => i.id !== itemId) },
-    notice: `Player removed ${item.name}${item.quantity > 1 ? ` ×${item.quantity}` : ''} from their inventory`,
+    character,
+    notice: `Player removed ${item.name}${item.quantity > 1 ? ` ×${item.quantity}` : ''} from their inventory${acNote}`,
+    warning,
   };
 }
 
