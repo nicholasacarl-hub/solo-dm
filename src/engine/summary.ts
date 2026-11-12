@@ -148,7 +148,7 @@ function hitDiceText(c: Character): string | null {
   return c.hitDice.map((h) => `${h.total - h.spent}/${h.total} d${h.die}`).join(', ');
 }
 
-/** "Frightened (until the end of your next turn; Banshee), Prone": with the details each was set with. */
+/** "Frightened (until the end of your next turn; Ghost), Prone": with the details each was set with. */
 function conditionsText(c: Character): string | null {
   if (c.conditions.length === 0) return null;
   return c.conditions.map((x) => `${conditionName(x.id)}${conditionDetails(x)}`).join(', ');

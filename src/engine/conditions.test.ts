@@ -94,8 +94,8 @@ describe('conditionName', () => {
 
 describe('conditionDetails (SRD 5.2.1 srd:rule:condition: various rules define how a condition ends)', () => {
   it('gives the duration, then the source, and nothing for a condition set without them', () => {
-    expect(conditionDetails({ id: 'frightened', duration: 'until the end of your next turn', source: 'Banshee' })).toBe(
-      ' (until the end of your next turn; Banshee)',
+    expect(conditionDetails({ id: 'frightened', duration: 'until the end of your next turn', source: 'Ghost' })).toBe(
+      ' (until the end of your next turn; Ghost)',
     );
     expect(conditionDetails({ id: 'restrained', duration: 'until freed' })).toBe(' (until freed)');
     expect(conditionDetails({ id: 'Hexed', source: 'Morgra' })).toBe(' (Morgra)');

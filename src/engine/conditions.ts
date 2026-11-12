@@ -326,7 +326,7 @@ function clipped(text: string, max: number): string {
 }
 
 /**
- * " (until the end of your next turn; Banshee)": the duration and source a condition was set with, for the DM's
+ * " (until the end of your next turn; Ghost)": the duration and source a condition was set with, for the DM's
  * lines (a status line, the sheet, the combat summary), so turns after the one that set it still know how it ends
  * (SRD 5.2.1 srd:rule:condition: various rules define how a condition ends). Each part is one line, clipped to about
  * DETAIL_MAX characters. "" when it has neither, and for Exhaustion, whose level is what its line shows.

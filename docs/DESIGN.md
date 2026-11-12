@@ -253,7 +253,7 @@ or in the DM's previous narration. This is cheap retrieval that prevents contrad
 The combat summary (here, in combat tool results and in the frozen prompt's combat section) and the player's
 tracker show the hero's AC from the sheet, never the copy `start_combat` stored, so Shield of Faith or Mage Armor
 mid-fight shows at once. Conditions show the duration and source the DM gave them ("Frightened (until the end of
-your next turn; Banshee)", each part clipped near 60 characters) on the status line, the sheet and the DM's combat
+your next turn; Ghost)", each part clipped near 60 characters) on the status line, the sheet and the DM's combat
 lines; the player's log and tracker keep bare names, so a source can't name a hidden creature. A condition name is
 matched strictly (with whole-input aliases such as "blindness" and "exhausted …"): an effect the DM names itself
 ("Protection from Poison", "Charm of Warding") stays its own condition with no standard rules, and the result says

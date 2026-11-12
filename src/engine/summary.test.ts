@@ -33,7 +33,7 @@ describe('characterStatusLine', () => {
   it('keeps the duration and source each condition was set with, on the status line and the sheet (SRD 5.2.1 srd:rule:condition)', () => {
     const c = mira({
       conditions: [
-        { id: 'frightened', duration: 'until the end of your next turn', source: 'Banshee' },
+        { id: 'frightened', duration: 'until the end of your next turn', source: 'Ghost' },
         { id: 'restrained', duration: 'until freed', source: 'Web (escape DC 12)' },
         { id: 'Cursed', duration: 'until the drowned bell in the lighthouse tolls three times at midnight', source: 'Morgra' },
         { id: 'prone' },
@@ -41,7 +41,7 @@ describe('characterStatusLine', () => {
       exhaustion: 2,
     });
     const listed =
-      'Frightened (until the end of your next turn; Banshee), Restrained (until freed; Web (escape DC 12)), Cursed (until the drowned bell in the lighthouse tolls three times…; Morgra), Prone';
+      'Frightened (until the end of your next turn; Ghost), Restrained (until freed; Web (escape DC 12)), Cursed (until the drowned bell in the lighthouse tolls three times…; Morgra), Prone';
     expect(characterStatusLine(c)).toContain(` · Conditions: ${listed} · Exhaustion 2 · `);
     expect(characterSheetText(c)).toContain(`**Exhaustion** 2 (−4 to D20 Tests) · **Conditions** ${listed}\n`);
   });
