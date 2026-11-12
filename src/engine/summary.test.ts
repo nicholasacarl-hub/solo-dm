@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { Character, Feature } from '@/types';
+import builderRaw from '../../public/srd/builder.json?raw';
+import type { BuilderData, Character, Feature, ImportedRef } from '@/types';
 import { importedPlaceholder, redactImported, wrapImported } from '@/lib/importedContent';
 import { sampleCharacter } from '@/test/fixtures';
 import { GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, importedRef, TEXT } from '@/test/structuredFixtures';
@@ -216,6 +217,19 @@ describe('book text copied onto the sheet (structured imports, spec §7.2)', () 
     await expect(`${characterSheetText(mira())}\n`).toMatchFileSnapshot('./__snapshots__/sheet-srd-character.md');
   });
 
+  it('leaves it byte-identical with its SRD gear linked as the builder links it: the SRD catalog text stays off the sheet', async () => {
+    // The builder's catalogItem: the option's id and its own description (SRD text), no magic flag (the SRD catalog has none).
+    const catalog = (JSON.parse(builderRaw) as BuilderData).equipment;
+    const ids: Record<string, string> = { 'item-dagger': 'srd:item:dagger', 'item-arcane-focus': 'srd:item:arcane-focus:staff', 'item-robe': 'srd:item:robe' };
+    const inventory = mira().inventory.map((i) => {
+      const option = catalog.find((o) => o.id === ids[i.id]);
+      return option ? { ...i, compendiumId: option.id, description: option.description } : i;
+    });
+    expect(inventory.filter((i) => i.compendiumId && i.description)).toHaveLength(3);
+    expect(catalog.some((o) => o.magic)).toBe(false);
+    await expect(`${characterSheetText(mira({ inventory }))}\n`).toMatchFileSnapshot('./__snapshots__/sheet-srd-character.md');
+  });
+
   it('wraps the whole copied text as one passage, so redaction removes all of it', () => {
     const sheet = characterSheetText(mira({ features: [emberWard] }));
     expect(sheet).toContain(
@@ -318,22 +332,88 @@ describe('items and spells the rules entries do not describe', () => {
   const robe = { id: 'i-robe', name: 'Robe', quantity: 1, compendiumId: 'srd:item:robe', description: 'A long robe.' };
   const charm = { id: 'i-charm', name: 'Tide Charm', quantity: 1, homebrewId: 'hb:tide-charm', description: 'Homebrew text.' };
 
-  it("shows a custom item's description whole, under the items, and leaves SRD and homebrew items to get_entry", () => {
+  it("shows a custom item's description whole, under the items, and a homebrew item's (the app writes none), and leaves SRD gear to get_entry", () => {
     const sheet = characterSheetText(mira({ inventory: [robe, blades, charm] }));
     expect(sheet).toContain(
-      'Robe · Chained Twin Blades (equipped) · Tide Charm\n- **Chained Twin Blades**: Two hooked blades joined by a length of black chain.\n\n  The smith who taught him to throw them forged the chain from his first sword.\n**Coins:**',
+      'Robe · Chained Twin Blades (equipped) · Tide Charm\n- **Chained Twin Blades**: Two hooked blades joined by a length of black chain.\n\n  The smith who taught him to throw them forged the chain from his first sword.\n- **Tide Charm**: Homebrew text.\n**Coins:**',
     );
     expect(sheet).not.toContain('A long robe.');
-    expect(sheet).not.toContain('Homebrew text.');
   });
 
-  it("wraps the DM's words on a book's item like copied text, and leaves the app's own words on one to get_entry", () => {
+  it("wraps the DM's words on a book's item like copied text, and names the book and get_entry for one the DM only linked", () => {
     const lantern = { id: 'i-lantern', name: 'Lantern of Hollow Light', quantity: 1, description: `The wick never burns down. ${GLOAMWOOD_MARKERS[6]}`, ref: importedRef() };
     const plain = { ...lantern, id: 'i-plain', name: 'Plain Lantern', description: 'From your book.', ref: importedRef({ textCopied: false }) };
     const sheet = characterSheetText(mira({ inventory: [lantern, plain] }));
     expect(sheet).toContain(`- **Lantern of Hollow Light**: <imported-content source="${GLOAMWOOD_TITLE}">\n  The wick never burns down. ${GLOAMWOOD_MARKERS[6]}\n  </imported-content>`);
-    expect(sheet).not.toContain('From your book.');
+    expect(sheet).toContain(`- **Plain Lantern** (${GLOAMWOOD_TITLE}; read it with get_entry): From your book.`);
     expect(redactImported(sheet)).not.toContain(GLOAMWOOD_MARKERS[6]);
+  });
+
+  // A book's item as inventory_add or the sheet links it (inventoryFromEntry): numbers, an app-written line, a ref with nothing copied.
+  const bookItemRef = (entryId: string, entryName: string, kind: 'item' | 'magic-item'): ImportedRef => ({
+    sourceId: 'gloam',
+    sourceTitle: GLOAMWOOD_TITLE,
+    entryId,
+    kind,
+    entryName,
+    textHash: '',
+    textCopied: false,
+  });
+
+  it("names the book and get_entry for a book's item the DM only linked, then the app's numbers-only line, unwrapped", () => {
+    const night = {
+      id: 'i-night',
+      name: 'Cloak of the Night',
+      quantity: 1,
+      equipped: true,
+      attuned: true,
+      magic: true,
+      category: 'magic-item' as const,
+      requiresAttunement: true,
+      attunementBy: 'a Wizard',
+      compendiumId: 'lib:gloam:61',
+      description: 'Uncommon magic item, requires attunement by a Wizard',
+      ref: bookItemRef('lib:gloam:61', 'Cloak of the Night', 'magic-item'),
+    };
+    // An item entry the app writes no line for: the pointer alone.
+    const hook = { id: 'i-hook', name: 'Ferry Hook', quantity: 1, compendiumId: 'lib:gloam:62', ref: bookItemRef('lib:gloam:62', 'Ferry Hook', 'item') };
+    const sheet = characterSheetText(mira({ inventory: [night, hook] }));
+    expect(sheet).toContain(
+      `Cloak of the Night (equipped, attuned) · Ferry Hook\n- **Cloak of the Night** (${GLOAMWOOD_TITLE}; read it with get_entry): Uncommon magic item, requires attunement by a Wizard\n- **Ferry Hook** (${GLOAMWOOD_TITLE}; read it with get_entry)\n**Coins:**`,
+    );
+    // The app's words, not the book's: a copy keeps them, as the save itself does.
+    expect(redactImported(sheet)).toContain('requires attunement by a Wizard');
+  });
+
+  it("still leaves out a book's item whose copied words a save pulled", () => {
+    const pulled = { id: 'i-lantern', name: 'Lantern of Hollow Light', quantity: 1, description: importedPlaceholder(GLOAMWOOD_TITLE), ref: { ...importedRef(), redacted: true as const } };
+    const sheet = characterSheetText(mira({ inventory: [pulled] }));
+    expect(sheet).toContain('Lantern of Hollow Light\n**Coins:**');
+    expect(sheet).not.toContain('- **Lantern of Hollow Light**');
+  });
+
+  // SRD 5.2.1 Magic Items: Cloak of Protection. The app copies no text onto an SRD magic item or a homebrew item, so a
+  // description there is the DM's (a ruling saved with inventory_update); non-magic SRD gear carries the SRD's own text.
+  it("shows the DM's words on an SRD magic item and on a homebrew item, magic or not, and leaves non-magic SRD gear to get_entry", () => {
+    const cloak = {
+      id: 'i-cloak',
+      name: 'Cloak of Protection',
+      quantity: 1,
+      equipped: true,
+      attuned: true,
+      magic: true,
+      category: 'magic-item' as const,
+      compendiumId: 'srd:magic-item:cloak-of-protection',
+      description: 'Its +1 fails in sunlight (ruling, session 4).',
+    };
+    const ember = { id: 'i-ember', name: 'Ember Charm', quantity: 1, magic: true, compendiumId: 'hb:ember-charm', description: 'Given by the fire-spirit Ashka.' };
+    const pipe = { id: 'i-pipe', name: 'Bone Pipe', quantity: 1, compendiumId: 'hb:bone-pipe', description: 'Its tune calms the marsh hounds.' };
+    const rope = { id: 'i-rope', name: 'Rope', quantity: 1, category: 'gear' as const, compendiumId: 'srd:item:rope', description: 'The catalog entry, as the app copied it.' };
+    const sheet = characterSheetText(mira({ inventory: [cloak, ember, pipe, rope] }));
+    expect(sheet).toContain(
+      'Cloak of Protection (equipped, attuned) · Ember Charm (magic) · Bone Pipe · Rope\n- **Cloak of Protection**: Its +1 fails in sunlight (ruling, session 4).\n- **Ember Charm**: Given by the fire-spirit Ashka.\n- **Bone Pipe**: Its tune calms the marsh hounds.\n**Coins:**',
+    );
+    expect(sheet).not.toContain('as the app copied it');
   });
 
   it("wraps notes that repeat a book's words like copied text, and leaves out notes a save pulled", () => {

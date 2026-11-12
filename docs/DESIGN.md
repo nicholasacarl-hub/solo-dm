@@ -85,9 +85,11 @@ preserved thinking valid.
 **The hero's sheet** (`characterSheetText`, src/engine/summary.ts) is one rendering for the frozen
 prompt's snapshot and `get_character_sheet`. The numbers are compact; every text is whole: what the
 player wrote (traits, ideals, bonds, flaws, appearance, backstory, notes), each feature's rules text, a
-transformation's summary and way back, the description of an item no rules entry describes (a custom
-item, or the DM's words on a book's item, wrapped like copied text) and a spell's notes (the DM's, or the
-builder's on a feat's or species' spell). Numbers name their sources where a condition may matter: the AC formula
+transformation's summary and way back, an item's description wherever the app didn't write it (a custom
+item, the DM's words on an SRD magic item or a homebrew item, or the DM's words on a book's item, wrapped like
+copied text; non-magic SRD gear carries the SRD's own text, left to `get_entry`) and a spell's notes (the DM's, or the
+builder's on a feat's or species' spell). A book's item linked without the DM's words gets a line naming the book and
+`get_entry`, then the app's numbers-only line (`describeOption`), so the sheet says which items to read. Numbers name their sources where a condition may matter: the AC formula
 names each item it counts, the Saving throws line what every save includes (`saveBonusSources`: a Ring or Cloak of
 Protection, an item's bonus the app read as always on, Aura of Protection), and an active item's attack and damage
 bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Magic items")
@@ -99,6 +101,9 @@ out from it, and the player's inventory says the DM adds those bonuses, so nobod
 by hand (`armor_class`, for Mage Armor) gets the formula "set by the DM: <reason>" rather than keeping the old one's
 items, and a change in what every save includes is announced in the tool's result and in the player's equip and
 attune notices ("saving throws now include …"), since the frozen sheet's line dates from the start of the session.
+Those notices, and removing an item from the sheet (which keeps the AC in step as unequipping it would), end with
+`syncArmorClass`'s warning when it keeps an AC set by hand or meets armor it can't identify; the player sees the same
+words as a toast, and the AC stays the DM's to set.
 Paragraphs and lists are kept and indented under their bullet; a Markdown heading inside a field
 becomes a bold line, so it can't pass for a section of the sheet. A field is cut only past 20,000
 characters (`SHEET_TEXT_MAX`, far above any real sheet: the longest SRD feature is about 4,300, Wizard
