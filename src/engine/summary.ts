@@ -10,7 +10,6 @@ import { conditionName } from './conditions';
 import { xpSummary } from './progression';
 import {
   abilityModifier,
-  activeBonusItems,
   attackBonus,
   attackDamageExpression,
   characterLevel,
@@ -345,25 +344,26 @@ function adaptationLines(c: Character): string[] {
 }
 
 /**
- * "+1 to attack and damage rolls, not counted by the app": an active magic item's attack and damage bonuses, which the
- * engine doesn't add to the hero's attacks (the DM adds them), or null when it has none.
+ * "+1 to attack and damage rolls with it, not counted by the app": a magic item's attack and damage bonuses, which the
+ * engine never adds to the hero's attacks (the DM adds them), or null when it has none or needs an attunement it
+ * lacks. A weapon the hero carries counts whether or not the sheet marks it equipped: the DM sees when it is wielded.
  */
 function uncountedBonusText(i: InventoryItem): string | null {
   const attack = Math.max(0, toInt(i.bonuses?.attack));
   const damage = Math.max(0, toInt(i.bonuses?.damage));
-  if (!attack && !damage) return null;
+  if ((!attack && !damage) || (i.requiresAttunement && !i.attuned)) return null;
   const rolls =
     attack === damage ? `${formatModifier(attack)} to attack and damage rolls` : [attack ? `${formatModifier(attack)} to attack rolls` : '', damage ? `${formatModifier(damage)} to damage rolls` : ''].filter(Boolean).join(', ');
-  return `${rolls}, not counted by the app`;
+  return `${rolls} with it, not counted by the app`;
 }
 
-function itemText(i: InventoryItem, active: ReadonlySet<InventoryItem>): string {
+function itemText(i: InventoryItem): string {
   const tags = [
     i.equipped ? 'equipped' : '',
     i.attuned ? 'attuned' : '',
     i.magic && !i.attuned ? 'magic' : '',
     i.charges ? `${i.charges.max - i.charges.used}/${i.charges.max} charges` : '',
-    (active.has(i) && uncountedBonusText(i)) || '',
+    uncountedBonusText(i) ?? '',
   ].filter(Boolean);
   return `${i.name}${i.quantity > 1 ? ` ×${i.quantity}` : ''}${tags.length ? ` (${tags.join(', ')})` : ''}`;
 }
@@ -387,8 +387,7 @@ function itemDescriptionLine(i: InventoryItem): string | null {
 function equipmentLines(c: Character): string[] {
   const gp = totalGp(c.currency);
   const coins = `**Coins:** ${formatCurrency(c.currency)}${gp > 0 ? ` (${Number.isInteger(gp) ? gp : gp.toFixed(2)} gp total)` : ''}`;
-  const active = new Set(activeBonusItems(c));
-  const items = c.inventory.length ? c.inventory.map((i) => itemText(i, active)).join(' · ') : 'nothing';
+  const items = c.inventory.length ? c.inventory.map(itemText).join(' · ') : 'nothing';
   const described = c.inventory.flatMap((i) => itemDescriptionLine(i) ?? []);
   return ['### Equipment', items, ...described, coins];
 }

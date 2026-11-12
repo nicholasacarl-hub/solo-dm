@@ -7,6 +7,7 @@ import { Brain, BookOpen } from 'lucide-react';
 import { formatModifier, ordinal, spellAttackBonus, spellSaveDC } from '@/engine';
 import { getRulesIndex } from '@/data';
 import { cn } from '@/lib/cn';
+import { isImportedPlaceholder } from '@/lib/importedContent';
 import { useGame } from '@/state/gameStore';
 import { ABILITY_NAMES, type Character, type CompendiumEntry, type KnownSpell, type SpellSlotLevel } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
@@ -20,6 +21,13 @@ import type { SheetChange } from './useSheetActions';
 const SLOT_LEVELS: SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 type EntryState = { status: 'loading' } | { status: 'ready'; entry: CompendiumEntry | null } | { status: 'error'; message: string };
+
+/** A spell's notes as the player reads them; notes a save left out (they quoted a book) said plainly. */
+function notesText(spell: Partial<Pick<KnownSpell, 'notes' | 'ref'>>): string | null {
+  const notes = spell.notes?.trim();
+  if (!notes) return null;
+  return isImportedPlaceholder(notes) ? `Notes left out of this save (they quoted “${spell.ref?.sourceTitle ?? 'a book'}”).` : notes;
+}
 
 /**
  * Look a spell up in the rules index (by id, then by name) and show its text, under the spell's own notes (the DM's
@@ -35,6 +43,7 @@ export function RulesEntryDialog({
 }) {
   const campaignId = useGame((s) => s.campaignId);
   const [state, setState] = useState<EntryState>({ status: 'loading' });
+  const notes = spell ? notesText(spell) : null;
   useEffect(() => {
     if (!spell) return;
     let alive = true;
@@ -60,10 +69,10 @@ export function RulesEntryDialog({
       description={state.status === 'ready' && state.entry ? [state.entry.summary, state.entry.sourceName].filter(Boolean).join(' · ') : undefined}
       size="lg"
     >
-      {spell?.notes?.trim() && (
+      {notes && (
         <p className="mb-3 text-sm">
           <span className="font-medium">Notes: </span>
-          {spell.notes.trim()}
+          {notes}
         </p>
       )}
       {state.status === 'loading' && (
@@ -119,6 +128,7 @@ function SpellRow({
 }) {
   const concentrating = c.spellcasting?.concentratingOn === spell.name;
   const canToggle = editable && spell.level > 0 && !spell.alwaysPrepared;
+  const notes = notesText(spell);
   return (
     <li className={cn('py-1', spell.level > 0 && !spell.prepared && !spell.alwaysPrepared && 'opacity-70')}>
       <div className="flex items-center gap-2">
@@ -163,7 +173,7 @@ function SpellRow({
         )}
       </div>
       {/* The spell's notes (what the DM wrote when it granted it, or the builder's), shown here as they are to the DM. */}
-      {spell.notes?.trim() && <p className="ml-6 line-clamp-2 text-xs text-muted">{spell.notes.trim()}</p>}
+      {notes && <p className="ml-6 line-clamp-2 text-xs text-muted">{notes}</p>}
     </li>
   );
 }

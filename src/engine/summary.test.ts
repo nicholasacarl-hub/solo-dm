@@ -384,12 +384,14 @@ describe('magic item bonuses on the DM sheet (SRD 5.2.1 Attunement; Cloak of Pro
     expect(characterSheetText(mira({ inventory: [] }))).toMatch(/\*\*Saving throws:\*\* [^\n]*CHA [+-]\d\n/);
   });
 
-  it("tags an active item's attack and damage bonuses as not counted by the app, and an inactive one's not at all", () => {
-    expect(characterSheetText(mira({ inventory: [blade] }))).toContain('Ember Blade (equipped, magic, +1 to attack and damage rolls, not counted by the app)');
+  it("tags a carried item's attack and damage bonuses as not counted by the app, and an unattuned one's not at all", () => {
+    expect(characterSheetText(mira({ inventory: [blade] }))).toContain('Ember Blade (equipped, magic, +1 to attack and damage rolls with it, not counted by the app)');
     const uneven = { ...blade, bonuses: { attack: 2, damage: 1 } };
-    expect(characterSheetText(mira({ inventory: [uneven] }))).toContain('Ember Blade (equipped, magic, +2 to attack rolls, +1 to damage rolls, not counted by the app)');
-    // Needs attunement and isn't attuned, or put away: its bonuses don't apply, so the sheet says nothing of them.
+    expect(characterSheetText(mira({ inventory: [uneven] }))).toContain('Ember Blade (equipped, magic, +2 to attack rolls, +1 to damage rolls with it, not counted by the app)');
+    // Carried but not marked equipped (as the DM's inventory_add and the builder leave a weapon): still the DM's to add.
+    const { equipped: _e, ...carried } = blade;
+    expect(characterSheetText(mira({ inventory: [carried] }))).toContain('Ember Blade (magic, +1 to attack and damage rolls with it, not counted by the app)');
+    // Needs attunement and isn't attuned: its bonuses don't work, so the sheet says nothing of them.
     expect(characterSheetText(mira({ inventory: [{ ...blade, requiresAttunement: true }] }))).toContain('Ember Blade (equipped, magic)');
-    expect(characterSheetText(mira({ inventory: [{ ...blade, equipped: false }] }))).toContain('Ember Blade (magic)');
   });
 });
