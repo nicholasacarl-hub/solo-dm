@@ -200,9 +200,12 @@ function withAc(before: Character, after: Character, catalog: EquipmentOption[] 
   const saves = saveSourcesChangeText(before, character);
   const notes = [character.armorClass === before.armorClass ? '' : `AC ${before.armorClass} → ${character.armorClass}`, saves ? saves.replace(/^S/, 's') : ''].filter(Boolean);
   const warning = firstWarning(events);
-  // On the notice's one line (notices are parsed back line by line); the AC formula it quotes names other items too.
+  // The DM, whose call it is, reads the engine's words on the notice's one line (notices are parsed back line by line;
+  // the AC formula it quotes names other items too). The player can't set the AC on the sheet, so their toast only says
+  // what happened and who decides.
   const kept = warning ? ` — ${warning.replace(/\s+/g, ' ')}` : '';
-  return { character, acNote: `${notes.length ? ` (${notes.join('; ')})` : ''}${kept}`, warning };
+  const toast = warning ? `Your AC stays ${character.armorClass}: your gear alone can't settle it, so your DM will be told with your next message.` : undefined;
+  return { character, acNote: `${notes.length ? ` (${notes.join('; ')})` : ''}${kept}`, warning: toast };
 }
 
 function mapItem(c: Character, itemId: string, patch: Partial<InventoryItem>): Character {

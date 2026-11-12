@@ -34,8 +34,8 @@ describe('sheet gear changes keep AC in step', () => {
   });
 });
 
-// The AC an equip, attune or removal can't settle on its own: the player sees why in a toast, and the DM, whose ruling it
-// is, reads the same words at the end of the notice's one line (notices are parsed back line by line).
+// The AC an equip, attune or removal can't settle on its own: the DM, whose ruling it is, reads why at the end of the
+// notice's one line (notices are parsed back line by line); the player, who can't set the AC, gets a plain toast.
 describe('sheet gear changes pass on what syncArmorClass warns', () => {
   const shield: InventoryItem = { id: 'shield', name: 'Shield', quantity: 1, category: 'shield' };
 
@@ -47,8 +47,8 @@ describe('sheet gear changes pass on what syncArmorClass warns', () => {
     expect(r.character.armorClass).toBe(15);
     const kept =
       'AC kept at 15: it differs from the 12 that gear and features gave, so it may include a spell such as Mage Armor or a manual change. Gear and features now give AC 14 (10 + DEX 2 + Shield 2); update the AC if that is right.';
-    expect(r.warning).toBe(kept);
     expect(r.notice).toBe(`Player equipped Shield — ${kept}`);
+    expect(r.warning).toBe("Your AC stays 15: your gear alone can't settle it, so your DM will be told with your next message.");
   });
 
   // SRD 5.2.1 Magic Items: Cloak of Protection — +1 to AC and saving throws while attuned.
@@ -56,8 +56,8 @@ describe('sheet gear changes pass on what syncArmorClass warns', () => {
     const cloak: InventoryItem = { id: 'cloak', name: 'Cloak of Protection', quantity: 1, magic: true, category: 'magic-item' };
     const r = itemAttuneChange(sampleCharacter({ armorClass: 15, inventory: [cloak] }), 'cloak', true);
     expect(r.character.armorClass).toBe(15);
-    expect(r.warning).toMatch(/^AC kept at 15: .*Gear and features now give AC 13 \(10 \+ DEX 2 \+ Cloak of Protection 1\); update the AC if that is right\.$/);
-    expect(r.notice).toBe(`Player attuned to Cloak of Protection (saving throws now include Cloak of Protection +1) — ${r.warning}`);
+    expect(r.notice).toMatch(/^Player attuned to Cloak of Protection \(saving throws now include Cloak of Protection \+1\) — AC kept at 15: .*Gear and features now give AC 13 \(10 \+ DEX 2 \+ Cloak of Protection 1\); update the AC if that is right\.$/);
+    expect(r.warning).toMatch(/^Your AC stays 15: /);
   });
 
   it('says so when the player puts on armor whose stats the app does not know', () => {
@@ -66,8 +66,8 @@ describe('sheet gear changes pass on what syncArmorClass warns', () => {
     const r = itemEquipChange(c, 'hauberk', true, null);
     expect(r.character.armorClass).toBe(12);
     const unknown = "AC kept at 12: Saltglass Hauberk's armor stats are unknown, so set the AC by hand.";
-    expect(r.warning).toBe(unknown);
     expect(r.notice).toBe(`Player equipped Saltglass Hauberk — ${unknown}`);
+    expect(r.warning).toMatch(/^Your AC stays 12: /);
   });
 
   it('lowers the AC when the player removes the Shield they wear, and says so; other gear goes as before', () => {
@@ -84,8 +84,8 @@ describe('sheet gear changes pass on what syncArmorClass warns', () => {
     const c = sampleCharacter({ armorClass: 17, armorTraining: ['Shields'], inventory: [{ ...shield, equipped: true }] });
     const r = removeItemChange(c, 'shield');
     expect(r.character.armorClass).toBe(17);
-    expect(r.warning).toMatch(/^AC kept at 17: it differs from the 14 that gear and features gave, .* Gear and features now give AC 12 \(10 \+ DEX 2\); update the AC if that is right\.$/);
-    expect(r.notice).toBe(`Player removed Shield from their inventory — ${r.warning}`);
+    expect(r.notice).toMatch(/^Player removed Shield from their inventory — AC kept at 17: it differs from the 14 that gear and features gave, .* Gear and features now give AC 12 \(10 \+ DEX 2\); update the AC if that is right\.$/);
+    expect(r.warning).toMatch(/^Your AC stays 17: /);
     expect(r.notice).not.toContain('\n');
   });
 });
