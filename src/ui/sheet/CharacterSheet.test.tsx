@@ -86,6 +86,25 @@ describe('CharacterSheet', () => {
     expect(await screen.findByText(/an imperceptible barrier of magical force/i)).toBeInTheDocument();
   });
 
+  it("shows a spell's notes under its row and above its rules text, as the DM sees them", async () => {
+    const user = userEvent.setup();
+    const hero = sampleCharacter();
+    const notes = 'Granted by the moth shrine: cast once at dusk without a slot.';
+    const spells = hero.spellcasting!.spells.map((s) => (s.name === 'Shield' ? { ...s, notes: `  ${notes}\n` } : s));
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...hero, spellcasting: { ...hero.spellcasting!, spells } } });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    const row = screen.getByRole('button', { name: 'Shield' }).closest('li')!;
+    expect(within(row).getByText(notes)).toBeInTheDocument();
+    // A spell without notes gets no notes line.
+    expect(screen.getByRole('button', { name: 'Magic Missile' }).closest('li')!.querySelectorAll('p')).toHaveLength(0);
+    await user.click(screen.getByRole('button', { name: 'Shield' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(notes)).toBeInTheDocument();
+    expect(within(dialog).getByText('Notes:')).toBeInTheDocument();
+    expect(await within(dialog).findByText(/an imperceptible barrier of magical force/i)).toBeInTheDocument();
+  });
+
   it('spends Heroic Inspiration and sets exhaustion', async () => {
     const user = userEvent.setup();
     render(<Harness />);

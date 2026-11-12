@@ -343,3 +343,42 @@ describe('items and spells the rules entries do not describe', () => {
     expect(sheet).toMatch(/- Level 1: [^\n]*Shield \(Granted in play\)[^\n]*\n {2}- Shield: Granted by the black scale: once per dawn without a slot\./);
   });
 });
+
+describe('magic item bonuses on the DM sheet (SRD 5.2.1 Attunement; Cloak of Protection)', () => {
+  const fen = {
+    id: 'i-fen',
+    name: 'Cloak of the Fen',
+    quantity: 1,
+    category: 'magic-item' as const,
+    magic: true,
+    requiresAttunement: true,
+    attuned: true,
+    bonuses: { savingThrows: 1 },
+  };
+  const blade = {
+    id: 'i-blade',
+    name: 'Ember Blade',
+    quantity: 1,
+    category: 'magic-item' as const,
+    magic: true,
+    equipped: true,
+    bonuses: { attack: 1, damage: 1 },
+  };
+
+  it('names what every save includes, so the DM can set a bonus aside when its condition does not hold', () => {
+    const cloak = { id: 'i-cloak', name: 'Cloak of Protection', quantity: 1, magic: true, attuned: true };
+    const sheet = characterSheetText(mira({ inventory: [cloak, fen] }));
+    expect(sheet).toMatch(/\*\*Saving throws:\*\* STR \+1 ·[^\n]* \(each includes Cloak of Protection \+1, Cloak of the Fen \+1\)\n/);
+    // Nothing to name: the line is as before.
+    expect(characterSheetText(mira({ inventory: [] }))).toMatch(/\*\*Saving throws:\*\* [^\n]*CHA [+-]\d\n/);
+  });
+
+  it("tags an active item's attack and damage bonuses as not counted by the app, and an inactive one's not at all", () => {
+    expect(characterSheetText(mira({ inventory: [blade] }))).toContain('Ember Blade (equipped, magic, +1 to attack and damage rolls, not counted by the app)');
+    const uneven = { ...blade, bonuses: { attack: 2, damage: 1 } };
+    expect(characterSheetText(mira({ inventory: [uneven] }))).toContain('Ember Blade (equipped, magic, +2 to attack rolls, +1 to damage rolls, not counted by the app)');
+    // Needs attunement and isn't attuned, or put away: its bonuses don't apply, so the sheet says nothing of them.
+    expect(characterSheetText(mira({ inventory: [{ ...blade, requiresAttunement: true }] }))).toContain('Ember Blade (equipped, magic)');
+    expect(characterSheetText(mira({ inventory: [{ ...blade, equipped: false }] }))).toContain('Ember Blade (magic)');
+  });
+});

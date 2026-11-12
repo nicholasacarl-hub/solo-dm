@@ -10,6 +10,7 @@ import { conditionName } from './conditions';
 import { xpSummary } from './progression';
 import {
   abilityModifier,
+  activeBonusItems,
   attackBonus,
   attackDamageExpression,
   characterLevel,
@@ -19,6 +20,7 @@ import {
   initiativeModifier,
   passivePerception,
   proficiencyBonus,
+  saveBonusSources,
   savingThrowModifier,
   skillModifier,
   speedDetails,
@@ -28,7 +30,7 @@ import {
 } from './rules';
 import { ordinal } from './spellcasting';
 import { activeTransformations } from './transform';
-import { formatInt } from './util';
+import { formatInt, toInt } from './util';
 
 const SLOT_LEVELS: readonly SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
@@ -222,8 +224,11 @@ function vitalsLines(c: Character): string[] {
 function abilityLines(c: Character): string[] {
   const scores = ABILITIES.map((a) => `${a.toUpperCase()} ${c.abilityScores[a]} (${formatModifier(abilityModifier(c.abilityScores[a]))})`);
   const saves = ABILITIES.map((a) => `${a.toUpperCase()} ${formatModifier(savingThrowModifier(c, a))}${c.savingThrows.includes(a) ? ' (prof)' : ''}`);
+  // What every save adds, by name, so the DM can set one aside when a condition in an item's text doesn't hold.
+  const sources = saveBonusSources(c).map((s) => `${s.name} ${formatModifier(s.bonus)}`);
+  const included = sources.length ? ` (each includes ${sources.join(', ')})` : '';
   const skills = SKILLS.map((s) => `${SKILL_NAMES[s]} ${formatModifier(skillModifier(c, s))}${PROF_LABEL[c.skills[s] ?? 0] ?? ''}`);
-  return [`**Abilities:** ${scores.join(' · ')}`, `**Saving throws:** ${saves.join(' · ')}`, `**Skills:** ${skills.join(' · ')}`];
+  return [`**Abilities:** ${scores.join(' · ')}`, `**Saving throws:** ${saves.join(' · ')}${included}`, `**Skills:** ${skills.join(' · ')}`];
 }
 
 function proficiencyLine(c: Character): string {
@@ -327,12 +332,26 @@ function adaptationLines(c: Character): string[] {
   return notes.length ? ['### Older-edition options (app notes)', ...notes.map((n) => `- ${n}`)] : [];
 }
 
-function itemText(i: InventoryItem): string {
+/**
+ * "+1 to attack and damage rolls, not counted by the app": an active magic item's attack and damage bonuses, which the
+ * engine doesn't add to the hero's attacks (the DM adds them), or null when it has none.
+ */
+function uncountedBonusText(i: InventoryItem): string | null {
+  const attack = Math.max(0, toInt(i.bonuses?.attack));
+  const damage = Math.max(0, toInt(i.bonuses?.damage));
+  if (!attack && !damage) return null;
+  const rolls =
+    attack === damage ? `${formatModifier(attack)} to attack and damage rolls` : [attack ? `${formatModifier(attack)} to attack rolls` : '', damage ? `${formatModifier(damage)} to damage rolls` : ''].filter(Boolean).join(', ');
+  return `${rolls}, not counted by the app`;
+}
+
+function itemText(i: InventoryItem, active: ReadonlySet<InventoryItem>): string {
   const tags = [
     i.equipped ? 'equipped' : '',
     i.attuned ? 'attuned' : '',
     i.magic && !i.attuned ? 'magic' : '',
     i.charges ? `${i.charges.max - i.charges.used}/${i.charges.max} charges` : '',
+    (active.has(i) && uncountedBonusText(i)) || '',
   ].filter(Boolean);
   return `${i.name}${i.quantity > 1 ? ` ×${i.quantity}` : ''}${tags.length ? ` (${tags.join(', ')})` : ''}`;
 }
@@ -356,7 +375,8 @@ function itemDescriptionLine(i: InventoryItem): string | null {
 function equipmentLines(c: Character): string[] {
   const gp = totalGp(c.currency);
   const coins = `**Coins:** ${formatCurrency(c.currency)}${gp > 0 ? ` (${Number.isInteger(gp) ? gp : gp.toFixed(2)} gp total)` : ''}`;
-  const items = c.inventory.length ? c.inventory.map(itemText).join(' · ') : 'nothing';
+  const active = new Set(activeBonusItems(c));
+  const items = c.inventory.length ? c.inventory.map((i) => itemText(i, active)).join(' · ') : 'nothing';
   const described = c.inventory.flatMap((i) => itemDescriptionLine(i) ?? []);
   return ['### Equipment', items, ...described, coins];
 }

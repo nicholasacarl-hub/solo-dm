@@ -156,12 +156,6 @@ function wornAttuned(c: Character) {
   return c.inventory.filter((i) => i.attuned && i.equipped !== false && !i.bonuses);
 }
 
-/** +1 per distinct attuned Ring / Cloak of Protection (SRD magic items: +1 to AC and saving throws). */
-function protectionItemBonus(c: Character): number {
-  const owned = new Set(wornAttuned(c).map((i) => nameKey(i.name)));
-  return [...PROTECTION_ITEMS].filter((key) => owned.has(key)).length;
-}
-
 /**
  * Items whose structured bonuses apply now (SRD 5.2.1 "Attunement"): worn (equipped, or attuned and not
  * taken off) and, when the item requires attunement, attuned. The same item counts once, and two copies
@@ -180,9 +174,10 @@ export function activeBonusItems(c: Character): InventoryItem[] {
   });
 }
 
-/** Saving throw bonus from active magic items (a Cloak's "+1 to saving throws"). */
-function itemSaveBonus(c: Character): number {
-  return activeBonusItems(c).reduce((sum, i) => sum + Math.max(0, toInt(i.bonuses?.savingThrows)), 0);
+/** One thing that adds to every saving throw beyond ability and proficiency, named for the DM's sheet. */
+export interface SaveBonusSource {
+  name: string;
+  bonus: number;
 }
 
 function classLevelOf(c: Character, className: string): number {
@@ -202,17 +197,45 @@ function auraOfProtectionBonus(c: Character): number {
 }
 
 /**
+ * What adds to every saving throw now, by name: an attuned Ring or Cloak of Protection (SRD 5.2.1 Magic Items: "+1
+ * bonus to Armor Class and saving throws"), an active magic item whose text the app read as an always-on bonus to
+ * saving throws (activeBonusItems), and the Paladin's Aura of Protection. Each save modifier counts exactly these,
+ * so the DM's sheet can name them and the DM can set one aside when a condition in an item's text doesn't hold.
+ */
+export function saveBonusSources(c: Character): SaveBonusSource[] {
+  const out: SaveBonusSource[] = [];
+  const worn = new Map<string, string>();
+  for (const i of wornAttuned(c)) if (!worn.has(nameKey(i.name))) worn.set(nameKey(i.name), i.name);
+  for (const key of PROTECTION_ITEMS) {
+    const name = worn.get(key);
+    if (name) out.push({ name, bonus: 1 });
+  }
+  for (const i of activeBonusItems(c)) {
+    const bonus = Math.max(0, toInt(i.bonuses?.savingThrows));
+    if (bonus) out.push({ name: i.name, bonus });
+  }
+  const aura = auraOfProtectionBonus(c);
+  if (aura) out.push({ name: 'Aura of Protection', bonus: aura });
+  return out;
+}
+
+/** The sum of saveBonusSources: what every saving throw adds beyond ability and proficiency. */
+function saveBonus(c: Character): number {
+  return saveBonusSources(c).reduce((sum, s) => sum + s.bonus, 0);
+}
+
+/**
  * Saving throw modifier: ability mod + PB if proficient, plus always-on save bonuses the sheet can see
  * (attuned Ring/Cloak of Protection, the Paladin's own Aura of Protection). Excludes the exhaustion penalty.
  */
 export function savingThrowModifier(c: Character, ability: Ability): number {
   const proficient = c.savingThrows.includes(ability) ? pb(c) : 0;
-  return mod(c, ability) + proficient + protectionItemBonus(c) + itemSaveBonus(c) + auraOfProtectionBonus(c);
+  return mod(c, ability) + proficient + saveBonus(c);
 }
 
 /** Modifier for a Death Saving Throw: it's a saving throw, so the exhaustion penalty and save bonuses apply. */
 export function deathSaveModifier(c: Character): number {
-  return exhaustionPenalty(c) + protectionItemBonus(c) + itemSaveBonus(c) + auraOfProtectionBonus(c);
+  return exhaustionPenalty(c) + saveBonus(c);
 }
 
 /** Raw ability check (no skill): the ability modifier. */
@@ -727,7 +750,7 @@ function baseRollModifier(c: Character, req: PlayerRollRequest): { modifier: num
       return { modifier: 0, label: 'Ability check' };
     case 'save':
       if (req.ability) return { modifier: savingThrowModifier(c, req.ability), label: `${ABILITY_NAMES[req.ability]} saving throw` };
-      return { modifier: protectionItemBonus(c) + itemSaveBonus(c) + auraOfProtectionBonus(c), label: 'Saving throw' };
+      return { modifier: saveBonus(c), label: 'Saving throw' };
     case 'attack': {
       const attack = req.attackName ? findAttack(c, req.attackName) : undefined;
       return attack ? { modifier: attackBonus(c, attack), label: `${attack.name} attack` } : improvisedAttack(c, req);

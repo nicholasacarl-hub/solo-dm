@@ -22,10 +22,17 @@ const SLOT_LEVELS: SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 type EntryState = { status: 'loading' } | { status: 'ready'; entry: CompendiumEntry | null } | { status: 'error'; message: string };
 
 /**
- * Look a spell up in the rules index (by id, then by name) and show its text. Nothing is copied onto
- * the sheet: a spell from a book that isn't on this device, or is switched off, says so.
+ * Look a spell up in the rules index (by id, then by name) and show its text, under the spell's own notes (the DM's
+ * when it granted the spell, the builder's for a feat's or species' spell). Nothing is copied onto the sheet: a spell
+ * from a book that isn't on this device, or is switched off, says so.
  */
-export function RulesEntryDialog({ spell, onClose }: { spell: (Pick<KnownSpell, 'id' | 'name'> & Partial<Pick<KnownSpell, 'ref'>>) | null; onClose: () => void }) {
+export function RulesEntryDialog({
+  spell,
+  onClose,
+}: {
+  spell: (Pick<KnownSpell, 'id' | 'name'> & Partial<Pick<KnownSpell, 'ref' | 'notes'>>) | null;
+  onClose: () => void;
+}) {
   const campaignId = useGame((s) => s.campaignId);
   const [state, setState] = useState<EntryState>({ status: 'loading' });
   useEffect(() => {
@@ -53,6 +60,12 @@ export function RulesEntryDialog({ spell, onClose }: { spell: (Pick<KnownSpell, 
       description={state.status === 'ready' && state.entry ? [state.entry.summary, state.entry.sourceName].filter(Boolean).join(' · ') : undefined}
       size="lg"
     >
+      {spell?.notes?.trim() && (
+        <p className="mb-3 text-sm">
+          <span className="font-medium">Notes: </span>
+          {spell.notes.trim()}
+        </p>
+      )}
       {state.status === 'loading' && (
         <div className="flex justify-center py-6">
           <Spinner label="Looking up the rules" />
@@ -107,46 +120,50 @@ function SpellRow({
   const concentrating = c.spellcasting?.concentratingOn === spell.name;
   const canToggle = editable && spell.level > 0 && !spell.alwaysPrepared;
   return (
-    <li className={cn('flex items-center gap-2 py-1', spell.level > 0 && !spell.prepared && !spell.alwaysPrepared && 'opacity-70')}>
-      {spell.level > 0 &&
-        (canToggle ? (
-          <input
-            type="checkbox"
-            checked={spell.prepared}
-            onChange={(e) => onEdit((cur) => preparedChange(cur, spell.id, e.target.checked))}
-            aria-label={`Prepared: ${spell.name}`}
-            className="size-4 shrink-0 accent-[var(--arcane)]"
-          />
-        ) : (
-          <span
-            aria-label={spell.alwaysPrepared ? 'Always prepared' : spell.prepared ? 'Prepared' : 'Not prepared'}
-            title={spell.alwaysPrepared ? 'Always prepared' : spell.prepared ? 'Prepared' : 'Not prepared'}
-            className={cn('size-2.5 shrink-0 rounded-full', spell.prepared || spell.alwaysPrepared ? 'bg-arcane' : 'border border-border')}
-          />
-        ))}
-      <button type="button" onClick={() => onOpen(spell)} className="min-w-0 truncate text-left text-sm font-medium hover:text-arcane hover:underline">
-        {spell.name}
-      </button>
-      {spell.concentration && <Badge tone="arcane" className="px-1.5">C</Badge>}
-      {spell.ritual && <Badge className="px-1.5">R</Badge>}
-      {spell.alwaysPrepared && <Badge tone="arcane">Always</Badge>}
-      {spell.ref && <BookBadge title={spell.ref.sourceTitle} />}
-      <span className="ml-auto truncate text-xs text-faint">{spell.source}</span>
-      {editable && spell.concentration && (
-        <button
-          type="button"
-          aria-pressed={concentrating}
-          aria-label={concentrating ? `Stop concentrating on ${spell.name}` : `Concentrate on ${spell.name}`}
-          title={concentrating ? 'Stop concentrating' : 'Concentrate on this spell'}
-          onClick={() => onEdit((cur) => concentrationChange(cur, concentrating ? null : spell.name))}
-          className={cn(
-            'grid size-7 shrink-0 place-items-center rounded-lg transition-colors',
-            concentrating ? 'bg-arcane-soft text-arcane' : 'text-faint hover:bg-surface-3 hover:text-arcane',
-          )}
-        >
-          <Brain className="size-3.5" aria-hidden />
+    <li className={cn('py-1', spell.level > 0 && !spell.prepared && !spell.alwaysPrepared && 'opacity-70')}>
+      <div className="flex items-center gap-2">
+        {spell.level > 0 &&
+          (canToggle ? (
+            <input
+              type="checkbox"
+              checked={spell.prepared}
+              onChange={(e) => onEdit((cur) => preparedChange(cur, spell.id, e.target.checked))}
+              aria-label={`Prepared: ${spell.name}`}
+              className="size-4 shrink-0 accent-[var(--arcane)]"
+            />
+          ) : (
+            <span
+              aria-label={spell.alwaysPrepared ? 'Always prepared' : spell.prepared ? 'Prepared' : 'Not prepared'}
+              title={spell.alwaysPrepared ? 'Always prepared' : spell.prepared ? 'Prepared' : 'Not prepared'}
+              className={cn('size-2.5 shrink-0 rounded-full', spell.prepared || spell.alwaysPrepared ? 'bg-arcane' : 'border border-border')}
+            />
+          ))}
+        <button type="button" onClick={() => onOpen(spell)} className="min-w-0 truncate text-left text-sm font-medium hover:text-arcane hover:underline">
+          {spell.name}
         </button>
-      )}
+        {spell.concentration && <Badge tone="arcane" className="px-1.5">C</Badge>}
+        {spell.ritual && <Badge className="px-1.5">R</Badge>}
+        {spell.alwaysPrepared && <Badge tone="arcane">Always</Badge>}
+        {spell.ref && <BookBadge title={spell.ref.sourceTitle} />}
+        <span className="ml-auto truncate text-xs text-faint">{spell.source}</span>
+        {editable && spell.concentration && (
+          <button
+            type="button"
+            aria-pressed={concentrating}
+            aria-label={concentrating ? `Stop concentrating on ${spell.name}` : `Concentrate on ${spell.name}`}
+            title={concentrating ? 'Stop concentrating' : 'Concentrate on this spell'}
+            onClick={() => onEdit((cur) => concentrationChange(cur, concentrating ? null : spell.name))}
+            className={cn(
+              'grid size-7 shrink-0 place-items-center rounded-lg transition-colors',
+              concentrating ? 'bg-arcane-soft text-arcane' : 'text-faint hover:bg-surface-3 hover:text-arcane',
+            )}
+          >
+            <Brain className="size-3.5" aria-hidden />
+          </button>
+        )}
+      </div>
+      {/* The spell's notes (what the DM wrote when it granted it, or the builder's), shown here as they are to the DM. */}
+      {spell.notes?.trim() && <p className="ml-6 line-clamp-2 text-xs text-muted">{spell.notes.trim()}</p>}
     </li>
   );
 }

@@ -118,6 +118,23 @@ describe('buildSystemPrompt', () => {
     }
   });
 
+  it("leaves a magic item's conditions and uncounted bonuses to the DM's judgment, applied through the numbers it passes", () => {
+    const rolls = section(DM_INSTRUCTIONS, '## Rolls and rulings');
+    const items = rolls.split('\n').find((line) => line.startsWith('- Magic items:')) ?? '';
+    for (const phrase of [
+      'the AC (the formula names the item) and in every save (the Saving throws line names it)',
+      "It doesn't count an item's attack and damage bonuses",
+      'a bonus its text gives only in some situations',
+      "it can't tell when a condition in the text stops a counted one",
+      'adjust the number you pass by the bonus',
+      'add a damage bonus to the damage you apply',
+      'tell the player in a line',
+      'get_entry',
+    ]) {
+      expect(items, phrase).toContain(phrase);
+    }
+  });
+
   it('renders the campaign: table rules, safety, chronicle, hero, quests, journal, clocks, homebrew, library, scene', () => {
     const text = buildSystemPrompt(input());
     expect(text).toContain('- Name: The Drowned Lantern');

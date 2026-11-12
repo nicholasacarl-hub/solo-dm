@@ -87,7 +87,13 @@ prompt's snapshot and `get_character_sheet`. The numbers are compact; every text
 player wrote (traits, ideals, bonds, flaws, appearance, backstory, notes), each feature's rules text, a
 transformation's summary and way back, the description of an item no rules entry describes (a custom
 item, or the DM's words on a book's item, wrapped like copied text) and a spell's notes (the DM's, or the
-builder's on a feat's or species' spell). Paragraphs and lists are kept and indented under their bullet; a Markdown heading inside a field
+builder's on a feat's or species' spell). Numbers name their sources where a condition may matter: the AC formula
+names each item it counts, the Saving throws line what every save includes (`saveBonusSources`: a Ring or Cloak of
+Protection, an item's bonus the app read as always on, Aura of Protection), and an active item's attack and damage
+bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Magic items")
+leave the rest to the DM: a bonus an item's text gives only sometimes, a condition that stops a counted one, and those
+attack and damage bonuses, applied by adjusting the AC or DC it passes (and the damage it applies) and told to the
+player in a line. Paragraphs and lists are kept and indented under their bullet; a Markdown heading inside a field
 becomes a bold line, so it can't pass for a section of the sheet. A field is cut only past 20,000
 characters (`SHEET_TEXT_MAX`, far above any real sheet: the longest SRD feature is about 4,300, Wizard
 Spellcasting, and a level-20 SRD character's features 8,000–15,000 in all), at a paragraph, line or word
@@ -396,7 +402,10 @@ the item worn, held, carried or attuned. Anything else is left out with a note (
 the app doesn't apply it (the DM can)"), and a Claude reading that applies such a bonus gets "…check it". The
 reader fails closed, so a shape it can't read is noted rather than applied: a conditional bonus applied silently
 changes combat without the player knowing, while an always-on bonus left out shows its note and the DM can still
-apply it. It reads the item's own name with it, and judges:
+apply it. **The reader is frozen**: it changes only for outright bugs (a crash, a hang, a bonus taken from another
+item or sentence, a note that misstates what the app applies), not to learn more wordings. A condition it misses is
+the DM's to honor, from the sheet's named sources and the item's text (see "The hero's sheet" above), and ROADMAP.md
+lists the shapes it is known to misjudge. It reads the item's own name with it, and judges:
 
 - **Paragraphs.** List items, headings and bold-only label lines are paragraphs of their own. A paragraph with no
   closing punctuation goes on into the next when that one starts in lower case, with "(" or a dash, or when the
