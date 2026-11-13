@@ -94,7 +94,8 @@ names each item it counts, the Saving throws line what every save includes (`sav
 Protection, an item's bonus the app read as always on, Aura of Protection), and an active item's attack and damage
 bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Bonuses") say
 the app counts only what the sheet names (attack ability and proficiency, the AC formula, the Saving throws line, the
-Defenses line, the Advantage sources the Advantage line lists) and leave the rest to the DM: cover, a fighting style,
+Skills line's totals (Thaumaturge and Magician included), the Defenses line, the Advantage sources the Advantage line
+lists) and leave the rest to the DM: the Proficiency Bonus a hero lacks with an off-sheet weapon, cover, a fighting style,
 a spell such as Bless, and for items a bonus an item's text gives only sometimes, a condition that stops a counted one, those
 attack and damage bonuses, and any bonus of an SRD or homebrew item (the app reads no text there; it counts only the
 Ring and Cloak of Protection, Bracers of Defense and a "+N" armor or shield by name), applied by adjusting the AC or
@@ -250,16 +251,23 @@ the scene, the combat summary (if any), open clocks, and **entity cards** — sh
 for any known NPC / place / faction / item whose name (or tag alias) appears in the player's message
 or in the DM's previous narration. This is cheap retrieval that prevents contradictions.
 
-The combat summary (here, in combat tool results and in the frozen prompt's combat section) and the player's
-tracker show the hero's AC from the sheet, never the copy `start_combat` stored, so Shield of Faith or Mage Armor
-mid-fight shows at once. Conditions show the duration and source the DM gave them ("Frightened (until the end of
-your next turn; Ghost)", each part clipped near 60 characters) on the status line, the sheet and the DM's combat
-lines; the player's log and tracker keep bare names, so a source can't name a hidden creature. A condition name is
-matched strictly (with whole-input aliases such as "blindness" and "exhausted …"): an effect the DM names itself
-("Protection from Poison", "Charm of Warding") stays its own condition with no standard rules, and the result says
-so and how to apply the standard one. `take_rest` refuses a dead hero or one below 1 HP before logging anything or
-opening the Hit Dice dialog, and points to the SRD's way back: death saving throws for a dying hero, 1 HP after
-1d4 hours for a Stable one.
+The combat summary (here, in combat tool results and in the frozen prompt's combat section) and the player's tracker
+show the hero's AC from the sheet, never the copy `start_combat` stored, so Shield of Faith or Mage Armor mid-fight
+shows at once. Conditions show the duration and source the DM gave them ("Frightened (until the end of your next
+turn; Ghost)", each part clipped near 60 characters) on the status line, the sheet and the DM's combat lines;
+update_combat's log lines and the player's tracker keep a creature's conditions bare, so a source can't name a
+hidden creature (the hero's own conditions show their duration and source on the player's sheet and in the log line
+that sets them). A condition name is matched strictly (with whole-input aliases such as "blindness" and "exhausted
+…"): an effect the DM names itself ("Protection from Poison", "Charm of Warding") stays its own condition with no
+standard rules, and the result says so and how to apply the standard one. `take_rest` refuses a dead hero or one
+below 1 HP before logging anything or opening the Hit Dice dialog, and points to the SRD's way back: death saving
+throws for a dying hero, 1 HP after 1d4 hours for a Stable one. When another creature stabilizes the hero (the Help
+action's Medicine check, a Healer's Kit, Spare the Dying), the DM marks it with `update_character` conditions_add
+"Stable" (the engine's `stabilize`: Stable, both tallies reset; "Stable" is never stored as a condition), and damage
+at 0 HP starts a Stable hero's tallies from zero however Stable was marked (the sheet's pips keep theirs). A
+Halfling's natural 1 on physical dice is rerolled in the same `request_player_roll` call (the dialog asks for the
+d20 that showed 1), so a death save records only the new roll; and every d20 result names Exhaustion when it is in
+the total.
 
 ### Player-side controls that talk to the DM
 

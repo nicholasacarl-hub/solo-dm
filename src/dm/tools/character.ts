@@ -38,6 +38,7 @@ import {
   setTempHp,
   spendHitDie,
   spendSlot,
+  stabilize,
   updateItem,
   useFeature,
   xpToNextLevel,
@@ -563,6 +564,11 @@ function conditionSteps(input: ToolInput<'update_character'>): ((c: Character) =
       exhaustion += 1;
       continue;
     }
+    // "Stable" isn't a condition: it records that another creature stabilized the dying hero (SRD 5.2.1).
+    if (/^(?:stable|stabili[sz]ed)$/i.test(cond.condition.trim())) {
+      steps.push((c) => stabilize(c, cond.source));
+      continue;
+    }
     steps.push((c) => addCondition(c, { id: cond.condition.trim(), ...defined({ source: cond.source, duration: cond.duration }) }));
   }
   if (exhaustion !== 0) steps.push((c) => changeExhaustion(c, exhaustion));
@@ -885,9 +891,11 @@ function restRefusal(c: Character, kind: ToolInput<'take_rest'>['kind']): string
   if (c.deathSaves.dead) return "The hero is dead; the dead don't rest.";
   if (c.hp.current >= 1) return null;
   const rest = kind === 'short' ? 'A Short Rest' : 'A Long Rest';
-  // SRD 5.2.1 Stabilizing a Character: only a Stable hero comes back on their own; a dying one keeps rolling.
+  // SRD 5.2.1 Stabilizing a Character: only a Stable hero comes back on their own; a dying one keeps rolling, unless
+  // another creature stabilized them (the Help action's Medicine check, a Healer's Kit, Spare the Dying), which the DM
+  // marks with conditions_add "Stable".
   if (!c.deathSaves.stable) {
-    return `${rest} needs at least 1 HP (SRD 5.2.1). The hero is dying, not Stable: death saving throws go on (request_player_roll "death-save") until three successes make them Stable, a natural 20 or any healing (update_character hp healing) brings them back, or three failures kill them.`;
+    return `${rest} needs at least 1 HP (SRD 5.2.1). The sheet has the hero dying, not Stable: death saving throws go on (request_player_roll "death-save") until three successes make them Stable, a natural 20 or any healing (update_character hp healing) brings them back, or three failures kill them. If another creature stabilized them (the Help action's DC 10 Wisdom (Medicine) check, a Healer's Kit, Spare the Dying), mark it with update_character conditions_add "Stable", then roll_dice 1d4 for the hours, update_character hp healing 1, and take_rest.`;
   }
   return `${rest} needs at least 1 HP (SRD 5.2.1). A Stable hero who isn't healed regains 1 HP after 1d4 hours: roll_dice 1d4 for the hours, update_character hp healing 1, then take_rest.`;
 }

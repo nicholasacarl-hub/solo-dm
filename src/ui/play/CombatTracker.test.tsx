@@ -90,8 +90,11 @@ describe('CombatTracker', () => {
     seedGame({ combat });
     render(<CombatTracker />);
     const bandit = initiativeRows().find((r) => r.textContent?.includes('Bandit 1'))!;
-    // The rules summary stays; the DM's words don't.
+    // The rules summary stays; the DM's words don't, in the chip's title or anywhere on the row.
     expect(within(bandit).getByText('Prone')).toHaveAttribute('title', 'You are on the ground.');
+    expect(bandit).not.toHaveTextContent(/wraith|1 minute/);
+    const titles = [bandit, ...bandit.querySelectorAll('[title]')].map((el) => el.getAttribute('title') ?? '');
+    expect(titles.join(' ')).not.toMatch(/wraith|1 minute/);
   });
 
   it("shows the hero's AC from the sheet, which can change mid-fight (srd:spell:shield-of-faith), not the copy from the fight's start", () => {

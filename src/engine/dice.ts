@@ -442,13 +442,18 @@ export function diceRange(expression: string): { min: number; max: number } {
 /**
  * Halfling Luck (SRD 5.2.1 Halfling): when the d20 of a D20 Test shows a 1, reroll that die once and
  * use the new roll (with Disadvantage the other die still counts if it is lower). Returns the result
- * unchanged when the natural roll isn't a 1. For digital rolls; a physical roll is rerolled by the player.
+ * unchanged when the natural roll isn't a 1. `value` is the reroll the player made on physical dice: their
+ * result holds only the d20 they keep, so `value` is the d20 they keep after the reroll; without it the die
+ * is rolled here.
  */
-export function rerollNaturalOne(result: D20TestResult, opts: { rng?: Rng } = {}): D20TestResult {
+export function rerollNaturalOne(result: D20TestResult, opts: { rng?: Rng; value?: number } = {}): D20TestResult {
   if (result.natural !== 1) return result;
   const index = result.dice.findIndex((d) => d.sides === 20 && !d.dropped && d.value === 1);
   if (index < 0) return result;
-  const rerolled = rollDie(20, opts.rng ?? cryptoRng);
+  if (opts.value !== undefined && (!Number.isInteger(opts.value) || opts.value < 1 || opts.value > 20)) {
+    throw new DiceError(`A d20 shows a whole number from 1 to 20 — got ${String(opts.value)}`);
+  }
+  const rerolled = opts.value ?? rollDie(20, opts.rng ?? cryptoRng);
   const values = result.dice.map((d, i) => (i === index ? rerolled : d.value));
   const d20s = result.dice.flatMap((d, i) => (d.sides === 20 ? [i] : []));
   const mode = result.advantage === 'advantage' ? 'kh' : result.advantage === 'disadvantage' ? 'kl' : null;

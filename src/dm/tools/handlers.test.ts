@@ -215,6 +215,46 @@ describe("request_player_roll: the hero's own conditions, traits and features", 
     expect(out.content).toContain('Roll damage with critical: true.');
   });
 
+  it("has a Halfling reroll a physical natural 1 in the same call, so a death save records only the new roll (SRD 5.2.1 Halfling: Luck)", async () => {
+    const h = setup({ campaignSettings: { playerRollMode: 'physical' } });
+    await h.s().updateCharacter((c) => ({
+      ...c,
+      hp: { ...c.hp, current: 0 },
+      deathSaves: { successes: 0, failures: 1, stable: false, dead: false },
+      features: [...c.features, { id: 'f-luck', name: 'Luck', description: 'Reroll natural 1s.', source: 'species', sourceName: 'Halfling' }],
+    }));
+    const faces = [1, 15, 1, 1];
+    const asked: { label: string; luck?: boolean }[] = [];
+    autoRespond(h.store, (req) => {
+      if (req.kind !== 'roll') return null;
+      asked.push({ label: req.label, luck: req.luck });
+      return { kind: 'roll', response: { result: dialogRoll(faces.shift() ?? 10, req.modifier, req.request.dc), manual: true } };
+    });
+    const out = await h.run('request_player_roll', { roll_type: 'death-save', reason: 'Cling to life' });
+    expect(out.isError).toBeUndefined();
+    expect(asked).toHaveLength(2);
+    expect(asked[1]).toMatchObject({ luck: true });
+    expect(asked[1].label).toMatch(/Luck reroll$/);
+    expect(out.content).toContain('The player rerolled the 1 on their physical dice; the result above is the new roll.');
+    expect(h.s().character?.deathSaves).toMatchObject({ successes: 1, failures: 1, dead: false });
+    expect(h.s().log.filter((e) => e.kind === 'roll')).toHaveLength(1);
+    // A second 1 stands: Luck rerolls once, and the new roll must be used.
+    await h.run('request_player_roll', { roll_type: 'death-save', reason: 'Cling to life' });
+    expect(asked).toHaveLength(4);
+    expect(h.s().character?.deathSaves).toMatchObject({ successes: 1, failures: 3, dead: true });
+  });
+
+  it('names Exhaustion in every d20 result, as it is in the total', async () => {
+    fakeDice.queue(12);
+    const h = setup();
+    await h.s().updateCharacter((c) => ({ ...c, exhaustion: 2 }));
+    const out = await h.run('request_player_roll', { roll_type: 'save', ability: 'dex', dc: 10, reason: 'Dodge' });
+    expect(out.content).toContain('The total includes Exhaustion 2 (−4 to D20 Tests).');
+    fakeDice.queue(12);
+    await h.s().updateCharacter((c) => ({ ...c, exhaustion: 0 }));
+    expect((await h.run('request_player_roll', { roll_type: 'save', ability: 'dex', dc: 10, reason: 'Dodge' })).content).not.toContain('Exhaustion');
+  });
+
   it('tells the DM when the player spent Heroic Inspiration to reroll in the dialog', async () => {
     const h = setup({ campaignSettings: { playerRollMode: 'prompt' } });
     autoRespond(h.store, (req) => {
@@ -229,6 +269,14 @@ describe("request_player_roll: the hero's own conditions, traits and features", 
 });
 
 describe('update_character', () => {
+  it('reads "Stable" as another creature stabilizing the dying hero, never as a condition (SRD 5.2.1 Stabilizing a Character)', async () => {
+    const h = setup();
+    const out = await h.run('update_character', { conditions_add: [{ condition: 'Stable' }], reason: 'Steady footing' });
+    expect(out.content).toContain('Not stabilized.');
+    expect(h.s().character?.conditions).toEqual([]);
+    expect(h.s().character?.deathSaves.stable).toBe(false);
+  });
+
   it('applies batched sections in one update and logs one line per section', async () => {
     const h = setup();
     const out = await h.run('update_character', {
@@ -401,9 +449,21 @@ describe('rests and leveling', () => {
     await h.s().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 0 }, deathSaves: { successes: 1, failures: 2, stable: false, dead: false }, conditions: [{ id: 'unconscious' }] }));
     const out = await h.run('take_rest', { kind: 'long' });
     expect(out.isError).toBe(true);
-    expect(out.content).toContain('The hero is dying, not Stable: death saving throws go on (request_player_roll "death-save")');
-    expect(out.content).not.toContain('1d4 hours');
+    expect(out.content).toContain('The sheet has the hero dying, not Stable: death saving throws go on (request_player_roll "death-save")');
+    // The Stable recovery is offered only once another creature stabilized them, which the DM marks first.
     expect(h.s().log).toHaveLength(0);
+    const [dying, stabilizedByAlly] = String(out.content).split('If another creature stabilized them');
+    expect(dying).not.toContain('1d4 hours');
+    expect(stabilizedByAlly).toContain(
+      `(the Help action's DC 10 Wisdom (Medicine) check, a Healer's Kit, Spare the Dying), mark it with update_character conditions_add "Stable", then roll_dice 1d4 for the hours`,
+    );
+    // Marked: the death saves stop with both tallies reset, and the rest is refused with the Stable path only.
+    const marked = await h.run('update_character', { conditions_add: [{ condition: 'Stable', source: 'Spare the Dying' }], reason: 'Brother Aldo' });
+    expect(marked.isError).toBeUndefined();
+    expect(h.s().character?.deathSaves).toEqual({ successes: 0, failures: 0, stable: true, dead: false });
+    expect(h.s().character?.conditions.map((c) => c.id)).toEqual(['unconscious']);
+    expect((await h.run('take_rest', { kind: 'long' })).content).toContain("A Stable hero who isn't healed regains 1 HP after 1d4 hours");
+    expect(h.s().log.map((e) => e.kind)).toEqual(['tool']); // only the Stable mark
   });
 
   it('refuses the dead any rest, logging nothing', async () => {

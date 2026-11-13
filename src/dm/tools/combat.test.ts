@@ -252,11 +252,15 @@ describe("update_combat conditions by the DM's own name (SRD 5.2.1 Rules Glossar
     expect(out.content).toContain('Bandit 1: no change');
     expect(out.content).toContain(`Not removed: Bandit 1 has no "KO'd" (it has unconscious, Hexed).`);
     expect(named(h.s().combat, 'Bandit 1')?.conditions).toHaveLength(2);
-    expect(logged().join('\n')).not.toMatch(/Hag|KO'd|Hexed/);
-    // A standard name the creature has, typed any way, is removed and logged by its stored name.
-    await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_remove: ['Unconscious', 'hexed'] });
+    expect(logged()).toEqual([]);
+    // A mixed call logs only what it removed: the miss (with the DM's typed details) stays in the DM's result.
+    const mixed = await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_remove: ['Unconscious', 'Hexed (the Hag hiding in the mist)'] });
+    expect(mixed.content).toContain('Not removed: Bandit 1 has no "Hexed (the Hag hiding in the mist)" (it has unconscious, Hexed).');
+    expect(logged()).toEqual(['Bandit 1: −unconscious']);
+    // A name the creature has, typed any way, is removed and logged by its stored name, once.
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_remove: ['hexed', 'HEXED'] });
     expect(named(h.s().combat, 'Bandit 1')?.conditions).toEqual([]);
-    expect(logged().at(-1)).toBe('Bandit 1: −unconscious, −Hexed');
+    expect(logged().at(-1)).toBe('Bandit 1: −Hexed');
   });
 });
 

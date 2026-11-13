@@ -186,9 +186,9 @@ export const applyAttackRollRules: typeof Engine.applyAttackRollRules = (result,
   return { ...result, isCritical, success: result.natural === 1 ? false : isCritical ? true : result.total >= result.dc };
 };
 
-export const rerollNaturalOne: typeof Engine.rerollNaturalOne = (result) => {
+export const rerollNaturalOne: typeof Engine.rerollNaturalOne = (result, opts) => {
   if (result.natural !== 1) return result;
-  const natural = die(20);
+  const natural = opts?.value ?? die(20);
   const total = natural + result.modifier;
   const next: D20TestResult = {
     ...result,
@@ -337,6 +337,15 @@ export const setTempHp: typeof Engine.setTempHp = (c, amount) => ({
   character: { ...c, hp: { ...c.hp, temp: Math.max(c.hp.temp, amount) } },
   events: [ev('temp-hp', `Temporary HP ${Math.max(c.hp.temp, amount)}`)],
 });
+
+export const stabilize: typeof Engine.stabilize = (c, how) => {
+  if (c.deathSaves.dead || c.hp.current > 0 || c.deathSaves.stable) return { character: c, events: [ev('warning', 'Not stabilized.')] };
+  const by = how?.trim() ? ` (${how.trim()})` : '';
+  return {
+    character: { ...c, deathSaves: { successes: 0, failures: 0, stable: true, dead: false } },
+    events: [ev('stabilized', `Stabilized${by}: Stable at 0 HP.`)],
+  };
+};
 
 export const recordDeathSave: typeof Engine.recordDeathSave = (c, natural) => {
   const ds = { ...c.deathSaves };

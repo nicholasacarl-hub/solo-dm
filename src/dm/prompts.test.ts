@@ -150,11 +150,22 @@ describe('buildSystemPrompt', () => {
     expect(advantage).toContain('the app applies only what it tracks, and names it in the result');
     expect(advantage).toContain('Pass anything else before the roll: a trait or feature (Gnomish Cunning, Danger Sense, Dwarven Resilience)');
     expect(advantage).toContain("Cover isn't Advantage: it adds to AC and Dexterity saves (see Bonuses).");
-    // Invisible's Advantage is applied on every attack, so the DM cancels it against a creature that sees the hero; a
+    // Invisible's Advantage is applied on every attack, so the DM cancels it against a creature that sees the hero, and
+    // where another Disadvantage leaves no value that reaches the rules' roll, takes Invisible off for that attack; a
     // Blinded or Deafened hero's sight or hearing checks are only noted, so the DM fails them without a roll.
-    expect(advantage).toContain('Invisible\'s Advantage on every attack (against a creature that can see the hero, pass "disadvantage" to cancel it)');
+    expect(advantage).toContain(
+      'Invisible\'s Advantage on every attack (against a creature that can see the hero it doesn\'t apply: pass "disadvantage" to cancel it, or "advantage" if something else gives Advantage; if something else gives Disadvantage, take Invisible off with update_character for that attack and put it back after if it lasts)',
+    );
     expect(advantage).toContain("A Blinded or Deafened hero's sight or hearing checks are only noted after the roll: call those failed without rolling.");
     expect(advantage).not.toMatch(/already applies their own conditions, armor and traits/);
+  });
+
+  it('has the DM mark a hero another creature stabilized, so the saves stop (SRD 5.2.1 Stabilizing a Character)', () => {
+    const dying = DM_INSTRUCTIONS.split('\n').find((line) => line.startsWith('- Dying:')) ?? '';
+    expect(dying).toContain(
+      'When another creature stabilizes them (the Help action\'s DC 10 Wisdom (Medicine) check, a Healer\'s Kit, Spare the Dying), mark it with update_character conditions_add "Stable"',
+    );
+    expect(dying).toContain('unhealed they regain 1 HP after 1d4 hours (roll_dice 1d4, then update_character hp healing 1)');
   });
 
   it('gives damage, spells, rulings, charges and missed calls their verified paths', () => {

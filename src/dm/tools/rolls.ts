@@ -9,6 +9,7 @@ import {
   applyAttackRollRules,
   attackDamageExpression,
   combineAdvantage,
+  exhaustionPenalty,
   findAttack,
   findMapCombatant,
   isValidDice,
@@ -191,11 +192,19 @@ async function rollWithPlayer(
   req: PlayerRollRequest,
   modifier: number,
   label: string,
+  luck = false,
 ): Promise<{ result: D20TestResult; manual: boolean }> {
   const store = ctx.deps.store();
   ctx.status(`Waiting for your roll: ${label}…`, 'waiting-player');
   try {
-    const response = await store.requestInteraction({ kind: 'roll', id: ctx.deps.newId(), request: req, modifier, label });
+    const response = await store.requestInteraction({
+      kind: 'roll',
+      id: ctx.deps.newId(),
+      request: req,
+      modifier,
+      label,
+      ...(luck ? { luck: true } : {}),
+    });
     if (response.kind !== 'roll') throw new ToolInputError('The roll dialog returned an unexpected answer.');
     return { result: response.response.result, manual: response.response.manual };
   } catch (err) {
@@ -264,20 +273,27 @@ export async function performPlayerRoll(ctx: ToolContext, input: PlayerRollReque
   const rolled = auto ? { result: rollLocally(ctx, request, modifier), manual: false } : await rollWithPlayer(ctx, request, modifier, label);
   let result = rolled.result;
 
-  // The player spent Heroic Inspiration in the roll dialog to reroll: this is the roll that counts.
-  if (character.heroicInspiration && ctx.deps.store().character?.heroicInspiration === false) {
-    notes.push(
-      'The player spent Heroic Inspiration to reroll: this is the new roll, which must be used (the first is discarded). Heroic Inspiration is already marked spent — don\'t spend it again.',
-    );
-  }
   if (d20 && situation.luck && result.natural === 1 && !/\bLuck\b/.test(result.breakdown)) {
     if (rolled.manual) {
-      notes.push(`${situation.luck} The player rolled physical dice: ask them to reroll that d20, then call request_player_roll again with the same parameters.`);
+      // Physical dice: the player rerolls that d20 now, in this same call, so only the new roll counts (a death save
+      // records the new roll alone) and a second 1 stands.
+      const again = await rollWithPlayer(ctx, request, modifier, `${label} — Luck reroll`, true);
+      if (again.result.natural !== undefined) result = rerollNaturalOne(result, { value: again.result.natural });
+      notes.push(`${situation.luck} The player rerolled the 1 on their physical dice; the result above is the new roll.`);
     } else {
       result = rerollNaturalOne(result, { rng: ctx.deps.rng });
       notes.push(`${situation.luck} The natural 1 was rerolled; the result above is the new roll.`);
     }
   }
+  // The player spent Heroic Inspiration in the roll dialog (Luck's included) to reroll: this is the roll that counts.
+  if (character.heroicInspiration && ctx.deps.store().character?.heroicInspiration === false) {
+    notes.push(
+      'The player spent Heroic Inspiration to reroll: this is the new roll, which must be used (the first is discarded). Heroic Inspiration is already marked spent — don\'t spend it again.',
+    );
+  }
+  // Exhaustion is in the modifier of every D20 Test (death saves included), and nothing else in the result names it.
+  const exhaustion = d20 ? exhaustionPenalty(character) : 0;
+  if (exhaustion) notes.push(`The total includes Exhaustion ${-exhaustion / 2} (−${-exhaustion} to D20 Tests).`);
 
   result = withVerdict(request.rollType, result, request.dc);
   if (request.rollType === 'attack') result = applyAttackRollRules(result, { critRange: situation.critRange });

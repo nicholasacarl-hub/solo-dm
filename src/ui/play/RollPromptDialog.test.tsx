@@ -120,6 +120,16 @@ describe('RollPromptDialog — physical dice', () => {
     expect(screen.getByText('Advantage')).toBeInTheDocument();
   });
 
+  it("asks a Halfling to reroll only the d20 that showed 1 for Luck (SRD 5.2.1 Halfling)", async () => {
+    const { onResolve, user } = renderPrompt({ ...interaction({ advantage: 'disadvantage' }), luck: true });
+    expect(screen.getByText('Luck: roll the d20 that showed 1 again, then enter the lower of your two d20s.')).toBeInTheDocument();
+    expect(screen.queryByText('Disadvantage: roll two d20s and enter the lower.')).not.toBeInTheDocument();
+    await user.type(screen.getByLabelText('Your d20'), '9');
+    await user.click(screen.getByRole('button', { name: 'Use this roll' }));
+    await user.click(screen.getByRole('button', { name: 'Continue' }));
+    expect(onResolve.mock.calls[0][0].result).toMatchObject({ natural: 9 });
+  });
+
   it('rejects numbers a d20 cannot show', async () => {
     const { onResolve, user } = renderPrompt(interaction({ advantage: 'disadvantage' }));
     expect(screen.getByText('Disadvantage: roll two d20s and enter the lower.')).toBeInTheDocument();

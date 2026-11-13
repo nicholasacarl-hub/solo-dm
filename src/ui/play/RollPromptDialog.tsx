@@ -15,6 +15,7 @@ import {
   diceExpression,
   effectiveDc,
   formatParts,
+  luckRerollInstructions,
   modifierParts,
   physicalInstructions,
   rollKind,
@@ -278,7 +279,11 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
           <PhysicalEntry
             inputRef={inputRef}
             instructions={
-              replaced ? physicalRerollInstructions(request, expression) : physicalInstructions(request, expression)
+              replaced
+                ? physicalRerollInstructions(request, expression)
+                : interaction.luck
+                  ? luckRerollInstructions(request)
+                  : physicalInstructions(request, expression)
             }
             label={kind === 'd20' ? 'Your d20' : 'Your total'}
             d20={kind === 'd20'}

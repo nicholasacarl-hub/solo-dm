@@ -190,3 +190,14 @@ export function physicalInstructions(req: PlayerRollRequest, expression: string 
   if (req.critical) return `Critical hit: roll ${dice} (the dice are doubled) and enter the total${including}.`;
   return `Roll ${dice} and enter the total${including}.`;
 }
+
+/**
+ * Physical dice, Halfling Luck (SRD 5.2.1 Halfling): the d20 that showed 1 is rolled again and the new roll is used.
+ * The player entered only the d20 they kept, so with Advantage both showed 1, and with Disadvantage the other die
+ * still counts if it is lower.
+ */
+export function luckRerollInstructions(req: PlayerRollRequest): string {
+  if (req.advantage === 'advantage') return 'Luck: both d20s showed 1. Roll one of them again and enter the new number.';
+  if (req.advantage === 'disadvantage') return 'Luck: roll the d20 that showed 1 again, then enter the lower of your two d20s.';
+  return 'Luck: roll your d20 again and enter the new number.';
+}

@@ -230,6 +230,16 @@ describe('rerollNaturalOne (SRD 5.2.1 Halfling: Luck)', () => {
     expect(saved).toMatchObject({ natural: 20, total: 19, isCritical: true });
     expect(saved.breakdown).toBe('2d20 (~~1~~ → 20, ~~1~~, Luck) − 1 = 19');
   });
+
+  it('takes the reroll the player made on physical dice, and a second 1 stands', () => {
+    const entered = manualD20Result(1, 2, { advantage: 'disadvantage', dc: 10 });
+    const lucky = rerollNaturalOne(entered, { value: 9 }); // the d20 they keep after rerolling the 1
+    expect(lucky).toMatchObject({ natural: 9, total: 11, success: true, isFumble: false, advantage: 'disadvantage' });
+    expect(lucky.breakdown).toBe('d20 (~~1~~ → 9, Luck) + 2 = 11');
+    expect(rerollNaturalOne(manualD20Result(1, 0), { value: 1 })).toMatchObject({ natural: 1, isFumble: true });
+    expect(() => rerollNaturalOne(entered, { value: 21 })).toThrow(DiceError);
+    expect(rerollNaturalOne(manualD20Result(4, 0), { value: 20 }).natural).toBe(4); // only a 1 is rerolled
+  });
 });
 
 describe('manual (physical dice) results', () => {
