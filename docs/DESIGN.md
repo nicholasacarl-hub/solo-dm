@@ -265,10 +265,11 @@ throws for a dying hero, 1 HP after 1d4 hours for a Stable one. When another cre
 action's Medicine check, a Healer's Kit, Spare the Dying), the DM marks it with `update_character` conditions_add
 "Stable" ("Stabilized", or either with a detail that says how, such as "Stable (Healer's Kit)"): the engine's
 `stabilize` makes them Stable with both tallies reset, and no condition is stored (a hero with HP keeps a homebrew
-effect so named, such as "Stable Footing"); removing "Stable" changes nothing and says why. Damage at 0 HP starts a
-Stable hero's tallies from zero however Stable was marked (the sheet's pips keep theirs). A Halfling's natural 1 on
-physical dice is rerolled in the same `request_player_roll` call (the dialog asks for the d20 that showed 1), so a
-death save records only the new roll; and every d20 result names Exhaustion when it is in the total.
+effect so named, such as "Stable Footing", and the DM is told it marks no stabilization); removing "Stable" changes
+nothing and says why (an older save's homebrew "Stable" is still removed). Damage at 0 HP starts a Stable hero's
+tallies from zero however Stable was marked (the sheet's pips keep theirs). A Halfling's natural 1 on physical dice
+is rerolled in the same `request_player_roll` call (the dialog asks for the d20 that showed 1), so a death save
+records only the new roll; and every d20 result names Exhaustion when it is in the total.
 
 ### Player-side controls that talk to the DM
 

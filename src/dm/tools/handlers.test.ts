@@ -293,6 +293,12 @@ describe('update_character', () => {
       ["Stable (Healer's Kit)", "Healer's Kit"],
       ['Stabilized by Brother Aldo', 'by Brother Aldo'],
       ['stabilised', undefined],
+      ['Stabilize', undefined],
+      ['Stable.', undefined],
+      ['Stable: Spare the Dying', 'Spare the Dying'],
+      ["Stable, Healer's Kit", "Healer's Kit"],
+      ["Stable-Healer's Kit", "Healer's Kit"],
+      ["Stable—Healer's Kit", "Healer's Kit"],
     ] as const) {
       const h = setup();
       await h.s().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 0 }, deathSaves: { successes: 1, failures: 2, stable: false, dead: false }, conditions: [{ id: 'unconscious' }] }));
@@ -304,6 +310,28 @@ describe('update_character', () => {
       expect(removed.content).toContain("Stable isn't a condition to remove: the hero stays Stable until damage starts the death saves again");
       expect(h.s().character?.deathSaves.stable).toBe(true);
     }
+  });
+
+  it('removes Stable as before when it is no mark: a dying hero, or a homebrew "Stable" an older save stored', async () => {
+    const h = setup();
+    await h.s().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 0 }, conditions: [{ id: 'unconscious' }] }));
+    const dying = await h.run('update_character', { conditions_remove: ['Stable'], reason: 'Undo' });
+    expect(dying.content).not.toContain("Stable isn't a condition to remove");
+    await h.s().updateCharacter((c) => ({ ...c, deathSaves: { successes: 0, failures: 0, stable: true, dead: false }, conditions: [{ id: 'unconscious' }, { id: 'Stable' }] }));
+    await h.run('update_character', { conditions_remove: ['Stable'], reason: 'Old save' });
+    expect(h.s().character?.conditions.map((c) => c.id)).toEqual(['unconscious']);
+    expect(h.s().character?.deathSaves.stable).toBe(true);
+  });
+
+  it('tells the DM when a Stable name with a detail stays a homebrew condition on a hero with HP', async () => {
+    const h = setup();
+    await h.s().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 0 }, conditions: [{ id: 'unconscious' }] }));
+    // Healed in the same call, the hero has HP when the conditions apply.
+    const out = await h.run('update_character', { hp: { kind: 'healing', amount: 1 }, conditions_add: [{ condition: "Stable (Healer's Kit)" }], reason: 'Bandaged' });
+    expect(out.content).toContain(
+      `Kept "Stable (Healer's Kit)" as a homebrew condition: the hero has 1 HP, so it marks no stabilization (only a creature at 0 HP can be stabilized). If it meant one, remove it with conditions_remove "Stable (Healer's Kit)".`,
+    );
+    expect(JSON.stringify(h.s().log)).not.toContain('marks no stabilization');
   });
 
   it('applies batched sections in one update and logs one line per section', async () => {

@@ -550,7 +550,10 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
 }
 
 /** "Stable" or "Stabilized", alone or with a detail after it ("Stable (Healer's Kit)", "Stabilized by Brother Aldo"). */
-const STABLE_NAME = /^(?:stable|stabili[sz]ed?)(?=$|[\s(:,-])/i;
+const STABLE_NAME = /^(?:stable|stabili[sz]ed?)(?=$|[\s(:,.\-–—])/i;
+
+/** The detail after a Stable name's word, without its separators ("Stable — Healer's Kit": "Healer's Kit"). */
+const stableDetail = (name: string, matched: string): string => name.slice(matched.length).replace(/^[\s(:,.\-–—]+|[\s).]+$/g, '');
 
 /**
  * "Stable" isn't a condition: added, it records that another creature stabilized the dying hero (SRD 5.2.1 Stabilizing
@@ -558,7 +561,7 @@ const STABLE_NAME = /^(?:stable|stabili[sz]ed?)(?=$|[\s(:,-])/i;
  * so named ("Stable Footing").
  */
 function addStable(c: Character, name: string, matched: string, cond: { source?: string; duration?: string }): EngineResult {
-  const detail = name.slice(matched.length).replace(/^[\s(:,-]+|[\s)]+$/g, '');
+  const detail = stableDetail(name, matched);
   if (detail && c.hp.current > 0) return addCondition(c, { id: name, ...defined({ source: cond.source, duration: cond.duration }) });
   return stabilize(c, cond.source ?? (detail || undefined));
 }
@@ -569,6 +572,23 @@ function removeStable(c: Character, name: string): EngineResult {
   const message =
     "Stable isn't a condition to remove: the hero stays Stable until damage starts the death saves again or healing brings them back (a mark made by mistake: the player can clear it with the death-save marks on their sheet).";
   return { character: c, events: [{ type: 'warning', message }] };
+}
+
+/**
+ * A line for each Stable name with a detail that a hero with HP kept as a homebrew condition ("Stable (Healer's Kit)"
+ * in the call that heals them): it marks no stabilization, and nothing else tells the DM so.
+ */
+function keptStableLines(added: readonly { condition: string }[] | undefined, c: Character): string[] {
+  if (c.hp.current <= 0) return [];
+  const lines = (added ?? []).flatMap(({ condition }) => {
+    const name = condition.trim();
+    const matched = STABLE_NAME.exec(name)?.[0];
+    if (!matched || !stableDetail(name, matched) || !c.conditions.some((x) => conditionKey(x.id) === conditionKey(name))) return [];
+    return [
+      `Kept "${name}" as a homebrew condition: the hero has ${c.hp.current} HP, so it marks no stabilization (only a creature at 0 HP can be stabilized). If it meant one, remove it with conditions_remove "${name}".`,
+    ];
+  });
+  return [...new Set(lines)];
 }
 
 /**
@@ -802,6 +822,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   const lines = results.flatMap((r) => eventLines(r.events)).filter(Boolean);
   // For the DM only (the player's log keeps the change itself).
   lines.push(...keptHomebrewLines(input.conditions_add, change.character.conditions));
+  lines.push(...keptStableLines(input.conditions_add, change.character));
   const saves = saveSourcesChangeText(before, change.character);
   if (saves) lines.push(`${saves}.`);
   const campaign = ctx.deps.store().campaign;
