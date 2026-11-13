@@ -25,6 +25,7 @@ import {
   characterLevel,
   characterSheetText,
   characterStatusLine,
+  conditionKey,
   saveSourcesChangeText,
   gainXp,
   levelUp,
@@ -548,6 +549,28 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
   return steps;
 }
 
+/** "Stable" or "Stabilized", alone or with a detail after it ("Stable (Healer's Kit)", "Stabilized by Brother Aldo"). */
+const STABLE_NAME = /^(?:stable|stabili[sz]ed?)(?=$|[\s(:,-])/i;
+
+/**
+ * "Stable" isn't a condition: added, it records that another creature stabilized the dying hero (SRD 5.2.1 Stabilizing
+ * a Character), the detail saying how. With a detail it means that only at 0 HP: a hero with HP keeps a homebrew effect
+ * so named ("Stable Footing").
+ */
+function addStable(c: Character, name: string, matched: string, cond: { source?: string; duration?: string }): EngineResult {
+  const detail = name.slice(matched.length).replace(/^[\s(:,-]+|[\s)]+$/g, '');
+  if (detail && c.hp.current > 0) return addCondition(c, { id: name, ...defined({ source: cond.source, duration: cond.duration }) });
+  return stabilize(c, cond.source ?? (detail || undefined));
+}
+
+/** Removing "Stable" changes nothing and says why; a homebrew condition by that name (an older save's) is removed. */
+function removeStable(c: Character, name: string): EngineResult {
+  if (!c.deathSaves.stable || c.conditions.some((x) => conditionKey(x.id) === conditionKey(name))) return removeCondition(c, name);
+  const message =
+    "Stable isn't a condition to remove: the hero stays Stable until damage starts the death saves again or healing brings them back (a mark made by mistake: the player can clear it with the death-save marks on their sheet).";
+  return { character: c, events: [{ type: 'warning', message }] };
+}
+
 /**
  * The engine gets the DM's own name and matches it strictly: "Poisoned" or "Frightened of the dragon" is that
  * condition (the detail its source), while "Protection from Poison" stays a homebrew condition by that name.
@@ -555,21 +578,23 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
 function conditionSteps(input: ToolInput<'update_character'>): ((c: Character) => EngineResult)[] {
   const steps: ((c: Character) => EngineResult)[] = [];
   let exhaustion = input.exhaustion_change ?? 0;
-  for (const name of input.conditions_remove ?? []) {
+  for (const raw of input.conditions_remove ?? []) {
+    const name = raw.trim();
     if (isExhaustion(name)) exhaustion -= 1;
-    else steps.push((c) => removeCondition(c, name.trim()));
+    else steps.push((c) => (STABLE_NAME.test(name) ? removeStable(c, name) : removeCondition(c, name)));
   }
   for (const cond of input.conditions_add ?? []) {
     if (isExhaustion(cond.condition)) {
       exhaustion += 1;
       continue;
     }
-    // "Stable" isn't a condition: it records that another creature stabilized the dying hero (SRD 5.2.1).
-    if (/^(?:stable|stabili[sz]ed)$/i.test(cond.condition.trim())) {
-      steps.push((c) => stabilize(c, cond.source));
+    const name = cond.condition.trim();
+    const stable = STABLE_NAME.exec(name);
+    if (stable) {
+      steps.push((c) => addStable(c, name, stable[0], cond));
       continue;
     }
-    steps.push((c) => addCondition(c, { id: cond.condition.trim(), ...defined({ source: cond.source, duration: cond.duration }) }));
+    steps.push((c) => addCondition(c, { id: name, ...defined({ source: cond.source, duration: cond.duration }) }));
   }
   if (exhaustion !== 0) steps.push((c) => changeExhaustion(c, exhaustion));
   return steps;

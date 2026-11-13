@@ -130,6 +130,15 @@ describe('RollPromptDialog — physical dice', () => {
     expect(onResolve.mock.calls[0][0].result).toMatchObject({ natural: 9 });
   });
 
+  it('after Heroic Inspiration in the Luck reroll, asks for the Inspiration reroll instead', async () => {
+    const { user } = renderPrompt({ ...interaction({ advantage: 'disadvantage' }), luck: true }, 'physical', { inspiration: true });
+    await user.type(screen.getByLabelText('Your d20'), '1');
+    await user.click(screen.getByRole('button', { name: 'Use this roll' }));
+    await user.click(screen.getByRole('button', { name: REROLL }));
+    expect(screen.getByText('Reroll one of your two d20s (the lower one), then enter the lower of the two.')).toBeInTheDocument();
+    expect(screen.queryByText(/^Luck:/)).not.toBeInTheDocument();
+  });
+
   it('rejects numbers a d20 cannot show', async () => {
     const { onResolve, user } = renderPrompt(interaction({ advantage: 'disadvantage' }));
     expect(screen.getByText('Disadvantage: roll two d20s and enter the lower.')).toBeInTheDocument();
@@ -315,7 +324,7 @@ describe('RollPromptDialog — Heroic Inspiration', () => {
     });
     expect(spies.updateCharacter).toHaveBeenCalledTimes(1);
     expect(spies.queueDmNotice).toHaveBeenCalledWith(
-      'Player spent Heroic Inspiration to reroll Stealth check (DEX): the first roll (7) was replaced by the reroll (20), which stands.',
+      'Player spent Heroic Inspiration to reroll Stealth check (DEX): the first roll (7) was replaced by the reroll (20).',
     );
   });
 
@@ -373,7 +382,7 @@ describe('RollPromptDialog — Heroic Inspiration', () => {
     });
     expect(useGame.getState().character?.heroicInspiration).toBe(false);
     expect(spies.queueDmNotice).toHaveBeenCalledWith(
-      'Player spent Heroic Inspiration to reroll Stealth check (DEX): the first roll (5) was replaced by the reroll (17), which stands.',
+      'Player spent Heroic Inspiration to reroll Stealth check (DEX): the first roll (5) was replaced by the reroll (17).',
     );
   });
 

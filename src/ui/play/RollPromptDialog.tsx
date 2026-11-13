@@ -54,7 +54,7 @@ function spendHeroicInspiration(label: string, first: D20TestResult, reroll: D20
     toast.error(`Couldn't save the spent Heroic Inspiration: ${errorMessage(err)}`),
   );
   queueDmNotice(
-    `Player spent Heroic Inspiration to reroll ${label}: the first roll (${first.total}) was replaced by the reroll (${reroll.total}), which stands.`,
+    `Player spent Heroic Inspiration to reroll ${label}: the first roll (${first.total}) was replaced by the reroll (${reroll.total}).`,
   );
 }
 

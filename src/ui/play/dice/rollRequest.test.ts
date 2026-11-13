@@ -6,6 +6,7 @@ import {
   diceExpression,
   effectiveDc,
   formatParts,
+  luckRerollInstructions,
   modifierParts,
   physicalInstructions,
   rollKind,
@@ -72,6 +73,13 @@ describe('roll request helpers', () => {
       'Roll 2d6+3 and enter the total, including the +3.',
     );
     expect(physicalInstructions(req({ rollType: 'hit-die' }), '1d8')).toBe('Roll 1d8 and enter the total.');
+  });
+
+  it('asks for only the d20 that showed 1 on a Luck reroll (SRD 5.2.1 Halfling: Luck)', () => {
+    expect(luckRerollInstructions(req({}))).toBe('Luck: roll your d20 again and enter the new number.');
+    // With Advantage the kept d20 is a 1 only when both were.
+    expect(luckRerollInstructions(req({ advantage: 'advantage' }))).toBe('Luck: both d20s showed 1. Roll one of them again and enter the new number.');
+    expect(luckRerollInstructions(req({ advantage: 'disadvantage' }))).toBe('Luck: roll the d20 that showed 1 again, then enter the lower of your two d20s.');
   });
 
   it('applies natural 20 / natural 1 to attack rolls', () => {

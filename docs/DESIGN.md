@@ -263,11 +263,12 @@ standard rules, and the result says so and how to apply the standard one. `take_
 below 1 HP before logging anything or opening the Hit Dice dialog, and points to the SRD's way back: death saving
 throws for a dying hero, 1 HP after 1d4 hours for a Stable one. When another creature stabilizes the hero (the Help
 action's Medicine check, a Healer's Kit, Spare the Dying), the DM marks it with `update_character` conditions_add
-"Stable" (the engine's `stabilize`: Stable, both tallies reset; "Stable" is never stored as a condition), and damage
-at 0 HP starts a Stable hero's tallies from zero however Stable was marked (the sheet's pips keep theirs). A
-Halfling's natural 1 on physical dice is rerolled in the same `request_player_roll` call (the dialog asks for the
-d20 that showed 1), so a death save records only the new roll; and every d20 result names Exhaustion when it is in
-the total.
+"Stable" ("Stabilized", or either with a detail that says how, such as "Stable (Healer's Kit)"): the engine's
+`stabilize` makes them Stable with both tallies reset, and no condition is stored (a hero with HP keeps a homebrew
+effect so named, such as "Stable Footing"); removing "Stable" changes nothing and says why. Damage at 0 HP starts a
+Stable hero's tallies from zero however Stable was marked (the sheet's pips keep theirs). A Halfling's natural 1 on
+physical dice is rerolled in the same `request_player_roll` call (the dialog asks for the d20 that showed 1), so a
+death save records only the new roll; and every d20 result names Exhaustion when it is in the total.
 
 ### Player-side controls that talk to the DM
 
@@ -707,8 +708,9 @@ Invariants, checked in CI (the definition of done):
   "Bonuses" line (and its exceptions in the order of truth and table talk), an exact Advantage line (what the app
   applies to the hero's rolls; cover isn't Advantage), free castings and rituals beside spell slots, extra damage in a
   sheet attack's `expression`, damage to the hero passed before the Defenses line's resistances, item charges kept as
-  a feature with uses, rulings that name an item, rulings kept when homebrew is off, and a missed tool call made late
-  and said aloud; and the Saving throws line names what every save includes (a Ring or Cloak of Protection, Aura of
+  a feature with uses, rulings that name an item, rulings kept when homebrew is off, a missed tool call made late
+  and said aloud, and the Dying line's stabilization by another creature (`update_character` conditions_add "Stable",
+  then 1 HP after 1d4 hours); and the Saving throws line names what every save includes (a Ring or Cloak of Protection, Aura of
   Protection), so those sheets and the prompt differ.
 - **One deliberate `DM_TOOLS` change** in this release (above), reviewed with its cost; otherwise
   `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).

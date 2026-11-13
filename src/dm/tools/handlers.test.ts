@@ -221,6 +221,7 @@ describe("request_player_roll: the hero's own conditions, traits and features", 
       ...c,
       hp: { ...c.hp, current: 0 },
       deathSaves: { successes: 0, failures: 1, stable: false, dead: false },
+      heroicInspiration: true,
       features: [...c.features, { id: 'f-luck', name: 'Luck', description: 'Reroll natural 1s.', source: 'species', sourceName: 'Halfling' }],
     }));
     const faces = [1, 15, 1, 1];
@@ -228,6 +229,8 @@ describe("request_player_roll: the hero's own conditions, traits and features", 
     autoRespond(h.store, (req) => {
       if (req.kind !== 'roll') return null;
       asked.push({ label: req.label, luck: req.luck });
+      // The player spends Heroic Inspiration in the Luck dialog (the dialog spends it through the store first).
+      if (req.luck && asked.length === 2) void h.s().updateCharacter((c) => ({ ...c, heroicInspiration: false }));
       return { kind: 'roll', response: { result: dialogRoll(faces.shift() ?? 10, req.modifier, req.request.dc), manual: true } };
     });
     const out = await h.run('request_player_roll', { roll_type: 'death-save', reason: 'Cling to life' });
@@ -236,6 +239,7 @@ describe("request_player_roll: the hero's own conditions, traits and features", 
     expect(asked[1]).toMatchObject({ luck: true });
     expect(asked[1].label).toMatch(/Luck reroll$/);
     expect(out.content).toContain('The player rerolled the 1 on their physical dice; the result above is the new roll.');
+    expect(out.content).toMatch(/spent Heroic Inspiration to reroll/);
     expect(h.s().character?.deathSaves).toMatchObject({ successes: 1, failures: 1, dead: false });
     expect(h.s().log.filter((e) => e.kind === 'roll')).toHaveLength(1);
     // A second 1 stands: Luck rerolls once, and the new roll must be used.
@@ -250,8 +254,12 @@ describe("request_player_roll: the hero's own conditions, traits and features", 
     await h.s().updateCharacter((c) => ({ ...c, exhaustion: 2 }));
     const out = await h.run('request_player_roll', { roll_type: 'save', ability: 'dex', dc: 10, reason: 'Dodge' });
     expect(out.content).toContain('The total includes Exhaustion 2 (−4 to D20 Tests).');
+    // A death save is a D20 Test too (its modifier carries the penalty).
     fakeDice.queue(12);
-    await h.s().updateCharacter((c) => ({ ...c, exhaustion: 0 }));
+    await h.s().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 0 } }));
+    expect((await h.run('request_player_roll', { roll_type: 'death-save', reason: 'Cling to life' })).content).toContain('The total includes Exhaustion 2 (−4 to D20 Tests).');
+    fakeDice.queue(12);
+    await h.s().updateCharacter((c) => ({ ...c, exhaustion: 0, hp: { ...c.hp, current: c.hp.max } }));
     expect((await h.run('request_player_roll', { roll_type: 'save', ability: 'dex', dc: 10, reason: 'Dodge' })).content).not.toContain('Exhaustion');
   });
 
@@ -275,6 +283,27 @@ describe('update_character', () => {
     expect(out.content).toContain('Not stabilized.');
     expect(h.s().character?.conditions).toEqual([]);
     expect(h.s().character?.deathSaves.stable).toBe(false);
+    // A hero with HP keeps a homebrew effect whose name starts with the word.
+    await h.run('update_character', { conditions_add: [{ condition: 'Stable Footing', source: 'Boots of the Mire' }], reason: 'Boots' });
+    expect(h.s().character?.conditions.map((c) => c.id)).toEqual(['Stable Footing']);
+  });
+
+  it('marks the dying hero Stable however the DM words it, the detail saying how, and removing it changes nothing', async () => {
+    for (const [condition, how] of [
+      ["Stable (Healer's Kit)", "Healer's Kit"],
+      ['Stabilized by Brother Aldo', 'by Brother Aldo'],
+      ['stabilised', undefined],
+    ] as const) {
+      const h = setup();
+      await h.s().updateCharacter((c) => ({ ...c, hp: { ...c.hp, current: 0 }, deathSaves: { successes: 1, failures: 2, stable: false, dead: false }, conditions: [{ id: 'unconscious' }] }));
+      const out = await h.run('update_character', { conditions_add: [{ condition }], reason: 'An ally' });
+      expect(out.content).toContain(how ? `Stabilized (${how}): Stable at 0 HP.` : 'Stabilized: Stable at 0 HP.');
+      expect(h.s().character?.deathSaves).toEqual({ successes: 0, failures: 0, stable: true, dead: false });
+      expect(h.s().character?.conditions.map((c) => c.id)).toEqual(['unconscious']);
+      const removed = await h.run('update_character', { conditions_remove: ['Stable'], reason: 'Undo' });
+      expect(removed.content).toContain("Stable isn't a condition to remove: the hero stays Stable until damage starts the death saves again");
+      expect(h.s().character?.deathSaves.stable).toBe(true);
+    }
   });
 
   it('applies batched sections in one update and logs one line per section', async () => {
