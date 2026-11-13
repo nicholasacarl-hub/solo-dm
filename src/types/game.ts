@@ -64,6 +64,7 @@ export interface Combatant {
   isPlayer: boolean;
   initiative: number;
   initiativeBonus: number;
+  /** The hero's is the sheet's AC when the fight started: show Character.armorClass instead, which stays current. */
   ac?: number;
   /** Undefined for the player character. */
   hp?: HitPoints;
@@ -505,7 +506,15 @@ export interface ShortRestResponse {
 }
 
 export type InteractionRequest =
-  | { kind: 'roll'; id: string; request: PlayerRollRequest; modifier: number; label: string }
+  | {
+      kind: 'roll';
+      id: string;
+      request: PlayerRollRequest;
+      modifier: number;
+      label: string;
+      /** Halfling Luck on physical dice: the player rerolls the d20 that showed 1 (SRD 5.2.1 Halfling). */
+      luck?: boolean;
+    }
   | { kind: 'short-rest'; id: string; hitDice: HitDiceEntry[]; conMod: number; reason?: string }
   | { kind: 'confirm'; id: string; title: string; body: string; confirmLabel?: string; cancelLabel?: string };
 

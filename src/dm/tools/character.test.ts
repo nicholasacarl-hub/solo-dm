@@ -317,6 +317,67 @@ describe('what the DM reads back about AC and saves after its own changes', () =
   });
 });
 
+describe("conditions by the DM's own name (SRD 5.2.1 Rules Glossary conditions)", () => {
+  const KEPT = 'Kept "Protection from Poison" as a homebrew condition: no Poisoned rules apply. To apply Poisoned, add "Poisoned".';
+
+  it('keeps a name with a condition word inside it as a homebrew condition, and tells the DM (not the player) no rules of it apply', async () => {
+    const h = setup();
+    const out = await h.run('update_character', { conditions_add: [{ condition: 'Protection from Poison', source: 'spell', duration: '1 hour' }] });
+    expect(h.sheet().conditions).toEqual([{ id: 'Protection from Poison', source: 'spell', duration: '1 hour' }]);
+    expect(out.content).toContain(`Now Protection from Poison (1 hour, spell)\n${KEPT}\nStatus:`);
+    expect(JSON.stringify(h.s().log)).not.toContain('Kept');
+  });
+
+  it('leaves a real Charmed alone: a boon named for a charm goes beside it, past an immunity to Charmed, and is removed by its name', async () => {
+    const h = setup({ character: sampleCharacter({ conditions: [{ id: 'charmed', source: 'Vampire' }] }) });
+    await h.run('update_character', { conditions_add: [{ condition: 'Charm of Warding', source: 'Fey blessing' }] });
+    expect(h.sheet().conditions).toEqual([{ id: 'charmed', source: 'Vampire' }, { id: 'Charm of Warding', source: 'Fey blessing' }]);
+    await h.run('update_character', { conditions_remove: ['Charm of Warding'] });
+    expect(h.sheet().conditions).toEqual([{ id: 'charmed', source: 'Vampire' }]);
+
+    const immune = setup({ character: sampleCharacter({ conditionImmunities: ['charmed'] }) });
+    await immune.run('update_character', { conditions_add: [{ condition: 'Charm of Warding' }] });
+    expect(immune.sheet().conditions).toEqual([{ id: 'Charm of Warding' }]);
+  });
+
+  it('never reads a boon that mentions Exhaustion as levels of it (SRD 5.2.1 Exhaustion: six levels kill)', async () => {
+    const h = setup();
+    const out = await h.run('update_character', { conditions_add: [{ condition: 'Ward against Exhaustion', source: 'Fey boon' }] });
+    expect(h.sheet().exhaustion).toBe(0);
+    expect(h.sheet().conditions).toEqual([{ id: 'Ward against Exhaustion', source: 'Fey boon' }]);
+    expect(out.content).toContain('Kept "Ward against Exhaustion" as a homebrew condition: no Exhaustion rules apply.');
+    await h.run('update_character', { conditions_remove: ['Ward against Exhaustion'] });
+    expect(h.sheet().conditions).toEqual([]);
+    expect(h.sheet().exhaustion).toBe(0);
+  });
+
+  it('keeps what worked: standard names in any case, their noun forms, a detail as the source, Exhaustion, removal by name', async () => {
+    const h = setup();
+    const out = await h.run('update_character', {
+      conditions_add: [
+        { condition: 'Poisoned' },
+        { condition: 'blindness' },
+        { condition: 'Frightened of the dragon' },
+        { condition: 'Exhausted (forced march)' },
+        { condition: 'Exhaustion 2' },
+      ],
+    });
+    expect(h.sheet().conditions).toEqual([{ id: 'poisoned' }, { id: 'blinded' }, { id: 'frightened', source: 'of the dragon' }]);
+    expect(h.sheet().exhaustion).toBe(2);
+    expect(out.content).not.toContain('Kept');
+    await h.run('update_character', { conditions_remove: ['poisoned', 'Blindness', 'Frightened', 'Exhaustion'] });
+    expect(h.sheet().conditions).toEqual([]);
+    expect(h.sheet().exhaustion).toBe(1);
+  });
+
+  it('says nothing of a homebrew name when the engine refused the condition', async () => {
+    const h = setup({ character: sampleCharacter({ hp: { max: 17, current: 0, temp: 0 }, deathSaves: { successes: 0, failures: 3, stable: false, dead: true } }) });
+    const out = await h.run('update_character', { conditions_add: [{ condition: 'Protection from Poison' }] });
+    expect(out.content).toContain("Warning: The dead don't gain conditions.");
+    expect(out.content).not.toContain('Kept');
+  });
+});
+
 describe('get_character_sheet', () => {
   // Invented: three paragraphs of backstory and long ideals, past the old 500- and 200-character cuts.
   const BACKSTORY = [

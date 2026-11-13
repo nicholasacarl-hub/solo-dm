@@ -27,6 +27,7 @@ import {
   setConcentration,
   setHeroicInspiration,
   setTempHp,
+  stabilize,
   totalGp,
   updateItem,
   useFeature,
@@ -112,6 +113,14 @@ describe('applyDamage', () => {
     expect(events[0].message).toMatch(/No longer Stable/);
   });
 
+  it("starts a Stable character's tallies from zero when damage sets them dying again, however Stable was marked (SRD 5.2.1 Death Saving Throws)", () => {
+    // The sheet's pips mark Stable at the third success without resetting the tallies.
+    const ticked = { ...dying(), deathSaves: { successes: 3, failures: 2, stable: true, dead: false } };
+    const { character } = applyDamage(ticked, 2);
+    expect(character.deathSaves).toEqual({ successes: 0, failures: 1, stable: false, dead: false });
+    expect(applyDamage(ticked, 2, { critical: true }).character.deathSaves).toEqual({ successes: 0, failures: 2, stable: false, dead: false });
+  });
+
   it('warns about Concentration checks and ignores damage to the dead', () => {
     const c = mira({ spellcasting: { ...mira().spellcasting!, concentratingOn: 'Detect Magic' } });
     const { events } = applyDamage(c, 5);
@@ -163,6 +172,30 @@ describe('applyHealing and temporary HP', () => {
     const { character } = setTempHp(dying(), 5);
     expect(character.hp.current).toBe(0);
     expect(ids(character)).toContain('unconscious');
+  });
+});
+
+describe('stabilize (SRD 5.2.1 Stabilizing a Character)', () => {
+  it('makes a dying hero Stable at 0 HP, still Unconscious, with both tallies reset', () => {
+    const down = { ...dying(), deathSaves: { successes: 1, failures: 2, stable: false, dead: false } };
+    const { character, events } = stabilize(down, 'Spare the Dying');
+    expect(character.deathSaves).toEqual({ successes: 0, failures: 0, stable: true, dead: false });
+    expect(character.hp.current).toBe(0);
+    expect(character.conditions).toEqual(down.conditions);
+    expect(events).toEqual([{ type: 'stabilized', message: 'Stabilized (Spare the Dying): Stable at 0 HP (still Unconscious), no more death saving throws unless damaged again.' }]);
+    // No more death saves, and damage starts them again from zero.
+    expect(recordDeathSave(character, 3).outcome).toBe('stable');
+    expect(applyDamage(character, 2).character.deathSaves).toEqual({ successes: 0, failures: 1, stable: false, dead: false });
+  });
+
+  it('changes nothing for a hero with HP, the dead or one already Stable', () => {
+    const dead = { ...dying(), deathSaves: { successes: 0, failures: 3, stable: false, dead: true } };
+    const stable = { ...dying(), deathSaves: { successes: 0, failures: 0, stable: true, dead: false } };
+    for (const c of [mira(), dead, stable]) {
+      const out = stabilize(c);
+      expect(out.character).toBe(c);
+      expect(out.events.map((e) => e.type)).toEqual(['warning']);
+    }
   });
 });
 

@@ -2,7 +2,8 @@
  * The 2024 conditions (SRD 5.2.1 Rules Glossary), summarized for the sheet and the DM.
  * Effects are paraphrased from the glossary entries.
  */
-import { CONDITION_IDS, type ConditionId } from '@/types';
+import { safeEnd } from '@/lib/text';
+import { CONDITION_IDS, type ActiveCondition, type ConditionId } from '@/types';
 
 export interface ConditionInfo {
   id: ConditionId;
@@ -213,7 +214,11 @@ const SYNONYMS: ReadonlyArray<[RegExp, ConditionId]> = [
   [/\bstun(?:ned)?\b/, 'stunned'],
 ];
 
-/** Map free text ("Poisoned", "knocked prone") to a standard condition id, or null. */
+/**
+ * The standard condition whose word appears anywhere in free text ("Protection from Poison": poisoned), or null.
+ * Too loose to decide what a name is (adding and removing use matchStandardCondition); it spots the condition word
+ * in a name that stays homebrew, so the DM can be told no rules of that condition apply.
+ */
 export function normalizeConditionId(input: string): ConditionId | null {
   const text = (typeof input === 'string' ? input : '').toLowerCase().replace(/[_-]+/g, ' ').trim();
   if (!text) return null;
@@ -226,11 +231,16 @@ export function normalizeConditionId(input: string): ConditionId | null {
   return best?.id ?? null;
 }
 
-/** Whole-input aliases accepted when adding or removing conditions. */
+/**
+ * Whole-input aliases accepted when adding or removing conditions, among them the noun and adjective forms a DM
+ * writes for a condition ("Blindness", "Sleeping", "Terrified").
+ */
 const ALIASES: Record<string, ConditionId> = {
   blind: 'blinded',
+  blindness: 'blinded',
   charm: 'charmed',
   deaf: 'deafened',
+  deafness: 'deafened',
   exhausted: 'exhaustion',
   fatigue: 'exhaustion',
   fatigued: 'exhaustion',
@@ -238,6 +248,7 @@ const ALIASES: Record<string, ConditionId> = {
   scared: 'frightened',
   fear: 'frightened',
   frighten: 'frightened',
+  terrified: 'frightened',
   grapple: 'grappled',
   grabbed: 'grappled',
   incapacitate: 'incapacitated',
@@ -245,10 +256,13 @@ const ALIASES: Record<string, ConditionId> = {
   paralysis: 'paralyzed',
   paralysed: 'paralyzed',
   petrify: 'petrified',
+  petrification: 'petrified',
   poison: 'poisoned',
   restrain: 'restrained',
   stun: 'stunned',
   asleep: 'unconscious',
+  sleeping: 'unconscious',
+  unconsciousness: 'unconscious',
   'knocked out': 'unconscious',
   'knocked unconscious': 'unconscious',
   'knocked prone': 'prone',
@@ -256,18 +270,27 @@ const ALIASES: Record<string, ConditionId> = {
 };
 
 /**
+ * Words that start a condition with a detail after them: each condition's name ("Frightened of the dragon"), and
+ * "exhausted", the usual way to write Exhaustion with its cause ("Exhausted (forced march)").
+ */
+const LEADING_WORDS: ReadonlyArray<readonly [string, ConditionId]> = [
+  ...CONDITION_IDS.map((id) => [id, id] as const),
+  ['exhausted', 'exhaustion'],
+];
+
+/**
  * Stricter than normalizeConditionId, for adding/removing conditions: the input must BE a condition
- * ("Poisoned", "knocked prone") or start with a condition's full name ("Frightened of the dragon"),
- * so homebrew names like "Poison Mist" stay homebrew. `detail` is any trailing text.
+ * ("Poisoned", "knocked prone") or start with a condition's full name ("Frightened of the dragon") or
+ * "Exhausted", so homebrew names like "Poison Mist" stay homebrew. `detail` is any trailing text.
  */
 export function matchStandardCondition(input: string): { id: ConditionId; detail: string } | null {
   const key = (typeof input === 'string' ? input : '').toLowerCase().replace(/[_]+/g, ' ').replace(/\s+/g, ' ').trim();
   if (!key) return null;
   if (STANDARD.has(key)) return { id: key as ConditionId, detail: '' };
   if (ALIASES[key]) return { id: ALIASES[key], detail: '' };
-  for (const id of CONDITION_IDS) {
-    if (key.startsWith(id) && /^[\s(:,-]/.test(key.slice(id.length))) {
-      const detail = input.trim().slice(id.length).replace(/^[\s(:,-]+|[\s)]+$/g, '');
+  for (const [word, id] of LEADING_WORDS) {
+    if (key.startsWith(word) && /^[\s(:,-]/.test(key.slice(word.length))) {
+      const detail = input.trim().slice(word.length).replace(/^[\s(:,-]+|[\s)]+$/g, '');
       return { id, detail };
     }
   }
@@ -288,4 +311,28 @@ export function conditionName(id: string): string {
   if (!raw) return 'Unknown condition';
   // Keep the author's casing for homebrew names; otherwise capitalize the first letter.
   return /[A-Z]/.test(raw) ? raw : raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+/** About the most of a condition's duration, and of its source, that a line for the DM shows. */
+const DETAIL_MAX = 60;
+
+/** The text on one line; past `max`, cut at a word end when there is one, and never inside an emoji. */
+function clipped(text: string, max: number): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  if (flat.length <= max) return flat;
+  const head = flat.slice(0, safeEnd(flat, max - 1));
+  const space = flat[head.length] === ' ' ? head.length : head.lastIndexOf(' ');
+  return `${(space > max * 0.6 ? head.slice(0, space) : head).trimEnd()}…`;
+}
+
+/**
+ * " (until the end of your next turn; Ghost)": the duration and source a condition was set with, for the DM's
+ * lines (a status line, the sheet, the combat summary), so turns after the one that set it still know how it ends
+ * (SRD 5.2.1 srd:rule:condition: various rules define how a condition ends). Each part is one line, clipped to about
+ * DETAIL_MAX characters. "" when it has neither, and for Exhaustion, whose level is what its line shows.
+ */
+export function conditionDetails(condition: ActiveCondition): string {
+  if (conditionKey(condition.id) === 'exhaustion') return '';
+  const parts = [condition.duration, condition.source].flatMap((p) => (typeof p === 'string' && p.trim() ? [clipped(p, DETAIL_MAX)] : []));
+  return parts.length ? ` (${parts.join('; ')})` : '';
 }

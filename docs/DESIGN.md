@@ -85,20 +85,29 @@ preserved thinking valid.
 **The hero's sheet** (`characterSheetText`, src/engine/summary.ts) is one rendering for the frozen
 prompt's snapshot and `get_character_sheet`. The numbers are compact; every text is whole: what the
 player wrote (traits, ideals, bonds, flaws, appearance, backstory, notes), each feature's rules text, a
-transformation's summary and way back, the description of an item no rules entry describes (a custom
-item, or the DM's words on a book's item, wrapped like copied text) and a spell's notes (the DM's, or the
-builder's on a feat's or species' spell). Numbers name their sources where a condition may matter: the AC formula
+transformation's summary and way back, an item's description wherever the app didn't write it (a custom
+item, the DM's words on an SRD magic item or a homebrew item, or the DM's words on a book's item, wrapped like
+copied text; non-magic SRD gear carries the SRD's own text, left to `get_entry`) and a spell's notes (the DM's, or the
+builder's on a feat's or species' spell). A book's item linked without the DM's words gets a line naming the book and
+`get_entry`, then the app's numbers-only line (`describeOption`), so the sheet says which items to read. Numbers name their sources where a condition may matter: the AC formula
 names each item it counts, the Saving throws line what every save includes (`saveBonusSources`: a Ring or Cloak of
 Protection, an item's bonus the app read as always on, Aura of Protection), and an active item's attack and damage
-bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Magic items")
-leave the rest to the DM: a bonus an item's text gives only sometimes, a condition that stops a counted one, those
+bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Bonuses") say
+the app counts only what the sheet names (attack ability and proficiency, the AC formula, the Saving throws line, the
+Skills line's totals (Thaumaturge and Magician included), the Defenses line, the Advantage sources the Advantage line
+lists) and leave the rest to the DM: the Proficiency Bonus a hero lacks with an off-sheet weapon, cover, a fighting style,
+a spell such as Bless, and for items a bonus an item's text gives only sometimes, a condition that stops a counted one, those
 attack and damage bonuses, and any bonus of an SRD or homebrew item (the app reads no text there; it counts only the
-Ring and Cloak of Protection, Bracers of Defense and a "+N" armor or shield by name), applied by adjusting the AC or DC it passes (and the damage it applies) and told to the
-player in a line; the order of truth says an item's own text (or a recorded ruling) beats a number the app worked
+Ring and Cloak of Protection, Bracers of Defense and a "+N" armor or shield by name), applied by adjusting the AC or
+DC it passes (extra damage goes in the damage roll's `expression`; a die such as Bless's is rolled first) and told to
+the player in a line; the order of truth says an item's own text (or a recorded ruling) beats a number the app worked
 out from it, and the player's inventory says the DM adds those bonuses, so nobody adds them twice. An AC the DM sets
 by hand (`armor_class`, for Mage Armor) gets the formula "set by the DM: <reason>" rather than keeping the old one's
 items, and a change in what every save includes is announced in the tool's result and in the player's equip and
 attune notices ("saving throws now include …"), since the frozen sheet's line dates from the start of the session.
+Those notices, and removing an item from the sheet (which keeps the AC in step as unequipping it would), end with
+`syncArmorClass`'s warning when it keeps an AC set by hand or meets armor it can't identify; the player, who can't set
+the AC on the sheet, gets a plain toast ("Your AC stays 15: … your DM will be told"), and the AC stays the DM's to set.
 Paragraphs and lists are kept and indented under their bullet; a Markdown heading inside a field
 becomes a bold line, so it can't pass for a section of the sheet. A field is cut only past 20,000
 characters (`SHEET_TEXT_MAX`, far above any real sheet: the longest SRD feature is about 4,300, Wizard
@@ -156,7 +165,7 @@ tool_result so Claude can correct itself.
 | `resolve_area` | Areas of effect (sphere, cylinder, cone, line, cube, emanation, listed squares): who is caught, with cover; lasting areas become terrain (difficult, obscured, hazard). |
 | `check_map` | Read-only: measure distance, line of sight and cover, plan a path, preview an area, or draw the map. |
 | `lookup_rules` | Search SRD 5.2.1 + enabled imports + homebrew. |
-| `get_entry` | Full text of one spell / monster / item / feature by name (reviewed imports add their stats line; other entries with the same name are listed). |
+| `get_entry` | Full text of one spell / monster / item / feature by name (reviewed imports add their stats line; other entries with the same name are listed). Up to 20,000 characters (`SHEET_TEXT_MAX`); a longer entry says how much didn't fit, to rule from what is there. |
 | `get_character_sheet` | Full current sheet. |
 | `create_homebrew` / `update_homebrew` | Create or modify homebrew (refused when the campaign disables homebrew). |
 | `update_journal` | Upsert NPCs, locations, factions, lore, secrets (DM-only when `secret`). |
@@ -241,6 +250,26 @@ The `<game_state>` block appended to each player message contains: the character
 the scene, the combat summary (if any), open clocks, and **entity cards** — short journal entries
 for any known NPC / place / faction / item whose name (or tag alias) appears in the player's message
 or in the DM's previous narration. This is cheap retrieval that prevents contradictions.
+
+The combat summary (here, in combat tool results and in the frozen prompt's combat section) and the player's tracker
+show the hero's AC from the sheet, never the copy `start_combat` stored, so Shield of Faith or Mage Armor mid-fight
+shows at once. Conditions show the duration and source the DM gave them ("Frightened (until the end of your next
+turn; Ghost)", each part clipped near 60 characters) on the status line, the sheet and the DM's combat lines;
+update_combat's log lines and the player's tracker keep a creature's conditions bare, so a source can't name a
+hidden creature (the hero's own conditions show their duration and source on the player's sheet and in the log line
+that sets them). A condition name is matched strictly (with whole-input aliases such as "blindness" and "exhausted
+…"): an effect the DM names itself ("Protection from Poison", "Charm of Warding") stays its own condition with no
+standard rules, and the result says so and how to apply the standard one. `take_rest` refuses a dead hero or one
+below 1 HP before logging anything or opening the Hit Dice dialog, and points to the SRD's way back: death saving
+throws for a dying hero, 1 HP after 1d4 hours for a Stable one. When another creature stabilizes the hero (the Help
+action's Medicine check, a Healer's Kit, Spare the Dying), the DM marks it with `update_character` conditions_add
+"Stable" ("Stabilized", or either with a detail that says how, such as "Stable (Healer's Kit)"): the engine's
+`stabilize` makes them Stable with both tallies reset, and no condition is stored (a hero with HP keeps a homebrew
+effect so named, such as "Stable Footing", and the DM is told it marks no stabilization); removing "Stable" changes
+nothing and says why (an older save's homebrew "Stable" is still removed). Damage at 0 HP starts a Stable hero's
+tallies from zero however Stable was marked (the sheet's pips keep theirs). A Halfling's natural 1 on physical dice
+is rerolled in the same `request_player_roll` call (the dialog asks for the d20 that showed 1), so a death save
+records only the new roll; and every d20 result names Exhaustion when it is in the total.
 
 ### Player-side controls that talk to the DM
 
@@ -677,8 +706,13 @@ Invariants, checked in CI (the definition of done):
   are byte-identical to before (`src/dm/requestBytes.test.ts` pins the request bytes). The sheet has
   since carried long text whole (above); a sheet whose texts are all one line and within the old
   limits reads byte for byte as before (`sheet-srd-character.md`). The DM instructions have since gained the
-  "Magic items" line (and its exceptions in the order of truth and table talk), and the Saving throws line names
-  what every save includes (a Ring or Cloak of Protection, Aura of Protection), so those sheets and the prompt differ.
+  "Bonuses" line (and its exceptions in the order of truth and table talk), an exact Advantage line (what the app
+  applies to the hero's rolls; cover isn't Advantage), free castings and rituals beside spell slots, extra damage in a
+  sheet attack's `expression`, damage to the hero passed before the Defenses line's resistances, item charges kept as
+  a feature with uses, rulings that name an item, rulings kept when homebrew is off, a missed tool call made late
+  and said aloud, and the Dying line's stabilization by another creature (`update_character` conditions_add "Stable",
+  then 1 HP after 1d4 hours); and the Saving throws line names what every save includes (a Ring or Cloak of Protection, Aura of
+  Protection), so those sheets and the prompt differ.
 - **One deliberate `DM_TOOLS` change** in this release (above), reviewed with its cost; otherwise
   `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
 - **Privacy.** No marker sentence of the test book appears in any exported bundle (the e2e test). Every

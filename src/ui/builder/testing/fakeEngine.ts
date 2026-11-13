@@ -214,6 +214,8 @@ export const fakeEngine = {
   },
   effectiveSpeed: (c: Character) => Math.max(0, c.speed - 5 * c.exhaustion),
   computeArmorClass,
+  // The stored AC stays as it is here; sheetChanges.test.ts checks equip, attune and remove against the real engine.
+  syncArmorClass: (_before: Character, after: Character) => ({ character: after, events: [] as GameEvent[] }),
   saveSourcesChangeText: () => null,
   rollRequestModifier: (c: Character, req: { rollType: string; skill?: Skill; ability?: Ability; attackName?: string }) => {
     const penalty = -2 * c.exhaustion;

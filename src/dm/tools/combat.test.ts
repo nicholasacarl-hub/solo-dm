@@ -212,6 +212,58 @@ describe('update_combat: hidden creatures (D41)', () => {
   });
 });
 
+describe("update_combat conditions by the DM's own name (SRD 5.2.1 Rules Glossary conditions)", () => {
+  it('keeps a name with a condition word inside it as homebrew, tells the DM (not the player), and removes by name', async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    const out = await h.run('update_combat', {
+      action: 'conditions',
+      target: 'Bandit 1',
+      conditions_add: [{ condition: 'Mark of the Invisible Hand', source: 'Thieves guild tattoo' }, { condition: 'Blindness' }],
+    });
+    expect(named(h.s().combat, 'Bandit 1')?.conditions).toEqual([{ id: 'Mark of the Invisible Hand', source: 'Thieves guild tattoo' }, { id: 'blinded' }]);
+    expect(out.content).toContain(
+      'Bandit 1: +Mark of the Invisible Hand, +blinded\nKept "Mark of the Invisible Hand" as a homebrew condition: no Invisible rules apply. To apply Invisible, add "Invisible".\n',
+    );
+    expect(toolLines(h.s().log).at(-1)?.summary).toBe('Bandit 1: +Mark of the Invisible Hand, +blinded');
+    // Removals compare as the engine does: case aside, and a homebrew name never takes the condition it mentions.
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_add: [{ condition: 'Invisible' }] });
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_remove: ['mark of the invisible hand', 'BLINDED'] });
+    expect(named(h.s().combat, 'Bandit 1')?.conditions).toEqual([{ id: 'invisible' }]);
+  });
+
+  it('removes a name the creature has as named, before reading it as a standard condition', async () => {
+    const combat = sampleCombat();
+    // An older save's homebrew "Fear" beside a real Frightened ("Fear" names Frightened now).
+    combat.combatants[2].conditions = [{ id: 'Fear', source: 'older save' }, { id: 'frightened' }];
+    const h = setup({ state: { combat } });
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 2', conditions_remove: ['Fear'] });
+    expect(named(h.s().combat, 'Bandit 2')?.conditions).toEqual([{ id: 'frightened' }]);
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 2', conditions_remove: ['Fear'] });
+    expect(named(h.s().combat, 'Bandit 2')?.conditions).toEqual([]);
+  });
+
+  it("reports only what it removed, by the stored name: a name the creature doesn't have is a DM-only note, never the player's log", async () => {
+    const combat = sampleCombat();
+    combat.combatants[1].conditions = [{ id: 'unconscious', source: 'Sleep' }, { id: 'Hexed', source: 'the Hag hiding in the mist' }];
+    const h = setup({ state: { combat } });
+    const logged = () => toolLines(h.s().log).map((l) => l.summary);
+    // The DM's line prints "Hexed (the Hag hiding in the mist)": copied back, it still finds nothing, and says so to the DM only.
+    const out = await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_remove: ["KO'd", 'Hexed (the Hag hiding in the mist)'] });
+    expect(out.content).toContain('Bandit 1: no change');
+    expect(out.content).toContain(`Not removed: Bandit 1 has no "KO'd" (it has unconscious, Hexed).`);
+    expect(named(h.s().combat, 'Bandit 1')?.conditions).toHaveLength(2);
+    expect(logged()).toEqual([]);
+    // A mixed call logs only what it removed: the miss (with the DM's typed details) stays in the DM's result.
+    const mixed = await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_remove: ['Unconscious', 'Hexed (the Hag hiding in the mist)'] });
+    expect(mixed.content).toContain('Not removed: Bandit 1 has no "Hexed (the Hag hiding in the mist)" (it has unconscious, Hexed).');
+    expect(logged()).toEqual(['Bandit 1: −unconscious']);
+    // A name the creature has, typed any way, is removed and logged by its stored name, once.
+    await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_remove: ['hexed', 'HEXED'] });
+    expect(named(h.s().combat, 'Bandit 1')?.conditions).toEqual([]);
+    expect(logged().at(-1)).toBe('Bandit 1: −Hexed');
+  });
+});
+
 describe('update_combat on a battle map', () => {
   it('places newcomers where asked, or arriving at the edge farthest from the hero', async () => {
     const h = setup({ state: { combat: sampleMappedCombat() } });
@@ -385,6 +437,23 @@ describe('start_combat and update_combat add: numbers from the stat block (spec 
     expect(named(h.s().combat, 'Glimmerwing Drake')).toMatchObject({ ac: 17, hp: { max: 52 } });
     const bad = await h.run('update_combat', { action: 'add', combatant: { name: 'Lamp Wraith', side: 'enemy' } });
     expect(bad).toMatchObject({ isError: true });
+  });
+});
+
+describe("the hero's AC in combat results", () => {
+  it("is the sheet's after a mid-fight change (armor_class for Mage Armor), not the copy start_combat took", async () => {
+    const heroLine = (text = '') => text.split('\n').find((line) => line.includes('Mira Voss ·'));
+    fakeDice.queue(15, 11);
+    const h = setup();
+    const start = await h.run('start_combat', { combatants: [{ name: 'Bandit', side: 'enemy', ac: 12, hp_max: 11, initiative_bonus: 1 }] });
+    expect(heroLine(start.content)).toBe('▶ 17 Mira Voss · AC 12');
+    expect(heroLine(toolLines(h.s().log).find((l) => l.tool === 'start_combat')?.detail)).toBe('▶ 17 Mira Voss · AC 12');
+
+    await h.run('update_character', { armor_class: 15, reason: 'Mage Armor' });
+    const next = await h.run('update_combat', { action: 'next_turn' });
+    expect(heroLine(next.content)).toBe('  17 Mira Voss · AC 15');
+    // Nothing syncs the tracker's copy: every view reads the sheet.
+    expect(named(h.s().combat, 'Mira Voss')?.ac).toBe(12);
   });
 });
 

@@ -1,6 +1,6 @@
 /**
  * Inventory tab: items (quantity, equip, attune, remove), adding items, and the coin purse.
- * Equipping armor or a shield recomputes AC with the builder's equipment catalog (merged: the SRD plus
+ * Equipping or removing armor or a shield recomputes AC with the builder's equipment catalog (merged: the SRD plus
  * the player's books, so accepting a book's armor updates AC without a reload). Items from a book carry
  * their numbers (armor, bonuses, attunement) and show the book's text live from the rules index.
  */
@@ -56,7 +56,7 @@ function bonusLines(item: InventoryItem): string[] {
   const bonuses = item.bonuses;
   if (!bonuses) return [];
   const applied = describeBonuses({ ...bonuses, attack: undefined, damage: undefined });
-  // The app doesn't add these to the hero's rolls; the DM does (its "Magic items" rule), so the player mustn't add them too.
+  // The app doesn't add these to the hero's rolls; the DM does (its "Bonuses" rule), so the player mustn't add them too.
   const rolls = describeBonuses({ attack: bonuses.attack, damage: bonuses.damage }).map((t) => `${t} — your DM adds it`);
   return [...applied, ...rolls];
 }
@@ -198,7 +198,7 @@ function ItemRow({ item, editable, onEdit, catalog }: { item: InventoryItem; edi
             type="button"
             aria-label={confirming ? `Confirm removing ${item.name}` : `Remove ${item.name}`}
             title={confirming ? 'Click again to remove' : 'Remove'}
-            onClick={() => (confirming ? onEdit((c) => removeItemChange(c, item.id)) : setConfirming(true))}
+            onClick={() => (confirming ? onEdit((c) => removeItemChange(c, item.id, catalog)) : setConfirming(true))}
             className={cn(
               'grid h-8 shrink-0 place-items-center rounded-lg px-2 text-xs font-medium',
               confirming ? 'bg-danger text-white' : 'text-faint hover:bg-danger-soft hover:text-danger',

@@ -131,19 +131,24 @@ function damageLabel(amount: number, damageType?: string): string {
   return `${amount} ${damageType?.trim() || 'damage'}`;
 }
 
-/** Damage while already at 0 HP: one death-save failure (two on a critical hit); massive damage kills. */
+/**
+ * Damage while already at 0 HP: one death-save failure (two on a critical hit); massive damage kills. A Stable
+ * creature starts its tallies from zero (SRD 5.2.1 Death Saving Throws: both reset when it becomes Stable), even when
+ * the sheet's pips marked it Stable without resetting them.
+ */
 function damageAtZero(c: Character, amount: number, temp: number, label: string, critical: boolean): EngineResult {
+  const saves = c.deathSaves.stable ? { ...c.deathSaves, successes: 0, failures: 0 } : c.deathSaves;
   const added = critical ? 2 : 1;
-  const failures = Math.min(3, c.deathSaves.failures + added);
+  const failures = Math.min(3, saves.failures + added);
   const base = { ...c, hp: { ...c.hp, temp } };
   if (amount >= c.hp.max) {
-    return die(base, { ...c.deathSaves, failures, stable: false, dead: true }, `Took ${label} at 0 HP — at least the HP maximum (${c.hp.max}): dies instantly.`);
+    return die(base, { ...saves, failures, stable: false, dead: true }, `Took ${label} at 0 HP — at least the HP maximum (${c.hp.max}): dies instantly.`);
   }
   if (failures >= 3) {
-    return die(base, { ...c.deathSaves, failures: 3, stable: false, dead: true }, `Took ${label} at 0 HP — third death save failure: dies.`);
+    return die(base, { ...saves, failures: 3, stable: false, dead: true }, `Took ${label} at 0 HP — third death save failure: dies.`);
   }
   const wasStable = c.deathSaves.stable ? ' No longer Stable.' : '';
-  const character = touch({ ...base, deathSaves: { ...c.deathSaves, failures, stable: false } });
+  const character = touch({ ...base, deathSaves: { ...saves, failures, stable: false } });
   const message = `Took ${label} at 0 HP — ${added} death save failure${added > 1 ? 's' : ''}${critical ? ' (critical hit)' : ''} (${failures}/3).${wasStable}`;
   return { character, events: [gameEvent('death-save', message)] };
 }
@@ -303,6 +308,22 @@ export function clearTempHp(c: Character): EngineResult {
 }
 
 type DeathSaveOutcome = 'success' | 'failure' | 'stable' | 'revived' | 'dead';
+
+/**
+ * Another creature stabilized the dying hero (SRD 5.2.1 Stabilizing a Character: the Help action's DC 10 Wisdom
+ * (Medicine) check, a Healer's Kit, Spare the Dying): Stable at 0 HP and still Unconscious, the death saves stop and both
+ * tallies reset (Death Saving Throws), until damage starts them again. `how` says who or what did it.
+ */
+export function stabilize(c: Character, how?: string): EngineResult {
+  if (c.deathSaves.dead) return unchanged(c, "The dead can't be stabilized.");
+  if (c.hp.current > 0) return unchanged(c, `Not dying (HP ${c.hp.current}): only a creature at 0 HP can be stabilized.`);
+  if (c.deathSaves.stable) return unchanged(c, 'Already Stable.');
+  const by = how?.trim() ? ` (${how.trim()})` : '';
+  return {
+    character: touch({ ...c, deathSaves: { successes: 0, failures: 0, stable: true, dead: false } }),
+    events: [gameEvent('stabilized', `Stabilized${by}: Stable at 0 HP (still Unconscious), no more death saving throws unless damaged again.`)],
+  };
+}
 
 /**
  * Record a death saving throw from the natural d20 (2024): 10+ success, 9- failure, natural 1 = two

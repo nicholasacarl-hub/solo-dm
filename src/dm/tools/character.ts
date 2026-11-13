@@ -25,10 +25,11 @@ import {
   characterLevel,
   characterSheetText,
   characterStatusLine,
+  conditionKey,
   saveSourcesChangeText,
   gainXp,
   levelUp,
-  normalizeConditionId,
+  matchStandardCondition,
   removeCondition,
   removeItem,
   removeSpell,
@@ -38,6 +39,7 @@ import {
   setTempHp,
   spendHitDie,
   spendSlot,
+  stabilize,
   updateItem,
   useFeature,
   xpToNextLevel,
@@ -85,6 +87,7 @@ import {
   defined,
   eventLines,
   fail,
+  keptHomebrewLines,
   logTool,
   mutateCharacter,
   ok,
@@ -130,8 +133,9 @@ function chain(c: Character, steps: ((c: Character) => EngineResult)[]): EngineR
   return { character, events };
 }
 
-function conditionId(name: string): string {
-  return normalizeConditionId(name) ?? name.trim();
+/** A name the DM gave for Exhaustion ("Exhaustion", "Exhausted (forced march)"): it changes the level instead. */
+function isExhaustion(name: string): boolean {
+  return matchStandardCondition(name)?.id === 'exhaustion';
 }
 
 function hpSection(hp: NonNullable<ToolInput<'update_character'>['hp']>, reason?: string): Section {
@@ -545,20 +549,72 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
   return steps;
 }
 
+/** "Stable" or "Stabilized", alone or with a detail after it ("Stable (Healer's Kit)", "Stabilized by Brother Aldo"). */
+const STABLE_NAME = /^(?:stable|stabili[sz]ed?)(?=$|[\s(:,.\-–—])/i;
+
+/** The detail after a Stable name's word, without its separators ("Stable — Healer's Kit": "Healer's Kit"). */
+const stableDetail = (name: string, matched: string): string => name.slice(matched.length).replace(/^[\s(:,.\-–—]+|[\s).]+$/g, '');
+
+/**
+ * "Stable" isn't a condition: added, it records that another creature stabilized the dying hero (SRD 5.2.1 Stabilizing
+ * a Character), the detail saying how. With a detail it means that only at 0 HP: a hero with HP keeps a homebrew effect
+ * so named ("Stable Footing").
+ */
+function addStable(c: Character, name: string, matched: string, cond: { source?: string; duration?: string }): EngineResult {
+  const detail = stableDetail(name, matched);
+  if (detail && c.hp.current > 0) return addCondition(c, { id: name, ...defined({ source: cond.source, duration: cond.duration }) });
+  return stabilize(c, cond.source ?? (detail || undefined));
+}
+
+/** Removing "Stable" changes nothing and says why; a homebrew condition by that name (an older save's) is removed. */
+function removeStable(c: Character, name: string): EngineResult {
+  if (!c.deathSaves.stable || c.conditions.some((x) => conditionKey(x.id) === conditionKey(name))) return removeCondition(c, name);
+  const message =
+    "Stable isn't a condition to remove: the hero stays Stable until damage starts the death saves again or healing brings them back (a mark made by mistake: the player can clear it with the death-save marks on their sheet).";
+  return { character: c, events: [{ type: 'warning', message }] };
+}
+
+/**
+ * A line for each Stable name with a detail that a hero with HP kept as a homebrew condition ("Stable (Healer's Kit)"
+ * in the call that heals them): it marks no stabilization, and nothing else tells the DM so.
+ */
+function keptStableLines(added: readonly { condition: string }[] | undefined, c: Character): string[] {
+  if (c.hp.current <= 0) return [];
+  const lines = (added ?? []).flatMap(({ condition }) => {
+    const name = condition.trim();
+    const matched = STABLE_NAME.exec(name)?.[0];
+    if (!matched || !stableDetail(name, matched) || !c.conditions.some((x) => conditionKey(x.id) === conditionKey(name))) return [];
+    return [
+      `Kept "${name}" as a homebrew condition: the hero has ${c.hp.current} HP, so it marks no stabilization (only a creature at 0 HP can be stabilized). If it meant one, remove it with conditions_remove "${name}".`,
+    ];
+  });
+  return [...new Set(lines)];
+}
+
+/**
+ * The engine gets the DM's own name and matches it strictly: "Poisoned" or "Frightened of the dragon" is that
+ * condition (the detail its source), while "Protection from Poison" stays a homebrew condition by that name.
+ */
 function conditionSteps(input: ToolInput<'update_character'>): ((c: Character) => EngineResult)[] {
   const steps: ((c: Character) => EngineResult)[] = [];
   let exhaustion = input.exhaustion_change ?? 0;
-  for (const name of input.conditions_remove ?? []) {
-    if (conditionId(name) === 'exhaustion') exhaustion -= 1;
-    else steps.push((c) => removeCondition(c, conditionId(name)));
+  for (const raw of input.conditions_remove ?? []) {
+    const name = raw.trim();
+    if (isExhaustion(name)) exhaustion -= 1;
+    else steps.push((c) => (STABLE_NAME.test(name) ? removeStable(c, name) : removeCondition(c, name)));
   }
   for (const cond of input.conditions_add ?? []) {
-    const id = conditionId(cond.condition);
-    if (id === 'exhaustion') {
+    if (isExhaustion(cond.condition)) {
       exhaustion += 1;
       continue;
     }
-    steps.push((c) => addCondition(c, { id, ...defined({ source: cond.source, duration: cond.duration }) }));
+    const name = cond.condition.trim();
+    const stable = STABLE_NAME.exec(name);
+    if (stable) {
+      steps.push((c) => addStable(c, name, stable[0], cond));
+      continue;
+    }
+    steps.push((c) => addCondition(c, { id: name, ...defined({ source: cond.source, duration: cond.duration }) }));
   }
   if (exhaustion !== 0) steps.push((c) => changeExhaustion(c, exhaustion));
   return steps;
@@ -578,7 +634,7 @@ function handSetFormula(reason: string | undefined): string {
 /**
  * armor_class: an AC the gear and features don't give (Mage Armor, Shield of Faith) gets a formula saying the DM set
  * it, so the sheet never shows the old formula's items and armor under a number they don't add up to (the DM's
- * "Magic items" rule reads the formula); an AC they do give gets their formula back.
+ * "Bonuses" rule reads the formula); an AC they do give gets their formula back.
  */
 function statSteps(input: ToolInput<'update_character'>, catalog: readonly EquipmentOption[] = []): ((c: Character) => EngineResult)[] {
   const steps: ((c: Character) => EngineResult)[] = [];
@@ -764,6 +820,9 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   await logSections(ctx, results, input.reason);
 
   const lines = results.flatMap((r) => eventLines(r.events)).filter(Boolean);
+  // For the DM only (the player's log keeps the change itself).
+  lines.push(...keptHomebrewLines(input.conditions_add, change.character.conditions));
+  lines.push(...keptStableLines(input.conditions_add, change.character));
   const saves = saveSourcesChangeText(before, change.character);
   if (saves) lines.push(`${saves}.`);
   const campaign = ctx.deps.store().campaign;
@@ -869,8 +928,28 @@ async function longRest(ctx: ToolContext, reason?: string): Promise<ToolOutcome>
   return ok([summary, ...eventLines(change.events), `Status: ${characterStatusLine(change.character)}`].join('\n'));
 }
 
+/**
+ * Why the hero can't start this rest, or null. A rest needs at least 1 HP (SRD 5.2.1 Short Rest, Long Rest), so the
+ * refusal comes before any log line or Hit Dice dialog, with the way back for a Stable hero: one who isn't healed
+ * regains 1 HP after 1d4 hours (SRD 5.2.1 Stabilizing a Character).
+ */
+function restRefusal(c: Character, kind: ToolInput<'take_rest'>['kind']): string | null {
+  if (c.deathSaves.dead) return "The hero is dead; the dead don't rest.";
+  if (c.hp.current >= 1) return null;
+  const rest = kind === 'short' ? 'A Short Rest' : 'A Long Rest';
+  // SRD 5.2.1 Stabilizing a Character: only a Stable hero comes back on their own; a dying one keeps rolling, unless
+  // another creature stabilized them (the Help action's Medicine check, a Healer's Kit, Spare the Dying), which the DM
+  // marks with conditions_add "Stable".
+  if (!c.deathSaves.stable) {
+    return `${rest} needs at least 1 HP (SRD 5.2.1). The sheet has the hero dying, not Stable: death saving throws go on (request_player_roll "death-save") until three successes make them Stable, a natural 20 or any healing (update_character hp healing) brings them back, or three failures kill them. If another creature stabilized them (the Help action's DC 10 Wisdom (Medicine) check, a Healer's Kit, Spare the Dying), mark it with update_character conditions_add "Stable", then roll_dice 1d4 for the hours, update_character hp healing 1, and take_rest.`;
+  }
+  return `${rest} needs at least 1 HP (SRD 5.2.1). A Stable hero who isn't healed regains 1 HP after 1d4 hours: roll_dice 1d4 for the hours, update_character hp healing 1, then take_rest.`;
+}
+
 export async function takeRestTool(input: ToolInput<'take_rest'>, ctx: ToolContext): Promise<ToolOutcome> {
   if (ctx.deps.store().combat?.active) return fail('The hero cannot rest during combat. End the combat first.');
+  const refusal = restRefusal(requireCharacter(ctx.deps.store()), input.kind);
+  if (refusal) return fail(refusal);
   return input.kind === 'short' ? shortRest(ctx, input.reason) : longRest(ctx, input.reason);
 }
 

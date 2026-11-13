@@ -13,7 +13,6 @@ import {
   type Character,
   type Combatant,
   type CombatState,
-  type ConditionId,
   type D20TestResult,
   type DieRoll,
   type GameEvent,
@@ -38,6 +37,11 @@ export {
   transformationFeatures,
   transformationGrants,
 } from '@/engine/transform';
+// Condition names run the real matchers (pure): the DM tools decide by them whether a name is a standard condition.
+import { matchStandardCondition } from '@/engine/conditions';
+export { conditionKey, matchStandardCondition, normalizeConditionId } from '@/engine/conditions';
+// get_entry's budget is the sheet's real field limit.
+export { SHEET_TEXT_MAX } from '@/engine/summary';
 // The battle-map modules run the real engine too (pure; they use the real ./combat and ./conditions inside).
 import * as realCombat from '@/engine/combat';
 export * from '@/engine/grid';
@@ -182,9 +186,9 @@ export const applyAttackRollRules: typeof Engine.applyAttackRollRules = (result,
   return { ...result, isCritical, success: result.natural === 1 ? false : isCritical ? true : result.total >= result.dc };
 };
 
-export const rerollNaturalOne: typeof Engine.rerollNaturalOne = (result) => {
+export const rerollNaturalOne: typeof Engine.rerollNaturalOne = (result, opts) => {
   if (result.natural !== 1) return result;
-  const natural = die(20);
+  const natural = opts?.value ?? die(20);
   const total = natural + result.modifier;
   const next: D20TestResult = {
     ...result,
@@ -334,6 +338,15 @@ export const setTempHp: typeof Engine.setTempHp = (c, amount) => ({
   events: [ev('temp-hp', `Temporary HP ${Math.max(c.hp.temp, amount)}`)],
 });
 
+export const stabilize: typeof Engine.stabilize = (c, how) => {
+  if (c.deathSaves.dead || c.hp.current > 0 || c.deathSaves.stable) return { character: c, events: [ev('warning', 'Not stabilized.')] };
+  const by = how?.trim() ? ` (${how.trim()})` : '';
+  return {
+    character: { ...c, deathSaves: { successes: 0, failures: 0, stable: true, dead: false } },
+    events: [ev('stabilized', `Stabilized${by}: Stable at 0 HP.`)],
+  };
+};
+
 export const recordDeathSave: typeof Engine.recordDeathSave = (c, natural) => {
   const ds = { ...c.deathSaves };
   if (natural === 20) {
@@ -351,21 +364,24 @@ export const recordDeathSave: typeof Engine.recordDeathSave = (c, natural) => {
   return { character: { ...c, deathSaves: ds }, events: [ev('death-save', `Death save: ${outcome}`)], outcome };
 };
 
-export const normalizeConditionId: typeof Engine.normalizeConditionId = (input) => {
-  const key = input.trim().toLowerCase().replace(/^knocked\s+/, '');
-  const ids: ConditionId[] = ['blinded', 'charmed', 'deafened', 'exhaustion', 'frightened', 'grappled', 'incapacitated', 'invisible', 'paralyzed', 'petrified', 'poisoned', 'prone', 'restrained', 'stunned', 'unconscious'];
-  return ids.find((id) => id === key) ?? null;
-};
 export const conditionName: typeof Engine.conditionName = (id) => id.charAt(0).toUpperCase() + id.slice(1);
 
-export const addCondition: typeof Engine.addCondition = (c, condition: ActiveCondition) => ({
-  character: { ...c, conditions: [...c.conditions.filter((x) => x.id !== condition.id), condition] },
-  events: [ev('condition-added', `${conditionName(condition.id)} added`)],
-});
-export const removeCondition: typeof Engine.removeCondition = (c, id) =>
-  c.conditions.some((x) => x.id === id)
+/** As the real engine: a standard name ("Poisoned") becomes its id, any other name is kept as a homebrew condition. */
+const conditionIdOf = (name: string): string => matchStandardCondition(name)?.id ?? name.trim();
+
+export const addCondition: typeof Engine.addCondition = (c, condition: ActiveCondition) => {
+  const id = conditionIdOf(condition.id);
+  return {
+    character: { ...c, conditions: [...c.conditions.filter((x) => x.id !== id), { ...condition, id }] },
+    events: [ev('condition-added', `${conditionName(id)} added`)],
+  };
+};
+export const removeCondition: typeof Engine.removeCondition = (c, name) => {
+  const id = c.conditions.some((x) => x.id === name) ? name : conditionIdOf(name);
+  return c.conditions.some((x) => x.id === id)
     ? { character: { ...c, conditions: c.conditions.filter((x) => x.id !== id) }, events: [ev('condition-removed', `${conditionName(id)} removed`)] }
     : warn(c, `${conditionName(id)} was not active`);
+};
 export const changeExhaustion: typeof Engine.changeExhaustion = (c, delta) => {
   const exhaustion = Math.max(0, Math.min(6, c.exhaustion + delta));
   return { character: { ...c, exhaustion }, events: [ev('exhaustion-changed', `Exhaustion ${c.exhaustion} → ${exhaustion}`)] };
@@ -539,15 +555,19 @@ export const damageCombatant: typeof Engine.damageCombatant = (s, id, amount) =>
 export const healCombatant: typeof Engine.healCombatant = (s, id, amount) => changeHp(s, id, amount);
 export const healthDescriptor: typeof Engine.healthDescriptor = (hp: HitPoints) =>
   hp.current <= 0 ? 'down' : hp.current <= hp.max / 4 ? 'critical' : hp.current <= hp.max / 2 ? 'bloodied' : hp.current < hp.max ? 'scratched' : 'unhurt';
-/** A simplified format; like the real one, the player's view leaves hidden creatures out and the DM's tags them. */
+/**
+ * A simplified format; like the real one, the player's view leaves hidden creatures out and the DM's tags them, and
+ * the hero's line shows the AC the caller passes (the sheet's), never the tracker's copy.
+ */
 export const summarizeCombat: typeof Engine.summarizeCombat = (s, opts) =>
   [
     `Round ${s.round}`,
     ...s.combatants.flatMap((c, i) => {
       if (opts?.forPlayer && c.hidden) return [];
+      const ac = c.isPlayer && opts?.heroAc !== undefined ? ` · AC ${opts.heroAc}` : '';
       const hp = c.hp ? (opts?.forPlayer && c.hideHp ? healthDescriptor(c.hp) : `HP ${c.hp.current}/${c.hp.max}`) : '';
       const hidden = !opts?.forPlayer && c.hidden ? ' [hidden]' : '';
-      return [`${i === s.turnIndex ? '▶' : ' '} ${c.initiative} ${c.name}${hidden}${hp ? ` · ${hp}` : ''}${c.defeated ? ' (down)' : ''}`];
+      return [`${i === s.turnIndex ? '▶' : ' '} ${c.initiative} ${c.name}${hidden}${ac}${hp ? ` · ${hp}` : ''}${c.defeated ? ' (down)' : ''}`];
     }),
   ].join('\n');
 

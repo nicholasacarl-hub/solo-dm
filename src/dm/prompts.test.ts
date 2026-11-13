@@ -118,26 +118,76 @@ describe('buildSystemPrompt', () => {
     }
   });
 
-  it("leaves a magic item's conditions and uncounted bonuses to the DM's judgment, applied through the numbers it passes", () => {
+  it("leaves the bonuses the app doesn't count to the DM's judgment, applied through the numbers it passes", () => {
     const rolls = section(DM_INSTRUCTIONS, '## Rolls and rulings');
-    const items = rolls.split('\n').find((line) => line.startsWith('- Magic items:')) ?? '';
+    const bonuses = rolls.split('\n').find((line) => line.startsWith('- Bonuses:')) ?? '';
     for (const phrase of [
-      'the app counts only the item bonuses that the AC formula and the Saving throws line name',
-      'an attack or damage bonus (the item\'s tag says "not counted by the app")',
+      'the app counts only what the sheet names: ability and proficiency on attacks, the AC formula\'s parts, what the Saving throws line lists, the Skills line\'s totals (Thaumaturge and Magician included), the Defenses line and the Advantage sources above',
+      'cover (Half +2, Three-Quarters +5 to AC and Dexterity saves), a fighting style (Archery), a spell (Bless, Shield)',
+      'an attack or damage bonus, tagged "not counted by the app"',
       "one from an SRD or homebrew item's text",
       'one its text gives only in some situations',
       "a counted one whose condition doesn't hold",
-      'Adjust the number you pass by it',
+      'Fold a flat one into the number you pass',
+      'not a death saving throw: its DC stays 10',
+      "or a monster's against the hero's spell",
+      'roll a die the hero adds (Bless) first, with request_player_roll roll_type "custom", and lower the dc by it',
+      'set armor_class for a lasting change (Mage Armor)',
       'without giving away a hidden DC or AC',
-      'add a damage bonus to the damage you apply',
-      'tell the player in a line',
       'get_entry',
     ]) {
-      expect(items, phrase).toContain(phrase);
+      expect(bonuses, phrase).toContain(phrase);
     }
+    expect(DM_INSTRUCTIONS).not.toContain('- Magic items:');
     // The order of truth and table talk leave a number the app worked out to the text it came from.
-    expect(DM_INSTRUCTIONS).toContain("When sources disagree, the earlier one wins, except that a rule's, feature's or item's own text, or a ruling you recorded, beats a number the app worked out from it (see Magic items).");
+    expect(DM_INSTRUCTIONS).toContain("When sources disagree, the earlier one wins, except that a rule's, feature's or item's own text, or a ruling you recorded, beats a number the app worked out from it (see Bonuses).");
     expect(section(DM_INSTRUCTIONS, '## Table talk')).toContain('A number the app worked out is different: if they point to a condition it missed');
+  });
+
+  it('says exactly what the app applies to the hero\'s rolls, and that cover is not Advantage', () => {
+    const rolls = section(DM_INSTRUCTIONS, '## Rolls and rulings');
+    const advantage = rolls.split('\n').find((line) => line.startsWith('- Advantage and Disadvantage')) ?? '';
+    expect(advantage).toContain('the app applies only what it tracks, and names it in the result');
+    expect(advantage).toContain('Pass anything else before the roll: a trait or feature (Gnomish Cunning, Danger Sense, Dwarven Resilience)');
+    expect(advantage).toContain("Cover isn't Advantage: it adds to AC and Dexterity saves (see Bonuses).");
+    // Invisible's Advantage is applied on every attack, so the DM cancels it against a creature that sees the hero, and
+    // where another Disadvantage leaves no value that reaches the rules' roll, takes Invisible off for that attack; a
+    // Blinded or Deafened hero's sight or hearing checks are only noted, so the DM fails them without a roll.
+    expect(advantage).toContain(
+      'Invisible\'s Advantage on every attack (against a creature that can see the hero it doesn\'t apply: pass "disadvantage" to cancel it, or "advantage" if something else gives Advantage; if something else gives Disadvantage, take Invisible off with update_character for that attack and put it back after if it lasts)',
+    );
+    expect(advantage).toContain("A Blinded or Deafened hero's sight or hearing checks are only noted after the roll: call those failed without rolling.");
+    expect(advantage).not.toMatch(/already applies their own conditions, armor and traits/);
+  });
+
+  it('has the DM mark a hero another creature stabilized, so the saves stop (SRD 5.2.1 Stabilizing a Character)', () => {
+    const dying = DM_INSTRUCTIONS.split('\n').find((line) => line.startsWith('- Dying:')) ?? '';
+    expect(dying).toContain(
+      'When another creature stabilizes them (the Help action\'s DC 10 Wisdom (Medicine) check, a Healer\'s Kit, Spare the Dying), mark it with update_character conditions_add "Stable"',
+    );
+    expect(dying).toContain('unhealed they regain 1 HP after 1d4 hours (roll_dice 1d4, then update_character hp healing 1)');
+  });
+
+  it('gives damage, spells, rulings, charges and missed calls their verified paths', () => {
+    const rolls = section(DM_INSTRUCTIONS, '## Rolls and rulings');
+    // A damage roll's expression replaces the sheet attack's dice (the dice dialog uses it first).
+    expect(rolls).toContain('for extra damage on a sheet attack — Sneak Attack, Divine Smite, a +1 weapon — the whole damage, the sheet\'s dice and modifier plus the extra, "1d6+3+2d6"');
+    expect(rolls).toContain("the app applies the Defenses line's resistances, immunities and vulnerabilities and says so, so pass the damage before them; halve for any other resistance, such as Rage, yourself");
+    expect(rolls).toContain("a Light weapon's extra attack adds no ability modifier unless it's negative or the hero has Two-Weapon Fighting");
+    expect(rolls).toContain('(the app adds ability and proficiency: raise the dc by the Proficiency Bonus if the hero isn\'t proficient with it');
+    expect(rolls).toContain('a hit of two damage types is still one call: apply the Defenses line to each part yourself, pass the total without damage_type, and say what you halved');
+    expect(rolls).toContain('unless the sheet gives a free casting they use (Magic Initiate, a lineage spell, Favored Enemy');
+    expect(rolls).toContain("they cast it as a Ritual, or it comes from a scroll or an item's charges");
+    expect(rolls).toContain('while they could cast Shield (prepared, with a slot or a free casting left)');
+    expect(rolls).toContain('(kind "ruling", naming the item when it\'s about one)');
+    expect(section(DM_INSTRUCTIONS, '## Memory and bookkeeping')).toContain('- Item charges: for an item with charges, add a feature named for it (features_add, source "item", uses_max = its charges, recharge "none")');
+    expect(section(DM_INSTRUCTIONS, '## Memory and bookkeeping')).toContain('uses_max stops at 20: for an item with more, keep the count in its description (inventory_update) or its journal entry');
+    expect(DM_INSTRUCTIONS).toContain('if you find one you narrated but never recorded, make the call now and say so in a brief aside');
+  });
+
+  it('keeps rulings when homebrew is off', () => {
+    const text = buildSystemPrompt(input({ campaign: { ...input().campaign, settings: { ...input().campaign.settings, homebrewFreedom: 'none' } } }));
+    expect(text).toContain('never call create_homebrew. Rulings on what the rules leave open are still yours: make them and record them (update_journal, kind "ruling").');
   });
 
   it('renders the campaign: table rules, safety, chronicle, hero, quests, journal, clocks, homebrew, library, scene', () => {
@@ -214,6 +264,12 @@ describe('buildSystemPrompt', () => {
     expect(text).toContain('shown to the player');
     expect(text).toContain('## Combat in progress');
     expect(text).toContain('Bandit 1');
+  });
+
+  it("freezes the hero's AC from the sheet into \"Combat in progress\", not the tracker's copy from the start of the fight", () => {
+    // The fight's copy of the hero says AC 12; a shield donned mid-fight made the sheet's 14.
+    const fight = section(buildSystemPrompt(input({ character: sampleCharacter({ armorClass: 14 }), combat: sampleCombat() })), '## Combat in progress');
+    expect(fight.split('\n').find((line) => line.includes('Mira Voss ·'))).toBe('  17 Mira Voss · AC 14');
   });
 
   it('handles a brand-new campaign without a character or history', () => {

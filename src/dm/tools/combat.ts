@@ -12,6 +12,7 @@
  */
 import {
   addCombatant,
+  conditionKey,
   createBattleMap,
   createCombat,
   currentCombatant,
@@ -21,8 +22,8 @@ import {
   healCombatant,
   healthDescriptor,
   initiativeModifier,
+  matchStandardCondition,
   nextTurn,
-  normalizeConditionId,
   placeCombatants,
   removeCombatant,
   rollD20Test,
@@ -57,6 +58,7 @@ import {
   defined,
   eventLines,
   fail,
+  keptHomebrewLines,
   logTool,
   mutateCharacter,
   mutateCombat,
@@ -336,10 +338,11 @@ export async function startCombatTool(input: StartInput, ctx: ToolContext): Prom
   const title = input.encounter_name ?? 'Combat';
   const visible = state.combatants.filter((c) => !c.hidden).length;
   const mapLine = state.map ? `\nBattle map: ${state.map.name ? `${state.map.name} ` : ''}(${state.map.width}×${state.map.height})` : '';
+  const heroAc = character.armorClass;
   await logTool(ctx, 'start_combat', 'combat', `Combat started: ${title} (${visible} combatants)`, {
-    detail: `${summarizeCombat(state, { forPlayer: true })}${mapLine}`,
+    detail: `${summarizeCombat(state, { forPlayer: true, heroAc })}${mapLine}`,
   });
-  const out = [`Combat started: ${title}.`, ...lines, '', summarizeCombat(state), turnLine(state)];
+  const out = [`Combat started: ${title}.`, ...lines, '', summarizeCombat(state, { heroAc }), turnLine(state)];
   out.push(...plan.notes);
   if (state.map) out.push('', describeMapSetup(state, character, { placed, stats: groups.map((g) => g.stats) }));
   return ok(out.join('\n'));
@@ -371,9 +374,17 @@ function hpText(c: Combatant | undefined, forPlayer: boolean): string {
   return `HP ${c.hp.current}/${c.hp.max}`;
 }
 
+/**
+ * A DM-named condition: the standard one the name is by the engine's strict match ("Poisoned", "Grappled by the
+ * ogre"), else the DM's own name as a homebrew condition ("Mark of the Invisible Hand" gives no Invisible rules).
+ */
+function conditionIdOf(name: string): string {
+  return matchStandardCondition(name)?.id ?? name.trim();
+}
+
 function toConditions(list: UpdateInput['conditions_add']): ActiveCondition[] {
   return (list ?? []).map((c) => ({
-    id: normalizeConditionId(c.condition) ?? c.condition.trim(),
+    id: conditionIdOf(c.condition),
     ...defined({ source: c.source, duration: c.duration }),
   }));
 }
@@ -462,17 +473,37 @@ function changeHp(state: CombatState, input: UpdateInput, kind: 'damage' | 'heal
 function changeConditions(state: CombatState, input: UpdateInput): CombatChange {
   const target = requireTarget(state, input.target, 'conditions');
   refuseHero(target, 'conditions');
-  const removed = new Set((input.conditions_remove ?? []).map((c) => normalizeConditionId(c) ?? c.trim()));
+  if (!input.conditions_add?.length && !input.conditions_remove?.length) {
+    throw new ToolInputError('update_combat conditions needs conditions_add or conditions_remove.');
+  }
+  // As the engine removes the hero's: a condition the creature has by that name, else the standard condition the name
+  // strictly is, if the creature has it. A name that finds nothing removes nothing and says so to the DM only; the
+  // summary and the player's log name what was removed as it was stored, never the DM's typed details.
+  const find = (key: string) => target.conditions.find((c) => conditionKey(c.id) === key);
+  const removed: ActiveCondition[] = [];
+  const missed: string[] = [];
+  for (const name of input.conditions_remove ?? []) {
+    const hit = find(conditionKey(name)) ?? find(conditionKey(conditionIdOf(name)));
+    if (!hit) missed.push(name.trim());
+    else if (!removed.includes(hit)) removed.push(hit);
+  }
+  const removedKeys = new Set(removed.map((c) => conditionKey(c.id)));
   const added = toConditions(input.conditions_add);
-  const addedIds = new Set(added.map((c) => c.id));
-  const conditions = [...target.conditions.filter((c) => !removed.has(c.id) && !addedIds.has(c.id)), ...added];
+  const addedKeys = new Set(added.map((c) => conditionKey(c.id)));
+  const conditions = [...target.conditions.filter((c) => !removedKeys.has(conditionKey(c.id)) && !addedKeys.has(conditionKey(c.id))), ...added];
   const parts = [
     added.length ? `+${added.map((c) => c.id).join(', +')}` : '',
-    removed.size ? `−${[...removed].join(', −')}` : '',
+    removed.length ? `−${removed.map((c) => c.id).join(', −')}` : '',
   ].filter(Boolean);
-  if (parts.length === 0) throw new ToolInputError('update_combat conditions needs conditions_add or conditions_remove.');
-  const summary = `${target.name}: ${parts.join(' ')}`;
-  return { state: updateCombatant(state, target.id, { conditions }), summary, log: target.hidden ? null : summary };
+  const has = target.conditions.length ? ` (it has ${target.conditions.map((c) => c.id).join(', ')})` : '';
+  const misses = missed.map((name) => `Not removed: ${target.name} has no "${name}"${has}.`);
+  const summary = parts.length ? `${target.name}: ${parts.join(' ')}` : `${target.name}: no change`;
+  return {
+    state: parts.length ? updateCombatant(state, target.id, { conditions }) : state,
+    summary,
+    log: target.hidden || !parts.length ? null : summary,
+    notes: [...misses, ...keptHomebrewLines(input.conditions_add, conditions)],
+  };
 }
 
 /** Removing a creature drops a stop it made or reacted to (the move can't be repeated any more). */
@@ -572,7 +603,7 @@ export async function updateCombatTool(input: UpdateInput, ctx: ToolContext): Pr
   const log = change.log === undefined ? change.summary : change.log;
   if (log) await logTool(ctx, 'update_combat', ICON[input.action] ?? 'combat', log, { secret: change.secret });
 
-  const lines = [change.summary, ...(change.notes ?? []), '', summarizeCombat(change.state)];
+  const lines = [change.summary, ...(change.notes ?? []), '', summarizeCombat(change.state, { heroAc: hero?.armorClass })];
   if (input.action !== 'next_turn') lines.push(turnLine(change.state));
   const mapLine = turnStartLine(before, change.state, hero);
   if (mapLine) lines.push(mapLine);

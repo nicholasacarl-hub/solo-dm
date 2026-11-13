@@ -15,6 +15,7 @@ import {
   diceExpression,
   effectiveDc,
   formatParts,
+  luckRerollInstructions,
   modifierParts,
   physicalInstructions,
   rollKind,
@@ -53,7 +54,7 @@ function spendHeroicInspiration(label: string, first: D20TestResult, reroll: D20
     toast.error(`Couldn't save the spent Heroic Inspiration: ${errorMessage(err)}`),
   );
   queueDmNotice(
-    `Player spent Heroic Inspiration to reroll ${label}: the first roll (${first.total}) was replaced by the reroll (${reroll.total}), which stands.`,
+    `Player spent Heroic Inspiration to reroll ${label}: the first roll (${first.total}) was replaced by the reroll (${reroll.total}).`,
   );
 }
 
@@ -278,7 +279,11 @@ export function RollPromptDialog({ interaction, mode, onResolve, onCancelTurn }:
           <PhysicalEntry
             inputRef={inputRef}
             instructions={
-              replaced ? physicalRerollInstructions(request, expression) : physicalInstructions(request, expression)
+              replaced
+                ? physicalRerollInstructions(request, expression)
+                : interaction.luck
+                  ? luckRerollInstructions(request)
+                  : physicalInstructions(request, expression)
             }
             label={kind === 'd20' ? 'Your d20' : 'Your total'}
             d20={kind === 'd20'}
