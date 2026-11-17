@@ -34,6 +34,35 @@ describe('pdfPagesToMarkdown', () => {
     );
   });
 
+  it('keeps a fourth heading size as a fourth level, and puts any smaller heading size there too', () => {
+    const page = [
+      line('Chapter 2: Lamplit Play', 760, 24),
+      line('Wick Tests', 730, 21),
+      line('Lighting Checks', 700, 18),
+      line('Wick Bonus', 670, 15),
+      line('Add your wick bonus to the roll whenever you light a lamp in a draft or in the rain.', 650),
+      line('Snuffing Checks', 620, 18),
+      line('Wick Bonus', 590, 15),
+      line('Add the same bonus when you snuff a lamp quickly, before anyone sees its light go out.', 570),
+      line('Sidebar: Old Wicks', 540, 13),
+      line('Old wicks burn unevenly, so a lamp with an old wick gives no bonus until it is trimmed.', 520),
+    ];
+    expect(pdfPagesToMarkdown([page])).toBe(
+      [
+        '# Chapter 2: Lamplit Play',
+        '## Wick Tests',
+        '### Lighting Checks',
+        '#### Wick Bonus',
+        'Add your wick bonus to the roll whenever you light a lamp in a draft or in the rain.',
+        '### Snuffing Checks',
+        '#### Wick Bonus',
+        'Add the same bonus when you snuff a lamp quickly, before anyone sees its light go out.',
+        '#### Sidebar: Old Wicks',
+        'Old wicks burn unevenly, so a lamp with an old wick gives no bonus until it is trimmed.',
+      ].join('\n\n'),
+    );
+  });
+
   it('builds lines from several runs (spaces at gaps) and keeps short stat lines apart', () => {
     const runs: PdfTextRun[] = [
       { str: 'Casting', x: 50, y: 700, width: 35, fontSize: 10, hasEOL: false },

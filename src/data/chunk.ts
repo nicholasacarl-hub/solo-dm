@@ -725,6 +725,28 @@ const STAT_BLOCK_SECTIONS = new Set(
 );
 const isStatBlockSection = (title: string) => STAT_BLOCK_SECTIONS.has(stripInlineMarkdown(title).toLowerCase());
 
+/**
+ * Stat-block parts whose names a rulebook also gives its own sections ("Actions", "Bonus Actions" and "Reactions" in a
+ * chapter on how to play). "Traits" isn't one: alone, it heads a creature's or a species' traits.
+ */
+const ACTION_SECTIONS = new Set(
+  ['actions', 'bonus actions', 'reactions', 'legendary actions', 'lair actions', 'mythic actions', 'regional effects'],
+);
+/** Notation only a stat block prints: an attack's line, "Hit:", a recharge, uses per day, a saving throw's DC line. */
+const STAT_BLOCK_NOTATION =
+  /\b(?:Melee|Ranged)(?: or (?:Melee|Ranged))?(?: (?:Weapon|Spell))? Attack(?: Roll)?:|\bHit:|\(Recharge \d|\(\d+\/Day\b|\b\d+\/Day each\b|\b(?:Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) Saving Throw:\s*DC \d/;
+
+/**
+ * A rulebook's own section under a stat-block part's name: an action section's name over text without a stat block's
+ * notation (subsections included), under a parent whose own text has no stat block's AC and HP or ability scores. A
+ * creature the reader doesn't recognise keeps its "Actions" that way, and a chapter on how to play keeps its own.
+ */
+function rulebookSection(section: Section, parentBody: string): boolean {
+  if (!ACTION_SECTIONS.has(stripInlineMarkdown(section.title).toLowerCase())) return false;
+  if ((ARMOR_CLASS.test(parentBody) && HIT_POINTS.test(parentBody)) || ABILITY_SCORES.test(parentBody)) return false;
+  return !STAT_BLOCK_NOTATION.test(renderSection(section));
+}
+
 /** The first `n` non-empty lines, without Markdown emphasis or list markers. */
 function leadingLines(text: string, n: number): string[] {
   return text
@@ -1123,14 +1145,24 @@ function addSection(node: Section, ancestors: string[], out: EntryBuilder, adopt
   const ownStatBlockParts: Section[] = [];
   const adoptedBy = new Map<Section, Section[]>();
   let creature: Section | null = null;
+  // Whether the child before was a stat-block part this section keeps: the parts after it stay with it.
+  let keeping = false;
   node.children.forEach((child, i) => {
-    const childKind = kinds[i];
-    if (childKind === null) {
-      if (creature) adoptedBy.get(creature)?.push(child);
-      else ownStatBlockParts.push(child);
-      return;
+    if (kinds[i] === null) {
+      if (creature) {
+        adoptedBy.get(creature)?.push(child);
+        return;
+      }
+      if (keeping || !rulebookSection(child, body)) {
+        ownStatBlockParts.push(child);
+        keeping = true;
+        return;
+      }
+      // A rulebook's own "Actions" or "Reactions": a section like any other.
+      kinds[i] = guessKind(stripInlineMarkdown(child.title) || 'Untitled', bodyOf(child), inner);
     }
-    creature = childKind === 'monster' ? child : null;
+    keeping = false;
+    creature = kinds[i] === 'monster' ? child : null;
     if (creature) adoptedBy.set(creature, []);
   });
   const ownText = renderSection({ ...node, children: ownStatBlockParts });

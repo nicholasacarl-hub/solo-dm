@@ -1055,6 +1055,94 @@ Lairs smell of lamp oil.
   });
 });
 
+describe('a rulebook’s own sections under stat-block names', () => {
+  const RULES = `# Chapter 4: Lamplit Play
+
+Every evening at the lamp table follows a few habits.
+
+## Knacks
+
+A knack is something your hero does well.
+
+## Actions
+
+On your turn you choose one main deed: running, searching, lighting a wick.
+
+### One Deed at a Time
+
+You finish one deed before you start the next.
+
+### Bonus Actions
+
+Some knacks grant a quick extra deed on your turn, such as trimming a wick.
+
+### Reactions
+
+A reaction is a swift answer to something that happens outside your turn, such as ducking a falling lamp.
+
+## Wandering
+
+Travel by lamplight is slow.
+`;
+
+  it('makes Actions, Bonus Actions and Reactions entries of their own, nested as the book nests them', () => {
+    const entries = chunkDocument(RULES, opts);
+    expect(entries.map((e) => e.name)).toEqual([
+      'Chapter 4: Lamplit Play', 'Knacks', 'Actions', 'One Deed at a Time', 'Bonus Actions', 'Reactions', 'Wandering',
+    ]);
+    expect(entries.find((e) => e.name === 'Bonus Actions')?.path).toEqual(['Chapter 4: Lamplit Play', 'Actions', 'Bonus Actions']);
+    expect(entries.find((e) => e.name === 'Actions')?.text).toBe('On your turn you choose one main deed: running, searching, lighting a wick.');
+    expect(entries[0].text).toBe('Every evening at the lamp table follows a few habits.');
+    expect(entries.every((e) => e.kind === 'rule')).toBe(true);
+  });
+
+  it('leaves a creature the reader doesn’t recognise its Actions, by its AC and HP or by the notation of its actions', () => {
+    // AC and HP without a challenge rating or ability scores: read as a rule, but a stat block's own.
+    const unrecognised = `# Odd Creatures
+
+## Reed Lurker
+
+Armor Class 13
+
+Hit Points 11 (2d8 + 2)
+
+### Actions
+
+Bite. The lurker snaps at a creature next to it.
+
+### Bonus Actions
+
+Sink. The lurker slips under the water.
+
+## Lamp Moth
+
+A moth that drinks lamp oil.
+
+### Actions
+
+Dust. Melee Attack Roll: +3, reach 5 ft. Hit: 2 (1d4) Poison damage.
+
+### Reactions
+
+Flutter. The moth flies 10 feet away.
+`;
+    const entries = chunkDocument(unrecognised, opts);
+    expect(entries.map((e) => e.name)).toEqual(['Reed Lurker', 'Lamp Moth']);
+    const lurker = entries[0].text;
+    expect(lurker).toContain('### Actions');
+    expect(lurker).toContain('### Bonus Actions');
+    // The moth's Actions show a stat block's notation, and its Reactions follow them.
+    expect(entries[1].text).toContain('Melee Attack Roll: +3');
+    expect(entries[1].text).toContain('### Reactions');
+  });
+
+  it('still gives a recognised creature the parts a PDF put beside it', () => {
+    const entries = chunkDocument(`# Night Things\n\n## Wick Hound\n\n_Small Beast, Unaligned_\n\n**AC** 12\n\n**HP** 7 (2d6)\n\n**CR** 1/8 (XP 25; PB +2)\n\n## Actions\n\nBite. Melee Attack Roll: +3, reach 5 ft.\n\n## Reactions\n\nYelp. The hound howls.\n`, opts);
+    expect(entries.map((e) => e.name)).toEqual(['Wick Hound']);
+    expect(entries[0].text).toContain('### Reactions');
+  });
+});
+
 describe('feats and Prerequisite lines in a whole book', () => {
   it('keeps stronghold rooms and class options as rules, with their subsections as entries of their own', () => {
     const entries = chunkDocument(HOLDINGS, opts);

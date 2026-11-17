@@ -162,9 +162,10 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
   const chars = (ls: Line[]) => ls.reduce((n, l) => n + l.text.length, 0);
   // Headings are a small share of the text; when "large" text dominates, sizes carry no structure.
   const useHeadings = headingLines.length > 0 && chars(headingLines) <= chars(lines) * MAX_HEADING_SHARE;
-  // Largest heading size = level 1, next = level 2, the rest = level 3.
+  // Largest heading size = level 1, then levels 2 and 3, the rest = level 4 (a book's sub-subsections keep their own
+  // level, so "Ability Modifier" under each of three sections isn't their sibling).
   const sizes = [...new Set(headingLines.map((l) => roundSize(l.fontSize)))].sort((a, b) => b - a);
-  const levelOf = (l: Line) => Math.min(3, sizes.indexOf(roundSize(l.fontSize)) + 1);
+  const levelOf = (l: Line) => Math.min(4, sizes.indexOf(roundSize(l.fontSize)) + 1);
 
   // A line much shorter than usual ends its paragraph (or is a stat line such as "Range: 60 feet").
   const bodyLengths = lines.filter((l) => !useHeadings || !isHeadingLine(l)).map((l) => l.text.length).sort((a, b) => a - b);
