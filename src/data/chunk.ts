@@ -724,6 +724,8 @@ const STAT_BLOCK_SECTIONS = new Set(
   ['traits', 'actions', 'bonus actions', 'reactions', 'legendary actions', 'lair actions', 'mythic actions', 'regional effects'],
 );
 const isStatBlockSection = (title: string) => STAT_BLOCK_SECTIONS.has(stripInlineMarkdown(title).toLowerCase());
+/** Whether a section holds sections of its own besides stat-block parts (a creature's "Actions" holds only its other parts). */
+const holdsOwnSections = (section: Section) => section.children.some((c) => !isStatBlockSection(c.title));
 
 /**
  * Stat-block parts whose names a rulebook also gives its own sections ("Actions", "Bonus Actions" and "Reactions" in a
@@ -752,7 +754,7 @@ function rulebookSection(section: Section, parentBody: string): boolean {
   if (!ACTION_SECTIONS.has(stripInlineMarkdown(section.title).toLowerCase())) return false;
   const parent = withoutEmphasis(parentBody);
   if ((ARMOR_CLASS.test(parent) && HIT_POINTS.test(parent)) || ABILITY_SCORES.test(parent)) return false;
-  if (section.children.some((c) => !isStatBlockSection(c.title))) return true;
+  if (holdsOwnSections(section)) return true;
   return !STAT_BLOCK_NOTATION.test(withoutEmphasis(renderSection(section)));
 }
 
@@ -1154,7 +1156,8 @@ function addSection(node: Section, ancestors: string[], out: EntryBuilder, adopt
   const ownStatBlockParts: Section[] = [];
   const adoptedBy = new Map<Section, Section[]>();
   let creature: Section | null = null;
-  // Whether the child before was a stat-block part this section keeps: the parts after it stay with it.
+  // Whether the child before was a stat-block part this section keeps: the parts after it stay with it, unless one holds
+  // sections of its own (a chapter's "Actions" after its "Traits").
   let keeping = false;
   node.children.forEach((child, i) => {
     if (kinds[i] === null) {
@@ -1162,7 +1165,7 @@ function addSection(node: Section, ancestors: string[], out: EntryBuilder, adopt
         adoptedBy.get(creature)?.push(child);
         return;
       }
-      if (keeping || !rulebookSection(child, body)) {
+      if ((keeping && !holdsOwnSections(child)) || !rulebookSection(child, body)) {
         ownStatBlockParts.push(child);
         keeping = true;
         return;

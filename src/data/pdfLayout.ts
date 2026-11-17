@@ -4,6 +4,9 @@
  * structure, each page becomes a "## Page N" section instead.
  */
 
+import { guessKind } from './chunk';
+import { stripInlineMarkdown } from './text';
+
 /** One run of text from a PDF page (pdf.js TextItem, simplified). */
 export interface PdfTextRun {
   str: string;
@@ -149,25 +152,39 @@ const cardLabelAlone = (text: string) => /^\p{Lu}/u.test(text) && CARD_LABELS_AL
 /** A paragraph so far that is exactly a feat category line, possibly wrapped ("General Feat (Prerequisite: Level 4+)"). */
 const FEAT_CATEGORY_PARAGRAPH = /^(?:Origin|General|Fighting Style|Epic Boon) Feat(?:\s*\([^)]*\))?$/i;
 
-/** A stat block's AC and HP lines ("AC 15", "Armor Class 15 (natural armor)", "HP 22 (5d8)", "Hit Points 22 (5d8)"). */
-const AC_LINE = /^(?:AC|Armor Class)\s+\d/;
-const HP_LINE = /^(?:HP|Hit Points)\s+\d/;
-const SCHOOLS = 'Abjuration|Conjuration|Divination|Enchantment|Evocation|Illusion|Necromancy|Transmutation';
-/** A spell's first lines: its level and school ("Level 3 Evocation (Wizard)", "Evocation Cantrip") or its casting time. */
-const SPELL_OPENING = new RegExp(`^(?:Casting Time|CASTING TIME)\\b|^Level [1-9] (?:${SCHOOLS})\\b|^(?:${SCHOOLS}) Cantrip\\b`);
-/** An item's type line: a category (and its parenthetical), a comma, a rarity ("Armor (Plate), Rare (Requires Attunement)"). */
-const ITEM_TYPE_OPENING =
-  /^(?:Wondrous Item|Weapon|Armor|Ring|Rod|Staff|Wand|Potion|Scroll|Shield|Ammunition)\b(?:\s*\([^)]*\))?,\s*(?:very rare|uncommon|common|rare|legendary|artifact|rarity varies)\b/i;
-/** A stat block's part headings ("Actions", "REACTIONS"), which stay under their creature. */
+/** A stat block's part headings ("Actions", "REACTIONS"), which stay with their creature. */
 const STAT_BLOCK_PART = /^(?:Traits|Actions|Bonus Actions|Reactions|Legendary Actions|Lair Actions|Mythic Actions|Regional Effects)$/i;
 
 /**
- * Whether a heading's own lines (up to the next heading) open an entity: a stat block (AC and HP lines), or a spell or
- * a magic item (its level and school, casting time or type line among its first four lines).
+ * An entity named at the third heading size is an entry, not a section. A level-3 heading over text the chunker reads
+ * as an entity (a stat block, a spell, a magic item or a feat: chunk.ts's guessKind, as the chunker keeps such a
+ * section whole with its subsections) takes in no later heading but its stat block's parts: until the next heading of
+ * level 3 or above, the level-4 headings after it become its level-3 siblings, as before the fourth level. Its parts
+ * set at its own size ("Traits", "Actions") don't end it. Otherwise a creature printed among smaller spell, feature or
+ * area headings would take every one after it. `levels`: each block's heading level, 0 for a paragraph.
  */
-function opensEntity(own: readonly string[]): boolean {
-  if (own.some((t) => AC_LINE.test(t)) && own.some((t) => HP_LINE.test(t))) return true;
-  return own.slice(0, 4).some((t) => SPELL_OPENING.test(t) || ITEM_TYPE_OPENING.test(t));
+function liftAfterEntities(blocks: readonly string[], levels: readonly number[]): string[] {
+  const out = [...blocks];
+  const above: { level: number; title: string }[] = [];
+  let afterEntity = false;
+  for (let i = 0; i < blocks.length; i++) {
+    const level = levels[i];
+    if (!level) continue;
+    const title = stripInlineMarkdown(blocks[i].slice(level + 1)) || 'Untitled';
+    if (level >= 4) {
+      if (afterEntity && !STAT_BLOCK_PART.test(title)) out[i] = `### ${blocks[i].slice(level + 1)}`;
+    } else if (level < 3) {
+      while (above.length && above[above.length - 1].level >= level) above.pop();
+      above.push({ level, title });
+      afterEntity = false;
+    } else if (!(afterEntity && STAT_BLOCK_PART.test(title))) {
+      let end = i + 1;
+      while (end < blocks.length && !levels[end]) end++;
+      const own = blocks.slice(i + 1, end).join('\n\n');
+      afterEntity = guessKind(title, own, above.map((a) => a.title)) !== 'rule';
+    }
+  }
+  return out;
 }
 
 /** Convert extracted PDF pages to Markdown with inferred headings. */
@@ -193,39 +210,36 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
   const shortLine = (bodyLengths[Math.floor(bodyLengths.length / 2)] ?? 0) * 0.6;
 
   const out: string[] = [];
+  // Each block's heading level (0 for a paragraph).
+  const levels: number[] = [];
   let paragraph = '';
   let lastBodyLength = 0;
   let heading: { level: number; text: string } | null = null;
   let prev: Line | null = null;
-  // An entity whose name is set at the third heading size (a stat block, a spell, an item) is an entry, not a section:
-  // until the next heading of that size or larger, smaller headings stay at its level (its siblings, as before the
-  // fourth level), except its stat block's parts. Otherwise a creature printed among smaller spell, feature or area
-  // headings would take every one after it.
-  let afterEntity = false;
-  const ownLines = (i: number) => {
-    const own: string[] = [];
-    for (let j = i + 1; j < lines.length && !isHeadingLine(lines[j]); j++) own.push(lines[j].text);
-    return own;
-  };
   const flushParagraph = () => {
-    if (paragraph) out.push(paragraph);
+    if (paragraph) {
+      out.push(paragraph);
+      levels.push(0);
+    }
     paragraph = '';
   };
   const flushHeading = () => {
-    if (heading) out.push(`${'#'.repeat(heading.level)} ${heading.text}`);
+    if (heading) {
+      out.push(`${'#'.repeat(heading.level)} ${heading.text}`);
+      levels.push(heading.level);
+    }
     heading = null;
   };
-  for (const [i, line] of lines.entries()) {
+  for (const line of lines) {
     const newPage = prev !== null && line.page !== prev.page;
     if (!useHeadings && (prev === null || newPage)) {
       flushParagraph();
       out.push(`## Page ${line.page}`);
+      levels.push(2);
     }
     if (useHeadings && isHeadingLine(line)) {
       flushParagraph();
-      let level = levelOf(line);
-      if (level <= 3) afterEntity = level === 3 && opensEntity(ownLines(i));
-      else if (afterEntity && !STAT_BLOCK_PART.test(line.text)) level = 3;
+      const level = levelOf(line);
       // Consecutive lines of the same heading size are one wrapped heading.
       if (heading && heading.level === level && prev && !newPage && prev.page === line.page) heading.text += ` ${line.text}`;
       else {
@@ -259,5 +273,5 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
   }
   flushHeading();
   flushParagraph();
-  return out.join('\n\n');
+  return liftAfterEntities(out, levels).join('\n\n');
 }

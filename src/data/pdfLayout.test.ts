@@ -152,6 +152,104 @@ describe('pdfPagesToMarkdown', () => {
     expect(headings).toEqual(['# Chapter 7: Lamp Magic', '## Casting Lamp Spells', '### Lamp Rituals', '#### Shared Rituals']);
   });
 
+  it('keeps a creature’s Traits and Actions set at its own size with it, and the smaller headings after it entries', () => {
+    const page = [
+      line('Chapter 2: The Candle Works', 760, 24),
+      line('Area 1: The Oil Store', 730, 18),
+      line('Barrels of lamp oil line the walls, and a newt basks in the warmth of the furnace flue.', 712),
+      line('Cinder Newt', 690, 14),
+      line('Small Elemental, Neutral', 674),
+      line('AC 13', 662),
+      line('HP 11 (2d6 + 4)', 650),
+      line('Speed 20 ft.', 638),
+      line('Str 8 -1 -1 Dex 16 +3 +3 Con 14 +2 +2 Int 3 -4 -4 Wis 10 +0 +0 Cha 5 -3 -3', 626),
+      line('CR 1/4 (XP 50; PB +2)', 614),
+      line('Traits', 594, 14),
+      line('Ember Skin. A creature that touches the newt takes 2 (1d4) Fire damage from its glowing skin.', 578),
+      line('Actions', 558, 14),
+      line('Bite. Melee Attack Roll: +5, reach 5 ft. Hit: 6 (1d6 + 3) Fire damage, and the target smolders.', 542),
+      line('Grinder’s Lens', 520, 12),
+      line('Wondrous Item, Uncommon', 504),
+      line('This lens of smoked glass lets you see through smoke and steam as if they were clear air, out to 60 feet.', 492),
+      line('Developments', 470, 12),
+      line('If the newt is slain, the furnace flue cools and the oil in the barrels stops bubbling within an hour.', 454),
+      line('Area 2: The Furnace', 430, 18),
+      line('The great furnace roars day and night, fed by a chute of coal from the yard outside the works.', 412),
+    ];
+    const markdown = pdfPagesToMarkdown([page]);
+    expect(markdown.split('\n\n').filter((p) => p.startsWith('#'))).toEqual([
+      '# Chapter 2: The Candle Works',
+      '## Area 1: The Oil Store',
+      '### Cinder Newt',
+      '### Traits',
+      '### Actions',
+      '### Grinder’s Lens',
+      '### Developments',
+      '## Area 2: The Furnace',
+    ]);
+    const entries = chunkDocument(markdown, { sourceId: 'pdf', sourceName: 'The Candle Works' });
+    expect(entries.map((e) => [e.name, e.kind])).toEqual([
+      ['Area 1: The Oil Store', 'rule'],
+      ['Cinder Newt', 'monster'],
+      ['Grinder’s Lens', 'magic-item'],
+      ['Developments', 'rule'],
+      ['Area 2: The Furnace', 'rule'],
+    ]);
+    expect(entries[1].text).toContain('Bite.');
+  });
+
+  it('reads an entity at the third size as the chunker does: stat lines with colons or on one line, an older card, a feat, a labelled type line', () => {
+    const openings: [string, string[]][] = [
+      ['Bog Lantern', ['Armor Class: 13 (natural armor)', 'Hit Points: 22 (5d8)', 'Str 10 +0 Dex 14 +2 Con 12 +1 Int 6 -2 Wis 10 +0 Cha 8 -1']],
+      ['Reed Lurker', ['Medium Monstrosity, Unaligned', 'AC 13 HP 22 (5d8) Speed 30 ft.', 'CR 1 (XP 200; PB +2)']],
+      ['Moth Veil', ['2nd-level illusion', 'Casting time: 1 action', 'Range: Self']],
+      ['Lamp Tender', ['Origin Feat', 'You can light or snuff any lamp within 30 feet of you without touching it.']],
+      ['Warden’s Lamp', ['Type: Wondrous Item, Uncommon', 'This brass lamp burns for a week on one filling of oil.']],
+    ];
+    for (const [name, own] of openings) {
+      const page = [
+        line('Appendix: Lamp Things', 760, 24),
+        line('Entries', 730, 20),
+        line(name, 700, 17),
+        ...own.map((text, i) => line(text, 684 - i * 12)),
+        line('Lamplight and Shadow', 620, 14),
+        line('Bright light and dim light from a magic lamp work as they do for any other lamp in the game.', 604),
+        line('A lamp carried in the open hand sheds its light in every direction, as far as its flame allows.', 592),
+      ];
+      const headings = pdfPagesToMarkdown([page]).split('\n\n').filter((p) => p.startsWith('#'));
+      expect([name, headings]).toEqual([name, ['# Appendix: Lamp Things', '## Entries', `### ${name}`, '### Lamplight and Shadow']]);
+    }
+  });
+
+  it('keeps a rules section’s subsections nested when its first lines only look like a card or a stat block', () => {
+    const page = [
+      line('Chapter 7: Lamp Magic', 760, 24),
+      line('Casting Lamp Spells', 730, 20),
+      line('Casting Time', 700, 17),
+      line('Lamp spells fall into a few groups by how long they take to cast:', 684),
+      line('Casting Time Typical Lamp Spells', 672),
+      line('Action Cinder Whip, Glowthread', 660),
+      line('Reaction Wax Ward', 648),
+      line('Longer Casting Times', 626, 14),
+      line('A spell that takes a minute or longer to cast needs your full attention for the whole time.', 610),
+      line('Your Defenses', 586, 17),
+      line('Your finished lamplighter’s defenses might read like this, once your armor is chosen:', 570),
+      line('AC 16 (chain shirt and shield)', 558),
+      line('HP 12 (1d10 + 2)', 546),
+      line('Hit Point Dice', 524, 14),
+      line('You have one Hit Point Die for each level, and you spend them to heal during a Short Rest.', 508),
+    ];
+    const headings = pdfPagesToMarkdown([page]).split('\n\n').filter((p) => p.startsWith('#'));
+    expect(headings).toEqual([
+      '# Chapter 7: Lamp Magic',
+      '## Casting Lamp Spells',
+      '### Casting Time',
+      '#### Longer Casting Times',
+      '### Your Defenses',
+      '#### Hit Point Dice',
+    ]);
+  });
+
   it('builds lines from several runs (spaces at gaps) and keeps short stat lines apart', () => {
     const runs: PdfTextRun[] = [
       { str: 'Casting', x: 50, y: 700, width: 35, fontSize: 10, hasEOL: false },

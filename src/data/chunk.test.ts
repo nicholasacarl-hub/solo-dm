@@ -1310,6 +1310,67 @@ Prick. The imp jabs a creature next to it.
     expect(text('Reed Lurker')).toContain('### Actions');
     expect(text('Tallow Imp')).toContain('### Actions');
   });
+
+  it('keeps a chapter’s Actions with sections of its own a section after a part it keeps (Traits first, or an Actions with notation)', () => {
+    const partsInOrder = `# Chapter 5: Reading a Creature
+
+## Parts of a Creature
+
+Each creature’s entry lists its parts in the same order.
+
+### Traits
+
+A creature’s traits describe what is always true of it.
+
+### Actions
+
+A creature’s actions say what it can do on its turn.
+
+#### Attack Lines
+
+An attack reads like this: Melee Attack Roll: +5, reach 5 ft. Hit: 7 (1d8 + 3) Slashing damage.
+
+#### Saving Throw Lines
+
+A saving throw reads like this: Dexterity Saving Throw: DC 13, each creature in a 10-foot Cube.
+
+### Bonus Actions
+
+A creature’s bonus actions are quick deeds.
+
+### Reactions
+
+A creature’s reactions answer what happens outside its turn.
+`;
+    const entries = chunkDocument(partsInOrder, opts);
+    expect(entries.map((e) => e.name)).toEqual(['Parts of a Creature', 'Actions', 'Attack Lines', 'Saving Throw Lines', 'Bonus Actions', 'Reactions']);
+    expect(entries[0].text).toContain('### Traits');
+    expect(entries.find((e) => e.name === 'Attack Lines')?.path).toEqual(['Chapter 5: Reading a Creature', 'Parts of a Creature', 'Actions', 'Attack Lines']);
+
+    const samples = `# Chapter 6: Creature Deeds
+
+## Sample Deeds
+
+These samples show how a creature’s deeds read.
+
+### Actions
+
+Bite. Melee Attack Roll: +4, reach 5 ft. Hit: 6 (1d8 + 2) Piercing damage.
+
+### Bonus Actions
+
+Some creatures act quickly as well.
+
+#### Quick Feints
+
+A feint lets a creature slip past a foe.
+
+#### Quick Retreats
+
+A retreat lets a creature step back from a foe.
+`;
+    expect(chunkDocument(samples, opts).map((e) => e.name)).toEqual(['Sample Deeds', 'Bonus Actions', 'Quick Feints', 'Quick Retreats']);
+  });
 });
 
 describe('feats and Prerequisite lines in a whole book', () => {
