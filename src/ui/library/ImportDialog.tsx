@@ -3,12 +3,16 @@
  * layer, Markdown, plain text, JSON) or photograph pages (transcribed by Claude with the player's
  * API key). Shows progress from importLibraryDocument and can be cancelled.
  *
+ * Paste with formatting: a copy from a web page or a document carries HTML beside its plain text; pasted with the
+ * Markdown format chosen, its headings, tables and lists arrive as Markdown (src/data/htmlPaste.ts), with a way back to
+ * the plain text.
+ *
  * Structured imports (spec §4.1): once the import is saved, the dialog looks for spells, monsters and
  * character options on this device (detectStructure, dismissible: closing lets it finish) and ends on
  * a done page with what it found and a link to the book page. A JSON pack's records arrive pending
  * with one tap to accept the confident ones. In demo mode photos are refused (no API calls).
  */
-import { useId, useRef, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ClipboardEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useShallow } from 'zustand/react/shallow';
 import { Camera, ClipboardType, FileUp, Info, Trash2, X } from 'lucide-react';
@@ -21,6 +25,7 @@ import {
   type ImportProgress,
   type PackImport,
 } from '@/data';
+import { formattedPaste, type HtmlConversion } from '@/data/htmlPaste';
 import { useSettings } from '@/state/settingsStore';
 import { findSourcesByFingerprint, listRecords } from '@/storage';
 import { MODELS, type LibrarySource } from '@/types';
@@ -123,6 +128,24 @@ const METHOD_HINTS: Record<Method, string> = {
   photos: 'Photograph printed pages; Claude transcribes them.',
 };
 
+/** What a formatted paste kept ("3 headings, 1 table and 2 lists"). */
+function keptSummary(c: HtmlConversion): string {
+  const parts = [
+    c.headings ? plural(c.headings, 'heading') : '',
+    c.tables ? plural(c.tables, 'table') : '',
+    c.lists ? plural(c.lists, 'list') : '',
+  ].filter(Boolean);
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
+}
+
+/** A formatted paste still in the text, which "Paste as plain text instead" swaps for the clipboard's plain text. */
+interface FormattedPaste {
+  start: number;
+  markdown: string;
+  plain: string;
+  kept: string;
+}
+
 const PASTE_FORMATS = [
   { value: 'markdown' as const, label: 'Markdown' },
   { value: 'text' as const, label: 'Plain text' },
@@ -142,6 +165,41 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [notes, setNotes] = useState('');
   const [text, setText] = useState('');
   const [pasteFormat, setPasteFormat] = useState<PasteFormat>('markdown');
+  const [formatted, setFormatted] = useState<FormattedPaste | null>(null);
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  // Where the caret goes once the text a paste set has rendered.
+  const caret = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    if (caret.current === null || !textRef.current) return;
+    textRef.current.setSelectionRange(caret.current, caret.current);
+    caret.current = null;
+  }, [text]);
+
+  /** A copy from a web page or a document: its HTML as Markdown, when the Markdown format is chosen and it has structure. */
+  const pasteWithFormatting = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (pasteFormat !== 'markdown') return;
+    const html = e.clipboardData.getData('text/html');
+    if (!html) return;
+    const plain = e.clipboardData.getData('text/plain');
+    const conversion = formattedPaste(html, plain);
+    if (!conversion) return;
+    e.preventDefault();
+    const { selectionStart: start, selectionEnd: end } = e.currentTarget;
+    setText(text.slice(0, start) + conversion.markdown + text.slice(end));
+    caret.current = start + conversion.markdown.length;
+    setFormatted({ start, markdown: conversion.markdown, plain, kept: keptSummary(conversion) });
+  };
+
+  /** Swap the formatted paste for the clipboard's plain text (only while the text still holds it as pasted). */
+  const pasteAsPlainText = () => {
+    if (!formatted) return;
+    const { start, markdown, plain } = formatted;
+    setFormatted(null);
+    if (text.slice(start, start + markdown.length) !== markdown) return;
+    setText(text.slice(0, start) + plain + text.slice(start + markdown.length));
+    caret.current = start + plain.length;
+    textRef.current?.focus();
+  };
   const [file, setFile] = useState<File | null>(null);
   const [photos, setPhotos] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -354,16 +412,32 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
               <Field
                 label="Text"
                 htmlFor={`${id}-text`}
-                hint="Headings (like “## Fireball”) split the text into separate entries."
+                hint="Headings (like “## Fireball”) split the text into separate entries. A copy from a web page or a document keeps its headings, tables and lists."
               >
                 <Textarea
                   id={`${id}-text`}
+                  ref={textRef}
                   rows={9}
                   value={text}
-                  onChange={(e) => setText(e.target.value)}
+                  onChange={(e) => {
+                    setText(e.target.value);
+                    setFormatted(null);
+                  }}
+                  onPaste={pasteWithFormatting}
                   placeholder={'## Lantern of Embers\nWondrous item, uncommon\n\nWhile lit, this lantern…'}
                   className="font-mono text-xs"
                 />
+                {/* The status stays mounted (hidden while empty) so screen readers announce a formatted paste. */}
+                <div className={formatted ? 'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted' : 'sr-only'}>
+                  <p role="status" aria-live="polite">
+                    {formatted ? `Pasted with formatting: kept ${formatted.kept}.` : ''}
+                  </p>
+                  {formatted && (
+                    <Button variant="ghost" size="sm" onClick={pasteAsPlainText}>
+                      Paste as plain text instead
+                    </Button>
+                  )}
+                </div>
               </Field>
               <SegmentedField legend="Format" value={pasteFormat} options={PASTE_FORMATS} onChange={setPasteFormat} />
             </>

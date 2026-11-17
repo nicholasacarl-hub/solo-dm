@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { sampleCampaign } from '@/test/fixtures';
 import { EXPECTED_DATA, extractionJob, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
@@ -352,6 +352,33 @@ describe('the import dialog', () => {
     expect(vi.mocked(storage.setRecordStatus).mock.calls[1][1]).toBe('pending');
     // Undone: the offer is back.
     expect(await within(done).findByRole('button', { name: 'Accept the 17 confident' })).toBeInTheDocument();
+  });
+
+  it('pastes a copy from a web page with its headings and tables, and can swap it back for the plain text', async () => {
+    const user = userEvent.setup();
+    vi.mocked(storage.useLibrarySources).mockReturnValue([]);
+    renderLibrary('/library?tab=mine');
+    await user.click(screen.getAllByRole('button', { name: /Import/ })[0]);
+    const dialog = screen.getByRole('dialog');
+    const box = within(dialog).getByLabelText('Text') as HTMLTextAreaElement;
+    const html = '<h2>Lamp Spells</h2><p>Spells of the <b>lamp</b>.</p><table><tr><th>Spell</th><th>Level</th></tr><tr><td>Ember Lash</td><td>1</td></tr></table>';
+    const plain = 'Lamp Spells\nSpells of the lamp.\nSpell\tLevel\nEmber Lash\t1';
+    const clipboardData = { getData: (type: string) => (type === 'text/html' ? html : type === 'text/plain' ? plain : '') };
+    expect(fireEvent.paste(box, { clipboardData })).toBe(false);
+    expect(box.value).toBe('## Lamp Spells\n\nSpells of the **lamp**.\n\n| Spell | Level |\n| --- | --- |\n| Ember Lash | 1 |');
+    expect(within(dialog).getByRole('status')).toHaveTextContent('Pasted with formatting: kept 1 heading and 1 table.');
+    await user.click(within(dialog).getByRole('button', { name: 'Paste as plain text instead' }));
+    expect(box.value).toBe(plain);
+    expect(within(dialog).queryByRole('button', { name: 'Paste as plain text instead' })).toBeNull();
+    expect(within(dialog).getByRole('status')).toBeEmptyDOMElement();
+
+    // With "Plain text" chosen, or a copy that is only prose, the browser pastes the plain text as usual.
+    await user.clear(box);
+    await user.click(within(dialog).getByRole('radio', { name: 'Plain text' }));
+    expect(fireEvent.paste(box, { clipboardData })).toBe(true);
+    await user.click(within(dialog).getByRole('radio', { name: 'Markdown' }));
+    expect(fireEvent.paste(box, { clipboardData: { getData: (type: string) => (type === 'text/html' ? '<p>Only <b>prose</b>.</p>' : 'Only prose.') } })).toBe(true);
+    expect(box.value).toBe('');
   });
 
   it('refuses photos in demo mode', async () => {
