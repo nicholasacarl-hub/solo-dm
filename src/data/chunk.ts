@@ -727,24 +727,33 @@ const isStatBlockSection = (title: string) => STAT_BLOCK_SECTIONS.has(stripInlin
 
 /**
  * Stat-block parts whose names a rulebook also gives its own sections ("Actions", "Bonus Actions" and "Reactions" in a
- * chapter on how to play). "Traits" isn't one: alone, it heads a creature's or a species' traits.
+ * chapter on how to play, "Legendary Actions" in one on running creatures). Not "Traits" (alone, it heads a creature's
+ * or a species' traits), nor "Lair Actions", "Regional Effects" or "Mythic Actions": under a lair, an adventure's area
+ * or a creature's lore they belong to that section, and older books word them without a stat block's notation.
  */
-const ACTION_SECTIONS = new Set(
-  ['actions', 'bonus actions', 'reactions', 'legendary actions', 'lair actions', 'mythic actions', 'regional effects'],
-);
-/** Notation only a stat block prints: an attack's line, "Hit:", a recharge, uses per day, a saving throw's DC line. */
+const ACTION_SECTIONS = new Set(['actions', 'bonus actions', 'reactions', 'legendary actions']);
+/**
+ * Notation only a stat block prints: an attack's line, "Hit:", a recharge, uses per day, a saving throw's DC line, a
+ * 2024 reaction's "Trigger: … Response:", "Legendary Action Uses:". Tested on text without emphasis marks.
+ */
 const STAT_BLOCK_NOTATION =
-  /\b(?:Melee|Ranged)(?: or (?:Melee|Ranged))?(?: (?:Weapon|Spell))? Attack(?: Roll)?:|\bHit:|\(Recharge \d|\(\d+\/Day\b|\b\d+\/Day each\b|\b(?:Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) Saving Throw:\s*DC \d/;
+  /\b(?:Melee|Ranged)(?: or (?:Melee|Ranged))?(?: (?:Weapon|Spell))? Attack(?: Roll)?:|\bHit:|\(Recharge\b|\(\d+\/[Dd]ay\b|\b\d+\/[Dd]ay [Ee]ach\b|\b(?:Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) Saving Throw:\s*DC \d|\bTrigger:[^\n]*\bResponse:|\bLegendary Action Uses:/;
+
+/** Text without Markdown emphasis marks ("_Melee Attack Roll:_", "*Armor Class* 13"), so the patterns above see its words. */
+const withoutEmphasis = (text: string) => text.replace(/[*_]/g, '');
 
 /**
- * A rulebook's own section under a stat-block part's name: an action section's name over text without a stat block's
- * notation (subsections included), under a parent whose own text has no stat block's AC and HP or ability scores. A
- * creature the reader doesn't recognise keeps its "Actions" that way, and a chapter on how to play keeps its own.
+ * A rulebook's own section under a stat-block part's name: an action section's name under a parent whose own text has
+ * no stat block's AC and HP or ability scores, that holds sections of its own (a creature's "Actions" holds only its
+ * other parts) or has no stat block's notation (subsections included). A creature the reader doesn't recognise keeps
+ * its "Actions" that way, and a chapter on how to play keeps its own, even one that quotes the notation it explains.
  */
 function rulebookSection(section: Section, parentBody: string): boolean {
   if (!ACTION_SECTIONS.has(stripInlineMarkdown(section.title).toLowerCase())) return false;
-  if ((ARMOR_CLASS.test(parentBody) && HIT_POINTS.test(parentBody)) || ABILITY_SCORES.test(parentBody)) return false;
-  return !STAT_BLOCK_NOTATION.test(renderSection(section));
+  const parent = withoutEmphasis(parentBody);
+  if ((ARMOR_CLASS.test(parent) && HIT_POINTS.test(parent)) || ABILITY_SCORES.test(parent)) return false;
+  if (section.children.some((c) => !isStatBlockSection(c.title))) return true;
+  return !STAT_BLOCK_NOTATION.test(withoutEmphasis(renderSection(section)));
 }
 
 /** The first `n` non-empty lines, without Markdown emphasis or list markers. */

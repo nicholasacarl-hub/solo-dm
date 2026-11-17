@@ -1,6 +1,7 @@
 /**
  * Markdown → the flattened text a PDF's text layer gives after pdfLayout.ts (the "flattened PDF" dialect
- * of spec §3.9): headings kept (levels above 3 become 3, like pdfLayout's three heading sizes), emphasis
+ * of spec §3.9): headings kept (levels above 3 become 3, as a PDF that sets its sub-subsections at its third heading
+ * size gives; pdfLayout reads a fourth size as level 4), emphasis
  * and list markers gone, every paragraph on one line, and tables reduced to loose lines — each body row
  * one line with its cells joined by single spaces, so columns can't be recovered.
  *

@@ -387,11 +387,13 @@ lose or merge them.
   stays an item.
 - **Monsters**: AC and HP lines with a CR and its XP, or the six ability scores. A stat block's "Actions" and the
   like follow the creature before them when a PDF puts them at its heading level. With no creature before it, an
-  "Actions", "Bonus Actions", "Reactions" (legendary, lair or mythic actions, regional effects) section stays in the
-  section above it only when it reads as a stat block's part: that section's own text shows AC and HP lines or
-  ability scores, the part shows a stat block's notation (an attack's line, "Hit:", a recharge, uses per day, a
-  saving throw's DC line), or a part kept that way comes just before it. Otherwise it is the book's own section, as in
-  a chapter on how to play. "Traits" always stays.
+  "Actions", "Bonus Actions", "Reactions" or "Legendary Actions" section stays in the section above it only when it
+  reads as a stat block's part: that section's own text shows AC and HP lines or ability scores; the part holds no
+  sections but other stat-block parts and shows a stat block's notation (an attack's line, "Hit:", a recharge, uses per
+  day, a saving throw's DC line, "Trigger: … Response:", "Legendary Action Uses:"), read through Markdown emphasis; or
+  a part kept that way comes just before it. Otherwise it is the book's own section, as in a chapter on how to play,
+  even one whose subsections quote that notation. "Traits", "Lair Actions", "Regional Effects" and "Mythic Actions"
+  always stay: under a lair, an adventure's area or a creature's lore, they belong to it.
 - **Spells**: a level and school line, a "Casting Time:" label, or a spell card's labels without colons at the top
   of the entry. A card is labels alone over their values, or a run of labels over a run of values (a web grid
   copied as text, but not a run whose Name or Spell label holds another spell's name); a grid's row of labels,
@@ -424,14 +426,17 @@ subsection is an entry. Other entities keep their subsections (a creature its Va
 its creature). Pasted text never takes for a heading a table's row (any line with "|"), a card label over its
 value, a label set off from its value, or "Origin Feat".
 
-**PDF import** (`src/data/pdfLayout.ts`) reads headings from font sizes: the largest heading size is level 1, the
-next two are levels 2 and 3, and any smaller heading size is level 4, so a book's sub-subsections stay under their
-sections. It drops a repeated line as a running header only where it stands at the top
-or bottom of its page, and never a stat block's line, an item's type line, a feat's category line, a labelled line
-in body text such as "Casting Time:", or a line that starts with a spell card's label set at 70% of the body size or
-more (in any case, with or without a bullet or a colon); a chapter header such as "Appendix B: Magic Items" still
-goes. A feat's category line keeps its own line, and a line of card labels alone (one label, or a grid's row of
-them) is a paragraph of its own.
+**PDF import** (`src/data/pdfLayout.ts`) reads headings from font sizes: the largest heading size is level 1, the next
+two are levels 2 and 3, and any smaller heading size is level 4, so a book's sub-subsections stay under their
+sections. A level-3 heading that opens a stat block (AC and HP lines), a spell (its level and school or "Casting Time"
+among its first lines) or a magic item (its type line) is an entry, not a section: until the next heading of level 3
+or above, the smaller headings after it stay at level 3, except its stat block's parts, so a creature printed among
+smaller spell, feature or area headings doesn't take them in. It drops a repeated line as a running header only where
+it stands at the top or bottom of its page, and never a stat block's line, an item's type line, a feat's category
+line, a labelled line in body text such as "Casting Time:", or a line that starts with a spell card's label set at 70%
+of the body size or more (in any case, with or without a bullet or a colon); a chapter header such as "Appendix B:
+Magic Items" still goes. A feat's category line keeps its own line, and a line of card labels alone (one label, or a
+grid's row of them) is a paragraph of its own.
 
 **Magic items** (`src/data/structured/parse/magicItem.ts`). A type line is read by its own grammar: a category,
 then rarities joined by "or", each with its parentheticals (attunement among them), also when wrapped over two

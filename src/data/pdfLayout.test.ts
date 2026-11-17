@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { chunkDocument } from './chunk';
 import { pdfPagesToMarkdown, type PdfTextRun } from './pdfLayout';
 
 /** One full line of text as a single run ending in a line break. */
@@ -61,6 +62,94 @@ describe('pdfPagesToMarkdown', () => {
         'Old wicks burn unevenly, so a lamp with an old wick gives no bonus until it is trimmed.',
       ].join('\n\n'),
     );
+  });
+
+  it('keeps a creature named at the third size an entry among smaller spell names: the spells after it stay entries, its Actions stay its own', () => {
+    const page = [
+      line('Chapter 9: Lamplight Spells', 760, 24),
+      line('Spell Descriptions', 730, 20),
+      line('Ember Lash', 700, 14),
+      line('Level 1 Evocation (Wizard)', 684),
+      line('Casting Time: Action', 672),
+      line('A lash of flame cracks at a creature you can see within reach of your outstretched hand.', 660),
+      line('Lamp Spirit', 630, 17),
+      line('Medium Celestial, Neutral', 612),
+      line('AC 11 plus the level of the spell', 600),
+      line('HP 30 plus 10 for each spell level above 3', 588),
+      line('Str 12 +1 +1 Dex 14 +2 +2 Con 12 +1 +1 Int 10 +0 +0 Wis 12 +1 +1 Cha 14 +2 +2', 576),
+      line('Actions', 556, 12),
+      line('Radiant Touch. Melee Attack Roll: bonus equals your spell attack modifier, reach 5 ft.', 540),
+      line('Sunbeam Thread', 510, 14),
+      line('Level 2 Evocation (Wizard)', 494),
+      line('Casting Time: Action', 482),
+      line('A thread of sunlight stitches across the room, shedding bright light along its whole length.', 470),
+      line('Wick Ward', 440, 14),
+      line('Level 1 Abjuration (Wizard)', 424),
+      line('Casting Time: Reaction', 412),
+      line('You shield a lamp flame from wind and water until the end of your next turn, whatever comes.', 400),
+    ];
+    const markdown = pdfPagesToMarkdown([page]);
+    const headings = markdown.split('\n\n').filter((p) => p.startsWith('#'));
+    expect(headings).toEqual([
+      '# Chapter 9: Lamplight Spells',
+      '## Spell Descriptions',
+      '#### Ember Lash',
+      '### Lamp Spirit',
+      '#### Actions',
+      '### Sunbeam Thread',
+      '### Wick Ward',
+    ]);
+    const entries = chunkDocument(markdown, { sourceId: 'pdf', sourceName: 'Lamplight Spells' });
+    expect(entries.map((e) => [e.name, e.kind])).toEqual([
+      ['Ember Lash', 'spell'],
+      ['Lamp Spirit', 'monster'],
+      ['Sunbeam Thread', 'spell'],
+      ['Wick Ward', 'spell'],
+    ]);
+    expect(entries[1].text).toContain('Radiant Touch');
+    expect(entries[1].text).not.toContain('Sunbeam');
+  });
+
+  it('keeps the headings after an item or a spell named at the third size its siblings, as it does after a creature', () => {
+    const page = [
+      line('Appendix: Lamps and Lamp Magic', 760, 24),
+      line('Magic Lamps', 730, 20),
+      line('Warden’s Lamp', 700, 17),
+      line('Wondrous Item, Uncommon', 684),
+      line('This brass lamp burns for a week on one filling of oil and never gutters in the wind or rain.', 672),
+      line('Lamplight and Shadow', 646, 14),
+      line('Bright light and dim light from a magic lamp work as they do for any other lamp in the game.', 630),
+      line('Moth Veil', 600, 17),
+      line('Level 2 Illusion (Wizard)', 584),
+      line('Casting Time: Action', 572),
+      line('A cloud of pale moths gathers around you and hides you from the eyes of anyone farther away.', 560),
+      line('Optional Rule: Guttering Flames', 534, 14),
+      line('A lamp that runs low on oil sheds dim light only, until someone refills it with fresh oil.', 518),
+    ];
+    const headings = pdfPagesToMarkdown([page]).split('\n\n').filter((p) => p.startsWith('#'));
+    expect(headings).toEqual([
+      '# Appendix: Lamps and Lamp Magic',
+      '## Magic Lamps',
+      '### Warden’s Lamp',
+      '### Lamplight and Shadow',
+      '### Moth Veil',
+      '### Optional Rule: Guttering Flames',
+    ]);
+  });
+
+  it('still nests a section’s fourth-size subsections when its prose only mentions a casting time or a duration', () => {
+    const page = [
+      line('Chapter 7: Lamp Magic', 760, 24),
+      line('Casting Lamp Spells', 730, 20),
+      line('Lamp Rituals', 700, 17),
+      line('A lamp ritual takes ten minutes longer than the spell’s normal', 684),
+      line('casting time, and the lamp must stay lit for the whole of it, or the', 672),
+      line('duration of the spell ends early and the ritual has to start over again.', 660),
+      line('Shared Rituals', 636, 14),
+      line('Two casters can share one ritual if both of them can see the same lamp flame throughout it.', 620),
+    ];
+    const headings = pdfPagesToMarkdown([page]).split('\n\n').filter((p) => p.startsWith('#'));
+    expect(headings).toEqual(['# Chapter 7: Lamp Magic', '## Casting Lamp Spells', '### Lamp Rituals', '#### Shared Rituals']);
   });
 
   it('builds lines from several runs (spaces at gaps) and keeps short stat lines apart', () => {
