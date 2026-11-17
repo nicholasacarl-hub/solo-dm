@@ -1055,6 +1055,324 @@ Lairs smell of lamp oil.
   });
 });
 
+describe('a rulebook’s own sections under stat-block names', () => {
+  const RULES = `# Chapter 4: Lamplit Play
+
+Every evening at the lamp table follows a few habits.
+
+## Knacks
+
+A knack is something your hero does well.
+
+## Actions
+
+On your turn you choose one main deed: running, searching, lighting a wick.
+
+### One Deed at a Time
+
+You finish one deed before you start the next.
+
+### Bonus Actions
+
+Some knacks grant a quick extra deed on your turn, such as trimming a wick.
+
+### Reactions
+
+A reaction is a swift answer to something that happens outside your turn, such as ducking a falling lamp.
+
+## Wandering
+
+Travel by lamplight is slow.
+`;
+
+  it('makes Actions, Bonus Actions and Reactions entries of their own, nested as the book nests them', () => {
+    const entries = chunkDocument(RULES, opts);
+    expect(entries.map((e) => e.name)).toEqual([
+      'Chapter 4: Lamplit Play', 'Knacks', 'Actions', 'One Deed at a Time', 'Bonus Actions', 'Reactions', 'Wandering',
+    ]);
+    expect(entries.find((e) => e.name === 'Bonus Actions')?.path).toEqual(['Chapter 4: Lamplit Play', 'Actions', 'Bonus Actions']);
+    expect(entries.find((e) => e.name === 'Actions')?.text).toBe('On your turn you choose one main deed: running, searching, lighting a wick.');
+    expect(entries[0].text).toBe('Every evening at the lamp table follows a few habits.');
+    expect(entries.every((e) => e.kind === 'rule')).toBe(true);
+  });
+
+  it('leaves a creature the reader doesn’t recognise its Actions, by its AC and HP or by the notation of its actions', () => {
+    // AC and HP without a challenge rating or ability scores: read as a rule, but a stat block's own.
+    const unrecognised = `# Odd Creatures
+
+## Reed Lurker
+
+Armor Class 13
+
+Hit Points 11 (2d8 + 2)
+
+### Actions
+
+Bite. The lurker snaps at a creature next to it.
+
+### Bonus Actions
+
+Sink. The lurker slips under the water.
+
+## Lamp Moth
+
+A moth that drinks lamp oil.
+
+### Actions
+
+Dust. Melee Attack Roll: +3, reach 5 ft. Hit: 2 (1d4) Poison damage.
+
+### Reactions
+
+Flutter. The moth flies 10 feet away.
+`;
+    const entries = chunkDocument(unrecognised, opts);
+    expect(entries.map((e) => e.name)).toEqual(['Reed Lurker', 'Lamp Moth']);
+    const lurker = entries[0].text;
+    expect(lurker).toContain('### Actions');
+    expect(lurker).toContain('### Bonus Actions');
+    // The moth's Actions show a stat block's notation, and its Reactions follow them.
+    expect(entries[1].text).toContain('Melee Attack Roll: +3');
+    expect(entries[1].text).toContain('### Reactions');
+  });
+
+  it('still gives a recognised creature the parts a PDF put beside it', () => {
+    const entries = chunkDocument(`# Night Things\n\n## Wick Hound\n\n_Small Beast, Unaligned_\n\n**AC** 12\n\n**HP** 7 (2d6)\n\n**CR** 1/8 (XP 25; PB +2)\n\n## Actions\n\nBite. Melee Attack Roll: +3, reach 5 ft.\n\n## Reactions\n\nYelp. The hound howls.\n`, opts);
+    expect(entries.map((e) => e.name)).toEqual(['Wick Hound']);
+    expect(entries[0].text).toContain('### Reactions');
+  });
+
+  it('keeps Lair Actions and Regional Effects in the lair or area they stand under, worded the older way', () => {
+    const book = `# Lamp Wyrms
+
+Lamp wyrms coil around old lighthouses.
+
+## A Lamp Wyrm’s Lair
+
+A lamp wyrm dens in a drowned lighthouse.
+
+### Lair Actions
+
+On initiative count 20 (losing initiative ties), the wyrm takes a lair action. Each creature in the lighthouse must succeed on a DC 15 Dexterity saving throw or take 10 (3d6) fire damage.
+
+### Regional Effects
+
+Lamps within a mile of the lair gutter and smoke.
+
+## Ancient Lamp Wyrm
+
+_Gargantuan Dragon, Chaotic Evil_
+
+**AC** 22
+
+**HP** 481 (26d20 + 208)
+
+**CR** 24 (XP 62,000; PB +7)
+
+# Chapter 2: The Drowned Lighthouse
+
+## Area 7: The Lamp Room
+
+The great lamp still turns.
+
+### Lair Actions
+
+While the wyrm is here, the lamp flares on initiative count 20: each creature in the room must succeed on a DC 13 Constitution saving throw or be blinded until the end of its next turn.
+`;
+    const entries = chunkDocument(book, opts);
+    expect(entries.map((e) => e.name)).toEqual(['Lamp Wyrms', 'A Lamp Wyrm’s Lair', 'Ancient Lamp Wyrm', 'Area 7: The Lamp Room']);
+    const lair = entries[1].text;
+    expect(lair).toContain('### Lair Actions');
+    expect(lair).toContain('### Regional Effects');
+    expect(entries[3].text).toContain('### Lair Actions');
+  });
+
+  it('keeps a chapter’s Actions a section of its own when its subsections quote the notation they explain', () => {
+    const chapter = `# Chapter 3: Reading a Creature
+
+How to read a creature’s entry.
+
+## Actions
+
+A creature’s actions say what it can do on its turn.
+
+### Attack Rolls
+
+An attack reads like this: Melee Attack Roll: +5, reach 5 ft. Hit: 7 (1d8 + 3) Slashing damage.
+
+### Limited Uses
+
+Some actions recharge, as “(Recharge 5–6)” says, and some work a few times a day, as “(2/Day)” says.
+
+## Bonus Actions
+
+A creature’s bonus actions are quick deeds.
+
+## Reactions
+
+A creature’s reactions answer what happens outside its turn.
+`;
+    const entries = chunkDocument(chapter, opts);
+    expect(entries.map((e) => e.name)).toEqual([
+      'Chapter 3: Reading a Creature', 'Actions', 'Attack Rolls', 'Limited Uses', 'Bonus Actions', 'Reactions',
+    ]);
+    expect(entries.find((e) => e.name === 'Attack Rolls')?.path).toEqual(['Chapter 3: Reading a Creature', 'Actions', 'Attack Rolls']);
+  });
+
+  it('reads a stat block’s notation and stat lines through Markdown emphasis, in either edition’s wording', () => {
+    const creatures = `# Odd Creatures
+
+## Ash Moth
+
+A moth that drinks lamp oil.
+
+### Actions
+
+_**Dust.**_ _Melee Attack Roll:_ +3, reach 5 ft. _Hit:_ 2 (1d4) Poison damage.
+
+### Reactions
+
+_**Flutter.**_ The moth flies 10 feet away.
+
+## Wax Hag
+
+A hag who keeps a candle shop.
+
+### Actions
+
+***Spellcasting.*** The hag casts one of the following spells:
+
+**1/Day Each:** _light_, _darkness_
+
+## Ember Sprite
+
+A spark that never quite goes out.
+
+### Bonus Actions
+
+***Flare.*** *Dexterity Saving Throw:* DC 12, one creature the sprite can see. *Failure:* 3 (1d6) Fire damage.
+
+## Cinder Toad
+
+A toad that swallows coals.
+
+### Actions
+
+***Belch (Recharge after a Short or Long Rest).*** The toad spits embers in a 15-foot cone.
+
+## Night Hound
+
+A hound that hunts by lamplight.
+
+### Reactions
+
+***Snap Back.*** _Trigger:_ A creature next to the hound hits it with an attack. _Response:_ The hound bites that creature.
+
+## Bell Wraith
+
+The ghost of a bell ringer.
+
+### Legendary Actions
+
+_Legendary Action Uses:_ 3. Immediately after another creature’s turn, the wraith can expend a use to take one of these actions.
+
+## Reed Lurker
+
+_Armor Class_ 13
+
+_Hit Points_ 11 (2d8 + 2)
+
+### Actions
+
+Bite. The lurker snaps at a creature next to it.
+
+## Tallow Imp
+
+| STR | DEX | CON | INT | WIS | CHA |
+|---|---|---|---|---|---|
+| 6 (−2) | 14 (+2) | 10 (+0) | 8 (−1) | 10 (+0) | 6 (−2) |
+
+### Actions
+
+Prick. The imp jabs a creature next to it.
+`;
+    const entries = chunkDocument(creatures, opts);
+    expect(entries.map((e) => e.name)).toEqual([
+      'Ash Moth', 'Wax Hag', 'Ember Sprite', 'Cinder Toad', 'Night Hound', 'Bell Wraith', 'Reed Lurker', 'Tallow Imp',
+    ]);
+    const text = (name: string) => entries.find((e) => e.name === name)?.text ?? '';
+    expect(text('Ash Moth')).toContain('### Reactions');
+    expect(text('Wax Hag')).toContain('1/Day Each');
+    expect(text('Ember Sprite')).toContain('### Bonus Actions');
+    expect(text('Cinder Toad')).toContain('### Actions');
+    expect(text('Night Hound')).toContain('### Reactions');
+    expect(text('Bell Wraith')).toContain('### Legendary Actions');
+    expect(text('Reed Lurker')).toContain('### Actions');
+    expect(text('Tallow Imp')).toContain('### Actions');
+  });
+
+  it('keeps a chapter’s Actions with sections of its own a section after a part it keeps (Traits first, or an Actions with notation)', () => {
+    const partsInOrder = `# Chapter 5: Reading a Creature
+
+## Parts of a Creature
+
+Each creature’s entry lists its parts in the same order.
+
+### Traits
+
+A creature’s traits describe what is always true of it.
+
+### Actions
+
+A creature’s actions say what it can do on its turn.
+
+#### Attack Lines
+
+An attack reads like this: Melee Attack Roll: +5, reach 5 ft. Hit: 7 (1d8 + 3) Slashing damage.
+
+#### Saving Throw Lines
+
+A saving throw reads like this: Dexterity Saving Throw: DC 13, each creature in a 10-foot Cube.
+
+### Bonus Actions
+
+A creature’s bonus actions are quick deeds.
+
+### Reactions
+
+A creature’s reactions answer what happens outside its turn.
+`;
+    const entries = chunkDocument(partsInOrder, opts);
+    expect(entries.map((e) => e.name)).toEqual(['Parts of a Creature', 'Actions', 'Attack Lines', 'Saving Throw Lines', 'Bonus Actions', 'Reactions']);
+    expect(entries[0].text).toContain('### Traits');
+    expect(entries.find((e) => e.name === 'Attack Lines')?.path).toEqual(['Chapter 5: Reading a Creature', 'Parts of a Creature', 'Actions', 'Attack Lines']);
+
+    const samples = `# Chapter 6: Creature Deeds
+
+## Sample Deeds
+
+These samples show how a creature’s deeds read.
+
+### Actions
+
+Bite. Melee Attack Roll: +4, reach 5 ft. Hit: 6 (1d8 + 2) Piercing damage.
+
+### Bonus Actions
+
+Some creatures act quickly as well.
+
+#### Quick Feints
+
+A feint lets a creature slip past a foe.
+
+#### Quick Retreats
+
+A retreat lets a creature step back from a foe.
+`;
+    expect(chunkDocument(samples, opts).map((e) => e.name)).toEqual(['Sample Deeds', 'Bonus Actions', 'Quick Feints', 'Quick Retreats']);
+  });
+});
+
 describe('feats and Prerequisite lines in a whole book', () => {
   it('keeps stronghold rooms and class options as rules, with their subsections as entries of their own', () => {
     const entries = chunkDocument(HOLDINGS, opts);

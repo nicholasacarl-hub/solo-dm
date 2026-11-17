@@ -4,6 +4,9 @@
  * structure, each page becomes a "## Page N" section instead.
  */
 
+import { guessKind } from './chunk';
+import { stripInlineMarkdown } from './text';
+
 /** One run of text from a PDF page (pdf.js TextItem, simplified). */
 export interface PdfTextRun {
   str: string;
@@ -149,6 +152,41 @@ const cardLabelAlone = (text: string) => /^\p{Lu}/u.test(text) && CARD_LABELS_AL
 /** A paragraph so far that is exactly a feat category line, possibly wrapped ("General Feat (Prerequisite: Level 4+)"). */
 const FEAT_CATEGORY_PARAGRAPH = /^(?:Origin|General|Fighting Style|Epic Boon) Feat(?:\s*\([^)]*\))?$/i;
 
+/** A stat block's part headings ("Actions", "REACTIONS"), which stay with their creature. */
+const STAT_BLOCK_PART = /^(?:Traits|Actions|Bonus Actions|Reactions|Legendary Actions|Lair Actions|Mythic Actions|Regional Effects)$/i;
+
+/**
+ * An entity named at the third heading size is an entry, not a section. A level-3 heading over text the chunker reads
+ * as an entity (a stat block, a spell, a magic item or a feat: chunk.ts's guessKind, as the chunker keeps such a
+ * section whole with its subsections) takes in no later heading but its stat block's parts: until the next heading of
+ * level 3 or above, the level-4 headings after it become its level-3 siblings, as before the fourth level. Its parts
+ * set at its own size ("Traits", "Actions") don't end it. Otherwise a creature printed among smaller spell, feature or
+ * area headings would take every one after it. `levels`: each block's heading level, 0 for a paragraph.
+ */
+function liftAfterEntities(blocks: readonly string[], levels: readonly number[]): string[] {
+  const out = [...blocks];
+  const above: { level: number; title: string }[] = [];
+  let afterEntity = false;
+  for (let i = 0; i < blocks.length; i++) {
+    const level = levels[i];
+    if (!level) continue;
+    const title = stripInlineMarkdown(blocks[i].slice(level + 1)) || 'Untitled';
+    if (level >= 4) {
+      if (afterEntity && !STAT_BLOCK_PART.test(title)) out[i] = `### ${blocks[i].slice(level + 1)}`;
+    } else if (level < 3) {
+      while (above.length && above[above.length - 1].level >= level) above.pop();
+      above.push({ level, title });
+      afterEntity = false;
+    } else if (!(afterEntity && STAT_BLOCK_PART.test(title))) {
+      let end = i + 1;
+      while (end < blocks.length && !levels[end]) end++;
+      const own = blocks.slice(i + 1, end).join('\n\n');
+      afterEntity = guessKind(title, own, above.map((a) => a.title)) !== 'rule';
+    }
+  }
+  return out;
+}
+
 /** Convert extracted PDF pages to Markdown with inferred headings. */
 export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
   const all = pages.flatMap((runs, i) => pageLines(runs, i + 1));
@@ -162,25 +200,34 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
   const chars = (ls: Line[]) => ls.reduce((n, l) => n + l.text.length, 0);
   // Headings are a small share of the text; when "large" text dominates, sizes carry no structure.
   const useHeadings = headingLines.length > 0 && chars(headingLines) <= chars(lines) * MAX_HEADING_SHARE;
-  // Largest heading size = level 1, next = level 2, the rest = level 3.
+  // Largest heading size = level 1, then levels 2 and 3, the rest = level 4 (a book's sub-subsections keep their own
+  // level, so "Ability Modifier" under each of three sections isn't their sibling).
   const sizes = [...new Set(headingLines.map((l) => roundSize(l.fontSize)))].sort((a, b) => b - a);
-  const levelOf = (l: Line) => Math.min(3, sizes.indexOf(roundSize(l.fontSize)) + 1);
+  const levelOf = (l: Line) => Math.min(4, sizes.indexOf(roundSize(l.fontSize)) + 1);
 
   // A line much shorter than usual ends its paragraph (or is a stat line such as "Range: 60 feet").
   const bodyLengths = lines.filter((l) => !useHeadings || !isHeadingLine(l)).map((l) => l.text.length).sort((a, b) => a - b);
   const shortLine = (bodyLengths[Math.floor(bodyLengths.length / 2)] ?? 0) * 0.6;
 
   const out: string[] = [];
+  // Each block's heading level (0 for a paragraph).
+  const levels: number[] = [];
   let paragraph = '';
   let lastBodyLength = 0;
   let heading: { level: number; text: string } | null = null;
   let prev: Line | null = null;
   const flushParagraph = () => {
-    if (paragraph) out.push(paragraph);
+    if (paragraph) {
+      out.push(paragraph);
+      levels.push(0);
+    }
     paragraph = '';
   };
   const flushHeading = () => {
-    if (heading) out.push(`${'#'.repeat(heading.level)} ${heading.text}`);
+    if (heading) {
+      out.push(`${'#'.repeat(heading.level)} ${heading.text}`);
+      levels.push(heading.level);
+    }
     heading = null;
   };
   for (const line of lines) {
@@ -188,6 +235,7 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
     if (!useHeadings && (prev === null || newPage)) {
       flushParagraph();
       out.push(`## Page ${line.page}`);
+      levels.push(2);
     }
     if (useHeadings && isHeadingLine(line)) {
       flushParagraph();
@@ -225,5 +273,5 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
   }
   flushHeading();
   flushParagraph();
-  return out.join('\n\n');
+  return liftAfterEntities(out, levels).join('\n\n');
 }

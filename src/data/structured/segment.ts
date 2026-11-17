@@ -402,7 +402,7 @@ function classNamedIn(title: string, known: ReadonlySet<string>): string | undef
 const isSubclassTitle = (title: string) => SUBCLASS_TITLE.test(title) || SUBCLASS_NAME.test(title);
 
 /**
- * A PDF's three heading sizes can flatten a subclass's feature headings to its own level: a
+ * A PDF that sets a subclass's feature headings at the subclass's own heading size flattens them to its level: a
  * subclass-titled node without children takes the following leaf siblings (up to the next
  * subclass-titled sibling, an entry stored as an entity or opening with a Prerequisite line, or a
  * sibling with children of its own).
