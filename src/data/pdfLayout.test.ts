@@ -198,13 +198,16 @@ describe('pdfPagesToMarkdown', () => {
     expect(entries[1].text).toContain('Bite.');
   });
 
-  it('reads an entity at the third size as the chunker does: stat lines with colons or on one line, an older card, a feat, a labelled type line', () => {
+  it('reads an entity at the third size as the chunker does: stat lines with colons, on one line or bulleted, an older card, a feat, a labelled type line', () => {
     const openings: [string, string[]][] = [
       ['Bog Lantern', ['Armor Class: 13 (natural armor)', 'Hit Points: 22 (5d8)', 'Str 10 +0 Dex 14 +2 Con 12 +1 Int 6 -2 Wis 10 +0 Cha 8 -1']],
       ['Reed Lurker', ['Medium Monstrosity, Unaligned', 'AC 13 HP 22 (5d8) Speed 30 ft.', 'CR 1 (XP 200; PB +2)']],
       ['Moth Veil', ['2nd-level illusion', 'Casting time: 1 action', 'Range: Self']],
       ['Lamp Tender', ['Origin Feat', 'You can light or snuff any lamp within 30 feet of you without touching it.']],
       ['Warden’s Lamp', ['Type: Wondrous Item, Uncommon', 'This brass lamp burns for a week on one filling of oil.']],
+      // A word processor's list bullets before each line.
+      ['Brine Crab', ['• Armor Class 12 (natural armor)', '• Hit Points 9 (2d6 + 2)', '• Str 12 +1 Dex 10 +0 Con 13 +1 Int 1 -5 Wis 9 -1 Cha 3 -4']],
+      ['Ember Mote', ['1st-level evocation', '● Casting Time: 1 action', '● Range: 60 feet']],
     ];
     for (const [name, own] of openings) {
       const page = [
