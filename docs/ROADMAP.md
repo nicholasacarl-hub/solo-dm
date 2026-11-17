@@ -84,6 +84,17 @@ the item's text, since the sheet names the item behind each AC and save bonus:
 - **Homebrewery and 5etools stat blocks**: creatures made with Homebrewery's V3 snippet ("**Armor Class** :: 13")
   read as rules, and a 5etools or legacy Homebrewery export that quotes each stat block (">## Name") merges its
   creatures into one entry.
+- **Creature parts filed apart**: when a creature's or NPC's own text shows no AC and HP lines or ability scores (its
+  stats in a section of their own, or "uses the … stat block, with these changes:"), its Actions, Bonus Actions,
+  Reactions or Legendary Actions become entries of their own if they print no stat-block notation, or if each action
+  is a heading of its own.
+- **PDF heading sizes out of the usual order**: a stat block's part headings set larger than the creature's name (as
+  Word's small-capitals effect can make them) take in the next creature; a heading that wraps onto a line set smaller
+  (a tagline, or a small-capitals line of figures) is named by that line; and a sidebar's, table's or running header's
+  title set between the book's heading sizes, or a stat block the reader doesn't recognise (AC and HP without a
+  challenge rating or ability scores), becomes the parent of the entries after it (their paths only).
+- **A rules chapter's "Traits"**: a section named "Traits" stays in the section above with its sub-sections, as a
+  species' traits do, so example traits under a stat-block chapter's "Traits" aren't entries of their own.
 - **Stored misreadings kept**: a glossary or a blank card that lists only a spell card's labels, a rules section that
   ends in a bare list of them ("Reading a Spell"), and a web page's glossary in divs or spans whose Casting Time
   definition opens with a casting time, stay spells when the first release stored them as spells (a PDF reader's copy
