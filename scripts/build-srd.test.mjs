@@ -8,6 +8,7 @@ import {
   applyTextFixes,
   buildSrd,
   compactTables,
+  groundedOpen5e,
   naturalName,
   parseArmorTraining,
   parseCostGp,
@@ -22,6 +23,7 @@ import {
   renderSubtree,
   ruleSections,
   slugify,
+  spellOwnSection,
   titleCase,
 } from './build-srd.mjs';
 
@@ -147,6 +149,123 @@ describe('parsers', () => {
 
   it('derives the proficiency bonus from CR', () => {
     expect([0, 0.25, 4, 5, 8, 9, 17, 21, 30].map(proficiencyBonusForCr)).toEqual([2, 2, 2, 3, 3, 4, 6, 7, 9]);
+  });
+});
+
+describe("Open5e's spell fields", () => {
+  const rec = {
+    saving_throw_ability: 'constitution',
+    attack_roll: true,
+    damage_roll: '10d6',
+    damage_types: ['cold'],
+    shape_type: 'sphere',
+    shape_size: 60,
+    material_cost: '1500',
+    material_consumed: true,
+  };
+  const scaling = [{ fields: { type: 'slot_level_7', damage_roll: '11d6' } }];
+
+  it("keeps each field the spell's own text bears out", () => {
+    const text =
+      '- **Components:** V, S, M (a crystal worth 1,500+ GP, which the spell consumes)\n\nMake a ranged spell attack. Frost fills a ' +
+      '60-foot-radius Sphere: each creature there makes a _Constitution saving throw_, taking 10d6 Cold damage on a failed save.';
+    expect(groundedOpen5e('Rime Orb', text, rec, scaling, quietReport)).toEqual({
+      saveAbility: 'con',
+      attackRoll: true,
+      damage: '10d6',
+      damageTypes: ['cold'],
+      area: { shape: 'sphere', size: 60 },
+      materialCostGp: 1500,
+      materialConsumed: true,
+      damageBySlotLevel: { 7: '11d6' },
+    });
+  });
+
+  it("leaves out, and reports, another spell's numbers (Freedom of Movement carried Freezing Sphere's)", () => {
+    const warnings = [];
+    const text = '- **Components:** V, S, M (a leather strap)\n\nYou touch a willing creature. Difficult Terrain no longer slows it.';
+    const out = groundedOpen5e('Lantern Stride', text, rec, scaling, { warn: (scope, message) => warnings.push(`${scope}: ${message}`) });
+    expect(out).toEqual({});
+    expect(warnings).toEqual([
+      'spells: Lantern Stride: Open5e damage "10d6" isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e damage type "cold" isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e save "con" isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e attack roll true isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e area {"shape":"sphere","size":60} isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e material cost 1500 isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e material consumed true isn\'t in the spell\'s text; left out',
+    ]);
+  });
+
+  it('reads "a d8" as 1d8, and neither "attack rolls against you" nor an ability\'s modifier as an attack roll or a save', () => {
+    const text =
+      "The weapon's damage die becomes a d8, and it deals Force damage. It uses your Constitution modifier. Other creatures have " +
+      'Disadvantage on attack rolls against you.';
+    const fields = { damage_roll: '1d8', damage_types: ['force'], attack_roll: true, saving_throw_ability: 'constitution' };
+    expect(groundedOpen5e('Oak Cudgel', text, fields, [], quietReport)).toEqual({
+      damage: '1d8',
+      damageTypes: ['force'],
+    });
+  });
+});
+
+describe("Open5e's spell fields, as the spell states them", () => {
+  const fields = (text, rec) => groundedOpen5e('Lantern Ward', text, rec, [], quietReport);
+
+  it('keeps a save the spell imposes, not one it gives Advantage on', () => {
+    expect(fields('You have Advantage on Constitution saving throws.', { saving_throw_ability: 'constitution' })).toEqual({});
+    expect(fields('The target must make a DC 15 Intelligence saving throw.', { saving_throw_ability: 'intelligence' })).toEqual({ saveAbility: 'int' });
+    expect(fields('It makes a Strength or Dexterity saving throw (its choice).', { saving_throw_ability: 'dexterity' })).toEqual({ saveAbility: 'dex' });
+  });
+
+  it('keeps an attack roll only for a melee or ranged spell attack', () => {
+    expect(fields('The target has Disadvantage on the next attack roll it makes.', { attack_roll: true })).toEqual({});
+    expect(fields('Whenever you hit it with an attack roll, it takes an extra 1d6 Necrotic damage.', { attack_roll: true })).toEqual({});
+    expect(fields('Make a melee spell attack against the target.', { attack_roll: true })).toEqual({ attackRoll: true });
+  });
+
+  it("keeps an area only where its size and shape are printed together, not a range's distance or a Line's width", () => {
+    expect(fields('- **Range:** 60 feet\n\nYou touch a willing creature.', { shape_type: 'sphere', shape_size: 60 })).toEqual({});
+    expect(fields('You make a Cube up to 100 feet on each side.', { shape_type: 'cube', shape_size: 100 })).toEqual({ area: { shape: 'cube', size: 100 } });
+    expect(fields('A 100-foot-long, 5-foot-wide Line blasts out.', { shape_type: 'line', shape_size: 100 })).toEqual({ area: { shape: 'line', size: 100 } });
+    expect(fields('A 100-foot-long, 5-foot-wide Line blasts out.', { shape_type: 'line', shape_size: 5 })).toEqual({});
+    expect(fields('A Line 60 feet long and 5 feet wide blasts out.', { shape_type: 'line', shape_size: 5 })).toEqual({});
+  });
+
+  it('keeps dice the spell deals as damage, not healing, bonus or table dice', () => {
+    const roll = (damage_roll) => ({ damage_roll });
+    expect(fields('A creature you touch regains Hit Points equal to 2d8 plus your spellcasting ability modifier.', roll('2d8'))).toEqual({});
+    expect(fields('The target adds 1d4 to the attack roll or saving throw.', roll('1d4'))).toEqual({});
+    expect(fields('The target reduces the total damage taken by 1d4.', roll('1d4'))).toEqual({});
+    expect(fields('It subtracts 1d8 from all its damage rolls.', roll('1d8'))).toEqual({});
+    expect(fields('Roll 1d8 to see which ray strikes it.', roll('1d8'))).toEqual({});
+    expect(fields('It takes 5d10 Radiant or Necrotic damage (your choice).', roll('5d10'))).toEqual({ damage: '5d10' });
+    expect(fields('It takes 5d8 Acid, Cold, Fire, Lightning, or Thunder damage.', roll('5d8'))).toEqual({ damage: '5d8' });
+    expect(fields('The blade deals Fire damage equal to 3d6.', roll('3d6'))).toEqual({ damage: '3d6' });
+    expect(fields("The spell's base damage is 12d6.", roll('12d6'))).toEqual({ damage: '12d6' });
+    expect(fields('Each dart deals 1d4 + 1 Force damage.', roll('1d4 + 1'))).toEqual({ damage: '1d4 + 1' });
+    expect(fields('It takes 3d8 damage of the chosen type.', roll('3d8'))).toEqual({ damage: '3d8' });
+  });
+
+  it('keeps a damage type the spell deals, not one it only grants Resistance or Immunity to', () => {
+    const types = (damage_types) => ({ damage_types });
+    expect(fields('The wall has Immunity to Poison and Psychic damage.', types(['psychic']))).toEqual({});
+    expect(fields('The target has Resistance to Bludgeoning, Piercing, and Slashing damage.', types(['slashing']))).toEqual({});
+    const shield = 'The warm shield grants Resistance to Cold damage.\n\nAn attacker takes 2d8 Fire damage from a warm shield or 2d8 Cold damage from a chill shield.';
+    expect(fields(shield, types(['fire', 'cold']))).toEqual({ damageTypes: ['fire', 'cold'] });
+  });
+
+  it('keeps a consumed material where the spell consumes or uses it up, by the SRD’s words for it', () => {
+    expect(fields('Each time you cast this spell, you must use a different sapphire.', { material_consumed: true })).toEqual({ materialConsumed: true });
+    expect(fields('When the spell ends, the container is destroyed.', { material_consumed: true })).toEqual({ materialConsumed: true });
+    expect(fields('The spell ends if the replica chest is destroyed.', { material_consumed: true })).toEqual({});
+  });
+
+  it("reads a spell's own section, without a summoned creature's (Control Weather's tables stay)", () => {
+    const [spell] = parseSections(
+      '# Lantern Call\nYou call a spirit.\n## Lantern Spirit\n- **AC** 12\n- **HP** 20\n### Actions\nIt breathes a 15-foot Cone.\n## Gusts\n| Stage | Wind |\n|---|---|\n| 1 | Calm |',
+    ).children;
+    expect(spellOwnSection(spell)).toBe('You call a spirit.\n\n### Gusts\n\n| Stage | Wind |\n|---|---|\n| 1 | Calm |');
   });
 });
 

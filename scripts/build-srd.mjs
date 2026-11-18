@@ -637,14 +637,7 @@ function buildSpells(ctx) {
       range: stats.get('Range'),
       components: stats.get('Components'),
       duration,
-      saveAbility: rec?.saving_throw_ability ? ABILITY_BY_NAME[rec.saving_throw_ability] : undefined,
-      attackRoll: rec?.attack_roll || undefined,
-      damage: rec?.damage_roll || undefined,
-      damageTypes: rec?.damage_types?.length ? rec.damage_types : undefined,
-      area: rec?.shape_type ? compactObject({ shape: rec.shape_type, size: rec.shape_size ?? undefined }) : undefined,
-      materialCostGp: rec?.material_cost ? Number(rec.material_cost) : undefined,
-      materialConsumed: rec?.material_consumed || undefined,
-      ...spellScaling(recRow ? scaling.get(recRow.pk) : undefined),
+      ...(rec ? groundedOpen5e(title, spellOwnSection(h1), rec, scaling.get(recRow.pk), report) : {}),
     };
     const summary =
       level === 0 ? `${school} cantrip · ${classes.join(', ')}` : `Level ${level} ${school} · ${classes.join(', ')}`;
@@ -666,6 +659,84 @@ function crossCheckSpell(report, title, parsed, rec, classNames) {
   if (Boolean(rec.concentration) !== parsed.concentration) {
     report.warn('spells', `${title}: concentration ${parsed.concentration} (Open5e ${rec.concentration})`);
   }
+}
+
+/**
+ * A spell's own text, to check Open5e's fields against: its section without a summoned creature's stat block (the SRD
+ * Markdown prints one as a sub-section with an AC line; a sub-section of the spell's own, such as Control Weather's
+ * tables, stays).
+ */
+export function spellOwnSection(node) {
+  const creature = (child) => /^[-*\s]*\*\*AC\*\*\s+\d/m.test(bodyOf(child));
+  return [bodyOf(node), ...node.children.filter((c) => !creature(c)).map((c) => renderSubtree(c, 1))].filter(Boolean).join('\n\n');
+}
+
+/**
+ * Open5e's fields for a spell, each kept only where the spell's own SRD text states it: a fixture can carry another
+ * spell's numbers (at the pinned commit, Freedom of Movement has Freezing Sphere's save, damage and area), mark a spell
+ * that only changes others' attack rolls as making one, or mark a priced component consumed when the spell doesn't use
+ * it up. A save must be one the spell imposes ("a Dexterity saving throw", not "Advantage on Dexterity saving throws"),
+ * an attack roll a melee or ranged spell attack, dice, damage types and a material's cost as printed, an area its size
+ * and shape together, and a consumed material one the text says the spell consumes or uses up. What the text doesn't
+ * state is left out and reported.
+ */
+const DAMAGE_TYPES = 'Acid|Bludgeoning|Cold|Fire|Force|Lightning|Necrotic|Piercing|Poison|Psychic|Radiant|Slashing|Thunder';
+
+export function groundedOpen5e(title, text, rec, scalingRows, report) {
+  const t = text.replace(/[*_]/g, '').replace(/(\d),(\d{3})\b/g, '$1$2');
+  const keep = (field, value, supported) => {
+    if (value === undefined || supported) return value;
+    report.warn('spells', `${title}: Open5e ${field} ${JSON.stringify(value)} isn't in the spell's text; left out`);
+    return undefined;
+  };
+  // Dice the spell deals as damage ("8d6 Fire damage", "5d10 Radiant or Necrotic damage", "3d8 damage", "Force damage
+  // equal to 1d8", "base damage is 12d6", "damage die becomes a d8"), not a healing, bonus or table roll; "1d8" is
+  // also printed as "a d8".
+  const typed = `(?:(?:${DAMAGE_TYPES})(?:,?\\s+or\\s+|,\\s*|\\s+and\\s+|\\s+))*`;
+  const diceIn = (roll) =>
+    (roll.match(/\d*d\d+/g) ?? []).every((d) => {
+      const [n, m] = d.split('d');
+      const die = `${n === '1' || n === '' ? '1?' : n}d${m}\\b`;
+      return new RegExp(
+        `(?:^|\\D)${die}(?:\\s*[+−-]\\s*\\d+)?\\s+(?:\\w+\\s+)?${typed}damage\\b|\\bdamage\\s+(?:equal\\s+to|is|die\\s+becomes)\\s+(?:an?\\s+)?${die}`,
+        'i',
+      ).test(t);
+    });
+  // A damage type named outside a sentence that only grants Resistance, Immunity or Vulnerability to it.
+  const sentences = t.split(/(?<=[.!?])\s+|\n+/);
+  const granted = /\b(?:Resistance|Immunity|Vulnerability|immune|resistant)\b/i;
+  const typeNamed = (type) => sentences.some((s) => !granted.test(s) && new RegExp(`\\b${type}\\b`, 'i').test(s));
+  const ability = rec.saving_throw_ability;
+  // "a Dexterity saving throw", "a DC 15 Intelligence saving throw", "a Strength or Dexterity saving throw".
+  const imposed =
+    ability && new RegExp(`\\b(?:a|an|another)\\s+(?:DC\\s+\\d+\\s+)?(?:\\w+\\s+or\\s+)?${ability}(?:\\s+or\\s+\\w+)?\\s+saving throw\\b`, 'i').test(t);
+  const damage = keep('damage', rec.damage_roll || undefined, Boolean(rec.damage_roll) && diceIn(rec.damage_roll));
+  const types = (rec.damage_types ?? []).filter((type) => keep('damage type', type, typeNamed(type)) !== undefined);
+  const shape = rec.shape_type;
+  const size = rec.shape_size ?? undefined;
+  // The area's size, not a Line's width ("a 100-foot-long, 5-foot-wide Line" is 100).
+  const sized = size === undefined ? '' : `\\b${size}[- ](?:foot|feet)\\b(?![- ]wide\\b)`;
+  const areaStated = sized
+    ? new RegExp(`${sized}[\\w ,-]{0,30}?\\b${shape}s?\\b|\\b${shape}s?\\b[\\w ,-]{0,30}?${sized}`, 'i').test(t)
+    : new RegExp(`\\b${shape}s?\\b`, 'i').test(t);
+  const cost = rec.material_cost ? Number(rec.material_cost) : undefined;
+  return {
+    saveAbility: ability ? keep('save', ABILITY_BY_NAME[ability], imposed) : undefined,
+    attackRoll: keep('attack roll', rec.attack_roll || undefined, /\b(?:melee|ranged) spell attack\b/i.test(t)),
+    damage,
+    damageTypes: types.length ? types : undefined,
+    area: shape ? keep('area', compactObject({ shape, size }), areaStated) : undefined,
+    materialCostGp: keep('material cost', cost, new RegExp(`\\b${cost}\\+? GP\\b`, 'i').test(t)),
+    // The SRD's words for a component the spell uses up: "which the spell consumes", "you must use a different sapphire",
+    // "When the spell ends, the container is destroyed".
+    materialConsumed: keep(
+      'material consumed',
+      rec.material_consumed || undefined,
+      /\bconsume|\bmust use a different\b|\bwhen the spell ends, the \w+ is destroyed\b/i.test(t),
+    ),
+    // Scaling rows are the same record's: they go when its damage does.
+    ...(damage || !rec.damage_roll ? spellScaling(scalingRows) : {}),
+  };
 }
 
 /** Damage at higher slot levels / character levels from Open5e SpellCastingOption rows. */

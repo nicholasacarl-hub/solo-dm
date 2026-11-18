@@ -2,7 +2,9 @@
  * Offline spell parser (spec §3.9): the level-and-school line ("_Level 2 Evocation (Sorcerer, Wizard)_",
  * "_Evocation Cantrip (Bard)_", older "*3rd-level evocation (ritual)*"), Casting Time / Range /
  * Components / Duration as bullets or lines, then from the description: the saving throw, a spell
- * attack, the first damage and the cantrip's damage by character level, and the area phrase.
+ * attack, the first damage and the cantrip's damage by character level, and the area phrase. A creature's
+ * stat block printed inside the spell (a summoned spirit's or steed's) is the creature's: none of these
+ * are read from it.
  *
  * Owner: E2. Pure.
  */
@@ -51,6 +53,44 @@ const SCALING = /\blevels?\s+5\s*\(\d+d\d+\),\s*11\s*\(\d+d\d+\),?\s*(?:and\s+)?
 /** The first damage it deals: "8d6 Fire damage", "Force damage equal to 4d12", "3d8 damage" (of a chosen type). */
 const DAMAGE_EXCERPT = /\d+d\d+(?:\s*[+−-]\s*\d+)?\s+\w+\s+damage|\b\w+\s+damage\s+equal\s+to\s+\d+d\d+(?:\s*[+−-]\s*\d+)?|\d+d\d+(?:\s*[+−-]\s*\d+)?\s+damage/i;
 
+/** A stat value after its label: "**AC** 14", "**AC:** 14", "Armor Class: 14", "**Armor Class** :: 14", "AC\u00a014". */
+const STAT_VALUE = String.raw`\b[*_: \t\u00a0]*\d`;
+/**
+ * The bullets a list puts before a line, as a PDF's text layer keeps them (the PDF reader's LINE_BULLET: a word
+ * processor's Symbol and Wingdings bullets among them; its second-level "o" and a dash take a space after them).
+ */
+const BULLETS = '•◦▪‣·●○■□◆◇►▸▶∙⁃➢❖✓✔\uf0b7\uf0a7\uf0d8\uf076\uf0fc';
+/** An AC label opening a line, as Markdown, a callout, a PDF text layer or a web page prints it ("- **AC** 14", "> **Armor Class** 14", "● AC 14"). */
+const AC_LINE = new RegExp(String.raw`^[ \t\u00a0>]*(?:[${BULLETS}][ \t\u00a0]*|(?:[-*+–—]|o)[ \t\u00a0]+)?[*_]*(?:Armor Class|AC)${STAT_VALUE}`);
+/** HP and Speed labels, also where a text layer joined them to the line before ("AC 14 HP 50", "HP 50 Speed 30 ft."). */
+const HP_LABEL = new RegExp(String.raw`(?:^|[\s>*_${BULLETS}–—-])(?:Hit Points|HP)${STAT_VALUE}`);
+const SPEED_LABEL = new RegExp(String.raw`(?:^|[\s>*_${BULLETS}–—-])Speed${STAT_VALUE}`);
+/** Lines of a text, each with its line break (or a <br> that a Markdown source kept), so their lengths add up to the text's. */
+const LINE_ENDS = /(?<=\n)|(?<=<br\s*\/?>)/i;
+/** A line with something on it besides a callout's ">" marks. */
+const filled = (line: string) => /[^\s>]/.test(line);
+
+/**
+ * A spell's own text: without a creature's stat block printed inside it (a summoned spirit's or steed's: its saves,
+ * attacks, damage and areas are the creature's). The stat block starts at an AC line that an HP line follows within
+ * four lines (an Initiative line may come between; a text layer may wrap a line or join two) and then a Speed line
+ * within two more, as every stat block prints them. An object's AC and HP alone (no Speed) start none.
+ */
+export function spellOwnText(text: string): string {
+  const lines = text.split(LINE_ENDS);
+  let offset = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (AC_LINE.test(lines[i])) {
+      const next = lines.slice(i, i + 16).filter(filled).slice(0, 7);
+      next[0] = next[0].replace(AC_LINE, '');
+      const hp = next.slice(0, 5).findIndex((l) => HP_LABEL.test(l));
+      if (hp >= 0 && next.slice(hp, hp + 3).some((l) => SPEED_LABEL.test(l))) return text.slice(0, offset);
+    }
+    offset += lines[i].length;
+  }
+  return text;
+}
+
 function formatOf(line: string, hasClasses: boolean): Wire<'spell'>['format'] {
   if (/\d(?:st|nd|rd|th)[- ]level/i.test(line)) return '2014';
   if (/^Level\s+\d/i.test(line) || hasClasses) return '2024';
@@ -67,7 +107,7 @@ export function parseSpell(candidate: Candidate & { kind: 'spell' }): OfflinePar
   const castingTime = v.get('Casting Time') ?? '';
   const duration = v.get('Duration') ?? '';
   const range = v.get('Range') ?? '';
-  const prose = proseParagraphs(text)
+  const prose = proseParagraphs(spellOwnText(text))
     .filter((p) => !SPELL_LINE.test(plain(p).slice(0, 80)) && !/^(?:Casting Time|Range|Components|Duration)\s*:/i.test(plain(p)))
     .map(plain)
     .join('\n');

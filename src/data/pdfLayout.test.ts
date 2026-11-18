@@ -326,6 +326,57 @@ describe('pdfPagesToMarkdown', () => {
     expect(paragraphs).toContain('Large Monstrosity, Unaligned, often met near the old lamps');
   });
 
+  it('starts a new line at a stat line after a list bullet, or with a colon after its label, even after a long line', () => {
+    const lead = 'When the spirit appears, it takes the statistics the spell gives it in the short list that follows:';
+    const stats = ['• AC 12 + the spell’s level', '\uf0b7 HP 20 + 5 for each spell level above 3', 'AC: 15', 'o Hit Points: 40', '\uf0a7 Speed: 25 ft.', '➢ CR 1'];
+    const page = [line(lead, 700), ...stats.flatMap((stat, i) => [line(stat, 688 - i * 24), line(lead, 676 - i * 24)])];
+    const paragraphs = pdfPagesToMarkdown([page]).split('\n\n');
+    for (const stat of stats) expect(paragraphs.some((p) => p.startsWith(stat)), stat).toBe(true);
+    // A list of dashes or middle dots, after a creature's type line or a wrapped item that ends in a word.
+    for (const mark of ['–', '-', '—', '·']) {
+      const list = [`${mark} AC 10 + 1 per spell level`, `${mark} HP 5 + 10 per spell level above 2`, `${mark} Speed 60 ft.`];
+      const block = [line('Large Celestial, Fey, or Fiend (Your Choice), Neutral', 700), ...list.map((l, i) => line(l, 688 - i * 12))];
+      const out = pdfPagesToMarkdown([[line(lead, 712), ...block]]).split('\n\n');
+      for (const l of list) expect(out, `${mark}: ${l}`).toContain(l);
+    }
+  });
+
+  it("keeps in the paragraph a card's or a Prerequisite label after a list's bullet, and a spaced dash in prose", () => {
+    const lead = 'Each feat in this chapter is laid out the same way, with the following parts in the order below:';
+    const feat = pdfPagesToMarkdown([[line(lead, 700), line('- Prerequisite: what you must have before you can take the feat, if it has any.', 688)]]);
+    expect(feat).not.toContain('\n\n- Prerequisite');
+    const card = pdfPagesToMarkdown([[line(lead, 700), line('• Casting Time: how long it takes to cast the spell, which the card gives first.', 688)]]);
+    expect(card).not.toContain('\n\n• Casting');
+    const wrap = 'You call a hound of lantern light into an unoccupied space you can see within range, a guardian';
+    const dashed = '— AC 14, HP 20, Speed 40 ft. — that stays at your side until the spell ends or you dismiss it early.';
+    const after = 'When the hound appears, each creature of your choice near it must make a Dexterity saving throw.';
+    for (const before of [wrap, `${wrap.replace(', a guardian', '')} (a Celestial guardian)`]) {
+      expect(pdfPagesToMarkdown([[line(before, 700), line(dashed, 688), line(after, 676)]])).not.toContain('\n\n— AC');
+    }
+    // Nor beside a dashed line that is no stat line with its value: the closing dash wrapped, a dashed list of options,
+    // an option that names a stat ("– Size. The steed is Large").
+    const stats = '— AC 14 + the spell’s level, HP 20 + 5 for each spell level above 3, Speed 40 ft., Fly 40 ft.';
+    const closing = pdfPagesToMarkdown([[line(wrap, 700), line(stats, 688), line('— that stays at your side until the spell ends, and when it appears it howls at the moon.', 676), line(after, 664)]]);
+    expect(closing).not.toContain('\n\n— AC');
+    const options = pdfPagesToMarkdown([[line('– Hound. A hound of light appears in an unoccupied space you can see within range, a guardian', 700), line(stats, 688), line('– Moth Cloud. A cloud of moths fills a 10-foot Emanation around a point you choose within range.', 676)]]);
+    expect(options).not.toContain('\n\n— AC');
+    const forms = pdfPagesToMarkdown([[line(wrap, 700), line(stats, 688), line('of the following forms for it when you cast the spell, and the form lasts until the spell ends:', 676), line('– Size. The steed is Large, or Medium if you are Small, whichever you choose when you cast it.', 664)]]);
+    expect(forms).not.toContain('\n\n— AC');
+  });
+
+  it('starts a dashed stat list whose first item wraps onto a second line', () => {
+    const page = [
+      line('When you cast the spell, the hound uses the statistics below, which change with the spell slot you use:', 700),
+      line('– Armor Class 11 + the level of the spell', 688),
+      line('(natural armor)', 676),
+      line('– Hit Points 20 + 5 for each spell level above 3', 664),
+      line('– Speed 40 ft.', 652),
+    ];
+    const paragraphs = pdfPagesToMarkdown([page]).split('\n\n');
+    expect(paragraphs.some((p) => p.startsWith('– Armor Class 11'))).toBe(true);
+    expect(paragraphs).toContain('– Hit Points 20 + 5 for each spell level above 3');
+  });
+
   it('drops running headers and page numbers', () => {
     const pages = [1, 2, 3, 4].map((n) => [
       line("Player's Notes", 800, 8),

@@ -12,7 +12,7 @@ import {
 } from '@/test/structuredFixtures';
 import type { CompendiumEntry } from '@/types';
 import { flatten } from './parse/flatten';
-import { candidateFor, markCandidate, readingOrder, segment, type SegmentContext } from './segment';
+import { candidateFor, explainsParts, markCandidate, readingOrder, segment, type SegmentContext } from './segment';
 
 /** A few SRD spell and class names, as the rules index would supply them (nameKeys). */
 const CTX: SegmentContext = {
@@ -200,6 +200,98 @@ describe('segment: structure rules', () => {
       ['background', 'Lamplighter'],
       ['species', 'Mosskin'],
     ]);
+    // What a re-check settles: the explanations an earlier reader took for a background and a species, not the real ones.
+    expect(entries.map((e) => [explainsParts('background', e.text), explainsParts('species', e.text)])).toEqual([
+      [true, false],
+      [false, true],
+      [false, false],
+      [false, false],
+      [false, false],
+    ]);
+    // Only what that reader took for one: three of the background's labels, all three of the species' lines.
+    const some = (labels: string[]) => explains(9, 'Parts', labels).text;
+    expect(explainsParts('background', some(['Ability Scores', 'Feat']))).toBe(false);
+    expect(explainsParts('species', some(['Creature Type', 'Speed']))).toBe(false);
+    expect(explainsParts('species', some(['Creature Type', 'Size']))).toBe(false);
+    expect((['class', 'subclass', 'feat'] as const).filter((k) => explainsParts(k, entries[0].text) || explainsParts(k, entries[1].text))).toEqual([]);
+  });
+
+  it('finds a species whose Creature Type line reads as 2022 books print it, and never takes a real one for an explanation', () => {
+    const runIns = (pairs: [string, string][]) => pairs.map(([l, v]) => `**_${l}._** ${v}`).join('\n\n');
+    const thornfolk = entry(1, 'Thornfolk', runIns([['Creature Type', 'You are a Humanoid.'], ['Size', 'You are Medium.'], ['Speed', 'Your walking speed is 30 feet.'], ['Bramble Hide', 'You have thorns.']]), ['Peoples', 'Thornfolk']);
+    const fogwisp = entry(3, 'Fogwisp Traits', runIns([['Creature Type', 'You are a Fey.'], ['Size', 'You are Small.'], ['Speed', 'Your walking speed is 25 feet.'], ['Mist Step', 'You drift.']]), ['Peoples', 'Fogwisp', 'Fogwisp Traits']);
+    const entries = [thornfolk, entry(2, 'Fogwisp', 'Fogwisps drift over the marsh.', ['Peoples', 'Fogwisp']), fogwisp];
+    expect(segment(entries, CTX).candidates.map((c) => [c.kind, c.name])).toEqual([
+      ['species', 'Thornfolk'],
+      ['species', 'Fogwisp'],
+    ]);
+    // Real ones, which a re-check must keep: these, an older layout with a Creature Type line, a type named another
+    // way, a background with a Feature subsection, and one whose Skill Proficiencies line names its skills.
+    const reedling = runIns([['Ability Score Increase', 'Your Wisdom score increases by 2.'], ['Creature Type', 'You are a Humanoid.'], ['Size', 'Your size is Small.'], ['Speed', 'Your walking speed is 25 feet.'], ['Languages', 'You can speak, read, and write Common and Sylvan.']]);
+    const reworded = runIns([['Creature Type', 'Your creature type is Fey.'], ['Size', 'You are Small.'], ['Speed', 'Your walking speed is 25 feet.']]);
+    // An explanation may name a type after its line's first full stop ("Most peoples here are Humanoid").
+    const explained = runIns([['Creature Type', 'Every creature has a tag for its type. Most peoples here are Humanoid.'], ['Size', 'Says how big.'], ['Speed', 'Says how fast.']]);
+    expect(explainsParts('species', explained)).toBe(true);
+    const olderGeneric = reedling.replace('You are a Humanoid.', 'See your lineage.');
+    for (const text of [thornfolk.text, fogwisp.text, reedling, reworded, olderGeneric]) expect(explainsParts('species', text), text).toBe(false);
+    const lampwarden = ['**Ability Scores:** Increase one score by 2 and a different one by 1.', '**Skill Proficiencies:** Insight and Perception', '**Tool Proficiency:** Tinker’s Tools', '**Equipment:** A lantern and 10 GP'].join('\n\n');
+    expect(explainsParts('background', lampwarden)).toBe(false);
+    expect(explainsParts('background', lampwarden.replace('Insight and Perception', 'Two you pick').replace('Increase one score', 'Increase your Strength'))).toBe(false);
+    // Lines that name no ability or skill: its Feature subsection keeps it a background (the older layout); without one,
+    // nothing tells it from an explanation.
+    const generic = lampwarden.replace('Insight and Perception', 'Two you pick');
+    expect(explainsParts('background', generic, ['Feature: Road Warden'])).toBe(false);
+    expect(explainsParts('background', generic)).toBe(true);
+  });
+
+  it("doesn't take an explanation written to the reader ('You are a Humanoid unless…') for a species, and reads a type in italics", () => {
+    const parts = ['**Creature Type.** You are a Humanoid unless your people says otherwise.', '**Size.** Your people tells you whether you are Small or Medium.', '**Speed.** Your people gives your walking speed.'];
+    const peoples = [
+      '## Mirefolk', 'Mirefolk live in the fens.', '### Mirefolk Traits', '***Creature Type.*** You are a Humanoid.', '***Size.*** You are Medium.', '***Speed.*** Your walking speed is 30 feet.', '***Mire Step.*** You ignore mud.',
+      '## Reedling', '- **Creature Type:** _Humanoid_', '- **Size:** Small', '- **Speed:** 30 feet', '***Reed Step.*** You hide in reeds.',
+    ];
+    const kinds = (blocks: string[]) => segment(chunkDocument(blocks.join('\n\n'), { sourceId: 't', sourceName: 'T' }), CTX).candidates.map((c) => [c.kind, c.name]);
+    const both = [['species', 'Mirefolk'], ['species', 'Reedling']];
+    // As the chapter's own text, and as a section of its own.
+    expect(kinds(['# Peoples of the Fen', 'Every people in this chapter has the following parts.', ...parts, ...peoples])).toEqual(both);
+    expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...parts, ...peoples])).toEqual(both);
+    // An explanation's Creature Type sentence goes on past the type (a condition, a default), as the chapter's own text
+    // or in a section of its own.
+    for (const type of ['You are a Humanoid—unless your people says otherwise.', 'You are a *Humanoid* unless your people says otherwise.', 'You are a Humanoid (unless your people says otherwise).', 'You are a Humanoid by default; your people may name another.']) {
+      const explaining = [`**Creature Type.** ${type}`, ...parts.slice(1)];
+      expect(kinds(['# Peoples of the Fen', 'Every people in this chapter has the following parts.', ...explaining, ...peoples]), type).toEqual(both);
+      expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...explaining, ...peoples]), type).toEqual(both);
+    }
+    // Whatever its Speed line gives.
+    const numbered = ['**Creature Type.** You are a Humanoid unless your people says otherwise.', parts[1], '**Speed.** Most peoples walk 30 feet a turn.'];
+    expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...numbered, ...peoples])).toEqual(both);
+    // With its species a level further down, under their people's lore.
+    const deeper = ['**Creature Type.** You are a Humanoid by default; your people may name another.', ...parts.slice(1)];
+    expect(kinds(['# Peoples of the Fen', 'Every people in this chapter has the following parts.', ...deeper, ...peoples.slice(0, 7)])).toEqual([['species', 'Mirefolk']]);
+    // The 2022 sentence as the books print it.
+    for (const type of ['You are a Humanoid.', 'You are a Humanoid. You are also considered a goblin for any prerequisite.', 'You are an Ooze.']) {
+      const bogwight = ['## Bogwight', `***Creature Type.*** ${type}`, '***Size.*** You are Small.', '***Speed.*** Your walking speed is 30 feet.', '***Fen Sight.*** You see in mist.'];
+      expect(kinds(['# Peoples of the Fen', ...bogwight]), type).toEqual([['species', 'Bogwight']]);
+    }
+    // A type in emphasis is named: a re-check keeps the species.
+    const italic = ['- **Creature Type:** Usually _Humanoid_', '- **Size:** Small', '- **Speed:** 30 feet'].join('\n\n');
+    expect(explainsParts('species', italic)).toBe(false);
+  });
+
+  it('keeps a species or a background whose subsection repeats its lines (a subrace, a variant) one record', () => {
+    const kinds = (blocks: string[]) => segment(chunkDocument(blocks.join('\n\n'), { sourceId: 't', sourceName: 'T' }), CTX).candidates.map((c) => [c.kind, c.name]);
+    const reedfolk = [
+      '# Peoples', '## Reedfolk', 'Reedfolk live by the river.', '### Reedfolk Traits',
+      '***Ability Score Increase.*** Your Dexterity score increases by 2.', '***Size.*** Your size is Small.', '***Speed.*** Your base walking speed is 25 feet.', '***Languages.*** You can speak, read, and write Common and Sylvan.', '***Subrace.*** Choose one of the subraces below.',
+      '#### Tall Reedfolk', '***Ability Score Increase.*** Your Wisdom score increases by 1.', '***Size.*** Your size is Medium.', '***Speed.*** Your base walking speed is 30 feet.',
+      '#### Short Reedfolk', '***Ability Score Increase.*** Your Charisma score increases by 1.', '***Nimble.*** You slip between larger creatures.',
+    ];
+    expect(kinds(reedfolk)).toEqual([['species', 'Reedfolk']]);
+    const lamplighter = [
+      '# Backgrounds', '## Lamplighter', '**Ability Scores:** Dexterity, Wisdom, Charisma', '**Feat:** Alert', '**Skill Proficiencies:** Insight and Perception', '**Tool Proficiency:** Tinker’s Tools', '**Equipment:** A lantern and 8 GP',
+      '### Variant: Wickwright', '**Ability Scores:** Dexterity, Intelligence, Charisma', '**Feat:** Crafter', '**Tool Proficiency:** Glassblower’s Tools',
+    ];
+    expect(kinds(lamplighter)).toEqual([['background', 'Lamplighter']]);
   });
 
   it('takes the flattened feature siblings of an older-format subclass along', () => {

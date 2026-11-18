@@ -71,6 +71,7 @@ export const KIND_RULES: Readonly<Record<StructuredKind, string>> = {
     'saveAbility: the ability its targets save with ("dex" for a Dexterity saving throw); "none" without a save.',
     'attack: "melee" or "ranged" when the caster makes a spell attack roll; otherwise "none".',
     'damageText: the first damage it deals, with dice and type ("8d6 Fire damage"); "" when none.',
+    'A creature\'s stat block printed inside the spell (a summoned spirit\'s or steed\'s) is the creature\'s: read areaText, saveAbility, attack and damageText from the spell\'s own text before it.',
     'cantripScalingText: for a cantrip whose damage grows with character level, the excerpt that lists the levels and dice ("levels 5 (2d10), 11 (3d10), and 17 (4d10)"); otherwise "".',
   ].join(' '),
   'magic-item': [

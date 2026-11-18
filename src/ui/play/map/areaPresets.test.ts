@@ -4,7 +4,7 @@ import { sampleCharacter } from '@/test/fixtures';
 import type { Character, CompendiumEntry } from '@/types';
 import { customPreset, presetFromEntry, rangeFeet, spellPresets } from './areaPresets';
 
-/** SRD 5.2.1 spell entries as the compendium stores them (text abridged to the lines that matter). */
+/** SRD 5.2.1 spell entries as the compendium stores them (text abridged to the lines that matter; Lightning Bolt's area aside). */
 function spell(id: string, name: string, range: string, text: string, area?: { shape: string; size: number }): CompendiumEntry {
   return {
     id,
@@ -31,7 +31,8 @@ const FIREBALL = spell(
   'Each creature in a 20-foot-radius Sphere centered on that point makes a Dexterity saving throw.',
   { shape: 'sphere', size: 20 },
 );
-// The stored area is the Line's width (5): the text is the source of truth (srd-rules §6.5).
+// A stored area that disagrees with the text (an older compendium kept the Line's width, 5, as its size): the text is
+// the source of truth (srd-rules §6.5).
 const LIGHTNING_BOLT = spell(
   'srd:spell:lightning-bolt',
   'Lightning Bolt',
@@ -83,6 +84,18 @@ describe('area presets from spell text (D64)', () => {
     expect(presetFromEntry(THUNDERWAVE)).toMatchObject({ shape: 'cube', sizeFt: 15, fromSelf: true });
     expect(presetFromEntry(ODD_AREA)).toMatchObject({ shape: 'sphere', sizeFt: 10, rangeFt: 60, fromSelf: false });
     expect(presetFromEntry(MAGIC_MISSILE)).toBeNull();
+  });
+
+  // SRD 5.2.1 Summon Dragon prints its spirit's stat block, whose Breath Weapon fills a cone: the spell itself has no area.
+  it("offers nothing from a summoned creature's stat block printed inside the spell", () => {
+    const call = spell(
+      'srd:spell:lantern-call',
+      'Lantern Call',
+      '60 feet',
+      'You call forth a lantern spirit.\n\n### Lantern Spirit\n\n- **AC** 12 + the spell’s level\n- **HP** 20 + 5 for each spell level above 3\n- **Speed** 30 ft.\n\n' +
+        '**_Flare._** _Dexterity Saving Throw:_ DC equals your spell save DC, each creature in a 15-foot Cone.',
+    );
+    expect(presetFromEntry(call)).toBeNull();
   });
 
   it('lists the hero’s prepared spells (and cantrips) with an area, in sheet order; nothing until the index loads', () => {

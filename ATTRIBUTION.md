@@ -9,6 +9,8 @@ This work includes material from the System Reference Document 5.2.1 ("SRD 5.2.1
 - [your5e/5e-srd-markdown](https://github.com/your5e/5e-srd-markdown) — SRD 5.2.1 converted to Markdown (CC-BY-4.0).
 - [open5e/open5e-api](https://github.com/open5e/open5e-api) — the `srd-2024` dataset (SRD content, CC-BY-4.0). Open5e artwork is not used.
 
+A spell's fields from Open5e are kept only where that spell's own SRD 5.2.1 text states them: a saving throw the spell imposes, an attack roll where the spell makes a melee or ranged spell attack, damage dice where the spell deals them as damage (not healing, bonus or table dice), a damage type the text names other than where the spell only grants Resistance or Immunity to it, a material's cost where the text names it, an area where its size (not a Line's width) and shape are printed together, and a consumed material where the text says the spell consumes or uses it up. A summoned creature's stat block printed inside a spell doesn't count as the spell's text. Values copied from another spell, or flags the text doesn't support, are left out.
+
 `scripts/fetch-srd-sources.sh` and `scripts/build-srd.mjs` reproduce the conversion.
 
 Solo DM is an unofficial fan project, **compatible with fifth edition**. It is not affiliated with, endorsed, sponsored, or approved by Wizards of the Coast.

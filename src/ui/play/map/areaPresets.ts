@@ -1,13 +1,15 @@
 /**
  * Area-template presets (D64): the hero's prepared spells whose compendium text names an area — parsed with
- * parseAreaText (the text is the source of truth: only a few SRD spells carry `data.area`, and Lightning Bolt's
- * stored size is its width), `data.area` only as a fallback — plus the Custom sizes. A spell the player
- * reviewed from their own book (structured imports, spec §6.4) is the exception: its `data.area` is the
- * player's checked reading, so it comes first. Pure.
+ * parseAreaText (the text is the source of truth: only some SRD spells carry `data.area`), `data.area` only as a
+ * fallback — plus the Custom sizes. Only the spell's own text counts, not a creature's stat block printed inside it
+ * (Summon Dragon's spirit breathes a cone; the spell has none). A spell the player reviewed from their own book
+ * (structured imports, spec §6.4) is the exception: its `data.area` is the player's checked reading, so it comes
+ * first. Pure.
  */
 import { parseAreaText } from '@/engine';
 import type { RulesIndex } from '@/data';
 import { isReviewedImport } from '@/data/structured/materialize';
+import { spellOwnText } from '@/data/structured/parse/spell';
 import type { AreaShape, Character, CompendiumEntry } from '@/types';
 
 export type TemplateShape = Exclude<AreaShape, 'squares'>;
@@ -78,9 +80,9 @@ function storedArea(entry: CompendiumEntry): StoredArea | null {
   return { shape: shape as TemplateShape, sizeFt, ...(widthFt ? { widthFt } : {}), ...(heightFt ? { heightFt } : {}) };
 }
 
-/** The text's area (parseAreaText), when it names one with a size. */
+/** The text's area (parseAreaText), when the spell's own text names one with a size. */
 function textArea(entry: CompendiumEntry): StoredArea | null {
-  const parsed = parseAreaText(entry.text);
+  const parsed = parseAreaText(spellOwnText(entry.text));
   if (!parsed || parsed.shape === 'squares' || !parsed.sizeFt) return null;
   return {
     shape: parsed.shape as TemplateShape,

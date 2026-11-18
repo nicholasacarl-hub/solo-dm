@@ -140,9 +140,32 @@ function joinLines(a: string, b: string): string {
   return `${a} ${b}`;
 }
 
-/** A line that starts a stat-block or spell label ("AC 17", "HP 150 (12d10 + 84)", "Speed 40 ft.", "Casting Time: Action"). */
-const STAT_LABEL_START =
-  /^(?:(?:AC|HP|CR)\s+\d|Speed\s+\d|Initiative\s+[+\u2212-]?\d|(?:Armor Class|Hit Points|Challenge)\s+\d|(?:Casting Time|Range|Components|Duration|Prerequisites?)\s*:)/;
+/**
+ * A list's bullet before a line, as a PDF's text layer keeps it: round and square bullets, arrows and ticks, a word
+ * processor's Symbol and Wingdings bullets and its second-level "o", or a dash. The stat-block matcher
+ * (structured/parse/spell.ts BULLETS) takes the same ones.
+ */
+const LINE_BULLET = String.raw`(?:[•◦▪‣·●○■□◆◇►▸▶∙⁃➢❖✓✔\uf0b7\uf0a7\uf0d8\uf076\uf0fc]\s*|(?:[-+–—]|o)\s+)`;
+/**
+ * A line that starts a stat-block or spell label ("AC 17", "AC: 17", "HP 150 (12d10 + 84)", "Speed 40 ft.", "Casting
+ * Time: Action"); a stat line also after a list's bullet ("• AC 12").
+ */
+const STAT_LABEL_START = new RegExp(
+  String.raw`^(?:${LINE_BULLET}?(?:(?:AC|HP|CR|Speed|Armor Class|Hit Points|Challenge):?\s+\d|Initiative:?\s+[+\u2212-]?\d)|(?:Casting Time|Range|Components|Duration|Prerequisites?)\s*:)`,
+);
+/** A dash or a middle dot opening a line: a list's bullet, or a spaced dash in prose ("…a guardian / — AC 14, HP 20 — that…"). */
+const DASH_MARK = /^[-+–—·]\s/;
+/** A stat line with its value after a dash or a middle dot ("– HP 20 + 5 for each spell level above 3"). */
+const dashedStat = (line: string | undefined) => line !== undefined && DASH_MARK.test(line) && STAT_LABEL_START.test(line);
+/**
+ * A stat or spell label line starts a line of its own; after a dash or a middle dot, only in a list of stat lines (the
+ * paragraph so far, or one of the two lines after it, is another with its value): a stat block lists several, a dash
+ * in prose stands alone.
+ */
+function statLineStarts(text: string, paragraph: string, after: readonly (string | undefined)[]): boolean {
+  if (!STAT_LABEL_START.test(text)) return false;
+  return !DASH_MARK.test(text) || [paragraph, ...after].some(dashedStat);
+}
 
 /** A spell card's labels alone on their line: one above its value, or a grid's row of them ("Casting Time", "RANGE", "CASTING TIME RANGE"). */
 const CARD_LABELS_ALONE = /^(?:Casting Time|Range(?:\/Area)?|Components|Duration)(?:\s+(?:Casting Time|Range(?:\/Area)?|Components|Duration))*$/i;
@@ -230,7 +253,7 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
     }
     heading = null;
   };
-  for (const line of lines) {
+  lines.forEach((line, at) => {
     const newPage = prev !== null && line.page !== prev.page;
     if (!useHeadings && (prev === null || newPage)) {
       flushParagraph();
@@ -260,7 +283,7 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
         gap < 0 ||
         lastBodyLength < shortLine ||
         afterCategory ||
-        STAT_LABEL_START.test(line.text) ||
+        statLineStarts(line.text, paragraph, [lines[at + 1]?.text, lines[at + 2]?.text]) ||
         cardLabelAlone(line.text) ||
         cardLabelAlone(paragraph);
       if (paragraphBreak) {
@@ -270,7 +293,7 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
       lastBodyLength = line.text.length;
     }
     prev = line;
-  }
+  });
   flushHeading();
   flushParagraph();
   return liftAfterEntities(out, levels).join('\n\n');

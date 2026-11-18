@@ -17,11 +17,20 @@ export const STRUCTURED_SCHEMA_VERSION = 1;
  * when the entry shows a shape other things print (a stronghold room's type line, labelled lines, a class
  * option's prerequisite); spells, monsters and magic items are found by their own lines (a type line,
  * stat-block labels), not by mentions in prose; a magic item's type line is read by its grammar, and a
- * bonus that applies only in some situations isn't applied.
+ * bonus that applies only in some situations isn't applied; 4 = a creature's ability scores split over two
+ * tables, a class table with its group row first (as D&D Beyond prints it), a class's spell list printed as
+ * tables, a subclass's own Spellcasting (a third caster), a species named by its "<Species> Traits" heading,
+ * a species whose Creature Type line reads "You are a Humanoid." (2022) found, with its type read from that line,
+ * a chapter's explanation of a background's or species' parts read as rules, a feat's "Choose one… Increase
+ * the chosen ability score", and a summoning spell's save, attack, damage and area read from its own text,
+ * not from its creature's stat block.
  */
-export const PARSER_VERSION = 3;
-/** Bump with any change to a system prompt or wire schema. */
-export const EXTRACT_PROMPT_VERSION = 1;
+export const PARSER_VERSION = 4;
+/**
+ * Bump with any change to a system prompt or wire schema. History: 1 = the first prompts; 2 = a spell's area, save,
+ * attack and damage are read from its own text, not from a creature's stat block printed inside it.
+ */
+export const EXTRACT_PROMPT_VERSION = 2;
 
 /** What the app structures. A subset of ContentKind, so the DM tool schemas keep their kind enums. */
 export type StructuredKind = Extract<

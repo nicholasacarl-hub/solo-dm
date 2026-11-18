@@ -362,7 +362,9 @@ per kind. What the offline reader can't read waits as *Not read yet* (the player
 subclass with a Spellcasting feature of its own (a Fighter's or Rogue's spellcasting subclass) reads as a third
 caster with the ability its text names; when it names none, the ability waits for Claude. A species printed under
 "<Species> Traits" takes the species' name, and a 2024 background's Ability Scores line must name abilities (a
-species' Creature Type line, a type), so a chapter's explanation of a background's or species' parts isn't one.
+species' Creature Type line, a type: "Humanoid", or the whole sentence 2022 books print, "You are a Humanoid.", in
+emphasis too), so a chapter's explanation of a background's or species' parts, which says what each line holds, isn't
+one ("You are a Humanoid unless your species says otherwise" explains).
 With the player's consent — the model (the Settings model and the cheaper ones, each with a price range
 and minutes), the kinds, and a spending limit — the runner sends one entry per request: streamed,
 structured-output JSON, adaptive thinking at effort `low`, one cached system block per kind, a warm-up
@@ -447,12 +449,18 @@ above it keeps it. Word's complex-script weight, style and size (`mso-bidi-…`)
 table's second header row arrives as its first row (Markdown has one header row); the class reader folds a class
 table's two rows into one header, whichever comes first ("Spell Slots per Spell Level" over 1 to 9, or, as D&D
 Beyond prints it, that group row over "Level | Proficiency Bonus | … | 1 | 2 …"). A class's spell list printed as a
-table per spell level gives the spells in its tables, not the tables' captions. Paragraphs keep their bold and italics, a
+table per spell level gives the spells in its tables, not the tables' captions. A spell's save, attack, damage and area
+come from its own text, not from a creature's stat block printed inside it (a summoning spell's spirit or steed, found
+by its AC, HP and Speed lines: as labels, colon labels or a list, after the bullets a word processor or a PDF's text
+layer prints, on lines a text layer wrapped or joined; the PDF reader starts a line at each stat line, after a bullet
+too, and after a dash or a middle dot when another stat line so marked, with its value, sits within two lines of it:
+a spaced dash in prose stands alone), both offline and in what Claude is asked for. Paragraphs keep their bold and italics, a
 line break starts a line (a stat block's lines stay apart), list items come as lists (Word's list paragraphs too),
 tables as pipe tables with their caption above and merged cells keeping the cells after them in their columns (a
 table that only lays out a page or boxes a sidebar reads as its cells' blocks), and a description list's term and
-value share a line. Links keep their text; images, scripts, styles, form controls, hidden elements and a site's
-navigation (and a banner, footer or search box marked as one) go, and a whole page copied is read from its main
+value share a line. Links keep their text; images (a figure that is only a picture takes its caption and artist's
+credit with it), scripts, styles, form controls, hidden elements and a site's navigation (and a banner, footer or
+search box marked as one) go, and a whole page copied is read from its main
 landmark when that holds most of the text. Text that would turn into Markdown (a leading "#", "-" or "1.", an
 asterisk) is escaped. A copy with only prose, one that is Markdown already (copied from an editor) or a paste with
 "Plain text" chosen pastes as the browser does. The Markdown goes in on lines of its own (a second paste's heading
@@ -610,10 +618,17 @@ its entries again after one.
 **Re-check.** When the offline rules change, `PARSER_VERSION` rises and the book page offers *Re-check for free*, which
 looks through the book again (`detectStructure`). It settles only the misreadings the version change
 explains (an entry an earlier version took for a spell, monster, magic item or feat that today's rules
-read as something else), judged by the entry's text, not by the version a record carries: removed when
+read as something else, and a chapter's explanation of a background's or species' parts taken for one: a
+section the earlier rules took for one and today's don't, whose Ability Scores and Skill Proficiencies lines
+name no ability or skill, or whose Creature Type line names no creature type, before their first full stop),
+judged by the entry's text, not by the version a record carries: removed when
 nobody worked on them, kept with a note once when someone accepted, edited, re-read with Claude or has a
 newer reading waiting, and accepted ones go back to review. A record that already has that note is the
-player's to decide, and the entry the player has open is never removed (it gets the note). *Re-read on
+player's to decide, by later versions too (they only stamp themselves on it), and the entry the player has
+open is never removed (it gets the note). A reading today's reader names differently ("Elf Traits" is now
+"Elf") keeps its record: a reading meets the stored record of its key, else of its kind and name, else of
+its kind and first entry when only one record and one reading start there; an accepted record keeps the
+name the player accepted. *Re-read on
 this device* gives such a record the note instead of reading it again as its old kind, and moves an
 accepted one back to review, as Re-check does. Records waiting in a paused Claude job are read again like
 any other (their place in the queue is kept); a note takes a record out of the queue, wherever it comes
@@ -682,7 +697,8 @@ an imported class's or subclass's features with their text (catching up subclass
 prints below the class's subclass level) and offers a feat at Ability Score Improvement, Epic Boon and
 Fighting Style levels, with "Decide with my DM" preselected. Items copy numbers, never text: armor
 stats, bonuses and attunement travel on the inventory item, so AC works in the DM's tools and on
-another device. Accepted spells join spell lists and area templates.
+another device. Accepted spells join spell lists and area templates. A template that comes from a spell's text is read
+from the spell's own text, not from a creature's stat block printed inside it (a summoning spell's spirit or steed).
 
 Name lookups rank this campaign's homebrew, shared homebrew, **reviewed imports** (and a book's own
 rules text), the SRD, then **unreviewed imported entities** — so a thin unreviewed duplicate never

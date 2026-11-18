@@ -435,41 +435,80 @@ function subclassMatch(node: OutlineNode, classNode: OutlineNode | null, known: 
   return null;
 }
 
+const ABILITY_WORDS = 'Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma|Any|Choose';
+const SKILL_WORDS =
+  'Acrobatics|Animal Handling|Arcana|Athletics|Deception|History|Insight|Intimidation|Investigation|Medicine|Nature|Perception|Performance|Persuasion|Religion|Sleight of Hand|Stealth|Survival|Any|Choose';
+const CREATURE_TYPES = 'Aberration|Beast|Celestial|Construct|Dragon|Elemental|Fey|Fiend|Giant|Humanoid|Monstrosity|Ooze|Plant|Undead';
+
 /**
  * A label's value starts with one of `words`: a background's Ability Scores line names abilities and a species'
- * Creature Type line names a type, where the section that explains a background's or species' parts says what the
- * line holds ("**Ability Scores.** A background lists three…").
+ * Creature Type line names a type ("Humanoid", or as 2022 books print it, "You are a Humanoid."), where the section
+ * that explains a background's or species' parts says what the line holds ("**Ability Scores.** A background lists
+ * three…").
  */
 const valueNames = (re: RegExp, words: string) =>
-  new RegExp(String.raw`${re.source}[ \t]*[*_]{0,3}[ \t]*\|?[ \t]*(?:${words})\b`, re.flags);
-const ABILITY_SCORES_VALUE = valueNames(L.abilityScores, 'Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma|Any|Choose');
-const CREATURE_TYPE_VALUE = valueNames(
-  L.creatureType,
-  'Aberration|Beast|Celestial|Construct|Dragon|Elemental|Fey|Fiend|Giant|Humanoid|Monstrosity|Ooze|Plant|Undead',
-);
+  new RegExp(String.raw`${re.source}[ \t]*[*_]{0,3}[ \t]*\|?[ \t]*[*_]{0,3}(?:${words})(?![A-Za-z0-9])`, re.flags);
+const ABILITY_SCORES_VALUE = valueNames(L.abilityScores, ABILITY_WORDS);
+// The 2022 sentence as the books print it, whole ("You are a Humanoid.", then perhaps "You are also considered…"), not
+// an explanation's ("You are a Humanoid unless your species says otherwise", "…by default").
+const CREATURE_TYPE_VALUE = valueNames(L.creatureType, String.raw`You are (?:an? )?[*_]{0,3}(?:${CREATURE_TYPES})[*_]{0,3}(?=\.|[ \t]*$)|(?:${CREATURE_TYPES})`);
+/** A label's line names one of `words` anywhere before its first full stop (in emphasis too: "_Humanoid_"). */
+const lineNames = (re: RegExp, words: string) => new RegExp(String.raw`${re.source}[^.\n]*?(?<![A-Za-z0-9])(?:${words})(?![A-Za-z0-9])`, re.flags);
+const ABILITY_SCORES_NAMED = lineNames(L.abilityScores, ABILITY_WORDS);
+const SKILLS_NAMED = lineNames(L.skills, SKILL_WORDS);
+const CREATURE_TYPE_NAMED = lineNames(L.creatureType, CREATURE_TYPES);
 
-function backgroundMatch(node: OutlineNode): string | null {
-  const text = ownText(node).slice(0, 3000);
-  if (!text) return null;
+/**
+ * Why a section's own text (`text`, its first 3000 characters) and its subsections' titles are a background's, or
+ * null. `named`: today's rule, whose Ability Scores line must name abilities (the reader before version 4 took any).
+ */
+function backgroundReason(text: string, childTitles: readonly string[], named = true): string | null {
   const labels2024 = [L.abilityScores, L.feat, L.skills, L.tools, L.equipment].filter((re) => re.test(text)).length;
-  if (labels2024 >= 3 && (!L.abilityScores.test(text) || ABILITY_SCORES_VALUE.test(text))) {
+  if (labels2024 >= 3 && (!named || !L.abilityScores.test(text) || ABILITY_SCORES_VALUE.test(text))) {
     return 'Has Ability Scores, Feat, Skill Proficiencies, Tool Proficiency or Equipment lines';
   }
-  const feature = L.feature.test(text) || node.children.some((c) => /^Feature\s*:/i.test(c.title));
+  const feature = L.feature.test(text) || childTitles.some((t) => /^Feature\s*:/i.test(t));
   if (L.skills.test(text) && L.equipment.test(text) && (L.languages.test(text) || L.tools.test(text)) && feature) {
     return 'Has Skill Proficiencies, Equipment and Languages lines and a Feature (older layout)';
   }
   return null;
 }
 
-function speciesMatch(node: OutlineNode): string | null {
-  const text = ownText(node).slice(0, 2000);
-  if (!text) return null;
-  if ([CREATURE_TYPE_VALUE, L.size, L.speed].filter((re) => re.test(text)).length >= 3) return 'Has Creature Type, Size and Speed lines';
+/** Why a section's own text (its first 2000 characters) is a species', or null. `named`: as for backgroundReason, for its Creature Type line. */
+function speciesReason(text: string, named = true): string | null {
+  if ([named ? CREATURE_TYPE_VALUE : L.creatureType, L.size, L.speed].filter((re) => re.test(text)).length >= 3) return 'Has Creature Type, Size and Speed lines';
   if ([L.asi, L.size, L.speed, L.languages].filter((re) => re.test(text)).length >= 3) {
     return 'Has Ability Score Increase, Size, Speed and Languages traits (older layout)';
   }
   return null;
+}
+
+/**
+ * A chapter's explanation of a background's or species' parts that the reader took for one before version 4: the
+ * reader then took it for one and today's rules don't, and its lines say what each holds, naming no ability or skill
+ * (a background's Ability Scores and Skill Proficiencies lines) or no creature type (a species' Creature Type line)
+ * before their first full stop. `text`: the section's own text; `childTitles`: its subsections' titles.
+ */
+export function explainsParts(kind: StructuredKind, text: string, childTitles: readonly string[] = []): boolean {
+  if (kind === 'background') {
+    const head = text.slice(0, 3000);
+    const says = L.abilityScores.test(head) && !ABILITY_SCORES_NAMED.test(head) && !SKILLS_NAMED.test(head);
+    return says && backgroundReason(head, childTitles, false) !== null && backgroundReason(head, childTitles) === null;
+  }
+  if (kind !== 'species') return false;
+  const head = text.slice(0, 2000);
+  const says = L.creatureType.test(head) && !CREATURE_TYPE_NAMED.test(head);
+  return says && speciesReason(head, false) !== null && speciesReason(head) === null;
+}
+
+function backgroundMatch(node: OutlineNode): string | null {
+  const text = ownText(node).slice(0, 3000);
+  return text ? backgroundReason(text, node.children.map((c) => c.title)) : null;
+}
+
+function speciesMatch(node: OutlineNode): string | null {
+  const text = ownText(node).slice(0, 2000);
+  return text ? speciesReason(text) : null;
 }
 
 /** Gear tables of a node (≤ 60 rows each, split beyond), and a single gear entry with Cost and Weight. */

@@ -9,7 +9,7 @@
 import { nameKey } from '@/lib/id';
 import { parseAreaText } from '@/engine/areas';
 import type { RecordWarning, SpellArea, SpellData, SpellSchool } from '@/types';
-import { SPELL_LINE } from '../parse/spell';
+import { SPELL_LINE, spellOwnText } from '../parse/spell';
 import type { SpellListHint } from '../segment';
 import type { Wire } from '../wire';
 import type { NormalizeContext, Normalized } from './index';
@@ -40,9 +40,9 @@ export function classesOf(text: string): string[] {
     .filter(Boolean);
 }
 
-/** A spell's area from its excerpt, else the first area phrase of its text (engine/areas.ts). */
+/** A spell's area from its excerpt, else the first area phrase of its own text (engine/areas.ts; not a creature's stat block inside it). */
 function areaOf(areaText: string, fullText: string): SpellArea | undefined {
-  const found = parseAreaText(areaText) ?? parseAreaText(fullText.replace(/[*_]/g, ''));
+  const found = parseAreaText(areaText) ?? parseAreaText(spellOwnText(fullText).replace(/[*_]/g, ''));
   if (!found) return undefined;
   return {
     shape: found.shape,
