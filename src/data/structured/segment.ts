@@ -303,6 +303,8 @@ export function candidateKey(kind: StructuredKind, name: string, primaryEntryId:
 function cleanName(kind: StructuredKind, title: string): string {
   if (kind === 'feat') return title.replace(/\s*\((?:(?:Origin|General|Fighting Style|Epic Boon)\s+)?Feat\)$/i, '').replace(/^Feat:\s*/i, '').trim() || title;
   if (kind === 'subclass') return SUBCLASS_TITLE.exec(title)?.[2].trim() ?? title;
+  // A species' stats under "<Species> Traits" (as 2024 and older books print them) are that species.
+  if (kind === 'species') return title.replace(/\s+Traits$/i, '').trim() || title;
   return title;
 }
 
@@ -433,11 +435,26 @@ function subclassMatch(node: OutlineNode, classNode: OutlineNode | null, known: 
   return null;
 }
 
+/**
+ * A label's value starts with one of `words`: a background's Ability Scores line names abilities and a species'
+ * Creature Type line names a type, where the section that explains a background's or species' parts says what the
+ * line holds ("**Ability Scores.** A background lists three…").
+ */
+const valueNames = (re: RegExp, words: string) =>
+  new RegExp(String.raw`${re.source}[ \t]*[*_]{0,3}[ \t]*\|?[ \t]*(?:${words})\b`, re.flags);
+const ABILITY_SCORES_VALUE = valueNames(L.abilityScores, 'Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma|Any|Choose');
+const CREATURE_TYPE_VALUE = valueNames(
+  L.creatureType,
+  'Aberration|Beast|Celestial|Construct|Dragon|Elemental|Fey|Fiend|Giant|Humanoid|Monstrosity|Ooze|Plant|Undead',
+);
+
 function backgroundMatch(node: OutlineNode): string | null {
   const text = ownText(node).slice(0, 3000);
   if (!text) return null;
   const labels2024 = [L.abilityScores, L.feat, L.skills, L.tools, L.equipment].filter((re) => re.test(text)).length;
-  if (labels2024 >= 3) return 'Has Ability Scores, Feat, Skill Proficiencies, Tool Proficiency or Equipment lines';
+  if (labels2024 >= 3 && (!L.abilityScores.test(text) || ABILITY_SCORES_VALUE.test(text))) {
+    return 'Has Ability Scores, Feat, Skill Proficiencies, Tool Proficiency or Equipment lines';
+  }
   const feature = L.feature.test(text) || node.children.some((c) => /^Feature\s*:/i.test(c.title));
   if (L.skills.test(text) && L.equipment.test(text) && (L.languages.test(text) || L.tools.test(text)) && feature) {
     return 'Has Skill Proficiencies, Equipment and Languages lines and a Feature (older layout)';
@@ -448,7 +465,7 @@ function backgroundMatch(node: OutlineNode): string | null {
 function speciesMatch(node: OutlineNode): string | null {
   const text = ownText(node).slice(0, 2000);
   if (!text) return null;
-  if ([L.creatureType, L.size, L.speed].filter((re) => re.test(text)).length >= 3) return 'Has Creature Type, Size and Speed lines';
+  if ([CREATURE_TYPE_VALUE, L.size, L.speed].filter((re) => re.test(text)).length >= 3) return 'Has Creature Type, Size and Speed lines';
   if ([L.asi, L.size, L.speed, L.languages].filter((re) => re.test(text)).length >= 3) {
     return 'Has Ability Score Increase, Size, Speed and Languages traits (older layout)';
   }
@@ -561,7 +578,7 @@ function sectionCandidate(node: OutlineNode, known: ReadonlySet<string>, subclas
   const species = speciesMatch(node);
   if (species) {
     const { chains, inner } = sectionChains(node, isStoredEntity);
-    return { candidate: makeCandidate('species', 'section', node.title, chains, species), inner };
+    return { candidate: makeCandidate('species', 'section', cleanName('species', node.title), chains, species), inner };
   }
   return null;
 }
