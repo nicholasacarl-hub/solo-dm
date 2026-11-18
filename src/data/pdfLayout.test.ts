@@ -328,10 +328,20 @@ describe('pdfPagesToMarkdown', () => {
 
   it('starts a new line at a stat line after a list bullet, or with a colon after its label, even after a long line', () => {
     const lead = 'When the spirit appears, it takes the statistics the spell gives it in the short list that follows:';
-    const stats = ['• AC 12 + the spell’s level', '\uf0b7 HP 20 + 5 for each spell level above 3', '– Speed 30 ft., Fly 30 ft.', 'AC: 15', 'o Hit Points: 40', '\uf0a7 Speed: 25 ft.', '➢ CR 1'];
+    const stats = ['• AC 12 + the spell’s level', '\uf0b7 HP 20 + 5 for each spell level above 3', 'AC: 15', 'o Hit Points: 40', '\uf0a7 Speed: 25 ft.', '➢ CR 1'];
     const page = [line(lead, 700), ...stats.flatMap((stat, i) => [line(stat, 688 - i * 24), line(lead, 676 - i * 24)])];
     const paragraphs = pdfPagesToMarkdown([page]).split('\n\n');
     for (const stat of stats) expect(paragraphs.some((p) => p.startsWith(stat)), stat).toBe(true);
+    // A list of dashes or middle dots, after a creature's type line or a wrapped item that ends in a word.
+    for (const mark of ['–', '-', '—', '·']) {
+      const list = [`${mark} AC 10 + 1 per spell level`, `${mark} HP 5 + 10 per spell level above 2`, `${mark} Speed 60 ft.`];
+      const block = [line('Large Celestial, Fey, or Fiend (Your Choice), Neutral', 700), ...list.map((l, i) => line(l, 688 - i * 12))];
+      const out = pdfPagesToMarkdown([[line(lead, 712), ...block]]).split('\n\n');
+      for (const l of list) expect(out, `${mark}: ${l}`).toContain(l);
+    }
+    const basics = ['- Creature Type: Humanoid', '- Size: Medium (about 4–7 feet tall) or Small (about 2–4 feet tall), chosen when you', 'select this species, as the player of a human prefers', '- Speed: 30 feet'];
+    const origins = pdfPagesToMarkdown([[line(lead, 712), ...basics.map((l, i) => line(l, 700 - i * 12))]]).split('\n\n');
+    expect(origins).toContain('- Speed: 30 feet');
   });
 
   it("keeps in the paragraph a card's or a Prerequisite label after a list's bullet, and a spaced dash in prose", () => {
@@ -341,8 +351,11 @@ describe('pdfPagesToMarkdown', () => {
     const card = pdfPagesToMarkdown([[line(lead, 700), line('• Casting Time: how long it takes to cast the spell, which the card gives first.', 688)]]);
     expect(card).not.toContain('\n\n• Casting');
     const wrap = 'You call a hound of lantern light into an unoccupied space you can see within range, a guardian';
-    const prose = pdfPagesToMarkdown([[line(wrap, 700), line('— AC 14, HP 20, Speed 40 ft. — that stays at your side until the spell ends or you dismiss it early.', 688)]]);
-    expect(prose).not.toContain('\n\n— AC');
+    const dashed = '— AC 14, HP 20, Speed 40 ft. — that stays at your side until the spell ends or you dismiss it early.';
+    const after = 'When the hound appears, each creature of your choice near it must make a Dexterity saving throw.';
+    for (const before of [wrap, `${wrap.replace(', a guardian', '')} (a Celestial guardian)`]) {
+      expect(pdfPagesToMarkdown([[line(before, 700), line(dashed, 688), line(after, 676)]])).not.toContain('\n\n— AC');
+    }
   });
 
   it('drops running headers and page numbers', () => {

@@ -255,6 +255,11 @@ describe('segment: structure rules', () => {
     // As the chapter's own text, and as a section of its own.
     expect(kinds(['# Peoples of the Fen', 'Every people in this chapter has the following parts.', ...parts, ...peoples])).toEqual(both);
     expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...parts, ...peoples])).toEqual(both);
+    // The 2022 sentence however it goes on.
+    for (const type of ['You are a Humanoid (goblinoid).', 'You are a Fey or a Humanoid, your choice.', 'You are a Humanoid creature.']) {
+      const bogwight = ['## Bogwight', `***Creature Type.*** ${type}`, '***Size.*** You are Small.', '***Speed.*** Your walking speed is 30 feet.', '***Fen Sight.*** You see in mist.'];
+      expect(kinds(['# Peoples of the Fen', ...bogwight]), type).toEqual([['species', 'Bogwight']]);
+    }
     // A type in emphasis is named: a re-check keeps the species.
     const italic = ['- **Creature Type:** Usually _Humanoid_', '- **Size:** Small', '- **Speed:** 30 feet'].join('\n\n');
     expect(explainsParts('species', italic)).toBe(false);

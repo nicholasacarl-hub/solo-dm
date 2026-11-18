@@ -153,9 +153,16 @@ const LINE_BULLET = String.raw`(?:[•◦▪‣·●○■□◆◇►▸▶∙�
 const STAT_LABEL_START = new RegExp(
   String.raw`^(?:${LINE_BULLET}?(?:(?:AC|HP|CR|Speed|Armor Class|Hit Points|Challenge):?\s+\d|Initiative:?\s+[+\u2212-]?\d)|(?:Casting Time|Range|Components|Duration|Prerequisites?)\s*:)`,
 );
-/** A dash or middle dot opening a line: a list's bullet after a sentence or a lead-in, else a spaced dash in prose ("…a guardian / — AC 14, HP 20 — that…"). */
-const DASH_START = /^[-+–—·]\s/;
-const statLineStarts = (text: string, paragraph: string) => STAT_LABEL_START.test(text) && (!DASH_START.test(text) || /[.:;!?)]$/.test(paragraph.trimEnd()));
+/** A dash or a middle dot opening a line: a list's bullet, or a spaced dash in prose ("…a guardian / — AC 14, HP 20 — that…"). */
+const DASH_MARK = /^[-+–—·]\s/;
+/**
+ * A stat or spell label line starts a line of its own; after a dash or a middle dot, only in a list of them (the line
+ * after it, or the paragraph so far, opens with one too): a stat block lists several lines, a dash in prose stands alone.
+ */
+function statLineStarts(text: string, paragraph: string, next: string | undefined): boolean {
+  if (!STAT_LABEL_START.test(text)) return false;
+  return !DASH_MARK.test(text) || DASH_MARK.test(paragraph) || DASH_MARK.test(next ?? '');
+}
 
 /** A spell card's labels alone on their line: one above its value, or a grid's row of them ("Casting Time", "RANGE", "CASTING TIME RANGE"). */
 const CARD_LABELS_ALONE = /^(?:Casting Time|Range(?:\/Area)?|Components|Duration)(?:\s+(?:Casting Time|Range(?:\/Area)?|Components|Duration))*$/i;
@@ -243,7 +250,7 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
     }
     heading = null;
   };
-  for (const line of lines) {
+  lines.forEach((line, at) => {
     const newPage = prev !== null && line.page !== prev.page;
     if (!useHeadings && (prev === null || newPage)) {
       flushParagraph();
@@ -273,7 +280,7 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
         gap < 0 ||
         lastBodyLength < shortLine ||
         afterCategory ||
-        statLineStarts(line.text, paragraph) ||
+        statLineStarts(line.text, paragraph, lines[at + 1]?.text) ||
         cardLabelAlone(line.text) ||
         cardLabelAlone(paragraph);
       if (paragraphBreak) {
@@ -283,7 +290,7 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
       lastBodyLength = line.text.length;
     }
     prev = line;
-  }
+  });
   flushHeading();
   flushParagraph();
   return liftAfterEntities(out, levels).join('\n\n');
