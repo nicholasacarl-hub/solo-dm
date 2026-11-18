@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { GLOAMWOOD_SOURCE_ID, SCRIPTED_WIRE, gloamwoodEntries } from '@/test/structuredFixtures';
 import { segment, type Candidate } from '../segment';
 import type { Wire } from '../wire';
-import { featLine, parseFeat } from './feat';
+import { abilityIncreaseSentence, featLine, parseFeat } from './feat';
 
 const ctx = { knownSpellNames: new Set<string>(), knownClassNames: new Set(['fighter', 'cleric']) };
 const candidates = (dialect: 'md' | 'mixed') => segment(gloamwoodEntries(GLOAMWOOD_SOURCE_ID, dialect), ctx).candidates;
@@ -22,6 +22,16 @@ describe('parseFeat', () => {
       });
     }
   }
+
+  it('reads the ability increase sentence, with the sentence before it when that one makes the choice', () => {
+    expect(abilityIncreaseSentence(['You gain the following benefits.', '**_Ability Score Increase._** Increase your Wisdom score by 1, to a maximum of 20.'])).toBe(
+      'Increase your Wisdom score by 1, to a maximum of 20.',
+    );
+    expect(
+      abilityIncreaseSentence(['**_Ability Score Increase._** Choose one ability your lantern favors. Increase the chosen ability score by 1, to a maximum of 20.']),
+    ).toBe('Choose one ability your lantern favors. Increase the chosen ability score by 1, to a maximum of 20.');
+    expect(abilityIncreaseSentence(['You learn to trim a wick by 1 inch at a time.'])).toBe('');
+  });
 
   it("keeps only the prerequisite when a PDF joined the feat's first sentence to its line", () => {
     expect(featLine('*Prerequisite: Elf or half-elf* You learn the old magic of the moth groves.')).toEqual({ categoryText: '', category: 'unknown', prerequisite: 'Elf or half-elf', joined: true });

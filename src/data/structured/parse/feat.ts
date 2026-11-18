@@ -44,12 +44,17 @@ export function featLine(paragraph: string | undefined): { categoryText: string;
   return { categoryText: '', category: 'unknown', prerequisite, joined: prerequisite !== pre[1].trim() };
 }
 
-/** The sentence that increases ability scores, copied whole ("Increase your Wisdom or Charisma score by 1, to a maximum of 20."). */
+/**
+ * The sentence that increases ability scores, copied whole ("Increase your Wisdom or Charisma score by 1, to a maximum
+ * of 20."), with the sentence before it when that one makes the choice ("Choose one ability… Increase the chosen
+ * ability score by 1").
+ */
 export function abilityIncreaseSentence(paragraphs: readonly string[]): string {
   for (const p of paragraphs) {
-    const text = plainText(runIn(p)?.rest ?? p);
-    const found = sentences(text).find((s) => /^Increase (?:your|one|two|three)\b[^.]*\bby [12]\b/i.test(s));
-    if (found) return found;
+    const all = sentences(plainText(runIn(p)?.rest ?? p));
+    const at = all.findIndex((s) => /^Increase (?:your|one|two|three|the chosen)\b[^.]*\bby [12]\b/i.test(s));
+    if (at < 0) continue;
+    return /^Increase the chosen\b/i.test(all[at]) && /^Choose\b/i.test(all[at - 1] ?? '') ? `${all[at - 1]} ${all[at]}` : all[at];
   }
   return '';
 }
