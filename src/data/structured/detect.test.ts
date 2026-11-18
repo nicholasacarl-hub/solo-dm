@@ -604,7 +604,7 @@ describe('after the offline reader improved again (version 4)', () => {
 
   /** What version 3 wrote, the named ones accepted. */
   async function readByVersion3(accepted: readonly string[]): Promise<StructuredRecord[]> {
-    await saveLibrarySource({ id: ORIG, title: 'Lantern Origins', kind: 'import', format: 'md', enabled: true, entryCount: ENTRIES.length, createdAt: 1, updatedAt: 1 }, ENTRIES);
+    await saveLibrarySource({ id: ORIG, title: 'Lantern Origins', kind: 'import', format: 'markdown', enabled: true, entryCount: ENTRIES.length, createdAt: 1, updatedAt: 1 }, ENTRIES);
     const entriesById = new Map(ENTRIES.map((x) => [x.id, x]));
     const as = (kind: StructuredRecord['kind'], name: string, n: number) =>
       candidateFor({ kind, name, span: 'section', entryIds: [`lib:${ORIG}:${n}`], candidateKey: candidateKey(kind, name, `lib:${ORIG}:${n}`) }, entriesById)!;
