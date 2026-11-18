@@ -76,6 +76,9 @@ describe('feat fields', () => {
     expect(abilityIncreaseOf('Increase your Strength or Dexterity score by 1, to a maximum of 20.')).toEqual({ abilities: ['str', 'dex'], amount: 1 });
     expect(abilityIncreaseOf('Increase one ability score of your choice by 2.')?.abilities).toHaveLength(6);
     expect(abilityIncreaseOf('')).toBeUndefined();
+    // The choice made in the sentence before: any ability, or the ones it names.
+    expect(abilityIncreaseOf('Choose one ability your lantern favors. Increase the chosen ability score by 1.')).toEqual({ abilities: ['str', 'dex', 'con', 'int', 'wis', 'cha'], amount: 1 });
+    expect(abilityIncreaseOf('Choose Strength or Constitution. Increase the chosen ability score by 1.')).toEqual({ abilities: ['str', 'con'], amount: 1 });
   });
 
   it('validates stored data: the span and the implied adaptation', () => {

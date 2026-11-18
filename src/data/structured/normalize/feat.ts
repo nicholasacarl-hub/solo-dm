@@ -132,13 +132,16 @@ export function minLevelOf(prerequisite: string | undefined): number | undefined
   return level >= 1 && level <= 20 ? level : undefined;
 }
 
-/** "Increase your Wisdom or Charisma score by 1" → { abilities: [wis, cha], amount: 1 }; "one ability score of your choice" → all six. */
+/**
+ * "Increase your Wisdom or Charisma score by 1" → { abilities: [wis, cha], amount: 1 }; "one ability score of your
+ * choice" or "Choose one ability… Increase the chosen ability score" → all six.
+ */
 export function abilityIncreaseOf(text: string): FeatData['abilityIncrease'] {
   const t = text.trim();
   if (!t) return undefined;
   const amount = /\bby 2\b/i.test(t) ? 2 : 1;
   const named = [...new Set(parseAbilityList(t))];
-  const abilities: Ability[] = named.length ? named : /\bof your choice\b/i.test(t) ? [...ABILITIES] : [];
+  const abilities: Ability[] = named.length ? named : /\bof your choice\b|\bChoose (?:one|an) ability\b/i.test(t) ? [...ABILITIES] : [];
   return abilities.length ? { abilities, amount } : undefined;
 }
 
