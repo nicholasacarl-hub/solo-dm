@@ -13,6 +13,7 @@
  *
  * Pure apart from the browser's DOMParser, which builds an inert document: nothing is fetched, run or rendered.
  */
+import { isStatBlockSection } from './chunk';
 
 export interface HtmlConversion {
   markdown: string;
@@ -84,6 +85,10 @@ const MAX_HEADING_CHARS = 90;
 /** The longest line read as a heading made by bolding it. */
 const MAX_BOLD_HEADING_CHARS = 70;
 const MAX_HEADING_SHARE = 0.4;
+/** A spell's parts that a document may set on lines of their own, as it does a stat block's. */
+const SPELL_PARTS = new Set(['at higher levels', 'using a higher-level spell slot', 'cantrip upgrade']);
+/** A line naming a part of the entry above it: a stat block's "Actions" or "Traits" (a species' too), a spell's "At Higher Levels". */
+const namesPart = (text: string) => isStatBlockSection(text) || SPELL_PARTS.has(text.toLowerCase());
 /** The default body size (px) when nothing on the page sets one. */
 const DEFAULT_SIZE = 16;
 const KEYWORD_SIZES: Record<string, number> = {
@@ -149,9 +154,10 @@ function emphasisOf(el: Element, ctx: Ctx): { bold: boolean; italic: boolean } {
   if (tag === 'B' || tag === 'STRONG') bold = true;
   if (tag === 'I' || tag === 'EM' || tag === 'CITE' || tag === 'DFN' || tag === 'VAR') italic = true;
   const style = styleOf(el);
-  const weight = /font-weight\s*:\s*([a-z0-9]+)/i.exec(style)?.[1].toLowerCase();
+  // The property itself, not Word's complex-script one ("<b style='mso-bidi-font-weight:normal'>" is bold).
+  const weight = /(?:^|;)\s*font-weight\s*:\s*([a-z0-9]+)/i.exec(style)?.[1].toLowerCase();
   if (weight) bold = /^(?:bold|bolder|[6-9]00)$/.test(weight) ? true : /^(?:normal|lighter|[1-5]00)$/.test(weight) ? false : bold;
-  const fontStyle = /font-style\s*:\s*([a-z]+)/i.exec(style)?.[1].toLowerCase();
+  const fontStyle = /(?:^|;)\s*font-style\s*:\s*([a-z]+)/i.exec(style)?.[1].toLowerCase();
   if (fontStyle) italic = fontStyle === 'italic' || fontStyle === 'oblique' ? true : fontStyle === 'normal' ? false : italic;
   return { bold, italic };
 }
@@ -159,7 +165,7 @@ function emphasisOf(el: Element, ctx: Ctx): { bold: boolean; italic: boolean } {
 /** Word's body size from the style block it copies ("p.MsoNormal {font-size:11.0pt}"), in px. */
 function wordBodySize(doc: Document): number | null {
   for (const style of Array.from(doc.querySelectorAll('style'))) {
-    const m = /MsoNormal\b[^{]*\{[^}]*?font-size\s*:\s*([\d.]+)pt/i.exec(style.textContent ?? '');
+    const m = /MsoNormal\b[^{]*\{(?:[^}]*?[;\s])?font-size\s*:\s*([\d.]+)pt/i.exec(style.textContent ?? '');
     if (m) return (Number.parseFloat(m[1]) * 4) / 3;
   }
   return null;
@@ -459,8 +465,10 @@ interface Inference {
 /**
  * Lines that are headings by their look: short lines set noticeably larger than the body text, their levels by size
  * (at most 4 levels), and with `bolded` short bold lines at the body size. Bold lines count only when there are two or
- * more and no heading by size comes after the first of them: a copy that sets its headings by size (a title above them
- * aside) bolds its labels and captions, not its headings ("STR" over "14 (+2)", a table's title).
+ * more and no heading by size (beside tagged headings, no larger line at all) comes after the first of them: a copy
+ * that sets its headings by size (a title above them aside) bolds its labels and captions, not its headings ("STR"
+ * over "14 (+2)", a table's title). A bold line naming a part of an entry ("Actions", "Reactions") goes a level below
+ * the other bold lines, under the creature's or spell's bold name, so the chunker keeps it with that entry.
  */
 function inferHeadings(blocks: Block[], { below, boldOnly, bolded }: Inference): { blocks: Block[]; found: number } {
   const paras = blocks.filter((b): b is ParaBlock => b.kind === 'para');
@@ -474,9 +482,8 @@ function inferHeadings(blocks: Block[], { below, boldOnly, bolded }: Inference):
   let best = -1;
   for (const [size, n] of weight) if (n > best) [body, best] = [size, n];
   const chars = (ps: ParaBlock[]) => ps.reduce((n, p) => n + p.plain.length, 0);
-  let sized = paras.filter(
-    (p) => p.size >= body * HEADING_RATIO && p.share >= 0.8 && p.plain.length <= MAX_HEADING_CHARS && /\p{L}/u.test(p.plain) && (p.bold || !boldOnly),
-  );
+  const larger = paras.filter((p) => p.size >= body * HEADING_RATIO && p.share >= 0.8 && p.plain.length <= MAX_HEADING_CHARS && /\p{L}/u.test(p.plain));
+  let sized = larger.filter((p) => p.bold || !boldOnly);
   if (chars(sized) > total * MAX_HEADING_SHARE) sized = [];
   let bold = bolded
     ? paras.filter(
@@ -485,11 +492,14 @@ function inferHeadings(blocks: Block[], { below, boldOnly, bolded }: Inference):
       )
     : [];
   const bySize = new Set(sized);
-  if (bold.length < 2 || paras.slice(paras.indexOf(bold[0])).some((p) => bySize.has(p)) || chars(sized) + chars(bold) > total * MAX_HEADING_SHARE) bold = [];
+  // Beside tagged headings a larger line that isn't bold isn't read as a heading, but it still shows the copy sets its headings by size.
+  const shownBySize = boldOnly ? new Set(larger) : bySize;
+  if (bold.length < 2 || paras.slice(paras.indexOf(bold[0])).some((p) => shownBySize.has(p)) || chars(sized) + chars(bold) > total * MAX_HEADING_SHARE) bold = [];
   const byBold = new Set(bold);
   const sizes = [...new Set(sized.map((p) => p.size))].sort((a, b) => b - a);
   const boldLevel = Math.min(6, below + Math.min(4, sizes.length) + 1);
-  const level = (p: ParaBlock) => (bySize.has(p) ? Math.min(6, below + Math.min(4, sizes.indexOf(p.size) + 1)) : boldLevel);
+  const level = (p: ParaBlock) =>
+    bySize.has(p) ? Math.min(6, below + Math.min(4, sizes.indexOf(p.size) + 1)) : Math.min(6, boldLevel + (namesPart(headingText(p.plain)) ? 1 : 0));
   return {
     blocks: blocks.map((b) => (b.kind === 'para' && (bySize.has(b) || byBold.has(b)) ? { kind: 'heading', level: level(b), text: headingText(b.plain) } : b)),
     found: sized.length + bold.length,

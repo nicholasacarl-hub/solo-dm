@@ -5,7 +5,7 @@
  *
  * Paste with formatting: a copy from a web page or a document carries HTML beside its plain text; pasted with the
  * Markdown format chosen, its headings, tables and lists arrive as Markdown (src/data/htmlPaste.ts) on lines of their
- * own, undoable with Ctrl+Z, with a way back to the plain text.
+ * own, undoable with Ctrl+Z (a long one, set directly, once), with a way back to the plain text.
  *
  * Structured imports (spec §4.1): once the import is saved, the dialog looks for spells, monsters and
  * character options on this device (detectStructure, dismissible: closing lets it finish) and ends on
@@ -147,10 +147,12 @@ interface FormattedPaste {
 }
 
 /**
- * The longest formatted paste (in lines) that goes through the browser's editing, so Ctrl+Z undoes it. A longer one is
- * set directly: the browser inserts it line by line, in time that grows with the square of its lines.
+ * The longest formatted paste (in lines) that goes through the browser's editing, so Ctrl+Z undoes it like any paste.
+ * A longer one is set directly: the browser inserts it line by line, in time that grows with the square of its lines.
  */
 const UNDOABLE_LINES = 200;
+/** Each line it inserts also takes time that grows with the text in the box: lines × characters stay under this (about 0.15 s on a desktop). */
+const UNDOABLE_COST = 200 * 50_000;
 
 /** Line breaks that set pasted Markdown apart from the text before and after it, so its first heading starts a line. */
 function apart(before: string, after: string): { lead: string; trail: string } {
@@ -186,32 +188,54 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [pasteFormat, setPasteFormat] = useState<PasteFormat>('markdown');
   const [formatted, setFormatted] = useState<FormattedPaste | null>(null);
   const textRef = useRef<HTMLTextAreaElement>(null);
-  // Where the caret goes once the text a paste set has rendered.
+  // Where the caret goes once the text a paste set has rendered, and the view to keep (moving the box resets it).
   const caret = useRef<number | null>(null);
+  const keptScroll = useRef<number | null>(null);
+  // The text before and after the last paste set directly, which the browser can't undo: Ctrl+Z in the box puts it back.
+  const directEdit = useRef<{ before: string; after: string; caret: number } | null>(null);
   useLayoutEffect(() => {
     const box = textRef.current;
     if (caret.current === null || !box) return;
+    if (document.activeElement !== box) box.focus();
     box.setSelectionRange(caret.current, caret.current);
+    if (keptScroll.current !== null) box.scrollTop = keptScroll.current;
+    keptScroll.current = null;
     revealEnd(box);
     caret.current = null;
   }, [text]);
 
   /**
    * Put `insert` in place of the box's text from `start` to `end`, the caret at `caretAt`: through the browser's editing
-   * where it has it, so Ctrl+Z undoes it like any paste (its input event runs onChange), else by setting the text. Both
-   * read the box itself, whose line breaks are always \n.
+   * when that's quick, so Ctrl+Z undoes it like any paste (its input event runs onChange), else by setting the text,
+   * which Ctrl+Z in the box undoes once. Both read the box itself, whose line breaks are always \n.
    */
   const replaceInBox = (box: HTMLTextAreaElement, start: number, end: number, insert: string, caretAt: number) => {
     box.focus();
     box.setSelectionRange(start, end);
-    const undoable = insert.split('\n').length <= UNDOABLE_LINES && typeof document.execCommand === 'function';
-    if (undoable && document.execCommand('insertText', false, insert)) {
+    const lines = insert.split('\n').length;
+    const quick = lines <= UNDOABLE_LINES && lines * (box.value.length + insert.length) <= UNDOABLE_COST;
+    if (quick && typeof document.execCommand === 'function' && document.execCommand('insertText', false, insert)) {
       box.setSelectionRange(caretAt, caretAt);
       revealEnd(box);
       return;
     }
+    const next = box.value.slice(0, start) + insert + box.value.slice(end);
+    if (next === box.value) {
+      box.setSelectionRange(caretAt, caretAt);
+      return;
+    }
+    // Chromium keeps the box's undo steps when its text is set by script, and Ctrl+Z or redo would replay them onto the
+    // new text (an earlier paste glued to its end). Taking the box out of the page and back drops them; the caret effect
+    // puts the focus and the view back.
+    const { parentNode, nextSibling } = box;
+    if (parentNode) {
+      keptScroll.current = box.scrollTop;
+      parentNode.removeChild(box);
+      parentNode.insertBefore(box, nextSibling);
+    }
+    directEdit.current = { before: box.value, after: next, caret: end };
     caret.current = caretAt;
-    setText(box.value.slice(0, start) + insert + box.value.slice(end));
+    setText(next);
   };
 
   /** A copy from a web page or a document: its HTML as Markdown, when the Markdown format is chosen and it has structure. */
@@ -461,7 +485,18 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
                   ref={textRef}
                   rows={9}
                   value={text}
+                  onKeyDown={(e) => {
+                    const edit = directEdit.current;
+                    if (!edit || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'z') return;
+                    directEdit.current = null;
+                    if (e.currentTarget.value !== edit.after) return;
+                    e.preventDefault();
+                    caret.current = edit.caret;
+                    setText(edit.before);
+                    setFormatted(null);
+                  }}
                   onChange={(e) => {
+                    directEdit.current = null;
                     caret.current = null;
                     setText(e.target.value);
                     setFormatted(null);

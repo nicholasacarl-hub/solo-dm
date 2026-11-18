@@ -259,6 +259,119 @@ describe('htmlToMarkdown', () => {
     expect(htmlToMarkdown(article).headings).toBe(1);
   });
 
+  describe('a creature, a species or a spell typed in a document, its name and parts bold', () => {
+    const span = (text: string, style = '') => `<span style="font-size:11pt;${style}">${text}</span>`;
+    const p = (...spans: string[]) => `<p dir="ltr">${spans.join('')}</p>`;
+    const bold = (text: string) => p(span(text, 'font-weight:700'));
+    const runIn = (label: string, text: string) => p(span(label, 'font-weight:700;font-style:italic'), span(` ${text}`, 'font-weight:400'));
+    const docs = (body: string) => `<meta charset="utf-8"><b style="font-weight:normal;" id="docs-internal-guid-7">${body}</b>`;
+    const cells = (row: string[]) => `<tr>${row.map((c) => `<td>${p(span(c))}</td>`).join('')}</tr>`;
+    const creature = (name: string, scores: string[], parts: string) =>
+      [
+        bold(name),
+        p(span('Tiny Fey, Neutral', 'font-style:italic')),
+        p(span('Armor Class', 'font-weight:700'), span(' 13')),
+        p(span('Hit Points', 'font-weight:700'), span(' 10 (4d4)')),
+        p(span('Speed', 'font-weight:700'), span(' 10 ft., Fly 40 ft.')),
+        `<table><tbody>${cells(['STR', 'DEX', 'CON', 'INT', 'WIS', 'CHA'])}${cells(scores)}</tbody></table>`,
+        p(span('Challenge', 'font-weight:700'), span(' 1/4 (XP 50)')),
+        parts,
+      ].join('');
+    const sprite = creature(
+      'Rafter Sprite',
+      ['3 (−4)', '16 (+3)', '10 (+0)', '8 (−1)', '12 (+1)', '13 (+1)'],
+      bold('Actions') +
+        runIn('Rafter Kick.', 'Melee Attack Roll: +5, reach 5 ft. Hit: 5 (1d4 + 3) Bludgeoning damage.') +
+        bold('Reactions') +
+        runIn('Flit.', 'Trigger: A creature the sprite can see hits it with an attack roll. Response: The sprite flies 10 feet.'),
+    );
+    const wisp = creature(
+      'Gutter Wisp',
+      ['1 (−5)', '18 (+4)', '10 (+0)', '6 (−2)', '10 (+0)', '9 (−1)'],
+      bold('ACTIONS') + runIn('Damp Touch.', 'Melee Attack Roll: +6, reach 5 ft. Hit: 6 (1d4 + 4) Cold damage.'),
+    );
+
+    it('keeps a stat block’s bold Actions and Reactions under its bold name, so the creature keeps its actions', () => {
+      const conversion = htmlToMarkdown(docs(sprite));
+      expect(conversion.markdown.split('\n\n').filter((l) => l.startsWith('#'))).toEqual(['# Rafter Sprite', '## Actions', '## Reactions']);
+      const entries = chunkDocument(conversion.markdown, opts);
+      expect(entries.map((e) => [e.name, e.kind])).toEqual([['Rafter Sprite', 'monster']]);
+      expect(entries[0].text).toContain('Rafter Kick.');
+      expect(entries[0].text).toContain('Flit.');
+      // Two creatures stay two, each with its own actions (a part's name in capitals too).
+      const two = chunkDocument(htmlToMarkdown(docs(sprite + wisp)).markdown, opts);
+      expect(two.map((e) => [e.name, e.kind])).toEqual([
+        ['Rafter Sprite', 'monster'],
+        ['Gutter Wisp', 'monster'],
+      ]);
+      expect(two[1].text).toContain('Damp Touch.');
+      expect(two[0].text).not.toContain('Damp Touch.');
+    });
+
+    it('keeps a species’ bold Traits and a spell’s bold At Higher Levels with them', () => {
+      const species = (name: string, trait: string) =>
+        bold(name) + p(span(`The ${name} keep the old bell towers.`)) + bold('Traits') + runIn(`${trait}.`, 'You can hear a bell ring from a mile away.');
+      const both = chunkDocument(htmlToMarkdown(docs(species('Bellfolk', 'Far Hearing') + species('Lanternfolk', 'Steady Light'))).markdown, opts);
+      expect(both.map((e) => e.name)).toEqual(['Bellfolk', 'Lanternfolk']);
+      expect(both[0].text).toContain('Far Hearing.');
+      const spell = [
+        bold('Ember Lash'),
+        p(span('Level 1 Evocation (Wizard)', 'font-style:italic')),
+        p(span('Casting Time:', 'font-weight:700'), span(' Action')),
+        p(span('Range:', 'font-weight:700'), span(' 30 feet')),
+        p(span('Components:', 'font-weight:700'), span(' V, S')),
+        p(span('Duration:', 'font-weight:700'), span(' Instantaneous')),
+        p(span('A lash of embers strikes one creature you can see within range.')),
+        bold('At Higher Levels'),
+        p(span('The lash strikes one more creature for each spell slot level above 1.')),
+      ].join('');
+      const entries = chunkDocument(htmlToMarkdown(docs(spell)).markdown, opts);
+      expect(entries.map((e) => [e.name, e.kind])).toEqual([['Ember Lash', 'spell']]);
+      expect(entries[0].text).toContain('for each spell slot level above 1');
+    });
+  });
+
+  it('reads no bold labels as headings beside a tagged title when a larger line comes after them, bold or not', () => {
+    // A creature page pasted into Word (its title a Heading 1), then copied: the ability labels are bold over their
+    // values, and "Actions" is larger but not bold.
+    const para = (html: string) => `<p class=MsoNormal>${html}<o:p></o:p></p>`;
+    const scores = ['STR', '13 (+1)', 'DEX', '15 (+2)', 'CON', '14 (+2)', 'INT', '4 (−3)', 'WIS', '12 (+1)', 'CHA', '7 (−2)'];
+    const word = `<html><head><meta name=Generator content="Microsoft Word 15"><style>p.MsoNormal {font-size:11.0pt;}</style></head><body>
+      <h1>Cinder Jackal</h1>${para("<b><span style='font-size:25.5pt'>Cinder Jackal</span></b>")}${para('<i>Small Monstrosity, Unaligned</i>')}
+      ${para('<b>Armor Class</b> 13')}${para('<b>Hit Points</b> 22 (4d6 + 8)')}${para('<b>Speed</b> 40 ft.')}
+      ${scores.map((s, i) => para(i % 2 ? s : `<b>${s}</b>`)).join('')}
+      ${para('<b>Senses</b> Darkvision 60 ft., Passive Perception 11')}${para('<b>Challenge</b> 1/2 (XP 100)')}
+      ${para("<span style='font-size:18.0pt'>Actions</span>")}
+      ${para('<b><i>Ash Bite.</i></b> Melee Attack Roll: +4, reach 5 ft. Hit: 5 (1d6 + 2) Fire damage.')}</body></html>`;
+    const conversion = htmlToMarkdown(word);
+    expect(conversion.headings).toBe(1);
+    expect(conversion.markdown).toContain('**STR**\n\n13 (+1)');
+    expect(chunkDocument(conversion.markdown, opts).map((e) => [e.name, e.kind])).toEqual([['Cinder Jackal', 'monster']]);
+  });
+
+  it('reads Word’s weight, style and body size, not its complex-script ones (mso-bidi-…)', () => {
+    const word = (style: string, body: string) =>
+      `<html><head><meta name=Generator content="Microsoft Word 15"><style>p.MsoNormal {${style}}</style></head><body>${body}</body></html>`;
+    const bidiBold = (text: string) => `<p class=MsoNormal><b style='mso-bidi-font-weight:normal'>${text}<o:p></o:p></b></p>`;
+    const lines = [
+      bidiBold('Tower Spells'),
+      '<p class=MsoNormal>Spells the bell ringers teach.</p>',
+      bidiBold('Toll of Dawn'),
+      "<p class=MsoNormal><i style='mso-bidi-font-style:normal'>Level 1 Evocation (Bard)</i></p>",
+      bidiBold('Quiet Hour'),
+      "<p class=MsoNormal><span style='mso-bidi-font-weight:bold'>Ask the sexton first.</span></p>",
+    ].join('');
+    expect(htmlToMarkdown(word('font-size:11.0pt;', lines)).markdown).toBe(
+      ['# Tower Spells', 'Spells the bell ringers teach.', '# Toll of Dawn', '_Level 1 Evocation (Bard)_', '# Quiet Hour', 'Ask the sexton first.'].join(
+        '\n\n',
+      ),
+    );
+    // The body size is font-size's, not a complex-script size written before it: 14pt lines are headings over 11pt text.
+    const sized = `<p class=MsoNormal><span style='font-size:14.0pt'>Wick Care</span></p><p class=MsoNormal>Trim the wick before every lighting, and never after.</p>
+      <p class=MsoNormal><span style='font-size:14.0pt'>Oil Care</span></p><p class=MsoNormal>Keep the oil sealed and away from the cold cellar wall.</p>`;
+    expect(htmlToMarkdown(word('mso-bidi-font-size:20.0pt;\n\tfont-size:11.0pt;', sized)).headings).toBe(2);
+  });
+
   it('reads very deep nesting without running out of stack', () => {
     const depth = 5000;
     const html = `<h2>Deep</h2>${'<div>'.repeat(depth)}bottom text${'</div>'.repeat(depth)}`;

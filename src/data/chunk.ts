@@ -723,7 +723,8 @@ export function headingAncestors(path: readonly string[] | undefined, name: stri
 const STAT_BLOCK_SECTIONS = new Set(
   ['traits', 'actions', 'bonus actions', 'reactions', 'legendary actions', 'lair actions', 'mythic actions', 'regional effects'],
 );
-const isStatBlockSection = (title: string) => STAT_BLOCK_SECTIONS.has(stripInlineMarkdown(title).toLowerCase());
+/** Whether a heading names a stat block's part ("Actions", "Traits"), which the entry before it keeps. */
+export const isStatBlockSection = (title: string) => STAT_BLOCK_SECTIONS.has(stripInlineMarkdown(title).toLowerCase());
 /** Whether a section holds sections of its own besides stat-block parts (a creature's "Actions" holds only its other parts). */
 const holdsOwnSections = (section: Section) => section.children.some((c) => !isStatBlockSection(c.title));
 

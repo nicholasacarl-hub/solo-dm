@@ -441,9 +441,43 @@ describe('the import dialog', () => {
       // A long paste is set directly: the browser's editing is slow on many lines.
       execCommand.mockClear();
       const long = Array.from({ length: 120 }, (_, i) => `<li>Charm ${i + 1}</li>`).join('');
+      // Set directly, the box is taken out of the page and put back: Chromium then drops its undo steps, which would
+      // otherwise replay an earlier paste onto the new text.
+      const moves = new MutationObserver(() => {});
+      moves.observe(box.parentNode as Node, { childList: true });
       fireEvent.paste(box, { clipboardData: { getData: (type: string) => (type === 'text/html' ? `<h2>Charms</h2><ul>${long}</ul><ol>${long}</ol>` : type === 'text/plain' ? 'Charms' : '') } });
+      expect(moves.takeRecords().flatMap((r) => [...r.removedNodes, ...r.addedNodes])).toEqual([box, box]);
+      moves.disconnect();
       expect(execCommand).not.toHaveBeenCalled();
       expect(box.value).toContain('Glow Mote\n\n## Charms\n\n- Charm 1\n');
+      // The same box, still focused, the caret after the paste; Ctrl+Z in it puts back the text from before, once.
+      const before = 'Intro\n\nLamp Spells\nEmber Lash\nGlow Mote';
+      expect(within(dialog).getByLabelText('Text')).toBe(box);
+      expect(document.activeElement).toBe(box);
+      expect(box.selectionStart).toBe(box.value.length);
+      expect(fireEvent.keyDown(box, { key: 'z', ctrlKey: true })).toBe(false);
+      expect(box.value).toBe(before);
+      expect(box.selectionStart).toBe(before.length);
+      expect(within(dialog).getByRole('status').textContent).toBe('');
+      expect(fireEvent.keyDown(box, { key: 'z', ctrlKey: true })).toBe(true);
+      // Once the text is edited, Ctrl+Z is the browser's again (it undoes the edit), even when the edit is taken back.
+      fireEvent.paste(box, { clipboardData: { getData: (type: string) => (type === 'text/html' ? `<h2>Charms</h2><ul>${long}</ul><ol>${long}</ol>` : '') } });
+      await user.type(box, 'x{Backspace}');
+      expect(fireEvent.keyDown(box, { key: 'z', ctrlKey: true })).toBe(true);
+      expect(box.value).toContain('## Charms');
+
+      // The browser's editing also slows with the text already in the box: a section pasted into a long text is set directly.
+      const rites = Array.from({ length: 70 }, (_, i) => `<li>Rite ${i + 1}</li>`).join('');
+      const section = { clipboardData: { getData: (type: string) => (type === 'text/html' ? `<h2>Rites</h2><ul>${rites}</ul>` : type === 'text/plain' ? 'Rites' : '') } };
+      await user.clear(box);
+      execCommand.mockClear();
+      fireEvent.paste(box, section);
+      expect(execCommand).toHaveBeenCalledTimes(1);
+      fireEvent.change(box, { target: { value: 'x'.repeat(200_000) } });
+      execCommand.mockClear();
+      fireEvent.paste(box, section);
+      expect(execCommand).not.toHaveBeenCalled();
+      expect(box.value).toContain('## Rites\n\n- Rite 1\n');
     } finally {
       Reflect.deleteProperty(document, 'execCommand');
     }

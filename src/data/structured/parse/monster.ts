@@ -59,12 +59,18 @@ function abilitiesFromTables(text: string): AbilityScores | null {
       const done = complete(out);
       if (done) return done;
     }
+    // A table naming an ability the grid already holds isn't the rest of the same block (a table before the stat block,
+    // or the next creature's): the scores go to Claude rather than mix the two.
+    const own: Partial<AbilityScores> = {};
     for (const row of [table.header, ...table.rows]) {
       row.forEach((cell, i) => {
         const a = abilityOf(cell);
-        if (a && grid[a] === undefined) grid[a] = leadingNumber(row[i + 1]);
+        if (a && own[a] === undefined) own[a] = leadingNumber(row[i + 1]);
       });
     }
+    const named = ABILITIES.filter((a) => own[a] !== undefined);
+    if (named.some((a) => grid[a] !== undefined)) return null;
+    for (const a of named) grid[a] = own[a];
     const done = complete(grid);
     if (done) return done;
   }

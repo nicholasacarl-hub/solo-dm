@@ -82,11 +82,17 @@ the item's text, since the sheet names the item behind each AC and save bonus:
 - **Word documents converted by pandoc**: the text after a multiline table can become an entry of its own, named
   after the table's last row.
 - **Paste with formatting** (the box's text can be edited before the import): a heading inside a sidebar or an
-  infobox (an `<aside>`) opens a section that takes in the text after the box; a page's quick menu, pager and "Back
-  to Top" links inside its main content stay; a table's second header row reads as its first body row; a spell's label
-  and value in separate boxes ("Casting Time" over "1 Action") aren't joined; text laid out by CSS alone (`display:
-  block` or `flex` on spans) runs together; and a line of the plain text that starts with "# " (a "#" column) pastes
-  the whole copy as plain text.
+  infobox (an `<aside>`), or a box's title set bold and larger beside fewer tagged headings, opens a section that
+  takes in the text after the box; a page's quick menu, pager and "Back to Top" links inside its main content stay,
+  and a select-all copy loses a page title set above its main landmark; a table's second header row reads as its
+  first body row (a class table's level table excepted); a spell's label and value in separate boxes ("Casting Time"
+  over "1 Action") aren't joined, and in a document editor's copy, labels bold on lines of their own over their values
+  ("STR" over "13 (+1)") read as headings when no larger line follows them; a list whose items are only headings (a
+  contents list of linked headings) becomes those headings; a single heading made by bolding and size beside as many
+  tagged headings stays text; text laid out by CSS alone (`display: block` or `flex` on spans) runs together; a line
+  of the plain text that starts with "# " (a "#" column) pastes the whole copy as plain text; and after Ctrl+Z undoes
+  a paste set directly (a long one, or one into a long text), the box's earlier edits can't be undone, and a further
+  Ctrl+Z undoes the last edit in another field (Chromium's undo is the page's).
 - **Homebrewery and 5etools stat blocks**: creatures made with Homebrewery's V3 snippet ("**Armor Class** :: 13")
   read as rules, and a 5etools or legacy Homebrewery export that quotes each stat block (">## Name") merges its
   creatures into one entry.

@@ -434,7 +434,12 @@ item that is only a heading, as numbered headings are). Headings shown only by t
 short lines set at least 15% larger than the body text, their levels by size, as the PDF reader reads them, and in a
 document editor's copy (Google Docs, Word, LibreOffice, Pages) two or more short bold lines at the body size, unless a
 heading by size follows the first of them (then they are labels); beside a few tagged headings (a styled title), such
-lines when they are bold and outnumber the tagged ones, a level below them. Paragraphs keep their bold and italics, a
+lines when they are bold and outnumber the tagged ones, a level below them (and any larger line after the first bold
+one, bold or not, makes the bold lines labels). A bold line naming an entry's part ("Actions", "Reactions", a
+species' "Traits", "At Higher Levels") goes a level below the other bold lines, so the creature, species or spell
+above it keeps it. Word's complex-script weight, style and size (`mso-bidi-…`) aren't read as the text's own. A
+table's second header row arrives as its first row (Markdown has one header row); the class reader folds a class
+table's into its header ("Spell Slots per Spell Level" over 1 to 9). Paragraphs keep their bold and italics, a
 line break starts a line (a stat block's lines stay apart), list items come as lists (Word's list paragraphs too),
 tables as pipe tables with their caption above and merged cells keeping the cells after them in their columns (a
 table that only lays out a page or boxes a sidebar reads as its cells' blocks), and a description list's term and
@@ -443,9 +448,12 @@ navigation (and a banner, footer or search box marked as one) go, and a whole pa
 landmark when that holds most of the text. Text that would turn into Markdown (a leading "#", "-" or "1.", an
 asterisk) is escaped. A copy with only prose, one that is Markdown already (copied from an editor) or a paste with
 "Plain text" chosen pastes as the browser does. The Markdown goes in on lines of its own (a second paste's heading
-doesn't join the first paste's last line), through the browser's editing so Ctrl+Z undoes it (up to 200 lines; a
-longer paste is set directly, since the browser inserts line by line). The box says what the paste kept and offers the
-plain text instead. DOMParser builds an inert document: nothing is fetched, run or shown.
+doesn't join the first paste's last line), through the browser's editing so Ctrl+Z undoes it, while that is quick: the
+browser inserts line by line, each line slower the longer the text in the box, so at most 200 lines and lines × the
+box's characters within a budget (about 0.15 s on a desktop). A paste beyond that is set directly; the box is taken out
+of the page and put back, which drops Chromium's undo steps for it (they would replay an earlier paste onto the new
+text), and Ctrl+Z right after it puts back the text from before. The box says what the paste kept and offers the plain
+text instead. DOMParser builds an inert document: nothing is fetched, run or shown.
 
 **PDF import** (`src/data/pdfLayout.ts`) reads headings from font sizes: the largest heading size is level 1, the next
 two are levels 2 and 3, and any smaller heading size is level 4, so a book's sub-subsections stay under their
