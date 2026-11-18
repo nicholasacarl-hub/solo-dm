@@ -1068,12 +1068,43 @@ export function inferPlainTextHeadings(text: string): string | null {
 // Chunking
 // ---------------------------------------------------------------------------
 
-/** Split text into parts of about `target` characters at paragraph (then sentence) boundaries. */
+/** A paragraph's lines when it is a pipe table (a header, a delimiter row and its rows), else null. */
+function tableLines(para: string): string[] | null {
+  const lines = para.split('\n');
+  return lines.length >= 3 && lines.every((l) => /^\s*\|/.test(l)) && /^\s*\|?\s*:?-{3,}/.test(lines[1]) ? lines : null;
+}
+
+/** A long table in parts of at most `max` characters, split between rows, each part with the table's header. */
+function tableParts(lines: readonly string[], max: number): string[] {
+  const head = lines.slice(0, 2).join('\n');
+  const parts: string[] = [];
+  let rows: string[] = [];
+  let size = head.length;
+  for (const row of lines.slice(2)) {
+    if (rows.length && size + row.length + 1 > max) {
+      parts.push([head, ...rows].join('\n'));
+      rows = [];
+      size = head.length;
+    }
+    rows.push(row);
+    size += row.length + 1;
+  }
+  if (rows.length) parts.push([head, ...rows].join('\n'));
+  return parts;
+}
+
+/** Split text into parts of about `target` characters at paragraph (then sentence) boundaries; tables between rows. */
 export function splitIntoChunks(text: string, target = TARGET_CHUNK_CHARS): string[] {
   const pieces: string[] = [];
   for (const para of text.split(/\n{2,}/).map((p) => p.trim()).filter(Boolean)) {
     if (para.length <= target * 2) {
       pieces.push(para);
+      continue;
+    }
+    // A table stays whole up to an entry's size, so its header heads all its rows; a longer one splits between rows.
+    const table = tableLines(para);
+    if (table) {
+      pieces.push(...tableParts(table, MAX_RULE_CHARS));
       continue;
     }
     // One huge paragraph: cut at sentence ends (or hard, for text without punctuation).

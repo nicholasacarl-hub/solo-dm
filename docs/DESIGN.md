@@ -429,7 +429,9 @@ stays what it is; a summoning spell is read before the stat block it prints. A s
 has subsections that read as spells is a chapter: its own text is an entry, read as whatever it reads as, and each
 subsection is an entry. Other entities keep their subsections (a creature its Variant stat block, a summoning spell
 its creature). Pasted text never takes for a heading a table's row (any line with "|"), a card label over its
-value, a label set off from its value, or "Origin Feat".
+value, a label set off from its value, or "Origin Feat". An entry too long for one part splits between paragraphs;
+a table stays whole up to an entry's size, and a longer one splits only between rows, each part under the table's
+header (never at a "lb." inside a row).
 
 **Paste with formatting** (`src/data/htmlPaste.ts`): a copy from a web page, a word processor or a doc editor carries
 HTML beside its plain text. With the paste box's Markdown format chosen, a paste whose HTML holds headings, tables or

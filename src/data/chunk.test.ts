@@ -93,6 +93,28 @@ describe('chunkDocument', () => {
     }
   });
 
+  it('never cuts a table inside a row: a table stays whole up to an entry’s size, a longer one splits between rows with its header', () => {
+    const rows = (n: number) => Array.from({ length: n }, (_, i) => `| Lantern Hook ${i + 1} | 1d${(i % 3) * 2 + 4} Piercing | Light, Thrown (Range 20/60) | Nick | ${(i % 4) + 1} lb. | ${i + 2} GP |`);
+    const head = '| Name | Damage | Properties | Mastery | Weight | Cost |\n| --- | --- | --- | --- | --- | --- |';
+    const intro = 'Lamplighters carry hooked poles of many kinds, each balanced for the long walk between the lamps. '.repeat(16).trim();
+    // Intro and table over an entry's limit together: the table, about 3,000 characters, stays one table.
+    const mid = chunkDocument(`## Lamp Poles\n\n${intro}\n\n${head}\n${rows(36).join('\n')}`, opts);
+    expect(mid.length).toBeGreaterThan(1);
+    const withTable = mid.filter((e) => e.text.includes('| Name |'));
+    expect(withTable).toHaveLength(1);
+    expect(withTable[0].text).toContain(`${head}\n${rows(36).join('\n')}`);
+    expect(`${head}\n${rows(36).join('\n')}`.length).toBeGreaterThan(3000);
+    // A table longer than an entry: every part is a whole table under the header, and every row is whole.
+    const long = splitIntoChunks(`${head}\n${rows(90).join('\n')}`);
+    expect(long.length).toBeGreaterThan(1);
+    for (const part of long) {
+      expect(part.startsWith(head)).toBe(true);
+      expect(part.length).toBeLessThanOrEqual(4000);
+      for (const line of part.split('\n')) expect(line.endsWith('|')).toBe(true);
+    }
+    expect(long.flatMap((p) => p.split('\n').slice(2))).toEqual(rows(90));
+  });
+
   it('keeps a monster stat block with its subsections as one entry', () => {
     const text = `# Bestiary\n\n## Goblin Warrior\n${GOBLIN}\n\n### Actions\n**Scimitar.** Melee Attack Roll: +4.\n\n### Bonus Actions\n**Nimble Escape.** The goblin takes the Disengage or Hide action.\n\n## Wolf\nAn ordinary wolf.`;
     const entries = chunkDocument(text, opts);
