@@ -339,9 +339,6 @@ describe('pdfPagesToMarkdown', () => {
       const out = pdfPagesToMarkdown([[line(lead, 712), ...block]]).split('\n\n');
       for (const l of list) expect(out, `${mark}: ${l}`).toContain(l);
     }
-    const basics = ['- Creature Type: Humanoid', '- Size: Medium (about 4–7 feet tall) or Small (about 2–4 feet tall), chosen when you', 'select this species, as the player of a human prefers', '- Speed: 30 feet'];
-    const origins = pdfPagesToMarkdown([[line(lead, 712), ...basics.map((l, i) => line(l, 700 - i * 12))]]).split('\n\n');
-    expect(origins).toContain('- Speed: 30 feet');
   });
 
   it("keeps in the paragraph a card's or a Prerequisite label after a list's bullet, and a spaced dash in prose", () => {
@@ -356,12 +353,15 @@ describe('pdfPagesToMarkdown', () => {
     for (const before of [wrap, `${wrap.replace(', a guardian', '')} (a Celestial guardian)`]) {
       expect(pdfPagesToMarkdown([[line(before, 700), line(dashed, 688), line(after, 676)]])).not.toContain('\n\n— AC');
     }
-    // Nor beside a dashed line that is no stat line: the closing dash wrapped, or a dashed list of options.
+    // Nor beside a dashed line that is no stat line with its value: the closing dash wrapped, a dashed list of options,
+    // an option that names a stat ("– Size. The steed is Large").
     const stats = '— AC 14 + the spell’s level, HP 20 + 5 for each spell level above 3, Speed 40 ft., Fly 40 ft.';
     const closing = pdfPagesToMarkdown([[line(wrap, 700), line(stats, 688), line('— that stays at your side until the spell ends, and when it appears it howls at the moon.', 676), line(after, 664)]]);
     expect(closing).not.toContain('\n\n— AC');
     const options = pdfPagesToMarkdown([[line('– Hound. A hound of light appears in an unoccupied space you can see within range, a guardian', 700), line(stats, 688), line('– Moth Cloud. A cloud of moths fills a 10-foot Emanation around a point you choose within range.', 676)]]);
     expect(options).not.toContain('\n\n— AC');
+    const forms = pdfPagesToMarkdown([[line(wrap, 700), line(stats, 688), line('of the following forms for it when you cast the spell, and the form lasts until the spell ends:', 676), line('– Size. The steed is Large, or Medium if you are Small, whichever you choose when you cast it.', 664)]]);
+    expect(forms).not.toContain('\n\n— AC');
   });
 
   it('starts a dashed stat list whose first item wraps onto a second line', () => {

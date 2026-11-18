@@ -107,6 +107,11 @@ the item's text, since the sheet names the item behind each AC and save bonus:
   challenge rating or ability scores), becomes the parent of the entries after it (their paths only).
 - **A rules chapter's "Traits"**: a section named "Traits" stays in the section above with its sub-sections, as a
   species' traits do, so example traits under a stat-block chapter's "Traits" aren't entries of their own.
+- **A chapter that explains its entries' parts**: when a species or backgrounds chapter's own text, under its heading,
+  explains the parts with run-in labels whose values read like real ones ("**Ability Scores:** Choose the three your
+  background lists", "**Creature Type:** Humanoid, unless your species says otherwise", or an older layout's Ability
+  Score Increase, Size, Speed and Languages), the chapter is taken for one background or species that takes in the
+  entries below it. Lines that say what each holds ("A background lists three…") are left out.
 - **Stored misreadings kept**: a glossary or a blank card that lists only a spell card's labels, a rules section that
   ends in a bare list of them ("Reading a Spell"), and a web page's glossary in divs or spans whose Casting Time
   definition opens with a casting time, stay spells when the first release stored them as spells (a PDF reader's copy

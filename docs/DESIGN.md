@@ -361,11 +361,10 @@ what it can offline into the same wire object Claude returns, and normalizes it 
 per kind. What the offline reader can't read waits as *Not read yet* (the player can fill it in by hand). A
 subclass with a Spellcasting feature of its own (a Fighter's or Rogue's spellcasting subclass) reads as a third
 caster with the ability its text names; when it names none, the ability waits for Claude. A species printed under
-"<Species> Traits" takes the species' name. A 2024 background's Ability Scores and Skill Proficiencies lines must
-name abilities and skills, and a species' Creature Type line a type ("Humanoid", or the sentence 2022 books print,
-"You are a Humanoid." or "…a Humanoid (goblinoid).", in emphasis too) and its Speed line a number, so a chapter's
-explanation of a background's or species' parts isn't one ("You are a Humanoid unless your species says otherwise",
-"gives your walking speed" explain).
+"<Species> Traits" takes the species' name, and a 2024 background's Ability Scores line must name abilities (a
+species' Creature Type line, a type: "Humanoid", or the whole sentence 2022 books print, "You are a Humanoid.", in
+emphasis too), so a chapter's explanation of a background's or species' parts, which says what each line holds, isn't
+one ("You are a Humanoid unless your species says otherwise" explains).
 With the player's consent — the model (the Settings model and the cheaper ones, each with a price range
 and minutes), the kinds, and a spending limit — the runner sends one entry per request: streamed,
 structured-output JSON, adaptive thinking at effort `low`, one cached system block per kind, a warm-up
@@ -454,8 +453,8 @@ table per spell level gives the spells in its tables, not the tables' captions. 
 come from its own text, not from a creature's stat block printed inside it (a summoning spell's spirit or steed, found
 by its AC, HP and Speed lines: as labels, colon labels or a list, after the bullets a word processor or a PDF's text
 layer prints, on lines a text layer wrapped or joined; the PDF reader starts a line at each stat line, after a bullet
-too, and after a dash or a middle dot when another stat line, or a species' Size or Creature Type line, so marked sits
-within two lines of it: a spaced dash in prose stands alone), both offline and in what Claude is asked for. Paragraphs keep their bold and italics, a
+too, and after a dash or a middle dot when another stat line so marked, with its value, sits within two lines of it:
+a spaced dash in prose stands alone), both offline and in what Claude is asked for. Paragraphs keep their bold and italics, a
 line break starts a line (a stat block's lines stay apart), list items come as lists (Word's list paragraphs too),
 tables as pipe tables with their caption above and merged cells keeping the cells after them in their columns (a
 table that only lays out a page or boxes a sidebar reads as its cells' blocks), and a description list's term and

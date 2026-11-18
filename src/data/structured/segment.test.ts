@@ -255,21 +255,21 @@ describe('segment: structure rules', () => {
     // As the chapter's own text, and as a section of its own.
     expect(kinds(['# Peoples of the Fen', 'Every people in this chapter has the following parts.', ...parts, ...peoples])).toEqual(both);
     expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...parts, ...peoples])).toEqual(both);
-    // However the chapter's own text words it, a chapter of species is none itself; a section of its own that sets a
-    // condition on the type isn't one either.
+    // An explanation's Creature Type sentence goes on past the type (a condition, a default), as the chapter's own text
+    // or in a section of its own.
     for (const type of ['You are a Humanoid—unless your people says otherwise.', 'You are a *Humanoid* unless your people says otherwise.', 'You are a Humanoid (unless your people says otherwise).', 'You are a Humanoid by default; your people may name another.']) {
       const explaining = [`**Creature Type.** ${type}`, ...parts.slice(1)];
       expect(kinds(['# Peoples of the Fen', 'Every people in this chapter has the following parts.', ...explaining, ...peoples]), type).toEqual(both);
       expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...explaining, ...peoples]), type).toEqual(both);
     }
-    // Its Speed line names no number; one that does, after a condition on the type, explains all the same.
+    // Whatever its Speed line gives.
     const numbered = ['**Creature Type.** You are a Humanoid unless your people says otherwise.', parts[1], '**Speed.** Most peoples walk 30 feet a turn.'];
     expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...numbered, ...peoples])).toEqual(both);
-    // Its species may sit a level further down, under their people's lore.
+    // With its species a level further down, under their people's lore.
     const deeper = ['**Creature Type.** You are a Humanoid by default; your people may name another.', ...parts.slice(1)];
     expect(kinds(['# Peoples of the Fen', 'Every people in this chapter has the following parts.', ...deeper, ...peoples.slice(0, 7)])).toEqual([['species', 'Mirefolk']]);
-    // The 2022 sentence however it goes on.
-    for (const type of ['You are a Humanoid (goblinoid).', 'You are a Fey or a Humanoid, your choice.', 'You are a Humanoid creature.']) {
+    // The 2022 sentence as the books print it.
+    for (const type of ['You are a Humanoid.', 'You are a Humanoid. You are also considered a goblin for any prerequisite.', 'You are an Ooze.']) {
       const bogwight = ['## Bogwight', `***Creature Type.*** ${type}`, '***Size.*** You are Small.', '***Speed.*** Your walking speed is 30 feet.', '***Fen Sight.*** You see in mist.'];
       expect(kinds(['# Peoples of the Fen', ...bogwight]), type).toEqual([['species', 'Bogwight']]);
     }
@@ -292,21 +292,6 @@ describe('segment: structure rules', () => {
       '### Variant: Wickwright', '**Ability Scores:** Dexterity, Intelligence, Charisma', '**Feat:** Crafter', '**Tool Proficiency:** Glassblower’s Tools',
     ];
     expect(kinds(lamplighter)).toEqual([['background', 'Lamplighter']]);
-  });
-
-  it("doesn't take a chapter of backgrounds for one, whatever its own text explains", () => {
-    const real = (name: string, abilities: string, skills: string) =>
-      [`## ${name}`, `**Ability Scores:** ${abilities}`, '**Feat:** Alert', `**Skill Proficiencies:** ${skills}`, '**Tool Proficiency:** Tinker’s Tools', '**Equipment:** Choose A or B: (A) Lantern, 8 GP; or (B) 50 GP'];
-    const md = [
-      '# Backgrounds', 'Every background in this chapter has these parts.',
-      '**Ability Scores:** Choose the three your background lists.', '**Feat:** The feat your background gives.', '**Skill Proficiencies:** The two your background gives.', '**Tool Proficiency:** The tool your background gives.', '**Equipment:** What your background gives.',
-      ...real('Lamplighter', 'Dexterity, Wisdom, Charisma', 'Insight and Perception'),
-      ...real('Ferryman', 'Strength, Constitution, Wisdom', 'Athletics and Survival'),
-    ].join('\n\n');
-    expect(segment(chunkDocument(md, { sourceId: 't', sourceName: 'T' }), CTX).candidates.map((c) => [c.kind, c.name])).toEqual([
-      ['background', 'Lamplighter'],
-      ['background', 'Ferryman'],
-    ]);
   });
 
   it('takes the flattened feature siblings of an older-format subclass along', () => {

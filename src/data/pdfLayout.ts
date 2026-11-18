@@ -155,16 +155,16 @@ const STAT_LABEL_START = new RegExp(
 );
 /** A dash or a middle dot opening a line: a list's bullet, or a spaced dash in prose ("…a guardian / — AC 14, HP 20 — that…"). */
 const DASH_MARK = /^[-+–—·]\s/;
-/** A list item of a stat block's or a species' basic lines after a dash or a middle dot ("– HP 20", "- Size: Medium"). */
-const DASH_STAT = /^[-+–—·]\s+[*_]*(?:AC|HP|CR|Speed|Armor Class|Hit Points|Challenge|Initiative|Creature Type|Size)\b/;
+/** A stat line with its value after a dash or a middle dot ("– HP 20 + 5 for each spell level above 3"). */
+const dashedStat = (line: string | undefined) => line !== undefined && DASH_MARK.test(line) && STAT_LABEL_START.test(line);
 /**
- * A stat or spell label line starts a line of its own; after a dash or a middle dot, only in a list of such lines (the
- * paragraph so far, or one of the two lines after it, is another): a stat block lists several, a dash in prose stands
- * alone.
+ * A stat or spell label line starts a line of its own; after a dash or a middle dot, only in a list of stat lines (the
+ * paragraph so far, or one of the two lines after it, is another with its value): a stat block lists several, a dash
+ * in prose stands alone.
  */
 function statLineStarts(text: string, paragraph: string, after: readonly (string | undefined)[]): boolean {
   if (!STAT_LABEL_START.test(text)) return false;
-  return !DASH_MARK.test(text) || [paragraph, ...after].some((l) => l !== undefined && DASH_STAT.test(l));
+  return !DASH_MARK.test(text) || [paragraph, ...after].some(dashedStat);
 }
 
 /** A spell card's labels alone on their line: one above its value, or a grid's row of them ("Casting Time", "RANGE", "CASTING TIME RANGE"). */
