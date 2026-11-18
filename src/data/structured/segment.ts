@@ -453,7 +453,7 @@ const ABILITY_SCORES_VALUE = valueNames(L.abilityScores, ABILITY_WORDS);
 // a Humanoid unless your species says otherwise").
 const CREATURE_TYPE_VALUE = valueNames(
   L.creatureType,
-  String.raw`You are (?:an? )?[*_]{0,3}(?:${CREATURE_TYPES})(?![A-Za-z0-9])[*_]{0,3}(?![ \t]*,?[ \t]*(?:unless|if|except|when)\b)|(?:${CREATURE_TYPES})`,
+  String.raw`You are (?:an? )?[*_]{0,3}(?:${CREATURE_TYPES})(?![A-Za-z0-9])(?![*_]*[ \t]*[,—–-]?[ \t]*\(?(?:unless|if|except|when)\b)[*_]{0,3}|(?:${CREATURE_TYPES})`,
 );
 /** A label's line names one of `words` anywhere before its first full stop (in emphasis too: "_Humanoid_"). */
 const lineNames = (re: RegExp, words: string) => new RegExp(String.raw`${re.source}[^.\n]*?(?<![A-Za-z0-9])(?:${words})(?![A-Za-z0-9])`, re.flags);
@@ -612,13 +612,15 @@ function sectionCandidate(node: OutlineNode, known: ReadonlySet<string>, subclas
     const candidate = makeCandidate('subclass', 'section', cleanName('subclass', node.title), chains, sub.reason, sub.parent ? { parentClassName: sub.parent } : {});
     return { candidate, inner, adopted };
   }
+  // A chapter of backgrounds or species is none itself, whatever its own text explains: a section that holds one isn't one.
+  const holds = (match: (n: OutlineNode) => string | null) => [...walk(node)].some((n) => n !== node && match(n) !== null);
   const background = backgroundMatch(node);
-  if (background) {
+  if (background && !holds(backgroundMatch)) {
     const { chains, inner } = sectionChains(node, isStoredEntity);
     return { candidate: makeCandidate('background', 'section', node.title, chains, background), inner };
   }
   const species = speciesMatch(node);
-  if (species) {
+  if (species && !holds(speciesMatch)) {
     const { chains, inner } = sectionChains(node, isStoredEntity);
     return { candidate: makeCandidate('species', 'section', cleanName('species', node.title), chains, species), inner };
   }

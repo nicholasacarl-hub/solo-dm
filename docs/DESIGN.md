@@ -364,7 +364,8 @@ caster with the ability its text names; when it names none, the ability waits fo
 "<Species> Traits" takes the species' name, and a 2024 background's Ability Scores line must name abilities (a
 species' Creature Type line, a type: "Humanoid", or the sentence 2022 books print, "You are a Humanoid." or "…a
 Humanoid (goblinoid).", in emphasis too), so a chapter's explanation of a background's or species' parts isn't one
-("You are a Humanoid unless your species says otherwise" explains).
+("You are a Humanoid unless your species says otherwise" explains), and a chapter that holds backgrounds or species is
+none itself, whatever its own text explains.
 With the player's consent — the model (the Settings model and the cheaper ones, each with a price range
 and minutes), the kinds, and a spending limit — the runner sends one entry per request: streamed,
 structured-output JSON, adaptive thinking at effort `low`, one cached system block per kind, a warm-up
