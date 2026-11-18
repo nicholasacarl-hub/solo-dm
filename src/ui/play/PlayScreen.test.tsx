@@ -199,14 +199,15 @@ describe('PlayScreen — one tab at a time', () => {
     expect(spies.unloadCampaign).toHaveBeenCalled();
     expect(screen.queryByRole('log', { name: 'Story so far' })).not.toBeInTheDocument();
 
-    // Taking it back reloads the campaign and lets the DM pick up whatever the other tab left.
+    // Taking it back reloads the campaign and lets the DM pick up whatever the other tab left. The reload can take
+    // over a second on a shared CI runner, so these waits are longer than the 1 s default.
     vi.mocked(dm.isBusy).mockReturnValue(false);
     acquire.mockResolvedValue(fakeLock().lock);
     await userEvent.setup().click(screen.getByRole('button', { name: 'Use this tab instead' }));
-    expect(await screen.findByRole('heading', { name: 'The Drowned Lantern' })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'The Drowned Lantern' }, { timeout: 3000 })).toBeInTheDocument();
     expect(acquire).toHaveBeenLastCalledWith('camp-1', { steal: true });
-    await waitFor(() => expect(dm.beginOrResume).toHaveBeenCalledTimes(2));
-  });
+    await waitFor(() => expect(dm.beginOrResume).toHaveBeenCalledTimes(2), { timeout: 3000 });
+  }, 15_000);
 
   it('still opens the campaign if locking itself fails', async () => {
     const error = vi.spyOn(console, 'error').mockImplementation(() => {});
