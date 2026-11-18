@@ -439,7 +439,9 @@ one, bold or not, makes the bold lines labels). A bold line naming an entry's pa
 species' "Traits", "At Higher Levels") goes a level below the other bold lines, so the creature, species or spell
 above it keeps it. Word's complex-script weight, style and size (`mso-bidi-…`) aren't read as the text's own. A
 table's second header row arrives as its first row (Markdown has one header row); the class reader folds a class
-table's into its header ("Spell Slots per Spell Level" over 1 to 9). Paragraphs keep their bold and italics, a
+table's two rows into one header, whichever comes first ("Spell Slots per Spell Level" over 1 to 9, or, as D&D
+Beyond prints it, that group row over "Level | Proficiency Bonus | … | 1 | 2 …"). A class's spell list printed as a
+table per spell level gives the spells in its tables, not the tables' captions. Paragraphs keep their bold and italics, a
 line break starts a line (a stat block's lines stay apart), list items come as lists (Word's list paragraphs too),
 tables as pipe tables with their caption above and merged cells keeping the cells after them in their columns (a
 table that only lays out a page or boxes a sidebar reads as its cells' blocks), and a description list's term and

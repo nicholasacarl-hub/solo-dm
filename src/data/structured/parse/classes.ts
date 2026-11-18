@@ -34,26 +34,34 @@ function coreTraits(tables: readonly MarkdownTable[]): Map<string, string> | nul
 
 /** The class table: a header with Level and Proficiency Bonus and one body row per level (20 of them). */
 function classTable(tables: readonly MarkdownTable[]): MarkdownTable | null {
-  const table = tables.find((t) => /^Level$/i.test(plainText(t.header[0] ?? '')) && t.header.some((h) => /Proficiency Bonus/i.test(h)) && t.rows.length >= 20);
-  return table ? withSubHeader(table) : null;
+  return (
+    tables
+      .map(withOneHeader)
+      .find((t) => /^Level$/i.test(plainText(t.header[0] ?? '')) && t.header.some((h) => /Proficiency Bonus/i.test(h)) && t.rows.length >= 20) ?? null
+  );
 }
 
 const ORDINALS = ['', '1st', '2nd', '3rd', '4th', '5th', '6th', '7th', '8th', '9th'];
 
 /**
- * A class table printed with two header rows ("—Spell Slots per Spell Level—" over 1 to 9, the other headers merged
- * down) arrives as a header and a first row with a blank Level cell, since Markdown has one header row: that row names
- * the columns it fills, and a bare number under the Spell Slots header is that level's slots ("1" is the "1st" column).
+ * A class table printed with two header rows arrives with one of them as its first row, since Markdown has one header
+ * row: a sub-header under the column names (its Level cell blank: 1 to 9 under "Spell Slots per Spell Level", the
+ * other headers merged down), or the column names under a row of groups (its first cell blank: D&D Beyond prints
+ * "—Spell Slots per Spell Level—" over "Level | Proficiency Bonus | … | 1 | 2 …"). The two become one header, and a
+ * bare number under the Spell Slots group is that level's slots ("1" is the "1st" column).
  */
-function withSubHeader(table: MarkdownTable): MarkdownTable {
-  const sub = (table.rows[0] ?? []).map((c) => plainText(c));
-  if (table.rows.length < 21 || sub[0] !== '' || !sub.some(Boolean)) return table;
-  const slots = table.header.findIndex((h) => /Spell Slots/i.test(plainText(h)));
-  const header = table.header.map((h, i) => {
-    if (!sub[i]) return h;
-    return slots >= 0 && i >= slots && /^[1-9]$/.test(sub[i]) ? ORDINALS[Number(sub[i])] : sub[i];
-  });
-  return { header, rows: table.rows.slice(1) };
+function withOneHeader(table: MarkdownTable): MarkdownTable {
+  const [first, ...levels] = table.rows;
+  if (!first) return table;
+  const top = table.header.map((h) => plainText(h));
+  const next = first.map((c) => plainText(c));
+  const slots = top.findIndex((h) => /Spell Slots/i.test(h));
+  const slotLevel = (cell: string, i: number) => (slots >= 0 && i >= slots && /^[1-9]$/.test(cell) ? ORDINALS[Number(cell)] : cell);
+  if (top[0] === '' && /^Level$/i.test(next[0] ?? '')) return { header: next.map(slotLevel), rows: levels };
+  if (/^Level$/i.test(top[0] ?? '') && next[0] === '' && next.some(Boolean)) {
+    return { header: table.header.map((h, i) => (next[i] ? slotLevel(next[i], i) : h)), rows: levels };
+  }
+  return table;
 }
 
 const SLOT_HEADER = /^(?:Spell Slots(?: per Spell Level)?\s*[-–—:]\s*)?(\d)(?:st|nd|rd|th)$/i;
