@@ -356,6 +356,25 @@ describe('pdfPagesToMarkdown', () => {
     for (const before of [wrap, `${wrap.replace(', a guardian', '')} (a Celestial guardian)`]) {
       expect(pdfPagesToMarkdown([[line(before, 700), line(dashed, 688), line(after, 676)]])).not.toContain('\n\n— AC');
     }
+    // Nor beside a dashed line that is no stat line: the closing dash wrapped, or a dashed list of options.
+    const stats = '— AC 14 + the spell’s level, HP 20 + 5 for each spell level above 3, Speed 40 ft., Fly 40 ft.';
+    const closing = pdfPagesToMarkdown([[line(wrap, 700), line(stats, 688), line('— that stays at your side until the spell ends, and when it appears it howls at the moon.', 676), line(after, 664)]]);
+    expect(closing).not.toContain('\n\n— AC');
+    const options = pdfPagesToMarkdown([[line('– Hound. A hound of light appears in an unoccupied space you can see within range, a guardian', 700), line(stats, 688), line('– Moth Cloud. A cloud of moths fills a 10-foot Emanation around a point you choose within range.', 676)]]);
+    expect(options).not.toContain('\n\n— AC');
+  });
+
+  it('starts a dashed stat list whose first item wraps onto a second line', () => {
+    const page = [
+      line('When you cast the spell, the hound uses the statistics below, which change with the spell slot you use:', 700),
+      line('– Armor Class 11 + the level of the spell', 688),
+      line('(natural armor)', 676),
+      line('– Hit Points 20 + 5 for each spell level above 3', 664),
+      line('– Speed 40 ft.', 652),
+    ];
+    const paragraphs = pdfPagesToMarkdown([page]).split('\n\n');
+    expect(paragraphs.some((p) => p.startsWith('– Armor Class 11'))).toBe(true);
+    expect(paragraphs).toContain('– Hit Points 20 + 5 for each spell level above 3');
   });
 
   it('drops running headers and page numbers', () => {

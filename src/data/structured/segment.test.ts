@@ -260,8 +260,11 @@ describe('segment: structure rules', () => {
     for (const type of ['You are a Humanoid—unless your people says otherwise.', 'You are a *Humanoid* unless your people says otherwise.', 'You are a Humanoid (unless your people says otherwise).', 'You are a Humanoid by default; your people may name another.']) {
       const explaining = [`**Creature Type.** ${type}`, ...parts.slice(1)];
       expect(kinds(['# Peoples of the Fen', 'Every people in this chapter has the following parts.', ...explaining, ...peoples]), type).toEqual(both);
-      if (!type.includes('by default')) expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...explaining, ...peoples]), type).toEqual(both);
+      expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...explaining, ...peoples]), type).toEqual(both);
     }
+    // Its Speed line names no number; one that does, after a condition on the type, explains all the same.
+    const numbered = ['**Creature Type.** You are a Humanoid unless your people says otherwise.', parts[1], '**Speed.** Most peoples walk 30 feet a turn.'];
+    expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...numbered, ...peoples])).toEqual(both);
     // Its species may sit a level further down, under their people's lore.
     const deeper = ['**Creature Type.** You are a Humanoid by default; your people may name another.', ...parts.slice(1)];
     expect(kinds(['# Peoples of the Fen', 'Every people in this chapter has the following parts.', ...deeper, ...peoples.slice(0, 7)])).toEqual([['species', 'Mirefolk']]);
@@ -273,6 +276,22 @@ describe('segment: structure rules', () => {
     // A type in emphasis is named: a re-check keeps the species.
     const italic = ['- **Creature Type:** Usually _Humanoid_', '- **Size:** Small', '- **Speed:** 30 feet'].join('\n\n');
     expect(explainsParts('species', italic)).toBe(false);
+  });
+
+  it('keeps a species or a background whose subsection repeats its lines (a subrace, a variant) one record', () => {
+    const kinds = (blocks: string[]) => segment(chunkDocument(blocks.join('\n\n'), { sourceId: 't', sourceName: 'T' }), CTX).candidates.map((c) => [c.kind, c.name]);
+    const reedfolk = [
+      '# Peoples', '## Reedfolk', 'Reedfolk live by the river.', '### Reedfolk Traits',
+      '***Ability Score Increase.*** Your Dexterity score increases by 2.', '***Size.*** Your size is Small.', '***Speed.*** Your base walking speed is 25 feet.', '***Languages.*** You can speak, read, and write Common and Sylvan.', '***Subrace.*** Choose one of the subraces below.',
+      '#### Tall Reedfolk', '***Ability Score Increase.*** Your Wisdom score increases by 1.', '***Size.*** Your size is Medium.', '***Speed.*** Your base walking speed is 30 feet.',
+      '#### Short Reedfolk', '***Ability Score Increase.*** Your Charisma score increases by 1.', '***Nimble.*** You slip between larger creatures.',
+    ];
+    expect(kinds(reedfolk)).toEqual([['species', 'Reedfolk']]);
+    const lamplighter = [
+      '# Backgrounds', '## Lamplighter', '**Ability Scores:** Dexterity, Wisdom, Charisma', '**Feat:** Alert', '**Skill Proficiencies:** Insight and Perception', '**Tool Proficiency:** Tinker’s Tools', '**Equipment:** A lantern and 8 GP',
+      '### Variant: Wickwright', '**Ability Scores:** Dexterity, Intelligence, Charisma', '**Feat:** Crafter', '**Tool Proficiency:** Glassblower’s Tools',
+    ];
+    expect(kinds(lamplighter)).toEqual([['background', 'Lamplighter']]);
   });
 
   it("doesn't take a chapter of backgrounds for one, whatever its own text explains", () => {

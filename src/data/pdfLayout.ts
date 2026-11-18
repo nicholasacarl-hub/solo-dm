@@ -155,13 +155,16 @@ const STAT_LABEL_START = new RegExp(
 );
 /** A dash or a middle dot opening a line: a list's bullet, or a spaced dash in prose ("…a guardian / — AC 14, HP 20 — that…"). */
 const DASH_MARK = /^[-+–—·]\s/;
+/** A list item of a stat block's or a species' basic lines after a dash or a middle dot ("– HP 20", "- Size: Medium"). */
+const DASH_STAT = /^[-+–—·]\s+[*_]*(?:AC|HP|CR|Speed|Armor Class|Hit Points|Challenge|Initiative|Creature Type|Size)\b/;
 /**
- * A stat or spell label line starts a line of its own; after a dash or a middle dot, only in a list of them (the line
- * after it, or the paragraph so far, opens with one too): a stat block lists several lines, a dash in prose stands alone.
+ * A stat or spell label line starts a line of its own; after a dash or a middle dot, only in a list of such lines (the
+ * paragraph so far, or one of the two lines after it, is another): a stat block lists several, a dash in prose stands
+ * alone.
  */
-function statLineStarts(text: string, paragraph: string, next: string | undefined): boolean {
+function statLineStarts(text: string, paragraph: string, after: readonly (string | undefined)[]): boolean {
   if (!STAT_LABEL_START.test(text)) return false;
-  return !DASH_MARK.test(text) || DASH_MARK.test(paragraph) || DASH_MARK.test(next ?? '');
+  return !DASH_MARK.test(text) || [paragraph, ...after].some((l) => l !== undefined && DASH_STAT.test(l));
 }
 
 /** A spell card's labels alone on their line: one above its value, or a grid's row of them ("Casting Time", "RANGE", "CASTING TIME RANGE"). */
@@ -280,7 +283,7 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
         gap < 0 ||
         lastBodyLength < shortLine ||
         afterCategory ||
-        statLineStarts(line.text, paragraph, lines[at + 1]?.text) ||
+        statLineStarts(line.text, paragraph, [lines[at + 1]?.text, lines[at + 2]?.text]) ||
         cardLabelAlone(line.text) ||
         cardLabelAlone(paragraph);
       if (paragraphBreak) {

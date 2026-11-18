@@ -460,14 +460,19 @@ const lineNames = (re: RegExp, words: string) => new RegExp(String.raw`${re.sour
 const ABILITY_SCORES_NAMED = lineNames(L.abilityScores, ABILITY_WORDS);
 const SKILLS_NAMED = lineNames(L.skills, SKILL_WORDS);
 const CREATURE_TYPE_NAMED = lineNames(L.creatureType, CREATURE_TYPES);
+/** A species' Speed line gives its number ("30 feet", "Your walking speed is 30 feet"); an explanation says what the line holds. */
+const SPEED_NUMBER = new RegExp(String.raw`${L.speed.source}[^.\n]*?\d`, L.speed.flags);
 
 /**
  * Why a section's own text (`text`, its first 3000 characters) and its subsections' titles are a background's, or
- * null. `named`: today's rule, whose Ability Scores line must name abilities (the reader before version 4 took any).
+ * null. `named`: today's rule, whose Ability Scores and Skill Proficiencies lines must name abilities and skills (the
+ * reader before version 4 took any).
  */
 function backgroundReason(text: string, childTitles: readonly string[], named = true): string | null {
   const labels2024 = [L.abilityScores, L.feat, L.skills, L.tools, L.equipment].filter((re) => re.test(text)).length;
-  if (labels2024 >= 3 && (!named || !L.abilityScores.test(text) || ABILITY_SCORES_VALUE.test(text))) {
+  // Today's lines name what they give: abilities, skills (an explanation says what each line holds).
+  const lines = !named || ((!L.abilityScores.test(text) || ABILITY_SCORES_VALUE.test(text)) && (!L.skills.test(text) || SKILLS_NAMED.test(text)));
+  if (labels2024 >= 3 && lines) {
     return 'Has Ability Scores, Feat, Skill Proficiencies, Tool Proficiency or Equipment lines';
   }
   const feature = L.feature.test(text) || childTitles.some((t) => /^Feature\s*:/i.test(t));
@@ -477,9 +482,11 @@ function backgroundReason(text: string, childTitles: readonly string[], named = 
   return null;
 }
 
-/** Why a section's own text (its first 2000 characters) is a species', or null. `named`: as for backgroundReason, for its Creature Type line. */
+/** Why a section's own text (its first 2000 characters) is a species', or null. `named`: as for backgroundReason, for its Creature Type line (a type) and its Speed line (a number). */
 function speciesReason(text: string, named = true): string | null {
-  if ([named ? CREATURE_TYPE_VALUE : L.creatureType, L.size, L.speed].filter((re) => re.test(text)).length >= 3) return 'Has Creature Type, Size and Speed lines';
+  if ([named ? CREATURE_TYPE_VALUE : L.creatureType, L.size, named ? SPEED_NUMBER : L.speed].filter((re) => re.test(text)).length >= 3) {
+    return 'Has Creature Type, Size and Speed lines';
+  }
   if ([L.asi, L.size, L.speed, L.languages].filter((re) => re.test(text)).length >= 3) {
     return 'Has Ability Score Increase, Size, Speed and Languages traits (older layout)';
   }
@@ -612,15 +619,13 @@ function sectionCandidate(node: OutlineNode, known: ReadonlySet<string>, subclas
     const candidate = makeCandidate('subclass', 'section', cleanName('subclass', node.title), chains, sub.reason, sub.parent ? { parentClassName: sub.parent } : {});
     return { candidate, inner, adopted };
   }
-  // A chapter of backgrounds or species is none itself, whatever its own text explains: a section that holds one isn't one.
-  const holds = (match: (n: OutlineNode) => string | null) => [...walk(node)].some((n) => n !== node && match(n) !== null);
   const background = backgroundMatch(node);
-  if (background && !holds(backgroundMatch)) {
+  if (background) {
     const { chains, inner } = sectionChains(node, isStoredEntity);
     return { candidate: makeCandidate('background', 'section', node.title, chains, background), inner };
   }
   const species = speciesMatch(node);
-  if (species && !holds(speciesMatch)) {
+  if (species) {
     const { chains, inner } = sectionChains(node, isStoredEntity);
     return { candidate: makeCandidate('species', 'section', cleanName('species', node.title), chains, species), inner };
   }
