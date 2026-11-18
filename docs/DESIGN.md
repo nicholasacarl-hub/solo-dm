@@ -358,7 +358,9 @@ is `src/test/structuredFixtures.ts` (invented content only).
 the book's fingerprint (FNV-1a over its entries in ordinal order). `detectStructure` then runs locally
 and for free: it segments the entries in reading order, detects candidates by their labels, parses
 what it can offline into the same wire object Claude returns, and normalizes it with one normalizer
-per kind. What the offline reader can't read waits as *Not read yet* (the player can fill it in by hand).
+per kind. What the offline reader can't read waits as *Not read yet* (the player can fill it in by hand). A
+subclass with a Spellcasting feature of its own (a Fighter's or Rogue's spellcasting subclass) reads as a third
+caster with the ability its text names; when it names none, the ability waits for Claude.
 With the player's consent — the model (the Settings model and the cheaper ones, each with a price range
 and minutes), the kinds, and a spending limit — the runner sends one entry per request: streamed,
 structured-output JSON, adaptive thinking at effort `low`, one cached system block per kind, a warm-up

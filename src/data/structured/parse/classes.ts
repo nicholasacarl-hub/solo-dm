@@ -14,13 +14,9 @@ import { blockText } from '../paragraphs';
 import type { Candidate, CandidateBlock } from '../segment';
 import type { Wire } from '../wire';
 import type { OfflineParse } from './index';
-import { findLabel, parseTables, plainText, type MarkdownTable } from './srdRulesOptions';
+import { findLabel, parseTables, plainText, spellcastingAbilityIn, type MarkdownTable } from './srdRulesOptions';
 
 const LEVEL_TITLE = /^Level\s+(\d{1,2})\s*:\s*(.+)$/i;
-const ABILITY_WORD = /\b(Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) is (?:your|the) spellcasting ability\b/i;
-const ABILITY_CODE: Readonly<Record<string, Wire<'class'>['spellcastingAbility']>> = {
-  strength: 'str', dexterity: 'dex', constitution: 'con', intelligence: 'int', wisdom: 'wis', charisma: 'cha',
-};
 
 /** A key-value table (first column = label) of a class's core traits, header row included. */
 function coreTraits(tables: readonly MarkdownTable[]): Map<string, string> | null {
@@ -109,7 +105,7 @@ export function parseClass(candidate: Candidate, entriesById?: ReadonlyMap<strin
     : [];
   const subclassFeature = features.find((f) => / Subclass$/i.test(f.name));
   const fullText = blocks.map(textOf).join('\n\n');
-  const ability = ABILITY_WORD.exec(plainText(fullText))?.[1].toLowerCase();
+  const ability = spellcastingAbilityIn(plainText(fullText));
   const otherList = /\b(?:from|on) the (\w+) spell list\b/i.exec(plainText(fullText));
 
   const wire: Wire<'class'> = {
@@ -125,7 +121,7 @@ export function parseClass(candidate: Candidate, entriesById?: ReadonlyMap<strin
     toolsText: trait('Tool Proficiencies', 'Tools'),
     equipmentText: trait('Starting Equipment'),
     casterType: casterTypeOf(table),
-    spellcastingAbility: ability ? (ABILITY_CODE[ability] ?? 'none') : 'none',
+    spellcastingAbility: ability ?? 'none',
     preparedSpellsText: '',
     spellListText: otherList && nameKey(otherList[1]) !== nameKey(candidate.name) ? `the ${otherList[1]} spell list` : '',
     subclassLevel: subclassFeature?.level ?? 0,

@@ -4,6 +4,7 @@
  * always-prepared spell table). Invented content only.
  */
 import { describe, expect, it } from 'vitest';
+import { chunkDocument } from '@/data/chunk';
 import { GLOAMWOOD_SOURCE_ID, SCRIPTED_WIRE, gloamwoodEntries } from '@/test/structuredFixtures';
 import { segment, type Candidate } from '../segment';
 import type { Wire } from '../wire';
@@ -29,6 +30,37 @@ describe('parseSubclass', () => {
 
   it('reads the Order of the Long Wick nested under its class', () => {
     expect(parseSubclass(candidate('Order of the Long Wick')).wire).toEqual(scripted('Wickwright Subclass: Order of the Long Wick'));
+  });
+
+  it('reads a subclass with a Spellcasting feature of its own as a third caster, with the ability it names', () => {
+    const read = (casting: string, more = '') => {
+      const md = [
+        '## Fighter Subclass: Lantern Knight',
+        '_Kindle Wards on Your Blade_',
+        'Lantern Knights learn a little of a wizard’s craft to guard the lamp roads.',
+        casting,
+        more,
+        '### Level 7: Smoke Ward',
+        'When a creature you can see hits you, you can wreathe yourself in lantern smoke.',
+      ].filter(Boolean).join('\n\n');
+      const entries = chunkDocument(md, { sourceId: 't', sourceName: 'T' });
+      const found = segment(entries, ctx).candidates.find((c) => c.name === 'Lantern Knight') as Candidate & { kind: 'subclass' };
+      const { wire, missing } = parseSubclass(found);
+      return { casterType: wire.casterType, ability: wire.spellcastingAbility, parent: wire.parentClassText, missing };
+    };
+    const ability = '**_Spellcasting Ability._** Intelligence is your spellcasting ability for these spells.';
+    expect(read(`### Level 3: Spellcasting\n\nYou learn to cast spells from lantern-lit runes.\n\n${ability}`)).toEqual({ casterType: 'third', ability: 'int', parent: 'Fighter', missing: [] });
+    // Older books: "When you reach 3rd level"; the ability under a sub-heading of its own.
+    expect(read('### Spellcasting\n\nWhen you reach 3rd level, you learn to cast spells from lantern-lit runes.', '#### Spellcasting Ability\n\nWisdom is your spellcasting ability for these spells.')).toEqual({
+      casterType: 'third',
+      ability: 'wis',
+      parent: 'Fighter',
+      missing: [],
+    });
+    // No ability named: Claude reads it.
+    expect(read('### Level 3: Spellcasting\n\nYou learn to cast spells from lantern-lit runes.')).toEqual({ casterType: 'third', ability: 'none', parent: 'Fighter', missing: ['spellcastingAbility'] });
+    // A subclass whose features only name spells isn't a caster of its own.
+    expect(read('### Level 3: Lantern Spells\n\nYou always have the Light cantrip prepared.')).toEqual({ casterType: 'none', ability: 'none', parent: 'Fighter', missing: [] });
   });
 
   it('reports a subclass without features or parent', () => {
