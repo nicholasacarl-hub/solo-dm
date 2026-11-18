@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { sampleCampaign } from '@/test/fixtures';
 import { EXPECTED_DATA, extractionJob, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
@@ -352,6 +352,135 @@ describe('the import dialog', () => {
     expect(vi.mocked(storage.setRecordStatus).mock.calls[1][1]).toBe('pending');
     // Undone: the offer is back.
     expect(await within(done).findByRole('button', { name: 'Accept the 17 confident' })).toBeInTheDocument();
+  });
+
+  it('pastes a copy from a web page with its headings and tables, and can swap it back for the plain text', async () => {
+    const user = userEvent.setup();
+    vi.mocked(storage.useLibrarySources).mockReturnValue([]);
+    renderLibrary('/library?tab=mine');
+    await user.click(screen.getAllByRole('button', { name: /Import/ })[0]);
+    const dialog = screen.getByRole('dialog');
+    const box = within(dialog).getByLabelText('Text') as HTMLTextAreaElement;
+    const html = '<h2>Lamp Spells</h2><p>Spells of the <b>lamp</b>.</p><table><tr><th>Spell</th><th>Level</th></tr><tr><td>Ember Lash</td><td>1</td></tr></table>';
+    const plain = 'Lamp Spells\nSpells of the lamp.\nSpell\tLevel\nEmber Lash\t1';
+    const clipboardData = { getData: (type: string) => (type === 'text/html' ? html : type === 'text/plain' ? plain : '') };
+    expect(fireEvent.paste(box, { clipboardData })).toBe(false);
+    expect(box.value).toBe('## Lamp Spells\n\nSpells of the **lamp**.\n\n| Spell | Level |\n| --- | --- |\n| Ember Lash | 1 |');
+    expect(within(dialog).getByRole('status')).toHaveTextContent('Pasted with formatting: kept 1 heading and 1 table.');
+    await user.click(within(dialog).getByRole('button', { name: 'Paste as plain text instead' }));
+    expect(box.value).toBe(plain);
+    expect(within(dialog).queryByRole('button', { name: 'Paste as plain text instead' })).toBeNull();
+    expect(within(dialog).getByRole('status')).toBeEmptyDOMElement();
+
+    // With "Plain text" chosen, or a copy that is only prose, the browser pastes the plain text as usual.
+    await user.clear(box);
+    await user.click(within(dialog).getByRole('radio', { name: 'Plain text' }));
+    expect(fireEvent.paste(box, { clipboardData })).toBe(true);
+    await user.click(within(dialog).getByRole('radio', { name: 'Markdown' }));
+    expect(fireEvent.paste(box, { clipboardData: { getData: (type: string) => (type === 'text/html' ? '<p>Only <b>prose</b>.</p>' : 'Only prose.') } })).toBe(true);
+    expect(box.value).toBe('');
+  });
+
+  it('sets a formatted paste apart from the text around it, reads Windows line breaks, and pastes through the browser’s editing where it can (so Ctrl+Z undoes it)', async () => {
+    const user = userEvent.setup();
+    vi.mocked(storage.useLibrarySources).mockReturnValue([]);
+    renderLibrary('/library?tab=mine');
+    await user.click(screen.getAllByRole('button', { name: /Import/ })[0]);
+    const dialog = screen.getByRole('dialog');
+    const box = within(dialog).getByLabelText('Text') as HTMLTextAreaElement;
+    const markdown = '## Lamp Spells\n\n- Ember Lash\n- Glow Mote';
+    const copy = (plain: string) => ({ clipboardData: { getData: (type: string) => (type === 'text/html' ? '<h2>Lamp Spells</h2><ul><li>Ember Lash</li><li>Glow Mote</li></ul>' : type === 'text/plain' ? plain : '') } });
+
+    // After typed text, and again after the first paste (the next section): each heading starts its own line.
+    await user.type(box, 'My notes');
+    fireEvent.paste(box, copy('Lamp Spells\nEmber Lash\nGlow Mote'));
+    fireEvent.paste(box, copy('Lamp Spells\nEmber Lash\nGlow Mote'));
+    expect(box.value).toBe(`My notes\n\n${markdown}\n\n${markdown}`);
+    // Into the middle of a line: the text after it moves to a paragraph of its own.
+    box.setSelectionRange(2, 2);
+    fireEvent.paste(box, copy('Lamp Spells'));
+    expect(box.value.startsWith(`My\n\n${markdown}\n\n notes\n\n## Lamp Spells`)).toBe(true);
+
+    // Windows line breaks: the swap gives the box's own \n text with the caret right after it, and the next paste lands there.
+    await user.clear(box);
+    await user.type(box, 'Outro');
+    box.setSelectionRange(0, 0);
+    fireEvent.paste(box, copy('Lamp Spells\r\nEmber Lash\r\nGlow Mote'));
+    await user.click(within(dialog).getByRole('button', { name: 'Paste as plain text instead' }));
+    expect(box.value).toBe('Lamp Spells\nEmber Lash\nGlow Mote\n\nOutro');
+    expect(box.selectionStart).toBe('Lamp Spells\nEmber Lash\nGlow Mote'.length);
+    fireEvent.paste(box, copy('Lamp Spells\r\nEmber Lash\r\nGlow Mote'));
+    expect(box.value).toBe(`Lamp Spells\nEmber Lash\nGlow Mote\n\n${markdown}\n\nOutro`);
+
+    // A copy with no plain text beside its HTML: nothing to swap back to.
+    await user.clear(box);
+    fireEvent.paste(box, copy(''));
+    expect(box.value).toBe(markdown);
+    expect(within(dialog).getByRole('status')).toHaveTextContent('Pasted with formatting: kept 1 heading and 1 list.');
+    expect(within(dialog).queryByRole('button', { name: 'Paste as plain text instead' })).toBeNull();
+
+    // A browser with editing commands inserts through them (its input event runs onChange); the note still shows.
+    const execCommand = vi.fn((_command: string, _ui: boolean, value: string) => {
+      const target = document.activeElement as HTMLTextAreaElement;
+      target.setRangeText(value, target.selectionStart, target.selectionEnd, 'end');
+      target.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: value }));
+      return true;
+    });
+    Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true });
+    try {
+      await user.clear(box);
+      await user.type(box, 'Intro');
+      fireEvent.paste(box, copy('Lamp Spells\nEmber Lash\nGlow Mote'));
+      expect(execCommand).toHaveBeenLastCalledWith('insertText', false, `\n\n${markdown}`);
+      expect(box.value).toBe(`Intro\n\n${markdown}`);
+      expect(within(dialog).getByRole('status')).toHaveTextContent('Pasted with formatting: kept 1 heading and 1 list.');
+      await user.click(within(dialog).getByRole('button', { name: 'Paste as plain text instead' }));
+      expect(execCommand).toHaveBeenLastCalledWith('insertText', false, 'Lamp Spells\nEmber Lash\nGlow Mote');
+      expect(box.value).toBe('Intro\n\nLamp Spells\nEmber Lash\nGlow Mote');
+      expect(box.selectionStart).toBe(box.value.length);
+      // A long paste is set directly: the browser's editing is slow on many lines.
+      execCommand.mockClear();
+      const long = Array.from({ length: 120 }, (_, i) => `<li>Charm ${i + 1}</li>`).join('');
+      // Set directly, the box is taken out of the page and put back: Chromium then drops its undo steps, which would
+      // otherwise replay an earlier paste onto the new text.
+      const moves = new MutationObserver(() => {});
+      moves.observe(box.parentNode as Node, { childList: true });
+      fireEvent.paste(box, { clipboardData: { getData: (type: string) => (type === 'text/html' ? `<h2>Charms</h2><ul>${long}</ul><ol>${long}</ol>` : type === 'text/plain' ? 'Charms' : '') } });
+      expect(moves.takeRecords().flatMap((r) => [...r.removedNodes, ...r.addedNodes])).toEqual([box, box]);
+      moves.disconnect();
+      expect(execCommand).not.toHaveBeenCalled();
+      expect(box.value).toContain('Glow Mote\n\n## Charms\n\n- Charm 1\n');
+      // The same box, still focused, the caret after the paste; Ctrl+Z in it puts back the text from before, once.
+      const before = 'Intro\n\nLamp Spells\nEmber Lash\nGlow Mote';
+      expect(within(dialog).getByLabelText('Text')).toBe(box);
+      expect(document.activeElement).toBe(box);
+      expect(box.selectionStart).toBe(box.value.length);
+      expect(fireEvent.keyDown(box, { key: 'z', ctrlKey: true })).toBe(false);
+      expect(box.value).toBe(before);
+      expect(box.selectionStart).toBe(before.length);
+      expect(within(dialog).getByRole('status').textContent).toBe('');
+      expect(fireEvent.keyDown(box, { key: 'z', ctrlKey: true })).toBe(true);
+      // Once the text is edited, Ctrl+Z is the browser's again (it undoes the edit), even when the edit is taken back.
+      fireEvent.paste(box, { clipboardData: { getData: (type: string) => (type === 'text/html' ? `<h2>Charms</h2><ul>${long}</ul><ol>${long}</ol>` : '') } });
+      await user.type(box, 'x{Backspace}');
+      expect(fireEvent.keyDown(box, { key: 'z', ctrlKey: true })).toBe(true);
+      expect(box.value).toContain('## Charms');
+
+      // The browser's editing also slows with the text already in the box: a section pasted into a long text is set directly.
+      const rites = Array.from({ length: 70 }, (_, i) => `<li>Rite ${i + 1}</li>`).join('');
+      const section = { clipboardData: { getData: (type: string) => (type === 'text/html' ? `<h2>Rites</h2><ul>${rites}</ul>` : type === 'text/plain' ? 'Rites' : '') } };
+      await user.clear(box);
+      execCommand.mockClear();
+      fireEvent.paste(box, section);
+      expect(execCommand).toHaveBeenCalledTimes(1);
+      fireEvent.change(box, { target: { value: 'x'.repeat(200_000) } });
+      execCommand.mockClear();
+      fireEvent.paste(box, section);
+      expect(execCommand).not.toHaveBeenCalled();
+      expect(box.value).toContain('## Rites\n\n- Rite 1\n');
+    } finally {
+      Reflect.deleteProperty(document, 'execCommand');
+    }
   });
 
   it('refuses photos in demo mode', async () => {

@@ -3,12 +3,16 @@
  * layer, Markdown, plain text, JSON) or photograph pages (transcribed by Claude with the player's
  * API key). Shows progress from importLibraryDocument and can be cancelled.
  *
+ * Paste with formatting: a copy from a web page or a document carries HTML beside its plain text; pasted with the
+ * Markdown format chosen, its headings, tables and lists arrive as Markdown (src/data/htmlPaste.ts) on lines of their
+ * own, undoable with Ctrl+Z (a long one, set directly, once), with a way back to the plain text.
+ *
  * Structured imports (spec §4.1): once the import is saved, the dialog looks for spells, monsters and
  * character options on this device (detectStructure, dismissible: closing lets it finish) and ends on
  * a done page with what it found and a link to the book page. A JSON pack's records arrive pending
  * with one tap to accept the confident ones. In demo mode photos are refused (no API calls).
  */
-import { useId, useRef, useState, type ReactNode } from 'react';
+import { useId, useLayoutEffect, useRef, useState, type ClipboardEvent, type ReactNode } from 'react';
 import { Link, useNavigate } from 'react-router';
 import { useShallow } from 'zustand/react/shallow';
 import { Camera, ClipboardType, FileUp, Info, Trash2, X } from 'lucide-react';
@@ -21,6 +25,7 @@ import {
   type ImportProgress,
   type PackImport,
 } from '@/data';
+import { formattedPaste, type HtmlConversion } from '@/data/htmlPaste';
 import { useSettings } from '@/state/settingsStore';
 import { findSourcesByFingerprint, listRecords } from '@/storage';
 import { MODELS, type LibrarySource } from '@/types';
@@ -123,6 +128,45 @@ const METHOD_HINTS: Record<Method, string> = {
   photos: 'Photograph printed pages; Claude transcribes them.',
 };
 
+/** What a formatted paste kept ("3 headings, 1 table and 2 lists"). */
+function keptSummary(c: HtmlConversion): string {
+  const parts = [
+    c.headings ? plural(c.headings, 'heading') : '',
+    c.tables ? plural(c.tables, 'table') : '',
+    c.lists ? plural(c.lists, 'list') : '',
+  ].filter(Boolean);
+  return parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}` : parts[0];
+}
+
+/** A formatted paste still in the text, which "Paste as plain text instead" swaps for the clipboard's plain text. */
+interface FormattedPaste {
+  start: number;
+  markdown: string;
+  plain: string;
+  kept: string;
+}
+
+/**
+ * The longest formatted paste (in lines) that goes through the browser's editing, so Ctrl+Z undoes it like any paste.
+ * A longer one is set directly: the browser inserts it line by line, in time that grows with the square of its lines.
+ */
+const UNDOABLE_LINES = 200;
+/** Each line it inserts also takes time that grows with the text in the box: lines × characters stay under this (about 0.15 s on a desktop). */
+const UNDOABLE_COST = 200 * 50_000;
+
+/** Line breaks that set pasted Markdown apart from the text before and after it, so its first heading starts a line. */
+function apart(before: string, after: string): { lead: string; trail: string } {
+  return {
+    lead: !before || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n',
+    trail: !after || after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n',
+  };
+}
+
+/** A caret set by script isn't scrolled to: a paste that ends the text shows that end, as the browser's own paste does. */
+function revealEnd(box: HTMLTextAreaElement): void {
+  if (box.selectionStart === box.value.length) box.scrollTop = box.scrollHeight;
+}
+
 const PASTE_FORMATS = [
   { value: 'markdown' as const, label: 'Markdown' },
   { value: 'text' as const, label: 'Plain text' },
@@ -142,6 +186,86 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
   const [notes, setNotes] = useState('');
   const [text, setText] = useState('');
   const [pasteFormat, setPasteFormat] = useState<PasteFormat>('markdown');
+  const [formatted, setFormatted] = useState<FormattedPaste | null>(null);
+  const textRef = useRef<HTMLTextAreaElement>(null);
+  // Where the caret goes once the text a paste set has rendered, and the view to keep (moving the box resets it).
+  const caret = useRef<number | null>(null);
+  const keptScroll = useRef<number | null>(null);
+  // The text before and after the last paste set directly, which the browser can't undo: Ctrl+Z in the box puts it back.
+  const directEdit = useRef<{ before: string; after: string; caret: number } | null>(null);
+  useLayoutEffect(() => {
+    const box = textRef.current;
+    if (caret.current === null || !box) return;
+    if (document.activeElement !== box) box.focus();
+    box.setSelectionRange(caret.current, caret.current);
+    if (keptScroll.current !== null) box.scrollTop = keptScroll.current;
+    keptScroll.current = null;
+    revealEnd(box);
+    caret.current = null;
+  }, [text]);
+
+  /**
+   * Put `insert` in place of the box's text from `start` to `end`, the caret at `caretAt`: through the browser's editing
+   * when that's quick, so Ctrl+Z undoes it like any paste (its input event runs onChange), else by setting the text,
+   * which Ctrl+Z in the box undoes once. Both read the box itself, whose line breaks are always \n.
+   */
+  const replaceInBox = (box: HTMLTextAreaElement, start: number, end: number, insert: string, caretAt: number) => {
+    box.focus();
+    box.setSelectionRange(start, end);
+    const lines = insert.split('\n').length;
+    const quick = lines <= UNDOABLE_LINES && lines * (box.value.length + insert.length) <= UNDOABLE_COST;
+    if (quick && typeof document.execCommand === 'function' && document.execCommand('insertText', false, insert)) {
+      box.setSelectionRange(caretAt, caretAt);
+      revealEnd(box);
+      return;
+    }
+    const next = box.value.slice(0, start) + insert + box.value.slice(end);
+    if (next === box.value) {
+      box.setSelectionRange(caretAt, caretAt);
+      return;
+    }
+    // Chromium keeps the box's undo steps when its text is set by script, and Ctrl+Z or redo would replay them onto the
+    // new text (an earlier paste glued to its end). Taking the box out of the page and back drops them; the caret effect
+    // puts the focus and the view back.
+    const { parentNode, nextSibling } = box;
+    if (parentNode) {
+      keptScroll.current = box.scrollTop;
+      parentNode.removeChild(box);
+      parentNode.insertBefore(box, nextSibling);
+    }
+    directEdit.current = { before: box.value, after: next, caret: end };
+    caret.current = caretAt;
+    setText(next);
+  };
+
+  /** A copy from a web page or a document: its HTML as Markdown, when the Markdown format is chosen and it has structure. */
+  const pasteWithFormatting = (e: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (pasteFormat !== 'markdown') return;
+    const html = e.clipboardData.getData('text/html');
+    if (!html) return;
+    // Windows puts text on the clipboard with \r\n line breaks.
+    const plain = e.clipboardData.getData('text/plain').replace(/\r\n?/g, '\n');
+    const conversion = formattedPaste(html, plain);
+    if (!conversion) return;
+    e.preventDefault();
+    const box = e.currentTarget;
+    const { selectionStart: start, selectionEnd: end, value } = box;
+    const { lead, trail } = apart(value.slice(0, start), value.slice(end));
+    const at = start + lead.length;
+    replaceInBox(box, start, end, lead + conversion.markdown + trail, at + conversion.markdown.length);
+    // After the insert: its input event clears what an earlier paste left.
+    setFormatted({ start: at, markdown: conversion.markdown, plain, kept: keptSummary(conversion) });
+  };
+
+  /** Swap the formatted paste for the clipboard's plain text (only while the text still holds it as pasted). */
+  const pasteAsPlainText = () => {
+    const box = textRef.current;
+    if (!formatted || !box) return;
+    const { start, markdown, plain } = formatted;
+    setFormatted(null);
+    if (box.value.slice(start, start + markdown.length) !== markdown) return;
+    replaceInBox(box, start, start + markdown.length, plain, start + plain.length);
+  };
   const [file, setFile] = useState<File | null>(null);
   const [photos, setPhotos] = useState<File[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -354,16 +478,44 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
               <Field
                 label="Text"
                 htmlFor={`${id}-text`}
-                hint="Headings (like “## Fireball”) split the text into separate entries."
+                hint="Headings (like “## Fireball”) split the text into separate entries. A copy from a web page or a document keeps its headings, tables and lists."
               >
                 <Textarea
                   id={`${id}-text`}
+                  ref={textRef}
                   rows={9}
                   value={text}
-                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={(e) => {
+                    const edit = directEdit.current;
+                    if (!edit || !(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey || e.key.toLowerCase() !== 'z') return;
+                    directEdit.current = null;
+                    if (e.currentTarget.value !== edit.after) return;
+                    e.preventDefault();
+                    caret.current = edit.caret;
+                    setText(edit.before);
+                    setFormatted(null);
+                  }}
+                  onChange={(e) => {
+                    directEdit.current = null;
+                    caret.current = null;
+                    setText(e.target.value);
+                    setFormatted(null);
+                  }}
+                  onPaste={pasteWithFormatting}
                   placeholder={'## Lantern of Embers\nWondrous item, uncommon\n\nWhile lit, this lantern…'}
                   className="font-mono text-xs"
                 />
+                {/* The status stays mounted (hidden while empty) so screen readers announce a formatted paste. */}
+                <div className={formatted ? 'flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted' : 'sr-only'}>
+                  <p role="status" aria-live="polite">
+                    {formatted ? `Pasted with formatting: kept ${formatted.kept}.` : ''}
+                  </p>
+                  {formatted?.plain && (
+                    <Button variant="ghost" size="sm" onClick={pasteAsPlainText}>
+                      Paste as plain text instead
+                    </Button>
+                  )}
+                </div>
               </Field>
               <SegmentedField legend="Format" value={pasteFormat} options={PASTE_FORMATS} onChange={setPasteFormat} />
             </>
