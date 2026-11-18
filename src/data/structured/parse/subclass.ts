@@ -9,7 +9,7 @@
 import type { Candidate, CandidateBlock } from '../segment';
 import type { Wire } from '../wire';
 import type { OfflineParse } from './index';
-import { plainText, sentences, splitRow, splitTopLevel } from './srdRulesOptions';
+import { plainText, sentences, spellcastingAbilityIn, splitRow, splitTopLevel } from './srdRulesOptions';
 
 const LEVEL_TITLE = /^Level\s+(\d{1,2})\s*:\s*(.+)$/i;
 const OLDER_LEVEL = /^(?:At|Starting at|Beginning at|When you reach) (\d{1,2})(?:st|nd|rd|th) level\b/i;
@@ -68,6 +68,13 @@ export function parseSubclass(candidate: Candidate): OfflineParse<'subclass'> {
   const tagline = setApart ? plainText(first) : (sentences(plainText(first))[0] ?? '');
   const spellsAt = paragraphs.findIndex((p) => SPELLS_INTRO.test(plainText(p)));
   const prepared = preparedSpellRows(spellsAt >= 0 ? paragraphs.slice(spellsAt) : []);
+  // A subclass with a Spellcasting feature of its own casts as a third caster (a Fighter's or Rogue's spellcasting
+  // subclass), with the ability that feature names, or failing that, the ability the subclass's text names.
+  const casting = features.find((f) => /^Spellcasting$/i.test(f.name));
+  const textOf = (blocks: readonly CandidateBlock[]) => plainText(blocks.flatMap((b) => b.paragraphs).join('\n\n'));
+  const ability = casting
+    ? (spellcastingAbilityIn(textOf(rest.filter((b) => b.id === casting.text.block))) ?? spellcastingAbilityIn(textOf(candidate.blocks)))
+    : undefined;
 
   const wire: Wire<'subclass'> = {
     matchesKind: true,
@@ -76,11 +83,15 @@ export function parseSubclass(candidate: Candidate): OfflineParse<'subclass'> {
     parentClassText: candidate.parentClassName?.trim() || parentFromTitles(candidate.blocks),
     taglineText: tagline,
     features,
-    casterType: 'none',
-    spellcastingAbility: 'none',
+    casterType: casting ? 'third' : 'none',
+    spellcastingAbility: ability ?? 'none',
     alwaysPreparedSpells: prepared,
     notes: '',
   };
-  const missing = [...(wire.parentClassText ? [] : ['parentClassText']), ...(features.length ? [] : ['features'])];
+  const missing = [
+    ...(wire.parentClassText ? [] : ['parentClassText']),
+    ...(features.length ? [] : ['features']),
+    ...(casting && !ability ? ['spellcastingAbility'] : []),
+  ];
   return { wire, missing };
 }

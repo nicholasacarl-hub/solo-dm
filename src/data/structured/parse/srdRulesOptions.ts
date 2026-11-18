@@ -97,6 +97,15 @@ export function splitRow(line: string): string[] {
 
 const isSeparatorRow = (cells: string[]) => cells.length > 0 && cells.every((c) => /^:?-+:?$/.test(c));
 
+const SPELLCASTING_ABILITY = /\b(Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma) is (?:your|the) spellcasting ability\b/i;
+const ABILITY_CODES: Readonly<Record<string, Ability>> = { strength: 'str', dexterity: 'dex', constitution: 'con', intelligence: 'int', wisdom: 'wis', charisma: 'cha' };
+
+/** The ability a class or subclass casts with ("Intelligence is your spellcasting ability"), as its code. */
+export function spellcastingAbilityIn(text: string): Ability | undefined {
+  const m = SPELLCASTING_ABILITY.exec(text);
+  return m ? ABILITY_CODES[m[1].toLowerCase()] : undefined;
+}
+
 export interface MarkdownTable {
   header: string[];
   rows: string[][];
