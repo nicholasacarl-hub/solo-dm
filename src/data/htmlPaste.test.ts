@@ -127,6 +127,20 @@ describe('htmlToMarkdown', () => {
     expect(htmlToMarkdown(html).markdown).toBe('## Lamps\n\nSeen.');
   });
 
+  it("leaves out a picture with its caption and the artist's credit, and reads a figure that holds more", () => {
+    const art = (inner: string) =>
+      `<h3>Lantern Call</h3><p>You call a lantern spirit.</p><figure class="compendium-art"><span class="artist-credit">Ada Quill</span>` +
+      `<a href="art.png"><img src="art.png" alt="A spirit"></a>${inner}</figure><p>It obeys you.</p>`;
+    expect(htmlToMarkdown(art('<figcaption>A lantern spirit drifts over the marsh at dusk, its light pale and cold</figcaption>')).markdown).toBe(
+      '### Lantern Call\n\nYou call a lantern spirit.\n\nIt obeys you.',
+    );
+    const table = '<figure><img src="w.png"><table><tr><th>Wick</th><th>Hours</th></tr><tr><td>Long</td><td>8</td></tr></table><figcaption>Table: Wicks</figcaption></figure>';
+    expect(htmlToMarkdown(table).markdown).toBe('| Wick | Hours |\n| --- | --- |\n| Long | 8 |\n\nTable: Wicks');
+    const prose = art('<p>Lantern spirits glow brighter near the dead, and dim when their caller lies.</p><figcaption>Lore</figcaption>');
+    expect(htmlToMarkdown(prose).markdown).toContain('Lantern spirits glow brighter near the dead');
+    expect(htmlToMarkdown('<figure><p>Light the way.</p><figcaption>An old saying</figcaption></figure>').markdown).toBe('Light the way.\n\nAn old saying');
+  });
+
   it('reads a whole page copied (select-all) from its main landmark, and leaves out navigation wherever it is', () => {
     const page = `<header><nav><ul><li><a href="/">Games</a></li><li><a href="/sources">Sources</a></li></ul></nav><div>Sign In</div></header>
       <main><h1>Chapter 3: Lamplighting</h1>

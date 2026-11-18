@@ -453,8 +453,9 @@ offline and in what Claude is asked for. Paragraphs keep their bold and italics,
 line break starts a line (a stat block's lines stay apart), list items come as lists (Word's list paragraphs too),
 tables as pipe tables with their caption above and merged cells keeping the cells after them in their columns (a
 table that only lays out a page or boxes a sidebar reads as its cells' blocks), and a description list's term and
-value share a line. Links keep their text; images, scripts, styles, form controls, hidden elements and a site's
-navigation (and a banner, footer or search box marked as one) go, and a whole page copied is read from its main
+value share a line. Links keep their text; images (a figure that is only a picture takes its caption and artist's
+credit with it), scripts, styles, form controls, hidden elements and a site's navigation (and a banner, footer or
+search box marked as one) go, and a whole page copied is read from its main
 landmark when that holds most of the text. Text that would turn into Markdown (a leading "#", "-" or "1.", an
 asterisk) is escaped. A copy with only prose, one that is Markdown already (copied from an editor) or a paste with
 "Plain text" chosen pastes as the browser does. The Markdown goes in on lines of its own (a second paste's heading

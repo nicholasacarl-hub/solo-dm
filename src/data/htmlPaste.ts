@@ -75,6 +75,10 @@ const BLOCK = new Set([
   'SECTION', 'SUMMARY', 'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR',
 ]);
 const HEADING_TAG = /^H([1-6])$/;
+/** What a figure may not hold to count as only a picture (its table, list, quote, code or headings are read). */
+const FIGURE_CONTENT = 'table, ul, ol, dl, pre, blockquote, h1, h2, h3, h4, h5, h6';
+/** The most text a picture's figure holds outside its caption: the artist's credit. */
+const MAX_CREDIT_CHARS = 60;
 /** A site's chrome, never its content: its navigation, and a banner, footer or search box marked as one. */
 const CHROME_ROLES = new Set(['navigation', 'banner', 'contentinfo', 'search']);
 /** Deeper nesting than this is read as plain text (no real page nests this far). */
@@ -111,6 +115,16 @@ function headingLevel(el: Element): number | null {
   if (roleOf(el) !== 'heading') return null;
   const level = Number.parseInt(el.getAttribute('aria-level') ?? '', 10);
   return Number.isFinite(level) ? Math.min(6, Math.max(1, level)) : 2;
+}
+
+/**
+ * A figure that is only a picture: an image, its caption, and perhaps the artist's credit (D&D Beyond prints both over
+ * its art). The picture isn't imported, so its caption and credit go with it.
+ */
+function pictureOnly(figure: Element): boolean {
+  if (!figure.querySelector('img, picture, svg') || figure.querySelector(FIGURE_CONTENT)) return false;
+  const rest = Array.from(figure.childNodes).filter((n) => !(n.nodeType === 1 && (n as Element).tagName.toUpperCase() === 'FIGCAPTION'));
+  return rest.map((n) => n.textContent ?? '').join(' ').replace(/\s+/g, ' ').trim().length <= MAX_CREDIT_CHARS;
 }
 
 function hidden(el: Element): boolean {
@@ -416,6 +430,7 @@ function read(nodes: Node[], ctx: Ctx, out: Collector): void {
     const tag = el.tagName.toUpperCase();
     if (SKIP.has(tag) || tag.startsWith('O:') || tag.startsWith('V:') || hidden(el)) continue;
     if (tag === 'NAV' || CHROME_ROLES.has(roleOf(el))) continue;
+    if (tag === 'FIGURE' && pictureOnly(el)) continue;
     if (ctx.depth > MAX_DEPTH) {
       out.text(` ${el.textContent ?? ''} `, ctx);
       continue;
