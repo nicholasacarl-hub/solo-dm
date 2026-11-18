@@ -52,7 +52,7 @@ import { doubtMessage, nameNotices, noticeIndex, type NoticeIndex } from './noti
 import { parseOffline } from './parse';
 import { STRUCTURED_LIMITS } from './schemas';
 import { correctStaleKinds, guessedKinds } from './staleKinds';
-import { candidateFor, candidateKey, markCandidate, segment, type Candidate, type SegmentContext, type SpellListHint } from './segment';
+import { candidateFor, candidateKey, explainsParts, markCandidate, segment, type Candidate, type SegmentContext, type SpellListHint } from './segment';
 import type { Wire } from './wire';
 
 export interface DetectionSummary {
@@ -290,6 +290,10 @@ export function applyReading(existing: StructuredRecord, fresh: StructuredRecord
 
 interface IdSpace { ids: Set<string>; publicIds: Set<string> }
 
+/** Where an entry's or a section's record starts: its kind, span and first entry (none for a table or a row). */
+const startOf = (r: { kind: StructuredKind; span: RecordSpan; entryIds: readonly string[] }): string | undefined =>
+  (r.span === 'entry' || r.span === 'section') && r.entryIds[0] ? `${r.kind}\u0000${r.span}\u0000${r.entryIds[0]}` : undefined;
+
 /** rec:<sourceId>:<kind>:<slug>[-n] and its publicId (§2.6), unique within the source; reserved in `space`. */
 function newIds(sourceId: string, kind: StructuredKind, name: string, span: RecordSpan, primaryEntryId: string, space: IdSpace): { id: string; publicId: string } {
   const slug = slugify(name) || 'entry';
@@ -346,9 +350,10 @@ export interface MergeResult {
 
 /**
  * Readings meet a source's stored records: matched by candidateKey, else by kind and name when that is
- * unique among the unmatched ones; new readings get ids; matched ones follow applyReading. Rows join
- * their table's record (tableRecordId). `limit`: the most records the source may hold (new ones beyond
- * it are left out; their readings get no record).
+ * unique among the unmatched ones, else (a reading today's reader names differently: "Elf Traits" → "Elf")
+ * by kind and first entry when one record and one reading start there; new readings get ids; matched
+ * ones follow applyReading. Rows join their table's record (tableRecordId). `limit`: the most records
+ * the source may hold (new ones beyond it are left out; their readings get no record).
  */
 export function mergeReadings(
   sourceId: string,
@@ -359,9 +364,17 @@ export function mergeReadings(
   const space: IdSpace = { ids: new Set(existing.map((r) => r.id)), publicIds: new Set(existing.map((r) => r.publicId)) };
   const byKey = new Map(existing.map((r) => [r.candidateKey, r]));
   const byName = new Map<string, StructuredRecord[]>();
+  const byStart = new Map<string, StructuredRecord[]>();
   for (const r of existing) {
     const key = `${r.kind}\u0000${r.span}\u0000${nameKey(r.name)}`;
     byName.set(key, [...(byName.get(key) ?? []), r]);
+    const start = startOf(r);
+    if (start) byStart.set(start, [...(byStart.get(start) ?? []), r]);
+  }
+  const startsRead = new Map<string, number>();
+  for (const reading of readings) {
+    const start = startOf(reading);
+    if (start) startsRead.set(start, (startsRead.get(start) ?? 0) + 1);
   }
   const used = new Set<string>();
   const tableIds = new Map<string, string>();
@@ -374,6 +387,11 @@ export function mergeReadings(
     if (!match) {
       const named = (byName.get(`${reading.kind}\u0000${reading.span}\u0000${nameKey(reading.normalized.name)}`) ?? []).filter((r) => !used.has(r.id));
       if (named.length === 1 && !readings.some((o) => o !== reading && o.candidateKey === named[0].candidateKey)) match = named[0];
+    }
+    const start = match ? undefined : startOf(reading);
+    if (start && startsRead.get(start) === 1) {
+      const starting = (byStart.get(start) ?? []).filter((r) => !used.has(r.id));
+      if (starting.length === 1) match = starting[0];
     }
     if (!match && opts.limit !== undefined && count >= opts.limit) {
       records.push(undefined);
@@ -427,13 +445,15 @@ const settleable = (r: StructuredRecord, reading?: ReadonlySet<string>) =>
 /**
  * The misreadings the version change explains: an entry an earlier reader took for this record's kind
  * (a spell, monster, magic item or feat) that today's rules read as something else (a stronghold room
- * taken for a feat, a rules paragraph taken for a magic item). Never a record the player marked (All
- * entries › Structure as…, What it is).
+ * taken for a feat, a rules paragraph taken for a magic item), and a chapter's explanation of a
+ * background's or species' parts taken for one. Never a record the player marked (All entries ›
+ * Structure as…, What it is).
  */
 function explainedMisreading(r: StructuredRecord, entriesById: ReadonlyMap<string, CompendiumEntry>): boolean {
-  if (r.span !== 'entry' || r.marked || !GUESSED_ENTITY_KINDS.includes(r.kind)) return false;
-  const entry = entriesById.get(r.entryIds[0]);
-  return entry !== undefined && misreadBefore(r.kind, entry.name, entry.text, headingAncestors(entry.path, entry.name));
+  const entry = r.marked ? undefined : entriesById.get(r.entryIds[0]);
+  if (!entry) return false;
+  if (r.span === 'section') return explainsParts(r.kind, entry.text);
+  return r.span === 'entry' && GUESSED_ENTITY_KINDS.includes(r.kind) && misreadBefore(r.kind, entry.name, entry.text, headingAncestors(entry.path, entry.name));
 }
 
 export interface Settled {
@@ -443,6 +463,8 @@ export interface Settled {
   open: Set<string>;
   /** Explained misreadings someone worked on: kept with a note (doubted()). */
   doubted: StructuredRecord[];
+  /** Explained misreadings an older version gave the note already: the player's to decide, only today's version is stamped on them. */
+  noted: Set<string>;
   /** The other records an older reader made: read again with today's reader (the player's markings among them). */
   reread: StructuredRecord[];
 }
@@ -451,10 +473,11 @@ export interface Settled {
  * Stored records today's detection didn't find again (`unmatched`). Only misreadings the version change
  * explains are settled, by what the entry's text shows rather than by the version a record carries (a
  * record read again as its old kind carries today's): removed when nobody worked on them and no note
- * was given, given a note once when someone did, so the player decides. The other records an older
- * reader made are read again. Rejected records, records Claude, a pack or the player filled in, records
- * being read (by the jobs in `reading`, when given: a paused job's queue is settled too, and a note takes
- * the record out of that queue) and records a newer app wrote are left as they are.
+ * was given, given a note once when someone did, so the player decides (a later version doesn't ask
+ * again). The other records an older reader made are read again. Rejected records, records Claude, a
+ * pack or the player filled in, records being read (by the jobs in `reading`, when given: a paused job's
+ * queue is settled too, and a note takes the record out of that queue) and records a newer app wrote
+ * are left as they are.
  */
 export function settleUnmatched(
   unmatched: readonly StructuredRecord[],
@@ -467,6 +490,7 @@ export function settleUnmatched(
   const remove = new Set<string>();
   const open = new Set<string>();
   const doubts: StructuredRecord[] = [];
+  const noted = new Set<string>();
   const reread: StructuredRecord[] = [];
   for (const r of unmatched) {
     if (!settleable(r, reading)) continue;
@@ -477,12 +501,14 @@ export function settleUnmatched(
     }
     const untouched = !workedOn(r) && !hasDoubt(r);
     if (untouched && !keep.has(r.id)) remove.add(r.id);
-    else if (older || (keep.has(r.id) && !hasDoubt(r))) {
+    else if (hasDoubt(r)) {
+      if (older) noted.add(r.id);
+    } else if (older || keep.has(r.id)) {
       doubts.push(doubted(r, now));
       if (untouched) open.add(r.id);
     }
   }
-  return { remove, open, doubted: doubts, reread };
+  return { remove, open, doubted: doubts, noted, reread };
 }
 
 // ---------------------------------------------------------------------------
@@ -605,13 +631,14 @@ export async function detectStructure(
   const reread = mergeReadings(sourceId, settled.reread, rereadings(settled.reread, ctx), { explicit: false, now, textChanged, reading });
   const rereadById = new Map(reread.writes.map((r) => [r.id, r]));
   const doubtedById = new Map(settled.doubted.map((r) => [r.id, r]));
-  const rereadIds = new Set(settled.reread.map((r) => r.id));
+  const seenIds = new Set([...settled.reread.map((r) => r.id), ...settled.noted]);
   const unmatchedWrites = merged.unmatched.flatMap((r) => {
     if (settled.remove.has(r.id) || (beingRead(r, reading) && !doubtedById.has(r.id))) return [];
     const rereadNext = rereadById.get(r.id);
     if (rereadNext) return [rereadNext];
-    // Read again and unchanged, or nothing to read it from (a table, a row, entries gone): today's reader has seen it.
-    let base = doubtedById.get(r.id) ?? (rereadIds.has(r.id) ? { ...r, parserVersion: PARSER_VERSION, updatedAt: now } : r);
+    // Read again and unchanged, nothing to read it from (a table, a row, entries gone), or a misreading that has the
+    // note already: today's reader has seen it.
+    let base = doubtedById.get(r.id) ?? (seenIds.has(r.id) ? { ...r, parserVersion: PARSER_VERSION, updatedAt: now } : r);
     const stale = r.origin !== 'pack' && r.origin !== 'manual' && r.span !== 'row' && textChanged(r);
     if (stale) base = withStale(base, now) ?? base;
     return base === r ? [] : [base];

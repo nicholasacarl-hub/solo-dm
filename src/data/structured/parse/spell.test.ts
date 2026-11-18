@@ -62,8 +62,8 @@ describe('parseSpell', () => {
   });
 
   // The same stat block as sources lay it out: the SRD's bullets, a callout (Homebrewery, GM Binder), colon labels (a web
-  // page's, a PDF's), round bullets, an Initiative line between, lines a text layer joined or wrapped, a <br> a Markdown
-  // source kept, no-break spaces.
+  // page's, a PDF's), the bullets a PDF's text layer keeps, an Initiative line between, lines a text layer joined or
+  // wrapped, a <br> a Markdown source kept, no-break spaces.
   const FLARE = '**_Flare._** _Dexterity Saving Throw:_ DC equals your spell save DC, each creature in a 15-foot Cone. _Failure:_ 2d6 Fire damage.';
   it.each([
     ['the SRD’s bullets', '- **AC** 12 + the spell’s level\n- **HP** 20 + 5 for each spell level above 3\n- **Speed** 30 ft.'],
@@ -72,6 +72,8 @@ describe('parseSpell', () => {
     ['colon labels', '**AC:** 12 + the spell’s level\n\n**HP:** 20 + 5 for each spell level above 3\n\n**Speed:** 30 ft.'],
     ['spelled-out colon labels', 'Armor Class: 12 + the spell’s level\nHit Points: 20 + 5 for each spell level above 3\nSpeed: 30 ft.'],
     ['round bullets', '● AC 12 + the spell’s level\n● HP 20 + 5 for each spell level above 3\n● Speed 30 ft.'],
+    ['a word processor’s Symbol bullets', ' AC 12 + the spell’s level\n HP 20 + 5 for each spell level above 3\n Speed 30 ft.'],
+    ['dashes, triangles and open circles', '– AC 12 + the spell’s level\n▸HP 20 + 5 for each spell level above 3 ○Speed 30 ft.'],
     ['an Initiative line between', '- **AC** 12 + the spell’s level\n- **Initiative** +2 (12)\n- **HP** 20 + 5 for each spell level above 3\n- **Speed** 30 ft.'],
     ['one joined line', 'AC 12 + the spell’s level HP 20 + 5 for each spell level above 3 Speed 30 ft.'],
     ['a wrapped line', 'AC 12 + the\nspell’s level\nHP 20 + 5 for each spell level above 3\nSpeed 30 ft.'],

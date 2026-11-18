@@ -613,10 +613,15 @@ its entries again after one.
 **Re-check.** When the offline rules change, `PARSER_VERSION` rises and the book page offers *Re-check for free*, which
 looks through the book again (`detectStructure`). It settles only the misreadings the version change
 explains (an entry an earlier version took for a spell, monster, magic item or feat that today's rules
-read as something else), judged by the entry's text, not by the version a record carries: removed when
+read as something else, and a chapter's explanation of a background's or species' parts taken for one),
+judged by the entry's text, not by the version a record carries: removed when
 nobody worked on them, kept with a note once when someone accepted, edited, re-read with Claude or has a
 newer reading waiting, and accepted ones go back to review. A record that already has that note is the
-player's to decide, and the entry the player has open is never removed (it gets the note). *Re-read on
+player's to decide, by later versions too (they only stamp themselves on it), and the entry the player has
+open is never removed (it gets the note). A reading today's reader names differently ("Elf Traits" is now
+"Elf") keeps its record: a reading meets the stored record of its key, else of its kind and name, else of
+its kind and first entry when only one record and one reading start there; an accepted record keeps the
+name the player accepted. *Re-read on
 this device* gives such a record the note instead of reading it again as its old kind, and moves an
 accepted one back to review, as Re-check does. Records waiting in a paused Claude job are read again like
 any other (their place in the queue is kept); a note takes a record out of the queue, wherever it comes

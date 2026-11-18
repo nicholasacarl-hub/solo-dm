@@ -12,7 +12,7 @@ import {
 } from '@/test/structuredFixtures';
 import type { CompendiumEntry } from '@/types';
 import { flatten } from './parse/flatten';
-import { candidateFor, markCandidate, readingOrder, segment, type SegmentContext } from './segment';
+import { candidateFor, explainsParts, markCandidate, readingOrder, segment, type SegmentContext } from './segment';
 
 /** A few SRD spell and class names, as the rules index would supply them (nameKeys). */
 const CTX: SegmentContext = {
@@ -200,6 +200,20 @@ describe('segment: structure rules', () => {
       ['background', 'Lamplighter'],
       ['species', 'Mosskin'],
     ]);
+    // What a re-check settles: the explanations an earlier reader took for a background and a species, not the real ones.
+    expect(entries.map((e) => [explainsParts('background', e.text), explainsParts('species', e.text)])).toEqual([
+      [true, false],
+      [false, true],
+      [false, false],
+      [false, false],
+      [false, false],
+    ]);
+    // Only what that reader took for one: three of the background's labels, all three of the species' lines.
+    const some = (labels: string[]) => explains(9, 'Parts', labels).text;
+    expect(explainsParts('background', some(['Ability Scores', 'Feat']))).toBe(false);
+    expect(explainsParts('species', some(['Creature Type', 'Speed']))).toBe(false);
+    expect(explainsParts('species', some(['Creature Type', 'Size']))).toBe(false);
+    expect((['class', 'subclass', 'feat'] as const).filter((k) => explainsParts(k, entries[0].text) || explainsParts(k, entries[1].text))).toEqual([]);
   });
 
   it('takes the flattened feature siblings of an older-format subclass along', () => {

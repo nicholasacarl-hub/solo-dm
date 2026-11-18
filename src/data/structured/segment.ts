@@ -448,6 +448,21 @@ const CREATURE_TYPE_VALUE = valueNames(
   'Aberration|Beast|Celestial|Construct|Dragon|Elemental|Fey|Fiend|Giant|Humanoid|Monstrosity|Ooze|Plant|Undead',
 );
 
+/**
+ * A chapter's explanation of a background's or species' parts that the reader took for one before version 4 (its
+ * labels are there, but its Ability Scores or Creature Type line names no abilities or type): `text` is the
+ * section's own text.
+ */
+export function explainsParts(kind: StructuredKind, text: string): boolean {
+  if (kind === 'background') {
+    const head = text.slice(0, 3000);
+    return L.abilityScores.test(head) && !ABILITY_SCORES_VALUE.test(head) && [L.feat, L.skills, L.tools, L.equipment].filter((re) => re.test(head)).length >= 2;
+  }
+  if (kind !== 'species') return false;
+  const head = text.slice(0, 2000);
+  return L.creatureType.test(head) && !CREATURE_TYPE_VALUE.test(head) && L.size.test(head) && L.speed.test(head);
+}
+
 function backgroundMatch(node: OutlineNode): string | null {
   const text = ownText(node).slice(0, 3000);
   if (!text) return null;
