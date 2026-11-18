@@ -81,6 +81,12 @@ the item's text, since the sheet names the item behind each AC and save bonus:
   tables whose header is centered or right-aligned (some long casting times).
 - **Word documents converted by pandoc**: the text after a multiline table can become an entry of its own, named
   after the table's last row.
+- **Paste with formatting** (the box's text can be edited before the import): a heading inside a sidebar or an
+  infobox (an `<aside>`) opens a section that takes in the text after the box; a page's quick menu, pager and "Back
+  to Top" links inside its main content stay; a table's second header row reads as its first body row; a spell's label
+  and value in separate boxes ("Casting Time" over "1 Action") aren't joined; text laid out by CSS alone (`display:
+  block` or `flex` on spans) runs together; and a line of the plain text that starts with "# " (a "#" column) pastes
+  the whole copy as plain text.
 - **Homebrewery and 5etools stat blocks**: creatures made with Homebrewery's V3 snippet ("**Armor Class** :: 13")
   read as rules, and a 5etools or legacy Homebrewery export that quotes each stat block (">## Name") merges its
   creatures into one entry.

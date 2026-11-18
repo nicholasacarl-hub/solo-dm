@@ -4,8 +4,8 @@
  * API key). Shows progress from importLibraryDocument and can be cancelled.
  *
  * Paste with formatting: a copy from a web page or a document carries HTML beside its plain text; pasted with the
- * Markdown format chosen, its headings, tables and lists arrive as Markdown (src/data/htmlPaste.ts), with a way back to
- * the plain text.
+ * Markdown format chosen, its headings, tables and lists arrive as Markdown (src/data/htmlPaste.ts) on lines of their
+ * own, undoable with Ctrl+Z, with a way back to the plain text.
  *
  * Structured imports (spec §4.1): once the import is saved, the dialog looks for spells, monsters and
  * character options on this device (detectStructure, dismissible: closing lets it finish) and ends on
@@ -146,6 +146,25 @@ interface FormattedPaste {
   kept: string;
 }
 
+/**
+ * The longest formatted paste (in lines) that goes through the browser's editing, so Ctrl+Z undoes it. A longer one is
+ * set directly: the browser inserts it line by line, in time that grows with the square of its lines.
+ */
+const UNDOABLE_LINES = 200;
+
+/** Line breaks that set pasted Markdown apart from the text before and after it, so its first heading starts a line. */
+function apart(before: string, after: string): { lead: string; trail: string } {
+  return {
+    lead: !before || before.endsWith('\n\n') ? '' : before.endsWith('\n') ? '\n' : '\n\n',
+    trail: !after || after.startsWith('\n\n') ? '' : after.startsWith('\n') ? '\n' : '\n\n',
+  };
+}
+
+/** A caret set by script isn't scrolled to: a paste that ends the text shows that end, as the browser's own paste does. */
+function revealEnd(box: HTMLTextAreaElement): void {
+  if (box.selectionStart === box.value.length) box.scrollTop = box.scrollHeight;
+}
+
 const PASTE_FORMATS = [
   { value: 'markdown' as const, label: 'Markdown' },
   { value: 'text' as const, label: 'Plain text' },
@@ -170,35 +189,58 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
   // Where the caret goes once the text a paste set has rendered.
   const caret = useRef<number | null>(null);
   useLayoutEffect(() => {
-    if (caret.current === null || !textRef.current) return;
-    textRef.current.setSelectionRange(caret.current, caret.current);
+    const box = textRef.current;
+    if (caret.current === null || !box) return;
+    box.setSelectionRange(caret.current, caret.current);
+    revealEnd(box);
     caret.current = null;
   }, [text]);
+
+  /**
+   * Put `insert` in place of the box's text from `start` to `end`, the caret at `caretAt`: through the browser's editing
+   * where it has it, so Ctrl+Z undoes it like any paste (its input event runs onChange), else by setting the text. Both
+   * read the box itself, whose line breaks are always \n.
+   */
+  const replaceInBox = (box: HTMLTextAreaElement, start: number, end: number, insert: string, caretAt: number) => {
+    box.focus();
+    box.setSelectionRange(start, end);
+    const undoable = insert.split('\n').length <= UNDOABLE_LINES && typeof document.execCommand === 'function';
+    if (undoable && document.execCommand('insertText', false, insert)) {
+      box.setSelectionRange(caretAt, caretAt);
+      revealEnd(box);
+      return;
+    }
+    caret.current = caretAt;
+    setText(box.value.slice(0, start) + insert + box.value.slice(end));
+  };
 
   /** A copy from a web page or a document: its HTML as Markdown, when the Markdown format is chosen and it has structure. */
   const pasteWithFormatting = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     if (pasteFormat !== 'markdown') return;
     const html = e.clipboardData.getData('text/html');
     if (!html) return;
-    const plain = e.clipboardData.getData('text/plain');
+    // Windows puts text on the clipboard with \r\n line breaks.
+    const plain = e.clipboardData.getData('text/plain').replace(/\r\n?/g, '\n');
     const conversion = formattedPaste(html, plain);
     if (!conversion) return;
     e.preventDefault();
-    const { selectionStart: start, selectionEnd: end } = e.currentTarget;
-    setText(text.slice(0, start) + conversion.markdown + text.slice(end));
-    caret.current = start + conversion.markdown.length;
-    setFormatted({ start, markdown: conversion.markdown, plain, kept: keptSummary(conversion) });
+    const box = e.currentTarget;
+    const { selectionStart: start, selectionEnd: end, value } = box;
+    const { lead, trail } = apart(value.slice(0, start), value.slice(end));
+    const at = start + lead.length;
+    replaceInBox(box, start, end, lead + conversion.markdown + trail, at + conversion.markdown.length);
+    // After the insert: its input event clears what an earlier paste left.
+    setFormatted({ start: at, markdown: conversion.markdown, plain, kept: keptSummary(conversion) });
   };
 
   /** Swap the formatted paste for the clipboard's plain text (only while the text still holds it as pasted). */
   const pasteAsPlainText = () => {
-    if (!formatted) return;
+    const box = textRef.current;
+    if (!formatted || !box) return;
     const { start, markdown, plain } = formatted;
     setFormatted(null);
-    if (text.slice(start, start + markdown.length) !== markdown) return;
-    setText(text.slice(0, start) + plain + text.slice(start + markdown.length));
-    caret.current = start + plain.length;
-    textRef.current?.focus();
+    if (box.value.slice(start, start + markdown.length) !== markdown) return;
+    replaceInBox(box, start, start + markdown.length, plain, start + plain.length);
   };
   const [file, setFile] = useState<File | null>(null);
   const [photos, setPhotos] = useState<File[]>([]);
@@ -420,6 +462,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
                   rows={9}
                   value={text}
                   onChange={(e) => {
+                    caret.current = null;
                     setText(e.target.value);
                     setFormatted(null);
                   }}
@@ -432,7 +475,7 @@ export function ImportDialog({ open, onClose }: { open: boolean; onClose: () => 
                   <p role="status" aria-live="polite">
                     {formatted ? `Pasted with formatting: kept ${formatted.kept}.` : ''}
                   </p>
-                  {formatted && (
+                  {formatted?.plain && (
                     <Button variant="ghost" size="sm" onClick={pasteAsPlainText}>
                       Paste as plain text instead
                     </Button>

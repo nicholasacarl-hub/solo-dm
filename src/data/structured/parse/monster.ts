@@ -41,8 +41,12 @@ const leadingNumber = (cell: string | undefined) => {
 const complete = (scores: Partial<AbilityScores>): AbilityScores | null =>
   ABILITIES.every((a) => typeof scores[a] === 'number' && (scores[a] as number) > 0) ? (scores as AbilityScores) : null;
 
-/** The ability table: a header naming the six abilities (a Score row, or one row of "14 (+2)" cells), or a grid of "| Str | 16 | +3 |" rows. */
+/**
+ * The ability table: a header naming the six abilities (a Score row, or one row of "14 (+2)" cells), or a grid of
+ * "| Str | 16 | +3 |" rows, which may run over two tables (a 2024 block prints Str to Con beside Int to Cha).
+ */
 function abilitiesFromTables(text: string): AbilityScores | null {
+  const grid: Partial<AbilityScores> = {};
   for (const table of parseTables(text)) {
     const cols = table.header.map(abilityOf);
     if (new Set(cols.filter(Boolean)).size === 6) {
@@ -55,7 +59,6 @@ function abilitiesFromTables(text: string): AbilityScores | null {
       const done = complete(out);
       if (done) return done;
     }
-    const grid: Partial<AbilityScores> = {};
     for (const row of [table.header, ...table.rows]) {
       row.forEach((cell, i) => {
         const a = abilityOf(cell);

@@ -1,10 +1,15 @@
 /**
  * Paste with formatting: the HTML a web page, a word processor or a doc editor puts on the clipboard beside its plain
  * text becomes Markdown, so a pasted chapter splits into entries as its source structures it. Headings, paragraphs,
- * lists, tables, bold and italics are kept; a link keeps its text; images, scripts, styles, form controls and hidden
- * elements go. A line break starts a line of its own (a stat block's "AC 15" and "HP 22" stay apart). With no heading
- * tags at all (a word processor's headings set by size alone), a short line set noticeably larger than the body text
- * becomes a heading, its level from its size, as the PDF reader reads them.
+ * lists, tables, bold and italics are kept; a link keeps its text; images, scripts, styles, form controls, hidden
+ * elements and a site's navigation go (a whole page copied is read from its main landmark). A line break starts a line
+ * of its own (a stat block's "AC 15" and "HP 22" stay apart), and a merged cell keeps the cells after it in their
+ * columns.
+ *
+ * Headings shown only by their look count too. With no heading tags (a word processor's headings set by size alone), a
+ * short line set noticeably larger than the body text becomes a heading, its level from its size, as the PDF reader
+ * reads them; in a document editor's copy, so do short lines made headings by bolding them. Beside a few tagged
+ * headings (a styled title over the rest), larger bold lines (and an editor's bold lines) are headings below them.
  *
  * Pure apart from the browser's DOMParser, which builds an inert document: nothing is fetched, run or rendered.
  */
@@ -32,11 +37,19 @@ interface ParaBlock {
   /** The size most of its characters use (px, to 0.5), and their share of its characters. */
   size: number;
   share: number;
+  /** All of its text is bold. */
+  bold: boolean;
+}
+
+interface HeadingBlock {
+  kind: 'heading';
+  level: number;
+  text: string;
 }
 
 type Block =
   | ParaBlock
-  | { kind: 'heading'; level: number; text: string }
+  | HeadingBlock
   /** A list line; `start` on a list's first item (a list's items join a list's lines, a Word list paragraph its neighbours'). */
   | { kind: 'item'; markdown: string; start?: boolean }
   | { kind: 'table'; markdown: string };
@@ -61,11 +74,15 @@ const BLOCK = new Set([
   'SECTION', 'SUMMARY', 'TBODY', 'TD', 'TFOOT', 'TH', 'THEAD', 'TR',
 ]);
 const HEADING_TAG = /^H([1-6])$/;
+/** A site's chrome, never its content: its navigation, and a banner, footer or search box marked as one. */
+const CHROME_ROLES = new Set(['navigation', 'banner', 'contentinfo', 'search']);
 /** Deeper nesting than this is read as plain text (no real page nests this far). */
 const MAX_DEPTH = 300;
 /** A heading by size: at least this much larger than the body text, as the PDF reader reads them. */
 const HEADING_RATIO = 1.15;
 const MAX_HEADING_CHARS = 90;
+/** The longest line read as a heading made by bolding it. */
+const MAX_BOLD_HEADING_CHARS = 70;
 const MAX_HEADING_SHARE = 0.4;
 /** The default body size (px) when nothing on the page sets one. */
 const DEFAULT_SIZE = 16;
@@ -80,6 +97,16 @@ const WORD_LIST = /mso-list\s*:\s*l\d+\s+level(\d+)/i;
 const MARKDOWN_SOURCE = /^ {0,3}#{1,6}[ \t]+\S/m;
 
 const styleOf = (el: Element) => el.getAttribute('style') ?? '';
+const roleOf = (el: Element) => (el.getAttribute('role') ?? '').trim().toLowerCase().split(/\s+/)[0];
+
+/** A heading's level: its tag's, or an element marked as one (Word for the web writes <p role="heading" aria-level="3">). */
+function headingLevel(el: Element): number | null {
+  const tag = HEADING_TAG.exec(el.tagName.toUpperCase());
+  if (tag) return Number(tag[1]);
+  if (roleOf(el) !== 'heading') return null;
+  const level = Number.parseInt(el.getAttribute('aria-level') ?? '', 10);
+  return Number.isFinite(level) ? Math.min(6, Math.max(1, level)) : 2;
+}
 
 function hidden(el: Element): boolean {
   if (el.hasAttribute('hidden') || el.getAttribute('aria-hidden') === 'true') return true;
@@ -229,7 +256,8 @@ class Collector {
     for (const runs of this.lines) {
       const plain = runs.map((r) => r.text).join('').trim();
       if (!plain) continue;
-      this.blocks.push({ kind: 'para', markdown: escapeLineStart(serialize(runs)), plain, ...dominantSize(runs) });
+      const bold = runs.every((r) => r.bold || !r.text.trim());
+      this.blocks.push({ kind: 'para', markdown: escapeLineStart(serialize(runs)), plain, ...dominantSize(runs), bold });
     }
     this.lines = [[]];
   }
@@ -275,6 +303,13 @@ function list(el: Element, ctx: Ctx, out: Collector, indent = ''): void {
     if (child.tagName !== 'LI') continue;
     const marker = ordered ? `${n++}.` : '-';
     const itemCtx: Ctx = { ...ctx, ...emphasisOf(child, ctx), size: ownSize(child, ctx.size) ?? ctx.size };
+    // An item that is only a heading is that heading (Google Docs and Word for the web number headings with a list).
+    const only = child.children.length === 1 ? child.firstElementChild : null;
+    if (only && headingLevel(only) !== null && (only.textContent ?? '').trim() === (child.textContent ?? '').trim()) {
+      walk(child, { ...itemCtx, depth: ctx.depth + 1 }, out);
+      first = indent === '';
+      continue;
+    }
     const { text, collector } = Collector.inline(child, itemCtx, true);
     if (text) {
       out.push({ kind: 'item', markdown: `${indent}${marker} ${escapeLineStart(text)}`, ...(first ? { start: true } : {}) });
@@ -326,19 +361,34 @@ function table(el: HTMLTableElement, ctx: Ctx, out: Collector): void {
     return;
   }
   const grid: string[][] = [];
+  // Per column, how many more rows a merged cell above (rowspan) covers: those rows leave the column empty.
+  const covered: number[] = [];
   for (const row of rows) {
     const cells: string[] = [];
+    const skipCovered = () => {
+      while ((covered[cells.length] ?? 0) > 0) {
+        covered[cells.length] -= 1;
+        cells.push('');
+      }
+    };
     for (const cell of Array.from(row.cells)) {
       if (hidden(cell)) continue;
+      skipCovered();
+      const col = cells.length;
       cells.push(Collector.inline(cell, inner).text.replace(/\|/g, '\\|'));
       const span = Math.min(Math.max(Number(cell.getAttribute('colspan')) || 1, 1), 50);
       for (let k = 1; k < span; k++) cells.push('');
+      const down = Math.min(Math.max(Number(cell.getAttribute('rowspan')) || 1, 1), rows.length) - 1;
+      for (let k = col; k < col + span; k++) covered[k] = down;
     }
+    skipCovered();
+    // A covered column past the row's own cells counts this row too.
+    for (let k = cells.length; k < covered.length; k++) if (covered[k] > 0) covered[k] -= 1;
     if (cells.some(Boolean)) grid.push(cells);
   }
   if (!grid.length) return;
   const caption = el.caption ? Collector.inline(el.caption, inner).text : '';
-  if (caption) out.push({ kind: 'para', markdown: escapeLineStart(caption), plain: caption, size: ctx.size, share: 1 });
+  if (caption) out.push({ kind: 'para', markdown: escapeLineStart(caption), plain: caption, size: ctx.size, share: 1, bold: false });
   const width = Math.max(...grid.map((r) => r.length));
   const row = (cells: string[]) => `| ${[...cells, ...Array<string>(width - cells.length).fill('')].join(' | ')} |`;
   out.push({ kind: 'table', markdown: [row(grid[0]), `| ${Array<string>(width).fill('---').join(' | ')} |`, ...grid.slice(1).map(row)].join('\n') });
@@ -346,7 +396,11 @@ function table(el: HTMLTableElement, ctx: Ctx, out: Collector): void {
 
 /** Read an element's children into the collector. */
 function walk(parent: Node, ctx: Ctx, out: Collector): void {
-  for (const node of Array.from(parent.childNodes)) {
+  read(Array.from(parent.childNodes), ctx, out);
+}
+
+function read(nodes: Node[], ctx: Ctx, out: Collector): void {
+  for (const node of nodes) {
     if (node.nodeType === 3) {
       out.text((node as Text).data, ctx);
       continue;
@@ -355,15 +409,16 @@ function walk(parent: Node, ctx: Ctx, out: Collector): void {
     const el = node as Element;
     const tag = el.tagName.toUpperCase();
     if (SKIP.has(tag) || tag.startsWith('O:') || tag.startsWith('V:') || hidden(el)) continue;
+    if (tag === 'NAV' || CHROME_ROLES.has(roleOf(el))) continue;
     if (ctx.depth > MAX_DEPTH) {
       out.text(` ${el.textContent ?? ''} `, ctx);
       continue;
     }
     const inherited = ctx.size;
     const next: Ctx = { ...ctx, ...emphasisOf(el, ctx), size: ownSize(el, inherited) ?? inherited, depth: ctx.depth + 1 };
-    const level = HEADING_TAG.exec(tag);
+    const level = headingLevel(el);
     if (tag === 'BR') out.lineBreak();
-    else if (level) heading(el, Number(level[1]), next, out);
+    else if (level !== null) heading(el, level, next, out);
     else if (tag === 'UL' || tag === 'OL') {
       if (out.deferredLists) out.deferredLists.push(el);
       else list(el, next, out);
@@ -392,8 +447,22 @@ function walk(parent: Node, ctx: Ctx, out: Collector): void {
   }
 }
 
-/** With no heading tags: short lines set noticeably larger than the body text, their levels by size (at most 4). */
-function inferHeadings(blocks: Block[]): Block[] {
+interface Inference {
+  /** Levels start below this one (the deepest tagged heading's). */
+  below: number;
+  /** Only bold lines are headings by size (beside tagged headings, a larger line that isn't bold is a pull quote). */
+  boldOnly: boolean;
+  /** Short bold lines at the body size are headings too, a level below those by size (a document editor's copy). */
+  bolded: boolean;
+}
+
+/**
+ * Lines that are headings by their look: short lines set noticeably larger than the body text, their levels by size
+ * (at most 4 levels), and with `bolded` short bold lines at the body size. Bold lines count only when there are two or
+ * more and no heading by size comes after the first of them: a copy that sets its headings by size (a title above them
+ * aside) bolds its labels and captions, not its headings ("STR" over "14 (+2)", a table's title).
+ */
+function inferHeadings(blocks: Block[], { below, boldOnly, bolded }: Inference): { blocks: Block[]; found: number } {
   const paras = blocks.filter((b): b is ParaBlock => b.kind === 'para');
   const weight = new Map<number, number>();
   let total = 0;
@@ -404,24 +473,64 @@ function inferHeadings(blocks: Block[]): Block[] {
   let body = DEFAULT_SIZE;
   let best = -1;
   for (const [size, n] of weight) if (n > best) [body, best] = [size, n];
-  const isHeading = (p: ParaBlock) =>
-    p.size >= body * HEADING_RATIO && p.share >= 0.8 && p.plain.length <= MAX_HEADING_CHARS && /\p{L}/u.test(p.plain);
-  const heads = paras.filter(isHeading);
-  if (!heads.length || heads.reduce((n, p) => n + p.plain.length, 0) > total * MAX_HEADING_SHARE) return blocks;
-  const sizes = [...new Set(heads.map((p) => p.size))].sort((a, b) => b - a);
-  return blocks.map((b) =>
-    b.kind === 'para' && isHeading(b) ? { kind: 'heading', level: Math.min(4, sizes.indexOf(b.size) + 1), text: headingText(b.plain) } : b,
+  const chars = (ps: ParaBlock[]) => ps.reduce((n, p) => n + p.plain.length, 0);
+  let sized = paras.filter(
+    (p) => p.size >= body * HEADING_RATIO && p.share >= 0.8 && p.plain.length <= MAX_HEADING_CHARS && /\p{L}/u.test(p.plain) && (p.bold || !boldOnly),
   );
+  if (chars(sized) > total * MAX_HEADING_SHARE) sized = [];
+  let bold = bolded
+    ? paras.filter(
+        (p) =>
+          p.bold && p.size >= body * 0.95 && p.size < body * HEADING_RATIO && p.plain.length <= MAX_BOLD_HEADING_CHARS && /\p{L}/u.test(p.plain) && !/[:.,;]$/.test(p.plain),
+      )
+    : [];
+  const bySize = new Set(sized);
+  if (bold.length < 2 || paras.slice(paras.indexOf(bold[0])).some((p) => bySize.has(p)) || chars(sized) + chars(bold) > total * MAX_HEADING_SHARE) bold = [];
+  const byBold = new Set(bold);
+  const sizes = [...new Set(sized.map((p) => p.size))].sort((a, b) => b - a);
+  const boldLevel = Math.min(6, below + Math.min(4, sizes.length) + 1);
+  const level = (p: ParaBlock) => (bySize.has(p) ? Math.min(6, below + Math.min(4, sizes.indexOf(p.size) + 1)) : boldLevel);
+  return {
+    blocks: blocks.map((b) => (b.kind === 'para' && (bySize.has(b) || byBold.has(b)) ? { kind: 'heading', level: level(b), text: headingText(b.plain) } : b)),
+    found: sized.length + bold.length,
+  };
+}
+
+/** A copy from a document editor (Google Docs, Word, Word for the web, LibreOffice, Pages, TextEdit): its writers often make a heading by bolding a line. */
+function fromDocEditor(doc: Document): boolean {
+  if (doc.querySelector('[id^="docs-internal-guid"], [class*="Mso"], .OutlineElement')) return true;
+  return Array.from(doc.querySelectorAll('meta[name]')).some(
+    (m) => /^generator$/i.test(m.getAttribute('name') ?? '') && /Microsoft Word|LibreOffice|OpenOffice|Cocoa HTML Writer/i.test(m.getAttribute('content') ?? ''),
+  );
+}
+
+/**
+ * Headings the copy shows only by their look. With no heading tags, all of them; beside a few tagged headings (a styled
+ * title over headings that are only larger bold text, or an editor's bold lines), those below the tagged ones, when
+ * they are two or more and outnumber the tagged ones.
+ */
+function withLookedHeadings(blocks: Block[], docEditor: boolean): Block[] {
+  const tagged = blocks.filter((b): b is HeadingBlock => b.kind === 'heading');
+  if (!tagged.length) return inferHeadings(blocks, { below: 0, boldOnly: false, bolded: docEditor }).blocks;
+  const inferred = inferHeadings(blocks, { below: tagged.reduce((n, b) => Math.max(n, b.level), 0), boldOnly: true, bolded: docEditor });
+  return inferred.found >= 2 && inferred.found > tagged.length ? inferred.blocks : blocks;
+}
+
+/** What to read: a whole page copied (select-all) holds a site's chrome around its main landmark; when that holds most of the text, only it. */
+function contentOf(doc: Document): Node[] {
+  const length = (el: Element) => (el.textContent ?? '').replace(/\s+/g, '').length;
+  const total = length(doc.body);
+  const main = Array.from(doc.querySelectorAll('main, [role="main"]')).find((m) => !hidden(m) && length(m) * 2 >= total);
+  return main ? [main] : Array.from(doc.body.childNodes);
 }
 
 /** Clipboard HTML as Markdown, with what it kept. */
 export function htmlToMarkdown(html: string): HtmlConversion {
   const doc = new DOMParser().parseFromString(html, 'text/html');
   const out = new Collector();
-  walk(doc.body, { bold: false, italic: false, size: wordBodySize(doc) ?? DEFAULT_SIZE, depth: 0 }, out);
+  read(contentOf(doc), { bold: false, italic: false, size: wordBodySize(doc) ?? DEFAULT_SIZE, depth: 0 }, out);
   out.flush();
-  let blocks: Block[] = out.blocks;
-  if (!blocks.some((b) => b.kind === 'heading')) blocks = inferHeadings(blocks);
+  const blocks = withLookedHeadings(out.blocks, fromDocEditor(doc));
   const parts: string[] = [];
   let lists = 0;
   blocks.forEach((b, i) => {

@@ -429,15 +429,23 @@ value, a label set off from its value, or "Origin Feat".
 
 **Paste with formatting** (`src/data/htmlPaste.ts`): a copy from a web page, a word processor or a doc editor carries
 HTML beside its plain text. With the paste box's Markdown format chosen, a paste whose HTML holds headings, tables or
-lists arrives as Markdown: headings as they are tagged (or, with none tagged, short lines set at least 15% larger than
-the body text, their levels by size, as the PDF reader reads them), paragraphs with their bold and italics, one line
-to a line break (a stat block's lines stay apart), list items (Word's list paragraphs too), tables as pipe tables with
-their caption above (a table that only lays out a page or boxes a sidebar reads as its cells' blocks), and a
-description list's term and value on one line. Links keep their text; images, scripts, styles, form controls and
-hidden elements go, and text that would turn into Markdown (a leading "#", "-" or "1.", an asterisk) is escaped. A
-copy with only prose, one that is Markdown already (copied from an editor) or a paste with "Plain text" chosen pastes
-as the browser does. The box says what the paste kept and offers the plain text instead. DOMParser builds an inert
-document: nothing is fetched, run or shown.
+lists arrives as Markdown. Headings come as they are tagged or marked (Word for the web's `role="heading"`, and a list
+item that is only a heading, as numbered headings are). Headings shown only by their look count too: with none tagged,
+short lines set at least 15% larger than the body text, their levels by size, as the PDF reader reads them, and in a
+document editor's copy (Google Docs, Word, LibreOffice, Pages) two or more short bold lines at the body size, unless a
+heading by size follows the first of them (then they are labels); beside a few tagged headings (a styled title), such
+lines when they are bold and outnumber the tagged ones, a level below them. Paragraphs keep their bold and italics, a
+line break starts a line (a stat block's lines stay apart), list items come as lists (Word's list paragraphs too),
+tables as pipe tables with their caption above and merged cells keeping the cells after them in their columns (a
+table that only lays out a page or boxes a sidebar reads as its cells' blocks), and a description list's term and
+value share a line. Links keep their text; images, scripts, styles, form controls, hidden elements and a site's
+navigation (and a banner, footer or search box marked as one) go, and a whole page copied is read from its main
+landmark when that holds most of the text. Text that would turn into Markdown (a leading "#", "-" or "1.", an
+asterisk) is escaped. A copy with only prose, one that is Markdown already (copied from an editor) or a paste with
+"Plain text" chosen pastes as the browser does. The Markdown goes in on lines of its own (a second paste's heading
+doesn't join the first paste's last line), through the browser's editing so Ctrl+Z undoes it (up to 200 lines; a
+longer paste is set directly, since the browser inserts line by line). The box says what the paste kept and offers the
+plain text instead. DOMParser builds an inert document: nothing is fetched, run or shown.
 
 **PDF import** (`src/data/pdfLayout.ts`) reads headings from font sizes: the largest heading size is level 1, the next
 two are levels 2 and 3, and any smaller heading size is level 4, so a book's sub-subsections stay under their

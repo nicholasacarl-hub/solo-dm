@@ -60,6 +60,23 @@ describe('parseMonster', () => {
     });
   });
 
+  it('reads the ability scores printed as two tables side by side (Str to Con, then Int to Cha)', () => {
+    const text = [
+      '_Medium Monstrosity, Unaligned_',
+      '**AC** 13 **Initiative** +2 (12)',
+      '**HP** 22 (5d8)',
+      '**Speed** 30 ft.',
+      '|  |  | MOD | SAVE |\n| --- | --- | --- | --- |\n| Str | 16 | +3 | +3 |\n| Dex | 14 | +2 | +2 |\n| Con | 12 | +1 | +1 |',
+      '|  |  | MOD | SAVE |\n| --- | --- | --- | --- |\n| Int | 3 | −4 | −4 |\n| Wis | 12 | +1 | +1 |\n| Cha | 6 | −2 | −2 |',
+      '**Senses** Passive Perception 11',
+      '**Languages** None',
+      '**CR** 1 (XP 200; PB +2)',
+    ].join('\n\n');
+    const { wire, missing } = parseText(text, 'Reed Lurker');
+    expect(missing).toEqual([]);
+    expect(wire.abilityScores).toEqual({ str: 16, dex: 14, con: 12, int: 3, wis: 12, cha: 6 });
+  });
+
   it('reads older damage and condition immunities together, the longest reach and legendary actions', () => {
     const text = [
       '*Huge dragon, chaotic evil*',

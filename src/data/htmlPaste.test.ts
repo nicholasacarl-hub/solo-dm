@@ -127,6 +127,138 @@ describe('htmlToMarkdown', () => {
     expect(htmlToMarkdown(html).markdown).toBe('## Lamps\n\nSeen.');
   });
 
+  it('reads a whole page copied (select-all) from its main landmark, and leaves out navigation wherever it is', () => {
+    const page = `<header><nav><ul><li><a href="/">Games</a></li><li><a href="/sources">Sources</a></li></ul></nav><div>Sign In</div></header>
+      <main><h1>Chapter 3: Lamplighting</h1>
+      <div role="navigation"><h2>Contents</h2><ul><li>Wicks</li><li>Oils</li></ul></div>
+      <p>Lamplighters tend the roads at dusk, one lamp at a time.</p>
+      <h2>Wicks</h2><p>A wick is trimmed before it is lit, and again at midnight.</p>
+      <nav><a href="/ch2">Previous</a> <a href="/ch4">Next</a></nav></main>
+      <footer><h3>Help</h3><ul><li>Privacy</li><li>Terms</li></ul><p>© 2026 Rules Site.</p></footer>`;
+    expect(htmlToMarkdown(page).markdown).toBe(
+      '# Chapter 3: Lamplighting\n\nLamplighters tend the roads at dusk, one lamp at a time.\n\n## Wicks\n\nA wick is trimmed before it is lit, and again at midnight.',
+    );
+    // A selection without the page around it: an article's own header and footer (no landmark role) stay.
+    const article = `<header><h2>Ember Lash</h2><p><em>Level 1 Evocation (Wizard)</em></p></header><p>A whip of embers.</p>
+      <footer><p>Found in the lamp chapter.</p></footer><div role="contentinfo">© Rules Site</div>`;
+    expect(htmlToMarkdown(article).markdown).toBe('## Ember Lash\n\n_Level 1 Evocation (Wizard)_\n\nA whip of embers.\n\nFound in the lamp chapter.');
+    // A main landmark that holds less than half the text isn't the whole of the content.
+    const aside = '<main><p>Short.</p></main><h2>Wick Lore</h2><p>Long after the lamps go out, the lore of the wick lives on in the guild.</p>';
+    expect(htmlToMarkdown(aside).markdown).toBe('Short.\n\n## Wick Lore\n\nLong after the lamps go out, the lore of the wick lives on in the guild.');
+  });
+
+  it('keeps the cells after a merged cell (rowspan) in their columns', () => {
+    const classTable = `<table><tr><th rowspan="2">Level</th><th rowspan="2">Features</th><th colspan="2">Wicks per Night</th></tr>
+      <tr><th>Short</th><th>Long</th></tr><tr><td>1</td><td>Lamplight</td><td>2</td><td>1</td></tr></table>`;
+    expect(htmlToMarkdown(classTable).markdown).toBe(
+      '| Level | Features | Wicks per Night |  |\n| --- | --- | --- | --- |\n|  |  | Short | Long |\n| 1 | Lamplight | 2 | 1 |',
+    );
+    const roads = `<table><tr><th>Season</th><th>Road</th><th>DC</th><th>Hazard</th></tr>
+      <tr><td rowspan="2">Autumn</td><td>Wet</td><td>12</td><td rowspan="2">Leaves</td></tr><tr><td>Dry</td><td>10</td></tr>
+      <tr><td>Winter</td><td>Icy</td><td>15</td><td>Frost</td></tr></table>`;
+    expect(htmlToMarkdown(roads).markdown).toBe(
+      '| Season | Road | DC | Hazard |\n| --- | --- | --- | --- |\n| Autumn | Wet | 12 | Leaves |\n|  | Dry | 10 |  |\n| Winter | Icy | 15 | Frost |',
+    );
+    // A short row under a merged cell further right: the merge still ends there.
+    const short = `<table><tr><th>A</th><th>B</th><th>C</th><th>D</th></tr><tr><td>1</td><td>2</td><td>3</td><td rowspan="2">4</td></tr>
+      <tr><td>5</td><td>6</td></tr><tr><td>7</td><td>8</td><td>9</td><td>10</td></tr></table>`;
+    expect(htmlToMarkdown(short).markdown).toBe('| A | B | C | D |\n| --- | --- | --- | --- |\n| 1 | 2 | 3 | 4 |\n| 5 | 6 |  |  |\n| 7 | 8 | 9 | 10 |');
+  });
+
+  it('reads elements marked as headings (Word for the web), and a list item that is only a heading (numbered headings) as that heading', () => {
+    const wordOnline = `<div class="OutlineElement Ltr"><p class="Paragraph" role="heading" aria-level="1"><span>Lamp Rules</span></p></div>
+      <div class="OutlineElement Ltr"><p class="Paragraph"><span>Lamps are lit at dusk.</span></p></div>
+      <div class="OutlineElement Ltr"><p class="Paragraph" role="heading" aria-level="3"><span>Trimming</span></p></div>
+      <div class="OutlineElement Ltr"><p class="Paragraph"><span>Trim before lighting.</span></p></div><div role="heading">Unnumbered</div>`;
+    expect(htmlToMarkdown(wordOnline).markdown).toBe('# Lamp Rules\n\nLamps are lit at dusk.\n\n### Trimming\n\nTrim before lighting.\n\n## Unnumbered');
+    const numbered = `<b style="font-weight:normal;" id="docs-internal-guid-2">
+      <ol><li dir="ltr" aria-level="1"><h2 dir="ltr" role="presentation"><span>Ember Lash</span></h2></li></ol>
+      <p dir="ltr"><span style="font-style:italic">Level 1 Evocation (Wizard)</span></p>
+      <ol start="2"><li dir="ltr" aria-level="1"><h2 dir="ltr" role="presentation"><span>Glow Mote</span></h2></li></ol>
+      <p dir="ltr"><span>A mote of light.</span></p></b>`;
+    expect(htmlToMarkdown(numbered).markdown).toBe('## Ember Lash\n\n_Level 1 Evocation (Wizard)_\n\n## Glow Mote\n\nA mote of light.');
+    // A question and its answer in one item stay an item.
+    expect(htmlToMarkdown('<ul><li><h3>Can a wick be relit?</h3><p>Yes, once.</p></li></ul>').markdown).toBe('- Can a wick be relit? Yes, once.');
+  });
+
+  it('reads short bold lines as headings in a document editor’s copy, below a title set by size', () => {
+    const lines = `<p dir="ltr"><span style="font-size:11pt;font-weight:700">Tower Spells</span></p>
+      <p dir="ltr"><span style="font-size:11pt;font-weight:400">Spells the bell ringers teach.</span></p>
+      <p dir="ltr"><span style="font-size:11pt;font-weight:700">Toll of Dawn</span></p>
+      <p dir="ltr"><span style="font-size:11pt;font-style:italic">Level 1 Evocation (Bard)</span></p>
+      <p dir="ltr"><span style="font-size:11pt;font-weight:700">Casting Time:</span><span style="font-size:11pt;font-weight:400"> Action</span></p>
+      <ul><li dir="ltr"><p dir="ltr" role="presentation"><span style="font-size:11pt">rings once</span></p></li></ul>
+      <p dir="ltr"><span style="font-size:11pt;font-weight:700">Quiet Hour</span></p>
+      <p dir="ltr"><span style="font-size:11pt;font-style:italic">Level 2 Enchantment (Bard)</span></p>
+      <p dir="ltr"><span style="font-size:11pt;font-weight:700">Note:</span></p>`;
+    const docs = (body: string) => `<meta charset="utf-8"><b style="font-weight:normal;" id="docs-internal-guid-3">${body}</b>`;
+    const conversion = htmlToMarkdown(docs(lines));
+    expect(conversion.markdown).toBe(
+      [
+        '# Tower Spells',
+        'Spells the bell ringers teach.',
+        '# Toll of Dawn',
+        '_Level 1 Evocation (Bard)_',
+        '**Casting Time:** Action',
+        '- rings once',
+        '# Quiet Hour',
+        '_Level 2 Enchantment (Bard)_',
+        '**Note:**',
+      ].join('\n\n'),
+    );
+    expect(chunkDocument(conversion.markdown, opts).map((e) => [e.name, e.kind])).toEqual([
+      ['Tower Spells', 'rule'],
+      ['Toll of Dawn', 'spell'],
+      ['Quiet Hour', 'spell'],
+    ]);
+    const titled = htmlToMarkdown(docs(`<p dir="ltr"><span style="font-size:26pt">Bell Notes</span></p>${lines}`)).markdown;
+    expect(titled.startsWith('# Bell Notes\n\n## Tower Spells\n\nSpells the bell ringers teach.\n\n## Toll of Dawn')).toBe(true);
+    // Not from a web page, where bold lines are labels; not one bold line alone.
+    expect(htmlToMarkdown(lines).headings).toBe(0);
+    expect(htmlToMarkdown(docs('<p><b>Tower Spells</b></p><p>Spells the bell ringers teach.</p><ul><li>one</li></ul>')).headings).toBe(0);
+  });
+
+  it('reads no bold lines as headings when headings by size come after them (they are labels)', () => {
+    const word = `<html><head><style>p.MsoNormal {font-size:11.0pt;}</style></head><body>
+      <p class=MsoNormal><b><span style='font-size:20.0pt'>Lamp Oils</span></b></p>
+      <p class=MsoNormal><b>Whale Oil</b></p><p class=MsoNormal>Burns bright and long, but smells of the sea for days.</p>
+      <p class=MsoNormal><b><span style='font-size:20.0pt'>Wicks</span></b></p>
+      <p class=MsoNormal><b>Cotton</b></p><p class=MsoNormal>Cheap, and easy to trim with a lamplighter's shears.</p></body></html>`;
+    expect(htmlToMarkdown(word).markdown).toBe(
+      [
+        '# Lamp Oils',
+        '**Whale Oil**',
+        'Burns bright and long, but smells of the sea for days.',
+        '# Wicks',
+        '**Cotton**',
+        "Cheap, and easy to trim with a lamplighter's shears.",
+      ].join('\n\n'),
+    );
+  });
+
+  it('reads larger bold lines beside a few tagged headings as headings below them, but not larger lines that aren’t bold', () => {
+    const word = `<html><head><style>p.MsoNormal {font-size:11.0pt;}</style></head><body><h1>Bell Notes</h1>
+      <p class=MsoNormal><b><span style='font-size:18.0pt'>Tower Spells</span></b></p>
+      <p class=MsoNormal>Spells the bell ringers teach to their apprentices over a long winter.</p>
+      <p class=MsoNormal><b><span style='font-size:14.0pt'>Toll of Dawn</span></b></p><p class=MsoNormal><i>Level 1 Evocation (Bard)</i></p>
+      <p class=MsoNormal><b><span style='font-size:14.0pt'>Quiet Hour</span></b></p><p class=MsoNormal><i>Level 2 Enchantment (Bard)</i></p></body></html>`;
+    expect(htmlToMarkdown(word).markdown).toBe(
+      [
+        '# Bell Notes',
+        '## Tower Spells',
+        'Spells the bell ringers teach to their apprentices over a long winter.',
+        '### Toll of Dawn',
+        '_Level 1 Evocation (Bard)_',
+        '### Quiet Hour',
+        '_Level 2 Enchantment (Bard)_',
+      ].join('\n\n'),
+    );
+    const article = `<h1>The Lamplighters' Guild</h1><p>The guild was founded in a hard winter, when the roads were dark and long.</p>
+      <p style="font-size:24px"><em>“Every lamp a promise.”</em></p><p>Its members swore to light every lamp on every road.</p>
+      <p style="font-size:24px"><em>“No road left dark.”</em></p><p>They kept that oath for a hundred years and more.</p>`;
+    expect(htmlToMarkdown(article).headings).toBe(1);
+  });
+
   it('reads very deep nesting without running out of stack', () => {
     const depth = 5000;
     const html = `<h2>Deep</h2>${'<div>'.repeat(depth)}bottom text${'</div>'.repeat(depth)}`;
