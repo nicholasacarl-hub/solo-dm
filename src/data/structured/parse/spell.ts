@@ -2,7 +2,9 @@
  * Offline spell parser (spec §3.9): the level-and-school line ("_Level 2 Evocation (Sorcerer, Wizard)_",
  * "_Evocation Cantrip (Bard)_", older "*3rd-level evocation (ritual)*"), Casting Time / Range /
  * Components / Duration as bullets or lines, then from the description: the saving throw, a spell
- * attack, the first damage and the cantrip's damage by character level, and the area phrase.
+ * attack, the first damage and the cantrip's damage by character level, and the area phrase. A creature's
+ * stat block printed inside the spell (a summoned spirit's or steed's) is the creature's: none of these
+ * are read from it.
  *
  * Owner: E2. Pure.
  */
@@ -51,6 +53,18 @@ const SCALING = /\blevels?\s+5\s*\(\d+d\d+\),\s*11\s*\(\d+d\d+\),?\s*(?:and\s+)?
 /** The first damage it deals: "8d6 Fire damage", "Force damage equal to 4d12", "3d8 damage" (of a chosen type). */
 const DAMAGE_EXCERPT = /\d+d\d+(?:\s*[+−-]\s*\d+)?\s+\w+\s+damage|\b\w+\s+damage\s+equal\s+to\s+\d+d\d+(?:\s*[+−-]\s*\d+)?|\d+d\d+(?:\s*[+−-]\s*\d+)?\s+damage/i;
 
+/**
+ * A creature's stat block printed inside a spell, from its AC line when an HP line follows ("**AC** 14 + the spell's
+ * level" then "**HP** 50 + 10 for each spell level above 5"; older books spell out Armor Class and Hit Points).
+ */
+const STAT_BLOCK_START = /^[ \t]*(?:[-*+•][ \t]+)?[*_]*(?:Armor Class|AC)[*_]*[ \t]+\d[^\n]*\n(?:[ \t]*\n)*[ \t]*(?:[-*+•][ \t]+)?[*_]*(?:Hit Points|HP)[*_]*[ \t]+\d/m;
+
+/** A spell's own text: without a creature's stat block printed inside it (its saves, attacks and damage are the creature's). */
+export function spellOwnText(text: string): string {
+  const at = STAT_BLOCK_START.exec(text)?.index;
+  return at === undefined ? text : text.slice(0, at);
+}
+
 function formatOf(line: string, hasClasses: boolean): Wire<'spell'>['format'] {
   if (/\d(?:st|nd|rd|th)[- ]level/i.test(line)) return '2014';
   if (/^Level\s+\d/i.test(line) || hasClasses) return '2024';
@@ -67,7 +81,7 @@ export function parseSpell(candidate: Candidate & { kind: 'spell' }): OfflinePar
   const castingTime = v.get('Casting Time') ?? '';
   const duration = v.get('Duration') ?? '';
   const range = v.get('Range') ?? '';
-  const prose = proseParagraphs(text)
+  const prose = proseParagraphs(spellOwnText(text))
     .filter((p) => !SPELL_LINE.test(plain(p).slice(0, 80)) && !/^(?:Casting Time|Range|Components|Duration)\s*:/i.test(plain(p)))
     .map(plain)
     .join('\n');

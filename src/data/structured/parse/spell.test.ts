@@ -1,14 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { SCRIPTED_WIRE, gloamwoodEntries } from '@/test/structuredFixtures';
 import type { CompendiumEntry } from '@/types';
+import { normalize } from '../normalize';
 import { segment, type Candidate } from '../segment';
 import { parseSpell } from './spell';
 
 const CTX = { knownSpellNames: new Set<string>(), knownClassNames: new Set<string>() };
 const fixture = (name: string, dialect: 'md' | 'mixed' = 'md') =>
   segment(gloamwoodEntries('gloam', dialect), CTX).candidates.find((c) => c.name === name) as Candidate & { kind: 'spell' };
-const parseText = (text: string, name = 'Ember Lash') =>
-  parseSpell(segment([{ id: 'lib:t:1', sourceId: 't', sourceName: 'T', kind: 'spell', name, text, path: ['Spells', name] } as CompendiumEntry], CTX).candidates[0] as Candidate & { kind: 'spell' });
+const entryOf = (text: string, name: string) => ({ id: 'lib:t:1', sourceId: 't', sourceName: 'T', kind: 'spell', name, text, path: ['Spells', name] }) as CompendiumEntry;
+const candidateOf = (text: string, name: string) => segment([entryOf(text, name)], CTX).candidates[0] as Candidate & { kind: 'spell' };
+const parseText = (text: string, name = 'Ember Lash') => parseSpell(candidateOf(text, name));
+const stats = (levelLine: string, more: string[]) =>
+  [levelLine, '**Casting Time:** Action', '**Range:** 60 feet', '**Components:** V, S', '**Duration:** Concentration, up to 1 hour', ...more].join('\n\n');
 
 describe('parseSpell', () => {
   it.each(['Ashen Choir', 'Cinder Mote'])('reads %s as Claude would, in Markdown', (name) => {
@@ -35,6 +39,48 @@ describe('parseSpell', () => {
       '_Level 1 Conjuration (Wizard)_\n\n- **Casting Time:** Action or Ritual\n- **Range:** 60 feet\n- **Components:** V\n- **Duration:** 1 minute\n\nEach creature in a 20-foot-radius Sphere makes a Wisdom saving throw. A target takes Force damage equal to 2d6.',
     );
     expect(wire).toMatchObject({ ritual: true, areaText: '20-foot-radius Sphere', saveAbility: 'wis', damageText: 'Force damage equal to 2d6' });
+  });
+
+  // SRD 5.2.1 "Spells": a summoning spell (Summon Dragon, Giant Insect, Find Steed) prints its creature's stat block.
+  it("reads nothing from a summoned creature's stat block printed inside the spell", () => {
+    const text = stats('_Level 3 Conjuration (Wizard)_', [
+      'You call forth a lantern spirit. It uses the Lantern Spirit stat block.',
+      '### Lantern Spirit',
+      'Small Fey, Neutral',
+      '**AC** 12 + the spell’s level',
+      '**HP** 20 + 5 for each spell level above 3',
+      '**Speed** 30 ft.',
+      'Actions',
+      '**_Flare._** _Dexterity Saving Throw:_ DC equals your spell save DC, each creature in a 15-foot Cone. _Failure:_ 2d6 Fire damage.',
+    ]);
+    const candidate = candidateOf(text, 'Lantern Call');
+    const { wire } = parseSpell(candidate);
+    expect(wire).toMatchObject({ saveAbility: 'none', attack: 'none', damageText: '', areaText: '' });
+    const { data } = normalize('spell', wire, { blocks: candidate.blocks, entriesById: new Map([['lib:t:1', entryOf(text, 'Lantern Call')]]), origin: 'parser', spellLists: [] });
+    expect(data).not.toHaveProperty('area');
+    expect(data).not.toHaveProperty('saveAbility');
+  });
+
+  it('reads the older stat block too (Armor Class and Hit Points lines), and the spell’s own save before it', () => {
+    const { wire } = parseText(
+      stats('*3rd-level conjuration*', [
+        'You call forth a thistle spirit. A creature within 10 feet of it makes a Wisdom saving throw or is Frightened.',
+        'Thistle Spirit\nSmall fey\nArmor Class 11 + the level of the spell (natural armor)\nHit Points 30 + 10 for each spell level above 3rd\nSpeed 30 ft.',
+        "Barb. Melee Spell Attack: your spell attack modifier to hit, reach 5 ft. Hit: 1d6 + 3 + the spell's level piercing damage.",
+      ]),
+      'Thistle Call',
+    );
+    expect(wire).toMatchObject({ saveAbility: 'wis', attack: 'none', damageText: '' });
+  });
+
+  it('reads on past an AC line no HP line follows (a wall section a PDF line break starts a line with)', () => {
+    const { wire } = parseText(
+      stats('_Level 6 Evocation (Wizard)_', [
+        'You raise a wall of frost. Each section has\nAC 12 and 30 Hit Points.\nA creature moving through a broken section makes a Constitution saving throw, taking 5d6 Cold damage on a failed save.',
+      ]),
+      'Frost Rampart',
+    );
+    expect(wire).toMatchObject({ saveAbility: 'con', damageText: '5d6 Cold damage' });
   });
 
   it('lists the key fields it could not read', () => {

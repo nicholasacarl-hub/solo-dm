@@ -32,10 +32,10 @@ describe('EXTRACT_SYSTEM', () => {
     for (const text of [...GLOAMWOOD_NAMES, ...GLOAMWOOD_MARKERS]) expect(all.includes(text.toLowerCase()), text).toBe(false);
   });
 
-  it('is byte-identical however often it is read (the cached prefix), at prompt version 1', async () => {
+  it('is byte-identical however often it is read (the cached prefix), at prompt version 2', async () => {
     const again = await import('./prompts');
     expect(again.EXTRACT_SYSTEM).toBe(EXTRACT_SYSTEM);
     expect(new Set(STRUCTURED_KINDS.map((k) => EXTRACT_SYSTEM[k])).size).toBe(STRUCTURED_KINDS.length);
-    expect(EXTRACT_PROMPT_VERSION).toBe(1);
+    expect(EXTRACT_PROMPT_VERSION).toBe(2);
   });
 });

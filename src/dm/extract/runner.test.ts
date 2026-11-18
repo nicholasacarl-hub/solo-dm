@@ -10,7 +10,7 @@ import { chunkDocument } from '@/data/chunk';
 import { getJob, getRecords, listRecords, putJob, putRecords, saveLibrarySource } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
 import { EXPECTED_DATA, SCRIPTED_WIRE, extractionJob, gloamwoodEntries, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
-import { DEFAULT_SETTINGS, type AppSettings, type ExtractionJob, type StructuredRecord } from '@/types';
+import { DEFAULT_SETTINGS, EXTRACT_PROMPT_VERSION, type AppSettings, type ExtractionJob, type StructuredRecord } from '@/types';
 import { FakeExtractionClient, type ExtractionStep } from '../testing/fakeExtractionClient';
 import { resetExtractionDeps, setExtractionDeps } from './deps';
 import { ExtractionUnavailableError } from './errors';
@@ -190,7 +190,7 @@ describe('a job from start to finish', () => {
     expect(done.usage.estimatedCostUsd).toBeGreaterThan(0);
     const drake = await byName('Glimmerwing Drake');
     expect(drake).toMatchObject({ origin: 'claude', runState: 'done', jobId: started.id, data: { ...EXPECTED_DATA['Glimmerwing Drake'], hp: 58 } });
-    expect(drake.extraction).toMatchObject({ model: 'claude-opus-5-5', requestedModel: 'claude-opus-5-5', promptVersion: 1 });
+    expect(drake.extraction).toMatchObject({ model: 'claude-opus-5-5', requestedModel: 'claude-opus-5-5', promptVersion: EXTRACT_PROMPT_VERSION });
     expect((await byName('Wickwright')).data).toMatchObject({ hitDie: 8, casterType: 'half' });
     expect(fake.requests.map((r) => r.title).sort()).toEqual(['Glimmerwing Drake', 'Mothkin', 'Wickwright']);
     expect(fake.requests.every((r) => r.options.maxRetries === 0)).toBe(true);

@@ -20,8 +20,11 @@ export const STRUCTURED_SCHEMA_VERSION = 1;
  * bonus that applies only in some situations isn't applied.
  */
 export const PARSER_VERSION = 3;
-/** Bump with any change to a system prompt or wire schema. */
-export const EXTRACT_PROMPT_VERSION = 1;
+/**
+ * Bump with any change to a system prompt or wire schema. History: 1 = the first prompts; 2 = a spell's area, save,
+ * attack and damage are read from its own text, not from a creature's stat block printed inside it.
+ */
+export const EXTRACT_PROMPT_VERSION = 2;
 
 /** What the app structures. A subset of ContentKind, so the DM tool schemas keep their kind enums. */
 export type StructuredKind = Extract<

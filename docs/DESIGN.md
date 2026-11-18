@@ -447,7 +447,9 @@ above it keeps it. Word's complex-script weight, style and size (`mso-bidi-…`)
 table's second header row arrives as its first row (Markdown has one header row); the class reader folds a class
 table's two rows into one header, whichever comes first ("Spell Slots per Spell Level" over 1 to 9, or, as D&D
 Beyond prints it, that group row over "Level | Proficiency Bonus | … | 1 | 2 …"). A class's spell list printed as a
-table per spell level gives the spells in its tables, not the tables' captions. Paragraphs keep their bold and italics, a
+table per spell level gives the spells in its tables, not the tables' captions. A spell's save, attack, damage and area
+come from its own text, not from a creature's stat block printed inside it (a summoning spell's spirit or steed), both
+offline and in what Claude is asked for. Paragraphs keep their bold and italics, a
 line break starts a line (a stat block's lines stay apart), list items come as lists (Word's list paragraphs too),
 tables as pipe tables with their caption above and merged cells keeping the cells after them in their columns (a
 table that only lays out a page or boxes a sidebar reads as its cells' blocks), and a description list's term and
