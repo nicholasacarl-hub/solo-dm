@@ -186,6 +186,22 @@ describe('segment: structure rules', () => {
     ]);
   });
 
+  it('names a species after its "<Species> Traits" heading, and takes no explanation of a background’s or species’ parts for one', () => {
+    const explains = (n: number, title: string, labels: string[]) =>
+      entry(n, title, labels.map((l) => `**_${l}._** Each one of these says what the ${l.toLowerCase()} line holds and how to use it.`).join('\n\n'), ['Origins', title]);
+    const entries = [
+      explains(1, 'Parts of a Background', ['Ability Scores', 'Feat', 'Skill Proficiencies', 'Tool Proficiency', 'Equipment']),
+      explains(2, 'Parts of a Species', ['Creature Type', 'Size', 'Speed', 'Special Traits']),
+      entry(3, 'Lamplighter', ['**Ability Scores:** Dexterity, Wisdom, Charisma', '**Feat:** Alert', '**Skill Proficiencies:** Insight and Perception', '**Tool Proficiency:** Tinker’s Tools', '**Equipment:** Choose A or B: (A) Lantern, Oil, 8 GP; or (B) 50 GP'].join('\n\n'), ['Origins', 'Lamplighter']),
+      entry(4, 'Mosskin', 'Mosskin grow slowly, like the moss they are named for.', ['Origins', 'Mosskin']),
+      entry(5, 'Mosskin Traits', '**Creature Type:** Humanoid\n\n**Size:** Small\n\n**Speed:** 30 feet', ['Origins', 'Mosskin', 'Mosskin Traits']),
+    ];
+    expect(segment(entries, CTX).candidates.map((c) => [c.kind, c.name])).toEqual([
+      ['background', 'Lamplighter'],
+      ['species', 'Mosskin'],
+    ]);
+  });
+
   it('takes the flattened feature siblings of an older-format subclass along', () => {
     const entries = [
       entry(1, 'Druid Circles', 'Circles.', ['Druid Circles']),
