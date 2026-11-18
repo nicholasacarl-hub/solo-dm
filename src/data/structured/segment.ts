@@ -584,30 +584,34 @@ function spellListHint(node: OutlineNode, knownClasses: ReadonlySet<string>, kno
   const title = SPELL_LIST_TITLE.exec(node.title);
   if (!title || !knownClasses.has(nameKey(title[1])) || !node.chain) return null;
   const text = subtreeText(node, 40_000);
-  const names: string[] = [];
-  const listed = [...text.matchAll(LIST_ITEM)].map((m) => cleanSpellName(m[1])).filter(Boolean);
-  // A PDF text layer loses list markers: short lines of their own that read like names.
-  const lines = listed.length
-    ? []
-    : text
-        .split(/\n+/)
-        .map((l) => l.trim())
-        .filter((l) => l.length <= 50 && !/^#/.test(l) && !/[.!?:;]$/.test(l) && /^[\p{Lu}\d]/u.test(l) && l.split(/\s+/).length <= 6)
-        .map((l) => cleanSpellName(l))
-        .filter(Boolean);
-  const items = listed.length ? listed : lines;
-  let known = items.filter((n) => knownSpells.has(nameKey(n))).length;
-  names.push(...items);
+  // Table columns that are mostly known spells (a page that prints the list as a table per spell level).
+  const tabled: string[] = [];
+  let known = 0;
   for (const table of gfmTables(text)) {
     const columns = table.header.map((_, col) => table.rows.map((r) => cleanSpellName(r[col] ?? '')).filter((c) => c && c !== '—' && c !== '-'));
     for (const cells of columns) {
       const hits = cells.filter((c) => knownSpells.has(nameKey(c))).length;
       if (cells.length && hits / cells.length >= 0.5) {
-        names.push(...cells);
+        tabled.push(...cells);
         known += hits;
       }
     }
   }
+  const listed = [...text.matchAll(LIST_ITEM)].map((m) => cleanSpellName(m[1])).filter(Boolean);
+  // A PDF text layer loses list markers: short lines of their own that read like names. Not beside tables of spells,
+  // whose captions read like names too ("Level 1 Bard Spells").
+  const lines =
+    listed.length || tabled.length
+      ? []
+      : text
+          .split(/\n+/)
+          .map((l) => l.trim())
+          .filter((l) => l.length <= 50 && !/^#/.test(l) && !/[.!?:;]$/.test(l) && /^[\p{Lu}\d]/u.test(l) && l.split(/\s+/).length <= 6)
+          .map((l) => cleanSpellName(l))
+          .filter(Boolean);
+  const items = listed.length ? listed : lines;
+  known += items.filter((n) => knownSpells.has(nameKey(n))).length;
+  const names = [...items, ...tabled];
   if (known < 5) return null;
   const unique = [...new Map(names.map((n) => [nameKey(n), n])).values()];
   return { className: title[1].trim(), spellNames: unique, entryId: node.chain.entries[0].id };

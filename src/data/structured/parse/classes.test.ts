@@ -35,18 +35,16 @@ describe('parseClass', () => {
 
   it('reads a class table printed with two header rows (a pasted page’s "Spell Slots per Spell Level" over 1 to 5)', () => {
     const header = '| Level | Proficiency Bonus | Class Features | Wicks | Prepared Spells | 1st | 2nd | 3rd | 4th | 5th |\n|---|---|---|---|---|---|---|---|---|---|';
-    for (const slots of ['1 | 2 | 3 | 4 | 5', '1st | 2nd | 3rd | 4th | 5th']) {
-      const entries = gloamwoodEntries(GLOAMWOOD_SOURCE_ID, 'md').map((e) =>
-        e.text.includes(header)
-          ? {
-              ...e,
-              text: e.text.replace(
-                header,
-                `| Level | Proficiency Bonus | Class Features | Wicks | Prepared Spells | —Spell Slots per Spell Level— |  |  |  |  |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n|  |  |  |  |  | ${slots} |`,
-              ),
-            }
-          : e,
-      );
+    const delimiter = '| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |';
+    const twoRows = [
+      // The group over the slot columns, the other headers merged down (a sub-header with a blank Level cell).
+      `| Level | Proficiency Bonus | Class Features | Wicks | Prepared Spells | —Spell Slots per Spell Level— |  |  |  |  |\n${delimiter}\n|  |  |  |  |  | 1 | 2 | 3 | 4 | 5 |`,
+      `| Level | Proficiency Bonus | Class Features | Wicks | Prepared Spells | —Spell Slots per Spell Level— |  |  |  |  |\n${delimiter}\n|  |  |  |  |  | 1st | 2nd | 3rd | 4th | 5th |`,
+      // A row of groups over the column names, as D&D Beyond prints it (its first cell blank).
+      `|  |  |  |  |  | —Spell Slots per Spell Level— |  |  |  |  |\n${delimiter}\n| Level | Proficiency Bonus | Class Features | Wicks | Prepared Spells | 1 | 2 | 3 | 4 | 5 |`,
+    ];
+    for (const table of twoRows) {
+      const entries = gloamwoodEntries(GLOAMWOOD_SOURCE_ID, 'md').map((e) => (e.text.includes(header) ? { ...e, text: e.text.replace(header, table) } : e));
       expect(entries.some((e) => e.text.includes('—Spell Slots per Spell Level—'))).toBe(true);
       const candidate = segment(entries, ctx).candidates.find((c) => c.name === 'Wickwright') as Candidate & { kind: 'class' };
       const { wire, missing } = parseClass(candidate, new Map(entries.map((e) => [e.id, e])));

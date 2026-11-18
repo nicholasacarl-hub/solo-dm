@@ -84,6 +84,21 @@ describe('segment: the Gloamwood Almanac', () => {
     expect(segment(mixed, CTX).spellLists).toEqual(expected);
   });
 
+  it('reads a spell list printed as a table per spell level without taking the tables’ captions for spells', () => {
+    const table = (caption: string, spells: [string, string][]) =>
+      `${caption}\n\n| Spell | School | Special |\n| --- | --- | --- |\n${spells.map(([spell, school]) => `| ${spell} | ${school} | — |`).join('\n')}`;
+    const text = [
+      'This section presents the Wizard spell list.',
+      table('Cantrips (Level 0 Wizard Spells)', [['Light', 'Evocation'], ['Mending', 'Transmutation']]),
+      table('Level 1 Wizard Spells', [['Burning Hands', 'Evocation'], ['Detect Magic', 'Divination'], ['Sleep', 'Enchantment']]),
+      table('Level 3 Wizard Spells', [['Fireball', 'Evocation'], ['Daylight', 'Evocation']]),
+    ].join('\n\n');
+    const { spellLists } = segment([entry(1, 'Wizard Spell List', text, ['Wizard', 'Wizard Spell List'])], CTX);
+    expect(spellLists.map((l) => [l.className, l.spellNames])).toEqual([
+      ['Wizard', ['Light', 'Mending', 'Burning Hands', 'Detect Magic', 'Sleep', 'Fireball', 'Daylight']],
+    ]);
+  });
+
   it('gives each candidate numbered blocks, a stable key and the hash of its texts', () => {
     const a = segment(md, CTX).candidates;
     const b = segment([...md].reverse(), CTX).candidates;
