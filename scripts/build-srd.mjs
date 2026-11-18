@@ -680,6 +680,8 @@ export function spellOwnSection(node) {
  * and shape together, and a consumed material one the text says the spell consumes or uses up. What the text doesn't
  * state is left out and reported.
  */
+const DAMAGE_TYPES = 'Acid|Bludgeoning|Cold|Fire|Force|Lightning|Necrotic|Piercing|Poison|Psychic|Radiant|Slashing|Thunder';
+
 export function groundedOpen5e(title, text, rec, scalingRows, report) {
   const t = text.replace(/[*_]/g, '').replace(/(\d),(\d{3})\b/g, '$1$2');
   const keep = (field, value, supported) => {
@@ -687,21 +689,33 @@ export function groundedOpen5e(title, text, rec, scalingRows, report) {
     report.warn('spells', `${title}: Open5e ${field} ${JSON.stringify(value)} isn't in the spell's text; left out`);
     return undefined;
   };
-  // "1d8" is also printed as "a d8".
+  // Dice the spell deals as damage ("8d6 Fire damage", "5d10 Radiant or Necrotic damage", "3d8 damage", "Force damage
+  // equal to 1d8", "base damage is 12d6", "damage die becomes a d8"), not a healing, bonus or table roll; "1d8" is
+  // also printed as "a d8".
+  const typed = `(?:(?:${DAMAGE_TYPES})(?:,?\\s+or\\s+|,\\s*|\\s+and\\s+|\\s+))*`;
   const diceIn = (roll) =>
     (roll.match(/\d*d\d+/g) ?? []).every((d) => {
       const [n, m] = d.split('d');
-      return new RegExp(`(?:^|\\D)${n === '1' || n === '' ? '1?' : n}d${m}\\b`).test(t);
+      const die = `${n === '1' || n === '' ? '1?' : n}d${m}\\b`;
+      return new RegExp(
+        `(?:^|\\D)${die}(?:\\s*[+−-]\\s*\\d+)?\\s+(?:\\w+\\s+)?${typed}damage\\b|\\bdamage\\s+(?:equal\\s+to|is|die\\s+becomes)\\s+(?:an?\\s+)?${die}`,
+        'i',
+      ).test(t);
     });
+  // A damage type named outside a sentence that only grants Resistance, Immunity or Vulnerability to it.
+  const sentences = t.split(/(?<=[.!?])\s+|\n+/);
+  const granted = /\b(?:Resistance|Immunity|Vulnerability|immune|resistant)\b/i;
+  const typeNamed = (type) => sentences.some((s) => !granted.test(s) && new RegExp(`\\b${type}\\b`, 'i').test(s));
   const ability = rec.saving_throw_ability;
   // "a Dexterity saving throw", "a DC 15 Intelligence saving throw", "a Strength or Dexterity saving throw".
   const imposed =
     ability && new RegExp(`\\b(?:a|an|another)\\s+(?:DC\\s+\\d+\\s+)?(?:\\w+\\s+or\\s+)?${ability}(?:\\s+or\\s+\\w+)?\\s+saving throw\\b`, 'i').test(t);
   const damage = keep('damage', rec.damage_roll || undefined, Boolean(rec.damage_roll) && diceIn(rec.damage_roll));
-  const types = (rec.damage_types ?? []).filter((type) => keep('damage type', type, new RegExp(`\\b${type}\\b`, 'i').test(t)) !== undefined);
+  const types = (rec.damage_types ?? []).filter((type) => keep('damage type', type, typeNamed(type)) !== undefined);
   const shape = rec.shape_type;
   const size = rec.shape_size ?? undefined;
-  const sized = size === undefined ? '' : `\\b${size}[- ](?:foot|feet)\\b`;
+  // The area's size, not a Line's width ("a 100-foot-long, 5-foot-wide Line" is 100).
+  const sized = size === undefined ? '' : `\\b${size}[- ](?:foot|feet)\\b(?![- ]wide\\b)`;
   const areaStated = sized
     ? new RegExp(`${sized}[\\w ,-]{0,30}?\\b${shape}s?\\b|\\b${shape}s?\\b[\\w ,-]{0,30}?${sized}`, 'i').test(t)
     : new RegExp(`\\b${shape}s?\\b`, 'i').test(t);

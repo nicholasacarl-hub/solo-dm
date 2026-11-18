@@ -224,10 +224,35 @@ describe("Open5e's spell fields, as the spell states them", () => {
     expect(fields('Make a melee spell attack against the target.', { attack_roll: true })).toEqual({ attackRoll: true });
   });
 
-  it("keeps an area only where its size and shape are printed together, not a range's distance", () => {
+  it("keeps an area only where its size and shape are printed together, not a range's distance or a Line's width", () => {
     expect(fields('- **Range:** 60 feet\n\nYou touch a willing creature.', { shape_type: 'sphere', shape_size: 60 })).toEqual({});
     expect(fields('You make a Cube up to 100 feet on each side.', { shape_type: 'cube', shape_size: 100 })).toEqual({ area: { shape: 'cube', size: 100 } });
-    expect(fields('A 100-foot-long, 5-foot-wide Line blasts out.', { shape_type: 'line', shape_size: 5 })).toEqual({ area: { shape: 'line', size: 5 } });
+    expect(fields('A 100-foot-long, 5-foot-wide Line blasts out.', { shape_type: 'line', shape_size: 100 })).toEqual({ area: { shape: 'line', size: 100 } });
+    expect(fields('A 100-foot-long, 5-foot-wide Line blasts out.', { shape_type: 'line', shape_size: 5 })).toEqual({});
+    expect(fields('A Line 60 feet long and 5 feet wide blasts out.', { shape_type: 'line', shape_size: 5 })).toEqual({});
+  });
+
+  it('keeps dice the spell deals as damage, not healing, bonus or table dice', () => {
+    const roll = (damage_roll) => ({ damage_roll });
+    expect(fields('A creature you touch regains Hit Points equal to 2d8 plus your spellcasting ability modifier.', roll('2d8'))).toEqual({});
+    expect(fields('The target adds 1d4 to the attack roll or saving throw.', roll('1d4'))).toEqual({});
+    expect(fields('The target reduces the total damage taken by 1d4.', roll('1d4'))).toEqual({});
+    expect(fields('It subtracts 1d8 from all its damage rolls.', roll('1d8'))).toEqual({});
+    expect(fields('Roll 1d8 to see which ray strikes it.', roll('1d8'))).toEqual({});
+    expect(fields('It takes 5d10 Radiant or Necrotic damage (your choice).', roll('5d10'))).toEqual({ damage: '5d10' });
+    expect(fields('It takes 5d8 Acid, Cold, Fire, Lightning, or Thunder damage.', roll('5d8'))).toEqual({ damage: '5d8' });
+    expect(fields('The blade deals Fire damage equal to 3d6.', roll('3d6'))).toEqual({ damage: '3d6' });
+    expect(fields("The spell's base damage is 12d6.", roll('12d6'))).toEqual({ damage: '12d6' });
+    expect(fields('Each dart deals 1d4 + 1 Force damage.', roll('1d4 + 1'))).toEqual({ damage: '1d4 + 1' });
+    expect(fields('It takes 3d8 damage of the chosen type.', roll('3d8'))).toEqual({ damage: '3d8' });
+  });
+
+  it('keeps a damage type the spell deals, not one it only grants Resistance or Immunity to', () => {
+    const types = (damage_types) => ({ damage_types });
+    expect(fields('The wall has Immunity to Poison and Psychic damage.', types(['psychic']))).toEqual({});
+    expect(fields('The target has Resistance to Bludgeoning, Piercing, and Slashing damage.', types(['slashing']))).toEqual({});
+    const shield = 'The warm shield grants Resistance to Cold damage.\n\nAn attacker takes 2d8 Fire damage from a warm shield or 2d8 Cold damage from a chill shield.';
+    expect(fields(shield, types(['fire', 'cold']))).toEqual({ damageTypes: ['fire', 'cold'] });
   });
 
   it('keeps a consumed material where the spell consumes or uses it up, by the SRD’s words for it', () => {
