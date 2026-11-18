@@ -9,7 +9,7 @@ This work includes material from the System Reference Document 5.2.1 ("SRD 5.2.1
 - [your5e/5e-srd-markdown](https://github.com/your5e/5e-srd-markdown) — SRD 5.2.1 converted to Markdown (CC-BY-4.0).
 - [open5e/open5e-api](https://github.com/open5e/open5e-api) — the `srd-2024` dataset (SRD content, CC-BY-4.0). Open5e artwork is not used.
 
-A spell's fields from Open5e (its saving throw, attack roll, damage and damage types, area, and its material's cost and whether the spell consumes it) are kept only where that spell's SRD 5.2.1 text bears them out, so a field another spell's numbers filled is left out.
+A spell's fields from Open5e are kept only where that spell's own SRD 5.2.1 text states them: a saving throw the spell imposes, an attack roll where the spell makes a melee or ranged spell attack, damage dice, damage types and a material's cost where the text names them, an area where its size and shape are printed together, and a consumed material where the text says the spell consumes or uses it up. A summoned creature's stat block printed inside a spell doesn't count as the spell's text. Values copied from another spell, or flags the text doesn't support, are left out.
 
 `scripts/fetch-srd-sources.sh` and `scripts/build-srd.mjs` reproduce the conversion.
 

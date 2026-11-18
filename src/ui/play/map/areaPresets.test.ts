@@ -91,7 +91,7 @@ describe('area presets from spell text (D64)', () => {
       'srd:spell:lantern-call',
       'Lantern Call',
       '60 feet',
-      'You call forth a lantern spirit.\n\n### Lantern Spirit\n\n**AC** 12 + the spell’s level\n\n**HP** 20 + 5 for each spell level above 3\n\n' +
+      'You call forth a lantern spirit.\n\n### Lantern Spirit\n\n- **AC** 12 + the spell’s level\n- **HP** 20 + 5 for each spell level above 3\n- **Speed** 30 ft.\n\n' +
         '**_Flare._** _Dexterity Saving Throw:_ DC equals your spell save DC, each creature in a 15-foot Cone.',
     );
     expect(presetFromEntry(call)).toBeNull();

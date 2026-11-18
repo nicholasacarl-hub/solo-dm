@@ -23,6 +23,7 @@ import {
   renderSubtree,
   ruleSections,
   slugify,
+  spellOwnSection,
   titleCase,
 } from './build-srd.mjs';
 
@@ -205,6 +206,41 @@ describe("Open5e's spell fields", () => {
       damage: '1d8',
       damageTypes: ['force'],
     });
+  });
+});
+
+describe("Open5e's spell fields, as the spell states them", () => {
+  const fields = (text, rec) => groundedOpen5e('Lantern Ward', text, rec, [], quietReport);
+
+  it('keeps a save the spell imposes, not one it gives Advantage on', () => {
+    expect(fields('You have Advantage on Constitution saving throws.', { saving_throw_ability: 'constitution' })).toEqual({});
+    expect(fields('The target must make a DC 15 Intelligence saving throw.', { saving_throw_ability: 'intelligence' })).toEqual({ saveAbility: 'int' });
+    expect(fields('It makes a Strength or Dexterity saving throw (its choice).', { saving_throw_ability: 'dexterity' })).toEqual({ saveAbility: 'dex' });
+  });
+
+  it('keeps an attack roll only for a melee or ranged spell attack', () => {
+    expect(fields('The target has Disadvantage on the next attack roll it makes.', { attack_roll: true })).toEqual({});
+    expect(fields('Whenever you hit it with an attack roll, it takes an extra 1d6 Necrotic damage.', { attack_roll: true })).toEqual({});
+    expect(fields('Make a melee spell attack against the target.', { attack_roll: true })).toEqual({ attackRoll: true });
+  });
+
+  it("keeps an area only where its size and shape are printed together, not a range's distance", () => {
+    expect(fields('- **Range:** 60 feet\n\nYou touch a willing creature.', { shape_type: 'sphere', shape_size: 60 })).toEqual({});
+    expect(fields('You make a Cube up to 100 feet on each side.', { shape_type: 'cube', shape_size: 100 })).toEqual({ area: { shape: 'cube', size: 100 } });
+    expect(fields('A 100-foot-long, 5-foot-wide Line blasts out.', { shape_type: 'line', shape_size: 5 })).toEqual({ area: { shape: 'line', size: 5 } });
+  });
+
+  it('keeps a consumed material where the spell consumes or uses it up, by the SRD’s words for it', () => {
+    expect(fields('Each time you cast this spell, you must use a different sapphire.', { material_consumed: true })).toEqual({ materialConsumed: true });
+    expect(fields('When the spell ends, the container is destroyed.', { material_consumed: true })).toEqual({ materialConsumed: true });
+    expect(fields('The spell ends if the replica chest is destroyed.', { material_consumed: true })).toEqual({});
+  });
+
+  it("reads a spell's own section, without a summoned creature's (Control Weather's tables stay)", () => {
+    const [spell] = parseSections(
+      '# Lantern Call\nYou call a spirit.\n## Lantern Spirit\n- **AC** 12\n- **HP** 20\n### Actions\nIt breathes a 15-foot Cone.\n## Gusts\n| Stage | Wind |\n|---|---|\n| 1 | Calm |',
+    ).children;
+    expect(spellOwnSection(spell)).toBe('You call a spirit.\n\n### Gusts\n\n| Stage | Wind |\n|---|---|\n| 1 | Calm |');
   });
 });
 

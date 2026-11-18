@@ -3,7 +3,7 @@ import { SCRIPTED_WIRE, gloamwoodEntries } from '@/test/structuredFixtures';
 import type { CompendiumEntry } from '@/types';
 import { normalize } from '../normalize';
 import { segment, type Candidate } from '../segment';
-import { parseSpell } from './spell';
+import { parseSpell, spellOwnText } from './spell';
 
 const CTX = { knownSpellNames: new Set<string>(), knownClassNames: new Set<string>() };
 const fixture = (name: string, dialect: 'md' | 'mixed' = 'md') =>
@@ -59,6 +59,47 @@ describe('parseSpell', () => {
     const { data } = normalize('spell', wire, { blocks: candidate.blocks, entriesById: new Map([['lib:t:1', entryOf(text, 'Lantern Call')]]), origin: 'parser', spellLists: [] });
     expect(data).not.toHaveProperty('area');
     expect(data).not.toHaveProperty('saveAbility');
+  });
+
+  // The same stat block as sources lay it out: the SRD's bullets, a callout (Homebrewery, GM Binder), colon labels (a web
+  // page's, a PDF's), round bullets, an Initiative line between, lines a text layer joined or wrapped, a <br> a Markdown
+  // source kept, no-break spaces.
+  const FLARE = '**_Flare._** _Dexterity Saving Throw:_ DC equals your spell save DC, each creature in a 15-foot Cone. _Failure:_ 2d6 Fire damage.';
+  it.each([
+    ['the SRD’s bullets', '- **AC** 12 + the spell’s level\n- **HP** 20 + 5 for each spell level above 3\n- **Speed** 30 ft.'],
+    ['a callout', '> - **Armor Class** 12 + the spell’s level\n> - **Hit Points** 20 + 5 for each spell level above 3\n> - **Speed** 30 ft.'],
+    ['a callout’s paragraphs', '> **AC** 12 + the\n> spell’s level\n>\n> **Initiative** +2 (12)\n>\n> **HP** 20 + 5 for each spell level above 3\n>\n> **Speed** 30 ft.'],
+    ['colon labels', '**AC:** 12 + the spell’s level\n\n**HP:** 20 + 5 for each spell level above 3\n\n**Speed:** 30 ft.'],
+    ['spelled-out colon labels', 'Armor Class: 12 + the spell’s level\nHit Points: 20 + 5 for each spell level above 3\nSpeed: 30 ft.'],
+    ['round bullets', '● AC 12 + the spell’s level\n● HP 20 + 5 for each spell level above 3\n● Speed 30 ft.'],
+    ['an Initiative line between', '- **AC** 12 + the spell’s level\n- **Initiative** +2 (12)\n- **HP** 20 + 5 for each spell level above 3\n- **Speed** 30 ft.'],
+    ['one joined line', 'AC 12 + the spell’s level HP 20 + 5 for each spell level above 3 Speed 30 ft.'],
+    ['a wrapped line', 'AC 12 + the\nspell’s level\nHP 20 + 5 for each spell level above 3\nSpeed 30 ft.'],
+    ['lines wrapped as far as it reads (HP four lines on, Speed two more)', 'AC 12 + the\nspell’s\nlevel\nInitiative +2 (12)\nHP 20 + 5 for each\nspell level above 3\nSpeed 30 ft.'],
+    ['<br> line breaks', 'Small Fey<br>**AC** 12 + the spell’s level<br>**HP** 20 + 5 for each spell level above 3<br>**Speed** 30 ft.'],
+    ['no-break spaces', '**AC**\u00a012 + the spell’s level\n\n**HP**\u00a020 + 5 for each spell level above 3\n\n**Speed**\u00a030 ft.'],
+  ])('finds the stat block laid out with %s', (_layout, block) => {
+    const text = stats('_Level 3 Conjuration (Wizard)_', ['You call forth a lantern spirit.', '### Lantern Spirit', 'Small Fey, Neutral', block, 'Actions', FLARE]);
+    expect(parseText(text, 'Lantern Call').wire).toMatchObject({ saveAbility: 'none', attack: 'none', damageText: '', areaText: '' });
+  });
+
+  it('cuts the text where the stat block starts, at its AC line', () => {
+    expect(spellOwnText('You call a spirit.\n\n### Lantern Spirit\n\n- **AC** 12\n- **HP** 20\n- **Speed** 30 ft.\n\nActions')).toBe(
+      'You call a spirit.\n\n### Lantern Spirit\n\n',
+    );
+    expect(spellOwnText('A spell with no stat block.\n\nAC 12 is its target number.')).toBe('A spell with no stat block.\n\nAC 12 is its target number.');
+  });
+
+  it("reads on past an object's AC and HP when no Speed follows them (no creature's stat block)", () => {
+    const { wire } = parseText(
+      stats('_Level 3 Conjuration (Druid)_', [
+        'You conjure a crackling totem within range. The totem is an object with these statistics:',
+        '- **AC** 13\n- **HP** 25',
+        'When the totem appears, each creature of your choice in a 10-foot Emanation from it makes a Constitution saving throw, taking 2d8 Thunder damage on a failed save.',
+      ]),
+      'Thunder Totem',
+    );
+    expect(wire).toMatchObject({ saveAbility: 'con', damageText: '2d8 Thunder damage', areaText: '10-foot Emanation' });
   });
 
   it('reads the older stat block too (Armor Class and Hit Points lines), and the spell’s own save before it', () => {
