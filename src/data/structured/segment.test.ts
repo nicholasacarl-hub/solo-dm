@@ -244,6 +244,22 @@ describe('segment: structure rules', () => {
     expect(explainsParts('background', generic)).toBe(true);
   });
 
+  it("doesn't take an explanation written to the reader ('You are a Humanoid unless…') for a species, and reads a type in italics", () => {
+    const parts = ['**Creature Type.** You are a Humanoid unless your people says otherwise.', '**Size.** Your people tells you whether you are Small or Medium.', '**Speed.** Your people gives your walking speed.'];
+    const peoples = [
+      '## Mirefolk', 'Mirefolk live in the fens.', '### Mirefolk Traits', '***Creature Type.*** You are a Humanoid.', '***Size.*** You are Medium.', '***Speed.*** Your walking speed is 30 feet.', '***Mire Step.*** You ignore mud.',
+      '## Reedling', '- **Creature Type:** _Humanoid_', '- **Size:** Small', '- **Speed:** 30 feet', '***Reed Step.*** You hide in reeds.',
+    ];
+    const kinds = (blocks: string[]) => segment(chunkDocument(blocks.join('\n\n'), { sourceId: 't', sourceName: 'T' }), CTX).candidates.map((c) => [c.kind, c.name]);
+    const both = [['species', 'Mirefolk'], ['species', 'Reedling']];
+    // As the chapter's own text, and as a section of its own.
+    expect(kinds(['# Peoples of the Fen', 'Every people in this chapter has the following parts.', ...parts, ...peoples])).toEqual(both);
+    expect(kinds(['# Peoples of the Fen', 'The peoples of the fen.', '## Parts of a People', ...parts, ...peoples])).toEqual(both);
+    // A type in emphasis is named: a re-check keeps the species.
+    const italic = ['- **Creature Type:** Usually _Humanoid_', '- **Size:** Small', '- **Speed:** 30 feet'].join('\n\n');
+    expect(explainsParts('species', italic)).toBe(false);
+  });
+
   it('takes the flattened feature siblings of an older-format subclass along', () => {
     const entries = [
       entry(1, 'Druid Circles', 'Circles.', ['Druid Circles']),

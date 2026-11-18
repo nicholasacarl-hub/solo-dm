@@ -447,11 +447,12 @@ const CREATURE_TYPES = 'Aberration|Beast|Celestial|Construct|Dragon|Elemental|Fe
  * three…").
  */
 const valueNames = (re: RegExp, words: string) =>
-  new RegExp(String.raw`${re.source}[ \t]*[*_]{0,3}[ \t]*\|?[ \t]*(?:${words})\b`, re.flags);
+  new RegExp(String.raw`${re.source}[ \t]*[*_]{0,3}[ \t]*\|?[ \t]*[*_]{0,3}(?:${words})(?![A-Za-z0-9])`, re.flags);
 const ABILITY_SCORES_VALUE = valueNames(L.abilityScores, ABILITY_WORDS);
-const CREATURE_TYPE_VALUE = valueNames(L.creatureType, `(?:You are (?:an? )?)?(?:${CREATURE_TYPES})`);
-/** A label's line names one of `words` anywhere before its first full stop. */
-const lineNames = (re: RegExp, words: string) => new RegExp(String.raw`${re.source}[^.\n]*?\b(?:${words})\b`, re.flags);
+// The 2022 sentence is the whole of it ("You are a Humanoid."), not an explanation's "You are a Humanoid unless…".
+const CREATURE_TYPE_VALUE = valueNames(L.creatureType, String.raw`You are (?:an? )?[*_]{0,3}(?:${CREATURE_TYPES})[*_]{0,3}(?=\.|[ \t]*$)|(?:${CREATURE_TYPES})`);
+/** A label's line names one of `words` anywhere before its first full stop (in emphasis too: "_Humanoid_"). */
+const lineNames = (re: RegExp, words: string) => new RegExp(String.raw`${re.source}[^.\n]*?(?<![A-Za-z0-9])(?:${words})(?![A-Za-z0-9])`, re.flags);
 const ABILITY_SCORES_NAMED = lineNames(L.abilityScores, ABILITY_WORDS);
 const SKILLS_NAMED = lineNames(L.skills, SKILL_WORDS);
 const CREATURE_TYPE_NAMED = lineNames(L.creatureType, CREATURE_TYPES);

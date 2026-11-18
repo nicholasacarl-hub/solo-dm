@@ -334,6 +334,17 @@ describe('pdfPagesToMarkdown', () => {
     for (const stat of stats) expect(paragraphs.some((p) => p.startsWith(stat)), stat).toBe(true);
   });
 
+  it("keeps in the paragraph a card's or a Prerequisite label after a list's bullet, and a spaced dash in prose", () => {
+    const lead = 'Each feat in this chapter is laid out the same way, with the following parts in the order below:';
+    const feat = pdfPagesToMarkdown([[line(lead, 700), line('- Prerequisite: what you must have before you can take the feat, if it has any.', 688)]]);
+    expect(feat).not.toContain('\n\n- Prerequisite');
+    const card = pdfPagesToMarkdown([[line(lead, 700), line('• Casting Time: how long it takes to cast the spell, which the card gives first.', 688)]]);
+    expect(card).not.toContain('\n\n• Casting');
+    const wrap = 'You call a hound of lantern light into an unoccupied space you can see within range, a guardian';
+    const prose = pdfPagesToMarkdown([[line(wrap, 700), line('— AC 14, HP 20, Speed 40 ft. — that stays at your side until the spell ends or you dismiss it early.', 688)]]);
+    expect(prose).not.toContain('\n\n— AC');
+  });
+
   it('drops running headers and page numbers', () => {
     const pages = [1, 2, 3, 4].map((n) => [
       line("Player's Notes", 800, 8),

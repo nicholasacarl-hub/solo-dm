@@ -147,12 +147,15 @@ function joinLines(a: string, b: string): string {
  */
 const LINE_BULLET = String.raw`(?:[•◦▪‣·●○■□◆◇►▸▶∙⁃➢❖✓✔\uf0b7\uf0a7\uf0d8\uf076\uf0fc]\s*|(?:[-+–—]|o)\s+)`;
 /**
- * A line that starts a stat-block or spell label ("AC 17", "AC: 17", "• HP 150 (12d10 + 84)", "Speed 40 ft.",
- * "Casting Time: Action"), perhaps after a list's bullet.
+ * A line that starts a stat-block or spell label ("AC 17", "AC: 17", "HP 150 (12d10 + 84)", "Speed 40 ft.", "Casting
+ * Time: Action"); a stat line also after a list's bullet ("• AC 12").
  */
 const STAT_LABEL_START = new RegExp(
-  String.raw`^${LINE_BULLET}?(?:(?:AC|HP|CR|Speed|Armor Class|Hit Points|Challenge):?\s+\d|Initiative:?\s+[+\u2212-]?\d|(?:Casting Time|Range|Components|Duration|Prerequisites?)\s*:)`,
+  String.raw`^(?:${LINE_BULLET}?(?:(?:AC|HP|CR|Speed|Armor Class|Hit Points|Challenge):?\s+\d|Initiative:?\s+[+\u2212-]?\d)|(?:Casting Time|Range|Components|Duration|Prerequisites?)\s*:)`,
 );
+/** A dash or middle dot opening a line: a list's bullet after a sentence or a lead-in, else a spaced dash in prose ("…a guardian / — AC 14, HP 20 — that…"). */
+const DASH_START = /^[-+–—·]\s/;
+const statLineStarts = (text: string, paragraph: string) => STAT_LABEL_START.test(text) && (!DASH_START.test(text) || /[.:;!?)]$/.test(paragraph.trimEnd()));
 
 /** A spell card's labels alone on their line: one above its value, or a grid's row of them ("Casting Time", "RANGE", "CASTING TIME RANGE"). */
 const CARD_LABELS_ALONE = /^(?:Casting Time|Range(?:\/Area)?|Components|Duration)(?:\s+(?:Casting Time|Range(?:\/Area)?|Components|Duration))*$/i;
@@ -270,7 +273,7 @@ export function pdfPagesToMarkdown(pages: PdfTextRun[][]): string {
         gap < 0 ||
         lastBodyLength < shortLine ||
         afterCategory ||
-        STAT_LABEL_START.test(line.text) ||
+        statLineStarts(line.text, paragraph) ||
         cardLabelAlone(line.text) ||
         cardLabelAlone(paragraph);
       if (paragraphBreak) {

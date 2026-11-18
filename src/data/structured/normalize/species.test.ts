@@ -39,6 +39,10 @@ describe('normalizeSpecies', () => {
     expect(typeOf('You are an Aberration.')).toBe('Aberration');
     expect(typeOf('Fey.')).toBe('Fey');
     expect(typeOf('Humanoid')).toBe('Humanoid');
+    // Only a next sentence ends it.
+    expect(typeOf('Humanoid (mothfolk; see the Lineages table)')).toBe('Humanoid (Mothfolk; See the Lineages Table)');
+    expect(typeOf('Humanoid (e.g. a mothfolk)')).toBe('Humanoid (E.g. a Mothfolk)');
+    expect(typeOf('Undead; Humanoid')).toBe('Undead; Humanoid');
   });
 
   it('fills Humanoid when no creature type is printed, as an info', () => {
