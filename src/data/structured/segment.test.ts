@@ -216,6 +216,34 @@ describe('segment: structure rules', () => {
     expect((['class', 'subclass', 'feat'] as const).filter((k) => explainsParts(k, entries[0].text) || explainsParts(k, entries[1].text))).toEqual([]);
   });
 
+  it('finds a species whose Creature Type line reads as 2022 books print it, and never takes a real one for an explanation', () => {
+    const runIns = (pairs: [string, string][]) => pairs.map(([l, v]) => `**_${l}._** ${v}`).join('\n\n');
+    const thornfolk = entry(1, 'Thornfolk', runIns([['Creature Type', 'You are a Humanoid.'], ['Size', 'You are Medium.'], ['Speed', 'Your walking speed is 30 feet.'], ['Bramble Hide', 'You have thorns.']]), ['Peoples', 'Thornfolk']);
+    const fogwisp = entry(3, 'Fogwisp Traits', runIns([['Creature Type', 'You are a Fey.'], ['Size', 'You are Small.'], ['Speed', 'Your walking speed is 25 feet.'], ['Mist Step', 'You drift.']]), ['Peoples', 'Fogwisp', 'Fogwisp Traits']);
+    const entries = [thornfolk, entry(2, 'Fogwisp', 'Fogwisps drift over the marsh.', ['Peoples', 'Fogwisp']), fogwisp];
+    expect(segment(entries, CTX).candidates.map((c) => [c.kind, c.name])).toEqual([
+      ['species', 'Thornfolk'],
+      ['species', 'Fogwisp'],
+    ]);
+    // Real ones, which a re-check must keep: these, an older layout with a Creature Type line, a type named another
+    // way, a background with a Feature subsection, and one whose Skill Proficiencies line names its skills.
+    const reedling = runIns([['Ability Score Increase', 'Your Wisdom score increases by 2.'], ['Creature Type', 'You are a Humanoid.'], ['Size', 'Your size is Small.'], ['Speed', 'Your walking speed is 25 feet.'], ['Languages', 'You can speak, read, and write Common and Sylvan.']]);
+    const reworded = runIns([['Creature Type', 'Your creature type is Fey.'], ['Size', 'You are Small.'], ['Speed', 'Your walking speed is 25 feet.']]);
+    // An explanation may name a type after its line's first full stop ("Most peoples here are Humanoid").
+    const explained = runIns([['Creature Type', 'Every creature has a tag for its type. Most peoples here are Humanoid.'], ['Size', 'Says how big.'], ['Speed', 'Says how fast.']]);
+    expect(explainsParts('species', explained)).toBe(true);
+    const olderGeneric = reedling.replace('You are a Humanoid.', 'See your lineage.');
+    for (const text of [thornfolk.text, fogwisp.text, reedling, reworded, olderGeneric]) expect(explainsParts('species', text), text).toBe(false);
+    const lampwarden = ['**Ability Scores:** Increase one score by 2 and a different one by 1.', '**Skill Proficiencies:** Insight and Perception', '**Tool Proficiency:** Tinker’s Tools', '**Equipment:** A lantern and 10 GP'].join('\n\n');
+    expect(explainsParts('background', lampwarden)).toBe(false);
+    expect(explainsParts('background', lampwarden.replace('Insight and Perception', 'Two you pick').replace('Increase one score', 'Increase your Strength'))).toBe(false);
+    // Lines that name no ability or skill: its Feature subsection keeps it a background (the older layout); without one,
+    // nothing tells it from an explanation.
+    const generic = lampwarden.replace('Insight and Perception', 'Two you pick');
+    expect(explainsParts('background', generic, ['Feature: Road Warden'])).toBe(false);
+    expect(explainsParts('background', generic)).toBe(true);
+  });
+
   it('takes the flattened feature siblings of an older-format subclass along', () => {
     const entries = [
       entry(1, 'Druid Circles', 'Circles.', ['Druid Circles']),

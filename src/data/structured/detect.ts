@@ -452,7 +452,8 @@ const settleable = (r: StructuredRecord, reading?: ReadonlySet<string>) =>
 function explainedMisreading(r: StructuredRecord, entriesById: ReadonlyMap<string, CompendiumEntry>): boolean {
   const entry = r.marked ? undefined : entriesById.get(r.entryIds[0]);
   if (!entry) return false;
-  if (r.span === 'section') return explainsParts(r.kind, entry.text);
+  // A section's subsections are its other entries.
+  if (r.span === 'section') return explainsParts(r.kind, entry.text, r.entryIds.slice(1).map((id) => entriesById.get(id)?.name ?? ''));
   return r.span === 'entry' && GUESSED_ENTITY_KINDS.includes(r.kind) && misreadBefore(r.kind, entry.name, entry.text, headingAncestors(entry.path, entry.name));
 }
 

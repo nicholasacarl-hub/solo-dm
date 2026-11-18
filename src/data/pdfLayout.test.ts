@@ -326,6 +326,14 @@ describe('pdfPagesToMarkdown', () => {
     expect(paragraphs).toContain('Large Monstrosity, Unaligned, often met near the old lamps');
   });
 
+  it('starts a new line at a stat line after a list bullet, or with a colon after its label, even after a long line', () => {
+    const lead = 'When the spirit appears, it takes the statistics the spell gives it in the short list that follows:';
+    const stats = ['• AC 12 + the spell’s level', '\uf0b7 HP 20 + 5 for each spell level above 3', '– Speed 30 ft., Fly 30 ft.', 'AC: 15', 'o Hit Points: 40', '\uf0a7 Speed: 25 ft.', '➢ CR 1'];
+    const page = [line(lead, 700), ...stats.flatMap((stat, i) => [line(stat, 688 - i * 24), line(lead, 676 - i * 24)])];
+    const paragraphs = pdfPagesToMarkdown([page]).split('\n\n');
+    for (const stat of stats) expect(paragraphs.some((p) => p.startsWith(stat)), stat).toBe(true);
+  });
+
   it('drops running headers and page numbers', () => {
     const pages = [1, 2, 3, 4].map((n) => [
       line("Player's Notes", 800, 8),

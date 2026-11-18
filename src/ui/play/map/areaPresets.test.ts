@@ -4,7 +4,7 @@ import { sampleCharacter } from '@/test/fixtures';
 import type { Character, CompendiumEntry } from '@/types';
 import { customPreset, presetFromEntry, rangeFeet, spellPresets } from './areaPresets';
 
-/** SRD 5.2.1 spell entries as the compendium stores them (text abridged to the lines that matter). */
+/** SRD 5.2.1 spell entries as the compendium stores them (text abridged to the lines that matter; Lightning Bolt's area aside). */
 function spell(id: string, name: string, range: string, text: string, area?: { shape: string; size: number }): CompendiumEntry {
   return {
     id,
@@ -31,7 +31,8 @@ const FIREBALL = spell(
   'Each creature in a 20-foot-radius Sphere centered on that point makes a Dexterity saving throw.',
   { shape: 'sphere', size: 20 },
 );
-// The stored area is the Line's width (5): the text is the source of truth (srd-rules §6.5).
+// A stored area that disagrees with the text (an older compendium kept the Line's width, 5, as its size): the text is
+// the source of truth (srd-rules §6.5).
 const LIGHTNING_BOLT = spell(
   'srd:spell:lightning-bolt',
   'Lightning Bolt',

@@ -362,7 +362,8 @@ per kind. What the offline reader can't read waits as *Not read yet* (the player
 subclass with a Spellcasting feature of its own (a Fighter's or Rogue's spellcasting subclass) reads as a third
 caster with the ability its text names; when it names none, the ability waits for Claude. A species printed under
 "<Species> Traits" takes the species' name, and a 2024 background's Ability Scores line must name abilities (a
-species' Creature Type line, a type), so a chapter's explanation of a background's or species' parts isn't one.
+species' Creature Type line, a type: "Humanoid", or "You are a Humanoid." as 2022 books print it), so a chapter's
+explanation of a background's or species' parts isn't one.
 With the player's consent — the model (the Settings model and the cheaper ones, each with a price range
 and minutes), the kinds, and a spending limit — the runner sends one entry per request: streamed,
 structured-output JSON, adaptive thinking at effort `low`, one cached system block per kind, a warm-up
@@ -449,7 +450,9 @@ table's two rows into one header, whichever comes first ("Spell Slots per Spell 
 Beyond prints it, that group row over "Level | Proficiency Bonus | … | 1 | 2 …"). A class's spell list printed as a
 table per spell level gives the spells in its tables, not the tables' captions. A spell's save, attack, damage and area
 come from its own text, not from a creature's stat block printed inside it (a summoning spell's spirit or steed, found
-by its AC, HP and Speed lines in whatever layout the source prints them), both offline and in what Claude is asked for. Paragraphs keep their bold and italics, a
+by its AC, HP and Speed lines: as labels, colon labels or a list, after the bullets a word processor or a PDF's text
+layer prints, on lines a text layer wrapped or joined; the PDF reader starts a line at each stat line, bulleted or
+not), both offline and in what Claude is asked for. Paragraphs keep their bold and italics, a
 line break starts a line (a stat block's lines stay apart), list items come as lists (Word's list paragraphs too),
 tables as pipe tables with their caption above and merged cells keeping the cells after them in their columns (a
 table that only lays out a page or boxes a sidebar reads as its cells' blocks), and a description list's term and
@@ -613,7 +616,9 @@ its entries again after one.
 **Re-check.** When the offline rules change, `PARSER_VERSION` rises and the book page offers *Re-check for free*, which
 looks through the book again (`detectStructure`). It settles only the misreadings the version change
 explains (an entry an earlier version took for a spell, monster, magic item or feat that today's rules
-read as something else, and a chapter's explanation of a background's or species' parts taken for one),
+read as something else, and a chapter's explanation of a background's or species' parts taken for one: a
+section the earlier rules took for one and today's don't, whose Ability Scores and Skill Proficiencies lines
+name no ability or skill, or whose Creature Type line names no creature type, before their first full stop),
 judged by the entry's text, not by the version a record carries: removed when
 nobody worked on them, kept with a note once when someone accepted, edited, re-read with Claude or has a
 newer reading waiting, and accepted ones go back to review. A record that already has that note is the

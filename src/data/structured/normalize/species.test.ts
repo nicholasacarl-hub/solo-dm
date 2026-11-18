@@ -32,6 +32,15 @@ describe('normalizeSpecies', () => {
     });
   }
 
+  it('reads the type from a Creature Type line printed as 2022 books print it ("You are a Humanoid.")', () => {
+    const wire = SCRIPTED_WIRE.Mothkin.wire as Wire<'species'>;
+    const typeOf = (creatureTypeText: string) => (normalizeSpecies({ ...wire, creatureTypeText }, context('Mothkin')).data as { creatureType: string }).creatureType;
+    expect(typeOf('You are a Humanoid. You are also considered a mothfolk for any prerequisite.')).toBe('Humanoid');
+    expect(typeOf('You are an Aberration.')).toBe('Aberration');
+    expect(typeOf('Fey.')).toBe('Fey');
+    expect(typeOf('Humanoid')).toBe('Humanoid');
+  });
+
   it('fills Humanoid when no creature type is printed, as an info', () => {
     const out = normalizeSpecies(SCRIPTED_WIRE.Bramblefolk.wire as Wire<'species'>, context('Bramblefolk'));
     expect(out.warnings).toEqual([{ code: 'default-used', severity: 'info', field: 'creatureType', message: 'No creature type is printed: the app used Humanoid.' }]);

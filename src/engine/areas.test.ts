@@ -543,7 +543,7 @@ describe('parseAreaText (srd-rules §6.5)', () => {
   it('A11: the SRD texts of Fireball, Burning Hands, Lightning Bolt, Moonbeam, Spirit Guardians, Thunderwave and Entangle', () => {
     expect(parseAreaText(text('srd:spell:fireball'))).toEqual({ shape: 'sphere', sizeFt: 20 });
     expect(parseAreaText(text('srd:spell:burning-hands'))).toEqual({ shape: 'cone', sizeFt: 15 });
-    // Not the stored data.area (its size is the Line's width).
+    // The Line's length and width, from the text.
     expect(parseAreaText(text('srd:spell:lightning-bolt'))).toEqual({ shape: 'line', sizeFt: 100, widthFt: 5 });
     expect(parseAreaText(text('srd:spell:moonbeam'))).toEqual({ shape: 'cylinder', sizeFt: 5, heightFt: 40 });
     expect(parseAreaText(text('srd:spell:spirit-guardians'))).toEqual({ shape: 'emanation', sizeFt: 15 });

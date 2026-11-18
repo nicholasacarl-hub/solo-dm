@@ -71,7 +71,8 @@ function limits(data: SpeciesData): RecordWarning[] {
 export function normalizeSpecies(wire: Wire<'species'>, ctx: NormalizeContext): Normalized<'species'> {
   const base = beginOption('species', wire, ctx, FIELDS);
   const w = base.warnings;
-  const creatureType = titleCase(wire.creatureTypeText.replace(/[.;]\s*$/, '')) || 'Humanoid';
+  // "Humanoid" (2024), "You are a Humanoid. You are also considered an elf…" (2022): the type.
+  const creatureType = titleCase(wire.creatureTypeText.replace(/^\s*You are (?:an? )?/i, '').split(/[.;](?:\s|$)/)[0].trim()) || 'Humanoid';
   if (!wire.creatureTypeText.trim()) w.push(defaultUsed('creatureType', 'No creature type is printed: the app used Humanoid.'));
   const sizes = sizesIn(wire.sizeText);
   if (!sizes.length) w.push(missing('sizes', 'Its size', 'block'));

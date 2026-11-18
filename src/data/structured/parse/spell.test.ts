@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { chunkDocument } from '@/data/chunk';
+import { pdfPagesToMarkdown, type PdfTextRun } from '@/data/pdfLayout';
 import { SCRIPTED_WIRE, gloamwoodEntries } from '@/test/structuredFixtures';
 import type { CompendiumEntry } from '@/types';
 import { normalize } from '../normalize';
@@ -74,6 +76,10 @@ describe('parseSpell', () => {
     ['round bullets', '● AC 12 + the spell’s level\n● HP 20 + 5 for each spell level above 3\n● Speed 30 ft.'],
     ['a word processor’s Symbol bullets', ' AC 12 + the spell’s level\n HP 20 + 5 for each spell level above 3\n Speed 30 ft.'],
     ['dashes, triangles and open circles', '– AC 12 + the spell’s level\n▸HP 20 + 5 for each spell level above 3 ○Speed 30 ft.'],
+    ['a word processor’s second-level bullets', 'o AC 12 + the spell’s level\no HP 20 + 5 for each spell level above 3\no Speed 30 ft.'],
+    ['a word processor’s third-level bullets', '\uf0a7 AC 12 + the spell’s level\n\uf0a7 HP 20 + 5 for each spell level above 3\n\uf0a7 Speed 30 ft.'],
+    ['em dashes', '— AC 12 + the spell’s level\n— HP 20 + 5 for each spell level above 3\n— Speed 30 ft.'],
+    ['bullets with no space after them', '▪AC 12 + the spell’s level\n▪HP 20 + 5 for each spell level above 3\n▪Speed 30 ft.'],
     ['an Initiative line between', '- **AC** 12 + the spell’s level\n- **Initiative** +2 (12)\n- **HP** 20 + 5 for each spell level above 3\n- **Speed** 30 ft.'],
     ['one joined line', 'AC 12 + the spell’s level HP 20 + 5 for each spell level above 3 Speed 30 ft.'],
     ['a wrapped line', 'AC 12 + the\nspell’s level\nHP 20 + 5 for each spell level above 3\nSpeed 30 ft.'],
@@ -83,6 +89,28 @@ describe('parseSpell', () => {
   ])('finds the stat block laid out with %s', (_layout, block) => {
     const text = stats('_Level 3 Conjuration (Wizard)_', ['You call forth a lantern spirit.', '### Lantern Spirit', 'Small Fey, Neutral', block, 'Actions', FLARE]);
     expect(parseText(text, 'Lantern Call').wire).toMatchObject({ saveAbility: 'none', attack: 'none', damageText: '', areaText: '' });
+  });
+
+  it('finds a stat block bulleted in a PDF after a long line leading into it, through the PDF reader', () => {
+    const run = (str: string, y: number, fontSize = 10): PdfTextRun => ({ str, x: 50, y, width: str.length * fontSize * 0.5, fontSize, hasEOL: true });
+    const body = [
+      'Level 3 Conjuration (Wizard)',
+      'Casting Time: Action',
+      'Range: 60 feet',
+      'Components: V, S',
+      'Duration: Concentration, up to 1 hour',
+      'You call forth a lantern spirit in an unoccupied space that you can see within range of the spell you cast.',
+      'When the spirit appears, roll for its mood; it then uses the statistics given in the short list below:',
+      '\uf0b7 AC 12 + the spell’s level',
+      '\uf0b7 HP 20 + 5 for each spell level above 3',
+      '\uf0b7 Speed 30 ft., Fly 30 ft.',
+      'Actions',
+      'Flare. Dexterity Saving Throw: DC equals your spell save DC, each creature in a 15-foot Cone. Failure: 2d6 Fire damage.',
+    ];
+    const page = [run('Lantern Call', 760, 16), ...body.map((text, i) => run(text, 736 - i * 12))];
+    const entries = chunkDocument(pdfPagesToMarkdown([page]), { sourceId: 't', sourceName: 'T' });
+    const candidate = segment(entries, CTX).candidates.find((c) => c.name === 'Lantern Call') as Candidate & { kind: 'spell' };
+    expect(parseSpell(candidate).wire).toMatchObject({ saveAbility: 'none', attack: 'none', damageText: '', areaText: '' });
   });
 
   it('cuts the text where the stat block starts, at its AC line', () => {

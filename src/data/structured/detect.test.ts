@@ -11,7 +11,7 @@ import { resetDatabase } from '@/storage/testData';
 import { EXPECTED_DATA, GLOAMWOOD_CANDIDATES, GLOAMWOOD_SOURCE_ID, extractionJob, gloamwoodEntries, gloamwoodEntryId, gloamwoodSource } from '@/test/structuredFixtures';
 import { PARSER_VERSION, SRD_SOURCE_ID, type CompendiumEntry, type LibrarySource, type StructuredRecord } from '@/types';
 import { createRulesIndex } from '../search';
-import { applyReading, detectStructure, doubted, doubtMessage, mergeReadings, readingJobIds, readOffline, rereadOffline, settleUnmatched, structureEntryAs, type Reading } from './detect';
+import { applyReading, detectStructure, doubted, doubtMessage, mergeReadings, readingHashOf, readingJobIds, readOffline, rereadOffline, settleUnmatched, structureEntryAs, type Reading } from './detect';
 import { noticeIndex } from './notices';
 import { correctStaleKinds } from './staleKinds';
 import { candidateFor, candidateKey, segment } from './segment';
@@ -636,6 +636,37 @@ describe('after the offline reader improved again (version 4)', () => {
     expect(after.find((r) => r.name === 'Parts of a Background')!.warnings).toContainEqual(expect.objectContaining({ code: 'not-this-kind', message: doubtMessage('background') }));
   });
 
+  it("keeps the species version 3 found that print 'You are a Humanoid.', and reads their type; Re-read on this device reads one today's reader finds", async () => {
+    const PEOPLES = 'peoples';
+    const runIns = (pairs: [string, string][]) => pairs.map(([l, v]) => `**_${l}._** ${v}`).join('\n\n');
+    const at = (n: number, name: string, text: string): CompendiumEntry => ({ id: `lib:${PEOPLES}:${n}`, sourceId: PEOPLES, sourceName: 'Marsh Peoples', kind: 'rule', name, text, path: ['Marsh Peoples', name] });
+    const entries = [
+      at(1, 'Thornfolk', runIns([['Creature Type', 'You are a Humanoid.'], ['Size', 'You are Medium.'], ['Speed', 'Your walking speed is 30 feet.'], ['Bramble Hide', 'You have thorns.']])),
+      at(2, 'Reedling', runIns([['Ability Score Increase', 'Your Wisdom score increases by 2.'], ['Creature Type', 'You are a Humanoid.'], ['Size', 'Your size is Small.'], ['Speed', 'Your walking speed is 25 feet.'], ['Reed Step', 'You hide in reeds.'], ['Languages', 'You can speak, read, and write Common and Sylvan.']])),
+    ];
+    await saveLibrarySource({ id: PEOPLES, title: 'Marsh Peoples', kind: 'import', format: 'markdown', enabled: true, entryCount: 2, createdAt: 1, updatedAt: 1 }, entries);
+    const entriesById = new Map(entries.map((x) => [x.id, x]));
+    const old = entries.map((x) => candidateFor({ kind: 'species', name: x.name, span: 'section', entryIds: [x.id], candidateKey: candidateKey('species', x.name, x.id) }, entriesById)!);
+    const ctx = { sourceId: PEOPLES, entriesById, spellLists: [], notices: null };
+    const v3 = mergeReadings(PEOPLES, [], old.flatMap((c) => readOffline(c, ctx)), { explicit: false, now: 1 }).writes.map((r) => {
+      // As version 3 read the line.
+      const data = { ...(r.data as object), creatureType: 'You Are a Humanoid' } as StructuredRecord['data'];
+      return { ...r, parserVersion: 3, status: 'accepted' as const, data, readingHash: readingHashOf(data) };
+    });
+    await putRecords(v3);
+    const summary = await detectStructure(PEOPLES);
+    expect(summary).toMatchObject({ removedNames: [], doubted: [] });
+    const after = await listRecords(PEOPLES);
+    expect(after.map((r) => [r.name, r.status, r.parserVersion, r.warnings.some((w) => w.code === 'not-this-kind')])).toEqual([
+      ['Thornfolk', 'accepted', PARSER_VERSION, false],
+      ['Reedling', 'accepted', PARSER_VERSION, false],
+    ]);
+    // The type as today's reader reads it waits as a newer reading.
+    expect(after.map((r) => (r.proposal?.data as { creatureType?: string } | undefined)?.creatureType)).toEqual(['Humanoid', 'Humanoid']);
+    expect(await rereadOffline(after.map((r) => r.id))).toMatchObject({ doubted: 0, accepted: [] });
+    expect((await listRecords(PEOPLES)).every((r) => r.status === 'accepted' && !r.warnings.some((w) => w.code === 'not-this-kind'))).toBe(true);
+  });
+
   it('renames a species nobody reviewed after its people, in the same record', async () => {
     const v3 = await readByVersion3([]);
     const summary = await detectStructure(ORIG);
@@ -656,7 +687,10 @@ describe('settleUnmatched (pure)', () => {
     id: 'lib:hold:3', sourceId: 'hold', sourceName: 'Holdings', kind: 'rule', name: 'Parts of a Species', path: ['Holdings', 'Parts of a Species'],
     text: '**Creature Type.** What the line names.\n\n**Size.** What the line gives.\n\n**Speed.** What the line gives.',
   } as CompendiumEntry;
-  const entriesById = new Map([room, feat, parts].map((e) => [e.id, e]));
+  const lines = ['**Ability Scores:** Increase one score by 2 and a different one by 1.', '**Skill Proficiencies:** Two you pick', '**Tool Proficiency:** Tinker’s Tools', '**Equipment:** A lantern'];
+  const warden = { id: 'lib:hold:4', sourceId: 'hold', sourceName: 'Holdings', kind: 'rule', name: 'Lampwarden', text: lines.join('\n\n'), path: ['Holdings', 'Lampwarden'] } as CompendiumEntry;
+  const feature = { id: 'lib:hold:5', sourceId: 'hold', sourceName: 'Holdings', kind: 'rule', name: 'Feature: Road Warden', text: 'You know the roads.', path: ['Holdings', 'Lampwarden', 'Feature: Road Warden'] } as CompendiumEntry;
+  const entriesById = new Map([room, feat, parts, warden, feature].map((e) => [e.id, e]));
   const note = { code: 'not-this-kind', severity: 'warn', message: 'An earlier version…', field: 'kind' } as const;
   const base = (id: string, patch: Partial<StructuredRecord> = {}): StructuredRecord => ({
     id, publicId: room.id, sourceId: 'hold', kind: 'feat', name: id, schemaVersion: 1, entryIds: [room.id], span: 'entry', candidateKey: id,
@@ -688,13 +722,15 @@ describe('settleUnmatched (pure)', () => {
       // An explanation of a species' parts an earlier reader took for one.
       base('parts', { kind: 'species', span: 'section', entryIds: [parts.id] }),
       base('a-species', { kind: 'species', span: 'section' }),
+      // A background whose lines name nothing, kept one by its Feature subsection.
+      base('a-background-with-a-feature', { kind: 'background', span: 'section', entryIds: [warden.id, feature.id] }),
     ];
     const settled = settleUnmatched(records, entriesById, 5);
     expect([...settled.remove]).toEqual(['unreviewed', 'current', 'parts']);
     expect(settled.doubted.map((r) => r.id)).toEqual(['accepted', 'edited', 'proposal', 'read-by-claude']);
     expect(settled.doubted[0]).toMatchObject({ status: 'accepted', confidence: 'medium', parserVersion: PARSER_VERSION, updatedAt: 5 });
     expect([...settled.noted]).toEqual(['noted-earlier', 'noted-earlier-pending']);
-    expect(settled.reread.map((r) => r.id)).toEqual(['marked', 'a-background', 'a-real-feat', 'a-species']);
+    expect(settled.reread.map((r) => r.id)).toEqual(['marked', 'a-background', 'a-real-feat', 'a-species', 'a-background-with-a-feature']);
   });
 
   it('takes a noted record out of a queue wherever the note comes from', () => {

@@ -140,9 +140,19 @@ function joinLines(a: string, b: string): string {
   return `${a} ${b}`;
 }
 
-/** A line that starts a stat-block or spell label ("AC 17", "HP 150 (12d10 + 84)", "Speed 40 ft.", "Casting Time: Action"). */
-const STAT_LABEL_START =
-  /^(?:(?:AC|HP|CR)\s+\d|Speed\s+\d|Initiative\s+[+\u2212-]?\d|(?:Armor Class|Hit Points|Challenge)\s+\d|(?:Casting Time|Range|Components|Duration|Prerequisites?)\s*:)/;
+/**
+ * A list's bullet before a line, as a PDF's text layer keeps it: round and square bullets, arrows and ticks, a word
+ * processor's Symbol and Wingdings bullets and its second-level "o", or a dash. The stat-block matcher
+ * (structured/parse/spell.ts BULLETS) takes the same ones.
+ */
+const LINE_BULLET = String.raw`(?:[•◦▪‣·●○■□◆◇►▸▶∙⁃➢❖✓✔\uf0b7\uf0a7\uf0d8\uf076\uf0fc]\s*|(?:[-+–—]|o)\s+)`;
+/**
+ * A line that starts a stat-block or spell label ("AC 17", "AC: 17", "• HP 150 (12d10 + 84)", "Speed 40 ft.",
+ * "Casting Time: Action"), perhaps after a list's bullet.
+ */
+const STAT_LABEL_START = new RegExp(
+  String.raw`^${LINE_BULLET}?(?:(?:AC|HP|CR|Speed|Armor Class|Hit Points|Challenge):?\s+\d|Initiative:?\s+[+\u2212-]?\d|(?:Casting Time|Range|Components|Duration|Prerequisites?)\s*:)`,
+);
 
 /** A spell card's labels alone on their line: one above its value, or a grid's row of them ("Casting Time", "RANGE", "CASTING TIME RANGE"). */
 const CARD_LABELS_ALONE = /^(?:Casting Time|Range(?:\/Area)?|Components|Duration)(?:\s+(?:Casting Time|Range(?:\/Area)?|Components|Duration))*$/i;

@@ -55,10 +55,13 @@ const DAMAGE_EXCERPT = /\d+d\d+(?:\s*[+−-]\s*\d+)?\s+\w+\s+damage|\b\w+\s+dama
 
 /** A stat value after its label: "**AC** 14", "**AC:** 14", "Armor Class: 14", "**Armor Class** :: 14", "AC\u00a014". */
 const STAT_VALUE = String.raw`\b[*_: \t\u00a0]*\d`;
-/** The bullets a list puts before a line, as the PDF reader keeps them (a word processor's Symbol bullet among them). */
-const BULLETS = '•◦▪‣·●○■□◆◇►▸▶\uf0b7';
+/**
+ * The bullets a list puts before a line, as a PDF's text layer keeps them (the PDF reader's LINE_BULLET: a word
+ * processor's Symbol and Wingdings bullets among them; its second-level "o" and a dash take a space after them).
+ */
+const BULLETS = '•◦▪‣·●○■□◆◇►▸▶∙⁃➢❖✓✔\uf0b7\uf0a7\uf0d8\uf076\uf0fc';
 /** An AC label opening a line, as Markdown, a callout, a PDF text layer or a web page prints it ("- **AC** 14", "> **Armor Class** 14", "● AC 14"). */
-const AC_LINE = new RegExp(String.raw`^[ \t\u00a0>]*(?:[${BULLETS}][ \t\u00a0]*|[-*+–—][ \t\u00a0]+)?[*_]*(?:Armor Class|AC)${STAT_VALUE}`);
+const AC_LINE = new RegExp(String.raw`^[ \t\u00a0>]*(?:[${BULLETS}][ \t\u00a0]*|(?:[-*+–—]|o)[ \t\u00a0]+)?[*_]*(?:Armor Class|AC)${STAT_VALUE}`);
 /** HP and Speed labels, also where a text layer joined them to the line before ("AC 14 HP 50", "HP 50 Speed 30 ft."). */
 const HP_LABEL = new RegExp(String.raw`(?:^|[\s>*_${BULLETS}–—-])(?:Hit Points|HP)${STAT_VALUE}`);
 const SPEED_LABEL = new RegExp(String.raw`(?:^|[\s>*_${BULLETS}–—-])Speed${STAT_VALUE}`);

@@ -1,10 +1,10 @@
 /**
  * Area-template presets (D64): the hero's prepared spells whose compendium text names an area — parsed with
- * parseAreaText (the text is the source of truth: only a few SRD spells carry `data.area`, and Lightning Bolt's
- * stored size is its width), `data.area` only as a fallback — plus the Custom sizes. Only the spell's own text
- * counts, not a creature's stat block printed inside it (Summon Dragon's spirit breathes a cone; the spell has
- * none). A spell the player reviewed from their own book (structured imports, spec §6.4) is the exception: its
- * `data.area` is the player's checked reading, so it comes first. Pure.
+ * parseAreaText (the text is the source of truth: only some SRD spells carry `data.area`), `data.area` only as a
+ * fallback — plus the Custom sizes. Only the spell's own text counts, not a creature's stat block printed inside it
+ * (Summon Dragon's spirit breathes a cone; the spell has none). A spell the player reviewed from their own book
+ * (structured imports, spec §6.4) is the exception: its `data.area` is the player's checked reading, so it comes
+ * first. Pure.
  */
 import { parseAreaText } from '@/engine';
 import type { RulesIndex } from '@/data';

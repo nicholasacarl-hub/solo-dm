@@ -20,6 +20,7 @@ export const STRUCTURED_SCHEMA_VERSION = 1;
  * bonus that applies only in some situations isn't applied; 4 = a creature's ability scores split over two
  * tables, a class table with its group row first (as D&D Beyond prints it), a class's spell list printed as
  * tables, a subclass's own Spellcasting (a third caster), a species named by its "<Species> Traits" heading,
+ * a species whose Creature Type line reads "You are a Humanoid." (2022) found, with its type read from that line,
  * a chapter's explanation of a background's or species' parts read as rules, a feat's "Choose one… Increase
  * the chosen ability score", and a summoning spell's save, attack, damage and area read from its own text,
  * not from its creature's stat block.
