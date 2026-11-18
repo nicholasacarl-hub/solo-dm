@@ -8,6 +8,7 @@ import {
   applyTextFixes,
   buildSrd,
   compactTables,
+  groundedOpen5e,
   naturalName,
   parseArmorTraining,
   parseCostGp,
@@ -147,6 +148,63 @@ describe('parsers', () => {
 
   it('derives the proficiency bonus from CR', () => {
     expect([0, 0.25, 4, 5, 8, 9, 17, 21, 30].map(proficiencyBonusForCr)).toEqual([2, 2, 2, 3, 3, 4, 6, 7, 9]);
+  });
+});
+
+describe("Open5e's spell fields", () => {
+  const rec = {
+    saving_throw_ability: 'constitution',
+    attack_roll: true,
+    damage_roll: '10d6',
+    damage_types: ['cold'],
+    shape_type: 'sphere',
+    shape_size: 60,
+    material_cost: '1500',
+    material_consumed: true,
+  };
+  const scaling = [{ fields: { type: 'slot_level_7', damage_roll: '11d6' } }];
+
+  it("keeps each field the spell's own text bears out", () => {
+    const text =
+      '- **Components:** V, S, M (a crystal worth 1,500+ GP, which the spell consumes)\n\nMake a ranged spell attack. Frost fills a ' +
+      '60-foot-radius Sphere: each creature there makes a _Constitution saving throw_, taking 10d6 Cold damage on a failed save.';
+    expect(groundedOpen5e('Rime Orb', text, rec, scaling, quietReport)).toEqual({
+      saveAbility: 'con',
+      attackRoll: true,
+      damage: '10d6',
+      damageTypes: ['cold'],
+      area: { shape: 'sphere', size: 60 },
+      materialCostGp: 1500,
+      materialConsumed: true,
+      damageBySlotLevel: { 7: '11d6' },
+    });
+  });
+
+  it("leaves out, and reports, another spell's numbers (Freedom of Movement carried Freezing Sphere's)", () => {
+    const warnings = [];
+    const text = '- **Components:** V, S, M (a leather strap)\n\nYou touch a willing creature. Difficult Terrain no longer slows it.';
+    const out = groundedOpen5e('Lantern Stride', text, rec, scaling, { warn: (scope, message) => warnings.push(`${scope}: ${message}`) });
+    expect(out).toEqual({});
+    expect(warnings).toEqual([
+      'spells: Lantern Stride: Open5e damage "10d6" isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e damage type "cold" isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e save "con" isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e attack roll true isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e area {"shape":"sphere","size":60} isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e material cost 1500 isn\'t in the spell\'s text; left out',
+      'spells: Lantern Stride: Open5e material consumed true isn\'t in the spell\'s text; left out',
+    ]);
+  });
+
+  it('reads "a d8" as 1d8, and neither "attack rolls against you" nor an ability\'s modifier as an attack roll or a save', () => {
+    const text =
+      "The weapon's damage die becomes a d8, and it deals Force damage. It uses your Constitution modifier. Other creatures have " +
+      'Disadvantage on attack rolls against you.';
+    const fields = { damage_roll: '1d8', damage_types: ['force'], attack_roll: true, saving_throw_ability: 'constitution' };
+    expect(groundedOpen5e('Oak Cudgel', text, fields, [], quietReport)).toEqual({
+      damage: '1d8',
+      damageTypes: ['force'],
+    });
   });
 });
 

@@ -85,6 +85,18 @@ describe('area presets from spell text (D64)', () => {
     expect(presetFromEntry(MAGIC_MISSILE)).toBeNull();
   });
 
+  // SRD 5.2.1 Summon Dragon prints its spirit's stat block, whose Breath Weapon fills a cone: the spell itself has no area.
+  it("offers nothing from a summoned creature's stat block printed inside the spell", () => {
+    const call = spell(
+      'srd:spell:lantern-call',
+      'Lantern Call',
+      '60 feet',
+      'You call forth a lantern spirit.\n\n### Lantern Spirit\n\n**AC** 12 + the spell’s level\n\n**HP** 20 + 5 for each spell level above 3\n\n' +
+        '**_Flare._** _Dexterity Saving Throw:_ DC equals your spell save DC, each creature in a 15-foot Cone.',
+    );
+    expect(presetFromEntry(call)).toBeNull();
+  });
+
   it('lists the hero’s prepared spells (and cantrips) with an area, in sheet order; nothing until the index loads', () => {
     const hero = caster([
       { id: 'srd:spell:fireball', name: 'Fireball', level: 3, prepared: true },

@@ -9,6 +9,8 @@ This work includes material from the System Reference Document 5.2.1 ("SRD 5.2.1
 - [your5e/5e-srd-markdown](https://github.com/your5e/5e-srd-markdown) — SRD 5.2.1 converted to Markdown (CC-BY-4.0).
 - [open5e/open5e-api](https://github.com/open5e/open5e-api) — the `srd-2024` dataset (SRD content, CC-BY-4.0). Open5e artwork is not used.
 
+A spell's fields from Open5e (its saving throw, attack roll, damage and damage types, area, and its material's cost and whether the spell consumes it) are kept only where that spell's SRD 5.2.1 text bears them out, so a field another spell's numbers filled is left out.
+
 `scripts/fetch-srd-sources.sh` and `scripts/build-srd.mjs` reproduce the conversion.
 
 Solo DM is an unofficial fan project, **compatible with fifth edition**. It is not affiliated with, endorsed, sponsored, or approved by Wizards of the Coast.

@@ -637,14 +637,7 @@ function buildSpells(ctx) {
       range: stats.get('Range'),
       components: stats.get('Components'),
       duration,
-      saveAbility: rec?.saving_throw_ability ? ABILITY_BY_NAME[rec.saving_throw_ability] : undefined,
-      attackRoll: rec?.attack_roll || undefined,
-      damage: rec?.damage_roll || undefined,
-      damageTypes: rec?.damage_types?.length ? rec.damage_types : undefined,
-      area: rec?.shape_type ? compactObject({ shape: rec.shape_type, size: rec.shape_size ?? undefined }) : undefined,
-      materialCostGp: rec?.material_cost ? Number(rec.material_cost) : undefined,
-      materialConsumed: rec?.material_consumed || undefined,
-      ...spellScaling(recRow ? scaling.get(recRow.pk) : undefined),
+      ...(rec ? groundedOpen5e(title, text, rec, scaling.get(recRow.pk), report) : {}),
     };
     const summary =
       level === 0 ? `${school} cantrip · ${classes.join(', ')}` : `Level ${level} ${school} · ${classes.join(', ')}`;
@@ -666,6 +659,44 @@ function crossCheckSpell(report, title, parsed, rec, classNames) {
   if (Boolean(rec.concentration) !== parsed.concentration) {
     report.warn('spells', `${title}: concentration ${parsed.concentration} (Open5e ${rec.concentration})`);
   }
+}
+
+/**
+ * Open5e's fields for a spell, each kept only where the spell's own SRD text bears it out: a fixture can carry another
+ * spell's numbers (at the pinned commit, Freedom of Movement has Freezing Sphere's save, damage and area) or mark a
+ * priced component consumed when the text doesn't consume it. What the text doesn't support is left out and reported.
+ */
+export function groundedOpen5e(title, text, rec, scalingRows, report) {
+  const t = text.replace(/[*_]/g, '').replace(/(\d),(\d{3})\b/g, '$1$2');
+  const keep = (field, value, supported) => {
+    if (value === undefined || supported) return value;
+    report.warn('spells', `${title}: Open5e ${field} ${JSON.stringify(value)} isn't in the spell's text; left out`);
+    return undefined;
+  };
+  // "1d8" is also printed as "a d8".
+  const diceIn = (roll) =>
+    (roll.match(/\d*d\d+/g) ?? []).every((d) => {
+      const [n, m] = d.split('d');
+      return new RegExp(`(?:^|\\D)${n === '1' || n === '' ? '1?' : n}d${m}\\b`).test(t);
+    });
+  const ability = rec.saving_throw_ability;
+  const damage = keep('damage', rec.damage_roll || undefined, Boolean(rec.damage_roll) && diceIn(rec.damage_roll));
+  const types = (rec.damage_types ?? []).filter((type) => keep('damage type', type, new RegExp(`\\b${type}\\b`, 'i').test(t)) !== undefined);
+  const size = rec.shape_size ?? undefined;
+  const cost = rec.material_cost ? Number(rec.material_cost) : undefined;
+  return {
+    saveAbility: ability ? keep('save', ABILITY_BY_NAME[ability], new RegExp(`\\b${ability} saving throw`, 'i').test(t)) : undefined,
+    attackRoll: keep('attack roll', rec.attack_roll || undefined, /\bspell attack\b|\battack roll\b/i.test(t)),
+    damage,
+    damageTypes: types.length ? types : undefined,
+    area: rec.shape_type
+      ? keep('area', compactObject({ shape: rec.shape_type, size }), size === undefined || new RegExp(`\\b${size}[- ](?:foot|feet)\\b`, 'i').test(t))
+      : undefined,
+    materialCostGp: keep('material cost', cost, new RegExp(`\\b${cost}\\+? GP\\b`, 'i').test(t)),
+    materialConsumed: keep('material consumed', rec.material_consumed || undefined, /\bconsume/i.test(t)),
+    // Scaling rows are the same record's: they go when its damage does.
+    ...(damage || !rec.damage_roll ? spellScaling(scalingRows) : {}),
+  };
 }
 
 /** Damage at higher slot levels / character levels from Open5e SpellCastingOption rows. */

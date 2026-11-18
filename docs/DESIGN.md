@@ -684,7 +684,8 @@ an imported class's or subclass's features with their text (catching up subclass
 prints below the class's subclass level) and offers a feat at Ability Score Improvement, Epic Boon and
 Fighting Style levels, with "Decide with my DM" preselected. Items copy numbers, never text: armor
 stats, bonuses and attunement travel on the inventory item, so AC works in the DM's tools and on
-another device. Accepted spells join spell lists and area templates.
+another device. Accepted spells join spell lists and area templates. A template is read from a spell's own text,
+never from a creature's stat block printed inside it (a summoning spell's spirit or steed).
 
 Name lookups rank this campaign's homebrew, shared homebrew, **reviewed imports** (and a book's own
 rules text), the SRD, then **unreviewed imported entities** — so a thin unreviewed duplicate never
