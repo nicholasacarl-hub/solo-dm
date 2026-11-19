@@ -23,6 +23,7 @@ import { DM_BACKSTORY, defaultPortrait, pick, suggestAlignment, suggestName, sug
 import {
   activeSteps,
   classSpellOptions,
+  grantedSpells,
   chosenFightingStyle,
   fightingStyleChoices,
   masteryPlan,
@@ -349,12 +350,15 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
   // One spell per name: a book's spell and the SRD's of the same name are one choice.
   const nameOf = (id: string) => nameKey(byId.get(id)?.name ?? id);
   let next = draft;
-  // Spells the hero already has from Magic Initiate, by name: the class lists don't take them again.
-  const initiateNames = new Set(
-    magicInitiateSources(draft, ctx.data)
+  // Spells the hero already has, by name, from Magic Initiate or granted by the class or species: the class
+  // lists don't take them again.
+  const granted = new Set(grantedSpells(draft, ctx.data).keys());
+  const initiateNames = new Set([
+    ...magicInitiateSources(draft, ctx.data)
       .flatMap(({ list }) => [...(draft.magicInitiate[list]?.cantrips ?? []), ...(draft.magicInitiate[list]?.spell ? [draft.magicInitiate[list]?.spell as string] : [])])
       .map(nameOf),
-  );
+    ...granted,
+  ]);
   if (plan.casting) {
     // As the step lists them (spells already chosen stay).
     const chosen = new Set([...draft.cantrips, ...draft.spellbook, ...draft.prepared]);
@@ -382,14 +386,22 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
   }
   const scores = finalAbilityScores(next, picks(next, ctx.data).background);
   const magicInitiate = { ...next.magicInitiate };
-  // Don't spend Magic Initiate picks on spells the character already knows (by name, of any book).
-  const known = new Set([...next.cantrips, ...next.spellbook, ...next.prepared].map(nameOf));
+  // Don't spend Magic Initiate picks on spells the character already knows or is granted (by name, of any book).
+  const known = new Set([...[...next.cantrips, ...next.spellbook, ...next.prepared].map(nameOf), ...granted]);
   for (const { list } of magicInitiateSources(next, ctx.data)) {
     const current = magicInitiate[list];
     const keep = new Set([...(current?.cantrips ?? []), ...(current?.spell ? [current.spell] : [])]);
-    const listed = (level: 0 | 1) => visibleSpells(spellsForClass(ctx.spells, list, level), null, keep).map((s) => s.id);
-    const cantripIds = listed(0).filter((id) => !known.has(nameOf(id)) || current?.cantrips.includes(id));
-    const levelOneIds = listed(1).filter((id) => !known.has(nameOf(id)) || current?.spell === id);
+    // As the step lists them (the source filter's); a filter that leaves too few falls back to "All".
+    const listed = (level: 0 | 1, need: number, own: (id: string) => boolean) => {
+      const free = (filter: string | null) =>
+        visibleSpells(spellsForClass(ctx.spells, list, level), filter, keep)
+          .map((s) => s.id)
+          .filter((id) => !known.has(nameOf(id)) || own(id));
+      const shownIds = free(next.sourceFilter);
+      return new Set(shownIds.map(nameOf)).size >= need ? shownIds : free(null);
+    };
+    const cantripIds = listed(0, 2, (id) => Boolean(current?.cantrips.includes(id)));
+    const levelOneIds = listed(1, 1, (id) => current?.spell === id);
     const mental: Ability[] = ['int', 'wis', 'cha'];
     const ability = current?.ability && mental.includes(current.ability) ? current.ability : [...mental].sort((a, b) => scores[b] - scores[a])[0];
     const cantrips = topUp((current?.cantrips ?? []).filter((id) => cantripIds.includes(id)), shuffle(cantripIds, rng), Math.min(2, new Set(cantripIds.map(nameOf)).size), nameOf);

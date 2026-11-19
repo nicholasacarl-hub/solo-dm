@@ -262,6 +262,26 @@ function speciesSpellNames(p: Picks): { cantrips: string[]; alwaysPrepared: stri
   return { cantrips: [...cantrips, ...fx.cantrips], alwaysPrepared: fx.alwaysPrepared };
 }
 
+/**
+ * The spells the hero has without choosing them, by name key: what the class's level 1 features keep prepared
+ * (a caster's) and what the species or lineage grants, with where each comes from. A list treats them as known,
+ * since the sheet keeps one spell per name (a pick of the same name would quietly replace one).
+ */
+export function grantedSpells(draft: BuilderDraft, data: BuilderData): Map<string, { name: string; source: string }> {
+  const p = picks(draft, data);
+  const out = new Map<string, { name: string; source: string }>();
+  const add = (name: string, source: string) => {
+    if (!out.has(nameKey(name))) out.set(nameKey(name), { name, source });
+  };
+  if (p.cls && spellPlan(draft, data).casting) {
+    for (const def of featuresAtLevel(p.cls, 1)) for (const name of alwaysPreparedSpellNames(def.description)) add(name, def.name);
+  }
+  const fromSpecies = speciesSpellNames(p);
+  const speciesSource = p.lineage?.name ?? p.species?.name ?? 'your species';
+  for (const name of [...fromSpecies.cantrips, ...fromSpecies.alwaysPrepared]) add(name, speciesSource);
+  return out;
+}
+
 function abilityNote(ability: Ability | null | undefined): string | undefined {
   return ability ? `Spellcasting ability: ${ABILITY_NAMES[ability]}` : undefined;
 }
@@ -699,6 +719,19 @@ function validateSpells(draft: BuilderDraft, ctx: BuilderContext): string[] {
   const errors: string[] = [];
   // A list offers one spell per name (a book's and the SRD's of the same name are one choice): count names.
   const names = (spells: readonly SpellInfo[]) => new Set(spells.map((s) => nameKey(s.name))).size;
+  // A pick that repeats a spell the hero already has would be lost on the sheet (one spell per name).
+  const granted = grantedSpells(draft, ctx.data);
+  const byId = new Map(ctx.spells.map((s) => [s.id, s]));
+  const picked = [
+    ...draft.cantrips,
+    ...draft.spellbook,
+    ...draft.prepared,
+    ...plan.magicInitiate.flatMap(({ list }) => [...(draft.magicInitiate[list]?.cantrips ?? []), ...(draft.magicInitiate[list]?.spell ? [draft.magicInitiate[list]?.spell as string] : [])]),
+  ];
+  for (const name of new Set(picked.map((id) => byId.get(id)?.name).filter((n): n is string => Boolean(n)))) {
+    const grant = granted.get(nameKey(name));
+    if (grant) errors.push(`You already have ${grant.name} from ${grant.source}; choose a different spell.`);
+  }
   if (plan.casting) {
     const cantripOptions = classSpellOptions(draft, ctx, 0);
     const levelOneOptions = classSpellOptions(draft, ctx, 1);

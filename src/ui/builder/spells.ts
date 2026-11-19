@@ -41,7 +41,8 @@ function levelFrom(entry: CompendiumEntry): number {
   if (typeof raw === 'string' && /^\d+$/.test(raw)) return Number(raw);
   const summary = entry.summary ?? '';
   if (/cantrip/i.test(summary)) return 0;
-  const match = /level\s*(\d)/i.exec(summary);
+  // "Level 2 Conjuration", or an older book's "2nd-level conjuration".
+  const match = /level\s*(\d)/i.exec(summary) ?? /\b([1-9])(?:st|nd|rd|th)[- ]level\b/i.exec(summary);
   return match ? Number(match[1]) : 0;
 }
 

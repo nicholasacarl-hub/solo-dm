@@ -560,6 +560,44 @@ describe('Let the DM decide', () => {
   });
 });
 
+describe('spells the class or species already gives (the sheet keeps one spell per name)', () => {
+  it('the DM never picks a granted spell again, and a hand-picked one is flagged', () => {
+    const start = { ...emptyDraft(), classId: cls('Wizard').id, backgroundId: bg('Sage').id, speciesId: species('Elf').id, lineage: 'High Elf' };
+    for (let i = 0; i < 50; i++) {
+      const draft = letDmBuildAll(start, ctx, { next: () => i / 50 });
+      const cantrips = [...draft.cantrips, ...(draft.magicInitiate.Wizard?.cantrips ?? [])].map((id) => spells.find((s) => s.id === id)?.name);
+      expect(cantrips, `seed ${i}`).not.toContain('Prestidigitation');
+      expect(firstIncompleteStep(draft, ctx), `seed ${i}`).toBeNull();
+    }
+    // A class that recommends the very cantrip the species grants (as the Cleric's Thaumaturgy and a species that
+    // gives Thaumaturgy): the DM takes the next one instead.
+    const wizard = cls('Wizard');
+    const keen = {
+      ...wizard,
+      id: 'srd:class:keen-wizard',
+      features: wizard.features.map((f) => (f.name === 'Spellcasting' ? { ...f, description: f.description.replace('_Light_, _Mage Hand_, and _Ray of Frost_', '_Prestidigitation_, _Light_, and _Mage Hand_') } : f)),
+    };
+    const keenCtx: BuilderContext = { data: { ...data, classes: [...data.classes, keen] }, spells };
+    for (const next of [0, 0.5, 0.99]) {
+      const draft = letDmDecide('spells', { ...wizardDraft(), classId: keen.id, cantrips: [], spellbook: [], prepared: [], magicInitiate: {} }, keenCtx, { next: () => next });
+      const names = draft.cantrips.map((id) => spells.find((s) => s.id === id)?.name);
+      expect(names, String(next)).not.toContain('Prestidigitation');
+      expect(names.slice(0, 2)).toEqual(['Light', 'Mage Hand']);
+    }
+    const doubled = { ...wizardDraft(), cantrips: [spellId('Fire Bolt'), spellId('Light'), spellId('Prestidigitation')] };
+    expect(validateStep('spells', doubled, ctx)).toContain('You already have Prestidigitation from High Elf; choose a different spell.');
+    expect(validateStep('spells', wizardDraft(), ctx)).toEqual([]);
+  });
+
+  it("reads an older book's spell line for the level ('2nd-level conjuration'), so its spell never reads as a cantrip", () => {
+    const misty = spellInfo({ id: 'lib:reed:7', sourceId: 'reed', sourceName: 'The Reed Primer', kind: 'spell', name: 'Misty Step', summary: '2nd-level conjuration', text: 'Invented.' });
+    expect(misty.level).toBe(2);
+    expect(spellInfo({ ...misty.entry, summary: '1st-level evocation' }).level).toBe(1);
+    expect(spellInfo({ ...misty.entry, summary: 'Level 3 Evocation (Wizard)' }).level).toBe(3);
+    expect(spellInfo({ ...misty.entry, summary: 'Evocation cantrip' }).level).toBe(0);
+  });
+});
+
 describe("a 2024 book's spells in place of the SRD's (one per name)", () => {
   // Invented: a book's accepted copies of SRD spells, with its own wording.
   const bookSpell = (name: string) => {
@@ -608,6 +646,20 @@ describe("a 2024 book's spells in place of the SRD's (one per name)", () => {
     }
   });
 
+  it("fills Magic Initiate from the step's source filter, falling back to All when the filter leaves too few", () => {
+    const sourceOf = (id: string) => withBook.spells.find((s) => s.id === id)?.entry.sourceId;
+    const start = { ...wizardDraft(), cantrips: [], spellbook: [], prepared: [], magicInitiate: {} };
+    for (const next of [0, 0.5, 0.99]) {
+      const srd = letDmDecide('spells', { ...start, sourceFilter: 'srd-5.2.1' }, withBook, { next: () => next });
+      const initiate = [...(srd.magicInitiate.Wizard?.cantrips ?? []), srd.magicInitiate.Wizard?.spell ?? ''];
+      expect(initiate.map(sourceOf), String(next)).toEqual(['srd-5.2.1', 'srd-5.2.1', 'srd-5.2.1']);
+      // The book has two cantrips, which the class list takes first: Magic Initiate falls back to All.
+      const ember = letDmDecide('spells', { ...start, sourceFilter: 'ember' }, withBook, { next: () => next });
+      expect(ember.magicInitiate.Wizard?.cantrips, String(next)).toHaveLength(2);
+      expect(validateStep('spells', ember, withBook).filter((e) => e.startsWith('Magic Initiate'))).toEqual([]);
+    }
+  });
+
   it("gives Magic Initiate two cantrips of two names, an older book's Light beside the SRD's notwithstanding", () => {
     const older = spellInfo({ ...book[0].entry, id: 'lib:oldtome:light', sourceId: 'oldtome', sourceName: 'The Old Tome', data: { ...book[0].entry.data, recordId: 'rec:oldtome:light', format: '2014' } });
     const fighterSage: BuilderContext = { data, spells: [...spells, older] };
@@ -625,7 +677,8 @@ describe("a 2024 book's spells in place of the SRD's (one per name)", () => {
     const draft = { ...wizardDraft(), classId: tiny.id, cantrips: [book[0].id], spellbook: [], prepared: [], magicInitiate: {} };
     expect(validateStep('spells', draft, tinyCtx).filter((e) => e.includes('cantrips'))).toEqual([]);
     // Filling in from a chosen SRD Light never ticks the book's Light as a second cantrip.
-    const third = onList(spells.find((s) => s.name === 'Prestidigitation')!);
+    // (Not Prestidigitation: this hero's High Elf lineage already grants it.)
+    const third = onList(spells.find((s) => s.name === 'Ray of Frost')!);
     const threeCtx: BuilderContext = { ...tinyCtx, spells: [...tinyCtx.spells, third] };
     for (const next of [0, 0.2, 0.4, 0.6, 0.8, 0.99]) {
       const filled = fillStep('spells', { ...draft, cantrips: [spellId('Light')] }, threeCtx, { next: () => next });

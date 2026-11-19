@@ -158,6 +158,19 @@ describe('CharacterBuilder with imported options', () => {
     expect(srd).not.toHaveAccessibleName(/already known|From/);
   });
 
+  it('shows a cantrip the species already gives as known on the class list', () => {
+    const CLERIC = byName(EXPECTED_MERGED.classes, 'Cleric');
+    const mothkin = byName(EXPECTED_MERGED.species, 'Mothkin');
+    const lampborn: SpeciesOption = { ...mothkin, id: 'lib:gloam:species:lampborn', name: 'Lampborn', traits: [{ name: 'Wick Whisper', description: 'You know the Thaumaturgy cantrip.' }], lineages: undefined, lineageTrait: undefined };
+    const entry = (id: string, name: string): SpellInfo =>
+      spellInfo({ id, sourceId: 'srd-5.2.1', sourceName: 'SRD 5.2.1', kind: 'spell', name, summary: 'Evocation Cantrip (Cleric)', text: 'Invented.', data: { level: 0, classes: ['Cleric'] } });
+    const spells = [entry('srd:spell:light', 'Light'), entry('srd:spell:sacred-flame', 'Sacred Flame'), entry('srd:spell:thaumaturgy', 'Thaumaturgy')];
+    renderBuilder({ step: 'spells', classId: CLERIC.id, speciesId: lampborn.id }, { ...EXPECTED_MERGED, species: [...EXPECTED_MERGED.species, lampborn] }, spells);
+    const thaumaturgy = within(screen.getByRole('list', { name: 'Cleric cantrips' })).getByRole('checkbox', { name: /^Thaumaturgy/ });
+    expect(thaumaturgy).toBeDisabled();
+    expect(thaumaturgy).toHaveAccessibleName(/already known/);
+  });
+
   it('narrows the options to one source, and "Let the DM decide" picks among what it shows', async () => {
     const user = userEvent.setup();
     renderBuilder();

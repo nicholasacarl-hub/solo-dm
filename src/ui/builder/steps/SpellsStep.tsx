@@ -10,6 +10,7 @@ import { SourceFilter } from '../BookBadges';
 import { Issues, RadioCards, StepHeader, SubHeading } from '../BuilderParts';
 import {
   classSpellOptions,
+  grantedSpells,
   optionBooks,
   picks,
   spellPlan,
@@ -168,8 +169,9 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
   // The source filter narrows what's listed (one spell per name under "All"); spells already chosen stay visible.
   const chosen = new Set([...classIds, ...initiateIds]);
   const visible = (list: SpellInfo[]) => visibleSpells(list, draft.sourceFilter, chosen);
-  // Known once chosen in any list, by name: a book's spell and the SRD's of the same name are one spell.
-  const chosenNames = new Set(ctx.spells.filter((s) => chosen.has(s.id)).map((s) => nameKey(s.name)));
+  // Known once chosen in any list, or granted by the class or species, by name: a book's spell and the SRD's
+  // of the same name are one spell.
+  const chosenNames = new Set([...ctx.spells.filter((s) => chosen.has(s.id)).map((s) => nameKey(s.name)), ...grantedSpells(draft, ctx.data).keys()]);
   const taken = new Set(ctx.spells.filter((s) => chosenNames.has(nameKey(s.name))).map((s) => s.id));
   const cantripOptions = visible(classSpellOptions(draft, ctx, 0));
   const levelOneOptions = visible(classSpellOptions(draft, ctx, 1));
