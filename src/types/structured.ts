@@ -357,9 +357,9 @@ export interface ImportedRef {
   kind: StructuredKind;
   entryName: string;                  // "Ember Warden"
   /**
-   * Option-level refs (ClassLevel.ref, subclassRef, speciesRef, backgroundRef): the option's edition, as its book's
-   * record has it (OptionSource.format; kept in step on load, fillClassEditions). A 2024 book's class plays by the
-   * SRD class of its name in the engine (engine/classData.ts rulesClassFor).
+   * Option-level refs (ClassLevel.ref, subclassRef, speciesRef, backgroundRef): the option's edition when taken
+   * (OptionSource.format). A class's is kept in step with its record on load (data/options/editions.ts
+   * withClassEditions): a 2024 book's class plays by the SRD class of its name (engine/classData.ts rulesClassFor).
    */
   format?: SourceFormat;
   part?: string;                      // feature, trait, lineage or background-feature name; absent = whole option

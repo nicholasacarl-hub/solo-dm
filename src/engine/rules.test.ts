@@ -445,6 +445,35 @@ describe('damage dice that grow with level', () => {
     expect(computeArmorClass(bookMonk(1, '2024')).ac).toBe(16);
   });
 
+  it("Dexterous Attacks: a Monk's Unarmed Strike made before the Monk levels uses DEX, never in armor or with a Shield (SRD 5.2.1 Monk, Martial Arts)", () => {
+    // A Fighter's Unarmed Strike (STR), the hero now a Monk too.
+    const strike: Attack = { id: 'us', name: 'Unarmed Strike', ability: 'str', proficient: true, damage: '1', damageType: 'bludgeoning' };
+    // A Greataxe isn't a Monk weapon (Heavy, Two-Handed): it keeps Strength.
+    const greataxe: Attack = { id: 'ga', name: 'Greataxe', ability: 'str', proficient: true, damage: '1d12', damageType: 'slashing' };
+    const ref: ImportedRef = { sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:monk', kind: 'class', entryName: 'Monk', textHash: '', textCopied: false, format: '2024' };
+    const hero = (monk: Character['classes'][number], inventory: InventoryItem[] = []) =>
+      mira({
+        abilityScores: { str: 10, dex: 16, con: 12, int: 8, wis: 14, cha: 10 },
+        classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level: 1, hitDie: 10, casterType: 'none' }, monk],
+        spellcasting: undefined,
+        attacks: [strike, greataxe],
+        inventory,
+        features: [],
+      });
+    for (const monk of [
+      { classId: 'srd:class:monk', name: 'Monk', level: 4, hitDie: 8 as const, casterType: 'none' as const },
+      { classId: 'lib:lamp:class:monk', name: 'Monk', level: 4, hitDie: 8 as const, casterType: 'none' as const, ref },
+    ]) {
+      // DEX 3 + Proficiency Bonus 3 to hit; the Martial Arts die with DEX for damage.
+      expect(attackBonus(hero(monk), strike)).toBe(6);
+      expect(attackDamageExpression(hero(monk), strike)).toBe('1d6+3');
+      expect(attackBonus(hero(monk), greataxe)).toBe(3);
+      const shield: InventoryItem = { id: 'sh', name: 'Shield', quantity: 1, equipped: true, category: 'armor' };
+      expect(attackBonus(hero(monk, [shield]), strike)).toBe(3);
+      expect(rollRequestModifier({ ...hero(monk, [shield]), attacks: [] }, request({ rollType: 'attack', attackName: 'Unarmed Strike' })).modifier).toBe(3);
+    }
+  });
+
   it('Martial Arts follows the Monk level, not the character level, and replaces the flat 1', () => {
     const fighterMonk = mira({
       abilityScores: { ...mira().abilityScores, str: 16 },

@@ -130,6 +130,17 @@ function featureHpBonuses(before: readonly Feature[], added: readonly { name: st
   return bonuses;
 }
 
+/**
+ * The Hit Points Draconic Resilience gives at the hero's Sorcerer levels (SRD 5.2.1 Draconic Sorcery: "Your Hit Point
+ * maximum increases by 3, and it increases by 1 whenever you gain another Sorcerer level"): one per Sorcerer level,
+ * a 2024 book's Sorcerer included (rulesClassFor), when the hero has the feature; else 0. levelUp adds the same,
+ * level by level (featureHpBonuses).
+ */
+export function draconicResilienceHitPoints(c: Pick<Character, 'classes' | 'features'>): number {
+  if (!hasFeatureNamed(c.features, 'Draconic Resilience')) return 0;
+  return c.classes.filter((cl) => rulesClassFor(cl)?.name === 'Sorcerer').reduce((sum, cl) => sum + Math.max(0, toInt(cl.level)), 0);
+}
+
 function rollHitPoints(
   die: HitDie,
   conMod: number,

@@ -70,12 +70,16 @@ The first version of structured imports deliberately leaves these out:
   feature, Aura of Protection…): its Martial Arts die stays the one on the sheet (a 2014 Monk's grows d4 → d6 → d8
   → d10), its unarmed strikes off the sheet use Strength, and Draconic Resilience's Hit Points at level-up are the
   DM's to add. The engine would need each edition's numbers.
+- **Monk weapons and Martial Arts**: the Martial Arts die replaces only an Unarmed Strike's damage, never a Monk
+  weapon's (a level 5 Monk's Spear still rolls 1d6, not the 1d8 die). Dexterity for a Monk weapon is set when it
+  joins the sheet: one added before the Monk levels (a Fighter's Spear) keeps Strength, and an Unarmed Strike or Monk
+  weapon the builder gave Dexterity keeps it in armor or with a Shield. The DM adjusts these.
 - **Telling a book read again from another book**: a hero's class, subclass, species or background whose book is
   switched off or gone is looked up again by its book's fingerprint, then its source and title, then any book's
   option of its name, so another book's option of that name stands in (a 2014 printing for a 2024 one of the same
   title, say). The fingerprint can't decide it alone: it changes when the book's text is read differently (a newer
-  reader, another file). An edition on option refs, or the hero's copied text compared with the candidate's, would
-  tell them apart.
+  reader, another file). Option refs now record their edition, which could break the tie for options taken since;
+  the hero's copied text compared with the candidate's could for older ones.
 - **Homebrew spells in the builder by campaign**: the builder's spell lists include homebrew spells saved in other
   campaigns (`RulesIndex.list()` skips the campaign check that search and name lookups make), unlabeled, so a hero
   can pick one its DM can't look up. List only this campaign's and shared homebrew, and label them.

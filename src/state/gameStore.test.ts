@@ -36,15 +36,27 @@ vi.mock('@/storage', async (importOriginal) => {
 
 // The store loads @/data lazily for restore (spec §7.4): the real pure restore over this device's "library".
 const libraryLookup = vi.hoisted(() => ({ calls: 0 }));
+// The builder data can be held back (a test releases it) to land a campaign replacement while a refresh waits.
+const builderGate = vi.hoisted(() => ({ wait: null as Promise<void> | null }));
 vi.mock('@/data', async () => {
   const restore = await import('@/data/structured/restore');
+  const editions = await import('@/data/options/editions');
   const fixtures = await import('@/test/structuredFixtures');
+  const wick = fixtures.EXPECTED_MERGED.classes.find((c) => c.id === 'lib:gloam:class:wickwright');
+  if (!wick) throw new Error('fixture changed');
+  // An invented 2024 book's Sorcerer (the Wickwright's data under the SRD class's name).
+  const builder = { ...fixtures.EXPECTED_MERGED, classes: [...fixtures.EXPECTED_MERGED.classes, { ...wick, id: 'lib:gloam:class:sorcerer', name: 'Sorcerer' }] };
   return {
     restoreImportedText: restore.restoreImportedText,
-    withClassEditions: (await import('@/data/options/resolve')).withClassEditions,
-    loadBuilderData: async () => fixtures.EXPECTED_MERGED,
+    withClassEditions: editions.withClassEditions,
+    hitPointsOwedForEditions: editions.hitPointsOwedForEditions,
+    loadBuilderData: async () => {
+      if (builderGate.wait) await builderGate.wait;
+      return builder;
+    },
     buildLibraryLookup: async () => {
       libraryLookup.calls += 1;
+      if (builderGate.wait) await builderGate.wait;
       return { entriesById: new Map(), sourcesByFingerprint: new Map(), sourcesByTitle: new Map(), builder: fixtures.EXPECTED_MERGED };
     },
   };
@@ -88,6 +100,51 @@ describe('refreshClassEditions', () => {
     // Run again: nothing to change.
     expect(await game().refreshClassEditions()).toBe(false);
   });
+
+  it("adds Draconic Resilience's Hit Points the Sorcerer levels gained before missed, once, with a normal save and a DM notice", async () => {
+    const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:sorcerer', kind: 'class' as const, entryName: 'Sorcerer', textHash: '', textCopied: false };
+    const classes = [{ classId: 'lib:gloam:class:sorcerer', name: 'Sorcerer', level: 5, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const, ref }];
+    const features = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass' as const, description: '' }];
+    const graph = await seedCampaign('a', { character: { classes, features, hp: { max: 27, current: 20, temp: 0 } } });
+    const before = await db.characters.get(graph.character?.id as string);
+    await game().loadCampaign('a-camp');
+    // SRD 5.2.1 Draconic Sorcery: 3 at Sorcerer 3, then 1 at each of levels 4 and 5.
+    await vi.waitFor(() => expect(game().character?.hp).toMatchObject({ max: 32, current: 25 }));
+    await whenPersisted();
+    const after = await db.characters.get(graph.character?.id as string);
+    expect(after?.hp).toMatchObject({ max: 32, current: 25 });
+    expect(after?.classes[0].ref?.format).toBe('2024');
+    expect(after?.updatedAt).not.toBe(before?.updatedAt);
+    expect(game().pendingDmNotices.filter((n) => n.includes('Hit Point maximum rose by 5 to 32'))).toHaveLength(1);
+    // Once: nothing more is owed.
+    expect(await game().refreshClassEditions()).toBe(false);
+    expect(game().character?.hp.max).toBe(32);
+  });
+
+  it('writes nothing over a campaign replaced (a GitHub pull, a save-file import) while it waits for the builder data', async () => {
+    const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:wickwright', kind: 'class' as const, entryName: 'Wickwright', textHash: '', textCopied: false };
+    const classes = [{ classId: 'lib:gloam:class:wickwright', name: 'Wickwright', level: 2, hitDie: 8 as const, casterType: 'half' as const, ref }];
+    let release = () => undefined as void;
+    builderGate.wait = new Promise<void>((resolve) => (release = resolve));
+    try {
+      const graph = await seedCampaign('a', { character: { classes } });
+      await game().loadCampaign('a-camp');
+      const waiting = game().refreshClassEditions();
+      // The pull lands: a newer hero in the row, then the change event (the store reloads).
+      const pulled = { ...(await db.characters.get(graph.character?.id as string))!, name: 'Pulled Name' };
+      await db.characters.put(pulled);
+      emitCampaignChange({ type: 'replaced', campaignId: 'a-camp' });
+      release();
+      expect(await waiting).toBe(false);
+      await vi.waitFor(() => expect(game().character?.name).toBe('Pulled Name'));
+      await whenPersisted();
+      // The reload's own refresh records the edition on the pulled hero; the stale copy was never written.
+      await vi.waitFor(async () => expect((await db.characters.get(graph.character?.id as string))?.classes[0].ref?.format).toBe('2024'));
+      expect((await db.characters.get(graph.character?.id as string))?.name).toBe('Pulled Name');
+    } finally {
+      builderGate.wait = null;
+    }
+  });
 });
 
 describe('restoreImportedText (spec §7.4)', () => {
@@ -113,6 +170,27 @@ describe('restoreImportedText (spec §7.4)', () => {
     expect(game().campaign?.updatedAt).toBe(storedCampaign?.updatedAt);
     // Run again: nothing left to restore.
     expect(await game().restoreImportedText()).toBeNull();
+  });
+
+  it('restores nothing onto a campaign replaced while it read the library (the reload restores the new one)', async () => {
+    let release = () => undefined as void;
+    const graph = await seedCampaign('a', { character: { features: [...sampleCharacter().features, pulledFeature] } });
+    builderGate.wait = new Promise<void>((resolve) => (release = resolve));
+    try {
+      await game().loadCampaign('a-camp');
+      const waiting = game().restoreImportedText();
+      const pulled = { ...(await db.characters.get(graph.character?.id as string))!, name: 'Pulled Name' };
+      await db.characters.put(pulled);
+      emitCampaignChange({ type: 'replaced', campaignId: 'a-camp' });
+      release();
+      expect(await waiting).toBeNull();
+      await vi.waitFor(() => expect(game().character?.name).toBe('Pulled Name'));
+      await whenPersisted();
+      await vi.waitFor(async () => expect((await db.characters.get(graph.character?.id as string))?.features.find((f) => f.id === 'f-ember')?.description).toBe(def.description));
+      expect((await db.characters.get(graph.character?.id as string))?.name).toBe('Pulled Name');
+    } finally {
+      builderGate.wait = null;
+    }
   });
 
   it('reports what stays missing and writes nothing', async () => {

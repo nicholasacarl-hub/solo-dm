@@ -714,7 +714,12 @@ for an SRD class of the same name for its numbers (hit die, level-up reminders).
 by the SRD class's rules (`rulesClassFor`): the Martial Arts die and a Monk's Dexterity for unarmed strikes,
 Unarmored Defense, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
 the edition (`ImportedRef.format`), set when the class is taken and kept in step with the book's record on load
-and after review (`withClassEditions`); an older-edition book's class gets only the rules that go by feature name.
+and after review (`withClassEditions`, `src/data/options/editions.ts`): by the class's id, and otherwise only filled,
+never changed, from a copy of the same text (the book's fingerprint), so another book's class of the name never lends
+its edition. An older-edition book's class gets only the rules that go by feature name. When a hero's book Sorcerer
+first plays by the SRD's rules, the Draconic Resilience Hit Points its earlier levels missed are added once, with a
+normal save and a DM notice (`refreshClassEditions`; nothing else in the app raises the maximum). That and the text
+restore write nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
 adaptations, shown in review, on builder cards, in the DM's stats line and on the sheet. Level-up adds

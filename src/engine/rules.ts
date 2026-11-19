@@ -280,9 +280,17 @@ function bestMentalAbility(c: Character): Ability {
 
 /** Ability modifier used by an attack (resolves 'finesse' and 'spell'). */
 export function attackAbilityModifier(c: Character, attack: Attack): number {
-  if (attack.ability === 'finesse') return Math.max(mod(c, 'str'), mod(c, 'dex'));
+  if (attack.ability === 'finesse' || dexterousUnarmedStrike(c, attack)) return Math.max(mod(c, 'str'), mod(c, 'dex'));
   if (attack.ability === 'spell') return mod(c, spellcastingAbility(c) ?? bestMentalAbility(c));
   return mod(c, attack.ability);
+}
+
+/**
+ * A Monk's Unarmed Strike on the sheet made before the Monk levels (a Fighter's, say): Dexterous Attacks lets it use
+ * DEX while no armor or Shield is worn (SRD 5.2.1 Monk, Martial Arts).
+ */
+function dexterousUnarmedStrike(c: Character, attack: Attack): boolean {
+  return attack.ability === 'str' && nameKey(attack.name) === 'unarmed-strike' && isMonk(c) && !wearsArmorOrShield(c);
 }
 
 /** Attack roll bonus: ability mod + PB (if proficient) + attackBonusExtra. */
@@ -724,7 +732,7 @@ function improvisedAttack(c: Character, req: PlayerRollRequest): { modifier: num
   const spell = name && c.spellcasting ? matchByName(c.spellcasting.spells, name, (s) => s.name).match : undefined;
   if (spell) return { modifier: spellAttackBonus(c) ?? pb(c) + mod(c, bestMentalAbility(c)), label: `${spell.name} attack` };
   if (name && isUnarmed(name)) {
-    const ability = isMonk(c) ? Math.max(mod(c, 'str'), mod(c, 'dex')) : mod(c, 'str');
+    const ability = isMonk(c) && !wearsArmorOrShield(c) ? Math.max(mod(c, 'str'), mod(c, 'dex')) : mod(c, 'str');
     return { modifier: ability + pb(c), label: 'Unarmed Strike attack' };
   }
   const ability = req.ability ?? 'str';

@@ -1228,11 +1228,12 @@ export const useGame = create<GameStore>()((set, get) => ({
   async restoreImportedText() {
     const { campaign, character } = get();
     if (!campaign || !character || !character.features.some(needsRestore)) return null;
+    const replacement = replacementOf(campaign.id);
     // Loaded lazily: the store never imports @/data statically (no gameStore → @/data edge, no cycle).
     const data = await import('@/data');
     const lookup = await data.buildLibraryLookup();
     const s = get();
-    if (s.campaign?.id !== campaign.id || !s.character || s.character.id !== character.id) return null;
+    if (!stillLoaded(campaign.id, character.id, replacement) || !s.character) return null;
     const { character: restored, report } = data.restoreImportedText(s.character, lookup);
     if (report.restored > 0) {
       set({ character: restored });
@@ -1245,18 +1246,41 @@ export const useGame = create<GameStore>()((set, get) => ({
   async refreshClassEditions() {
     const { campaign, character } = get();
     if (!campaign || !character || !character.classes.some((cl) => cl.ref && cl.classId.startsWith('lib:'))) return false;
+    const replacement = replacementOf(campaign.id);
     const data = await import('@/data');
     const builder = await data.loadBuilderData();
     const s = get();
-    if (s.campaign?.id !== campaign.id || !s.character || s.character.id !== character.id) return false;
+    if (!stillLoaded(campaign.id, character.id, replacement) || !s.character) return false;
     const next = data.withClassEditions(s.character, builder.classes);
     if (next === s.character) return false;
+    const owed = data.hitPointsOwedForEditions(s.character, next);
+    if (owed > 0) {
+      // Hit Points are game state: a normal save (sync sees it), and the DM hears why the maximum rose.
+      const saved = await get().updateCharacter((c) => {
+        const edited = data.withClassEditions(c, builder.classes);
+        return { ...edited, hp: { ...edited.hp, max: edited.hp.max + owed, current: edited.hp.current > 0 ? edited.hp.current + owed : edited.hp.current } };
+      });
+      get().queueDmNotice(
+        `${saved.name}'s Hit Point maximum rose by ${owed} to ${saved.hp.max}: Draconic Resilience now adds its Hit Points for a book's Sorcerer, and the Sorcerer levels gained before didn't get them.`,
+      );
+      return true;
+    }
     set({ character: next });
     // As is, like restoreImportedText: character.updatedAt and the campaign row are left alone.
     await persist(campaign.id, 'the character', () => storage.putCharacter(next)).catch(noop);
     return true;
   },
 }));
+
+/**
+ * After an await: the same campaign and character are still loaded, and the campaign wasn't replaced (a GitHub pull, a
+ * save-file import) or reloaded meanwhile. A stale in-memory copy must not be written over the new one; the reload
+ * runs its own restore and refresh.
+ */
+function stillLoaded(campaignId: string, characterId: string, replacement: number): boolean {
+  const s = useGame.getState();
+  return replacementOf(campaignId) === replacement && !s.loading && s.campaign?.id === campaignId && s.character?.id === characterId;
+}
 
 // A campaign replaced by an import / GitHub pull, or deleted from the save slots (in this tab or
 // another), must not keep being written from a stale in-memory copy.

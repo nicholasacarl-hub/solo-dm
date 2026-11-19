@@ -7,6 +7,7 @@ import {
   XP_THRESHOLDS,
   applyLongRest,
   applyShortRest,
+  draconicResilienceHitPoints,
   levelForXp,
   levelUp,
   spendHitDie,
@@ -440,6 +441,16 @@ describe('levelUp: Armor Class', () => {
     const resilient: Feature[] = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass', description: '' }];
     expect(levelUp(sorcerer('2024', 3, resilient), { className: 'Sorcerer', hpMethod: 'average' }).hpGained).toBe(4 + 2 + 1);
     expect(levelUp(sorcerer('2014', 2), gain).hpGained).toBe(4 + 2);
+  });
+
+  it("draconicResilienceHitPoints: one per Sorcerer level with the feature, a 2024 book's Sorcerer included (SRD 5.2.1 Draconic Sorcery)", () => {
+    const resilient: Feature[] = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass', description: '' }];
+    const ref = (format: SourceFormat): ImportedRef => ({ sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:sorcerer', kind: 'class', entryName: 'Sorcerer', textHash: '', textCopied: false, format });
+    const book = (level: number, format: SourceFormat): ClassLevel => ({ ...asClass('Sorcerer', level), classId: 'lib:lamp:class:sorcerer', ref: ref(format) });
+    expect(draconicResilienceHitPoints({ classes: [asClass('Sorcerer', 6), asClass('Fighter', 2)], features: resilient })).toBe(6);
+    expect(draconicResilienceHitPoints({ classes: [book(4, '2024')], features: resilient })).toBe(4);
+    expect(draconicResilienceHitPoints({ classes: [book(4, '2014')], features: resilient })).toBe(0);
+    expect(draconicResilienceHitPoints({ classes: [asClass('Sorcerer', 6)], features: [] })).toBe(0);
   });
 
   it('multiclassing into Barbarian adds Unarmored Defense (SRD 5.2.1 Barbarian; Multiclassing)', () => {
