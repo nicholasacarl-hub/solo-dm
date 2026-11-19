@@ -2,7 +2,7 @@
  * The level-up dialog with the player's books (spec §5.4, §8.3): the real engine, the merged builder data
  * of the invented Gloamwood fixture (SRD Cleric and Fighter + the book), a fake game store.
  */
-import { render, screen, within } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { levelUp } from '@/engine';
@@ -189,6 +189,25 @@ describe('LevelUpDialog with imported options', () => {
     expect(await screen.findByText('You took Lantern Bearer (+1 Charisma).')).toBeInTheDocument();
   });
 
+  it("offers a 2024 book's feat in place of the SRD's of its name, and keeps the one picked if the book arrives meanwhile", async () => {
+    const user = userEvent.setup();
+    const lantern = EXPECTED_MERGED.feats.find((f) => f.name === 'Lantern Bearer')!;
+    const withBook = { ...EXPECTED_MERGED, feats: [...EXPECTED_MERGED.feats, { ...lantern, id: 'lib:gloam:feat:grappler', name: 'Grappler' }] };
+    resetFakeGame({ campaign: sampleCampaign(), character: fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }) });
+    mocks.data = withBook;
+    const view = render(<LevelUpDialog open onClose={() => undefined} />);
+    expect(screen.getAllByRole('radio', { name: /^Grappler/ })).toHaveLength(1);
+    view.unmount();
+    mocks.data = EXPECTED_MERGED;
+    const again = render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('radio', { name: /^Grappler/ }));
+    mocks.data = withBook;
+    again.rerender(<LevelUpDialog open onClose={() => undefined} />);
+    const grapplers = screen.getAllByRole('radio', { name: /^Grappler/ });
+    expect(grapplers).toHaveLength(2);
+    expect(grapplers[0]).toBeChecked();
+  });
+
   it('applies +2 to one ability and names it on the sheet', async () => {
     const user = userEvent.setup();
     resetFakeGame({ campaign: sampleCampaign(), character: fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }) });
@@ -260,6 +279,30 @@ describe('LevelUpDialog with imported options', () => {
     const added = sheet().classes[1];
     expect(added).toMatchObject({ classId: 'lib:gloam:class:wickwright', name: 'Wickwright', level: 1, casterType: 'half', ref: { entryId: 'lib:gloam:class:wickwright', kind: 'class' } });
     expect(sheet().features.find((f) => f.name === 'Wick Sense')?.ref?.textCopied).toBe(true);
+  });
+
+  it("offers a 2024 book's class and subclass in place of the SRD's of their names; a hero on the book's class sees no SRD note", async () => {
+    const book = { sourceId: 'gloam', title: GLOAMWOOD_TITLE, format: '2024' as const, adaptations: [] };
+    const bookCleric: ClassOption = { ...CLERIC, id: 'lib:gloam:class:cleric', subclasses: [], source: { ...book, recordId: 'rec:gloam:class:cleric' } };
+    const champion = FIGHTER.subclasses.find((s) => s.name === 'Champion')!;
+    const bookChampion = { ...EMBER, id: 'lib:gloam:subclass:champion', name: 'Champion' };
+    mocks.data = {
+      ...EXPECTED_MERGED,
+      classes: [...EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, subclasses: [...c.subclasses, bookChampion] } : c)), bookCleric],
+    };
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    const select = screen.getByLabelText('Or multiclass into');
+    expect(within(select).getAllByRole('option').map((o) => o.textContent)).toEqual(['Choose a new class…', `Wickwright · ${GLOAMWOOD_TITLE} (d8)`, `Cleric · ${GLOAMWOOD_TITLE} (d8)`]);
+    const champions = within(screen.getByRole('radiogroup', { name: 'Subclass' })).getAllByRole('radio', { name: /Champion/ });
+    expect(champions).toHaveLength(1);
+    expect(within(champions[0]).getByText(`From ${GLOAMWOOD_TITLE}`)).toBeInTheDocument();
+    expect(champion.source).toBeUndefined();
+    cleanup();
+    // A hero on the book's Cleric: the SRD Cleric is neither offered nor noted ("isn't offered" is for a book's class).
+    resetFakeGame({ campaign: sampleCampaign(), character: hero({ classId: bookCleric.id, name: 'Cleric', level: 2, hitDie: 8 }) });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    expect(screen.queryByText(/Cleric \(SRD 5\.2\.1\) isn't offered/)).toBeNull();
+    expect(within(screen.getByLabelText('Or multiclass into')).queryByText(/^Cleric/)).toBeNull();
   });
 
   it("says when an imported class's data isn't on this device", () => {

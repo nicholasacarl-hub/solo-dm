@@ -1,11 +1,16 @@
 /**
  * Where builder options come from (structured imports, spec §5.3): the books in the merged data, the
- * source filter ("All · SRD · <book>"), which SRD options need an "SRD" badge (an import shares the name),
- * and the older-edition notes and book refs a draft's choices carry. Pure.
+ * source filter ("All · SRD · <book>"), the SRD options a 2024 book's stand in for (hidden under "All"),
+ * which SRD options need an "SRD" badge (an import shares the name), and the older-edition notes and
+ * book refs a draft's choices carry. Pure.
  */
+import { withoutReplacedSrd } from '@/data/options/replaced';
+import { isReviewedImport } from '@/data/structured/materialize';
 import { nameKey } from '@/lib/id';
 import { SRD_SOURCE_ID, type BuilderData, type OptionSource } from '@/types';
 import type { SpellInfo } from './spells';
+
+export { replacesSrd, withoutReplacedSrd } from '@/data/options/replaced';
 
 export interface OptionBook {
   id: string;
@@ -46,9 +51,34 @@ export function spellInSourceFilter(spell: SpellInfo, filter: string | null): bo
   return spell.entry.sourceId === filter;
 }
 
-/** Only what the filter shows, but never hiding the one that is chosen (its card stays visible). */
-export function filtered<T extends Sourced & { id: string }>(list: readonly T[], filter: string | null, keepId?: string | null): T[] {
+/**
+ * Only what the filter shows, but never hiding the one that is chosen (its card stays visible). "All"
+ * leaves out the SRD options that a 2024 book's option of the same name stands in for.
+ */
+export function filtered<T extends Sourced & { id: string; name: string }>(list: readonly T[], filter: string | null, keepId?: string | null): T[] {
+  if (!filter) return withoutReplacedSrd(list, [keepId]);
   return list.filter((o) => inSourceFilter(o, filter) || o.id === keepId);
+}
+
+/** A book's accepted spell in the 2024 format: it stands in for the SRD spell of its name. */
+const replacesSrdSpell = (spell: SpellInfo): boolean => isReviewedImport(spell.entry) && spell.entry.data?.format === '2024';
+
+/**
+ * The spells a list shows: the source filter's, never hiding a chosen one (a list drops a chosen spell it
+ * doesn't show). "All" shows one spell per name the SRD has: a 2024 book's accepted spell instead of the
+ * SRD's, and the SRD's instead of a book's spell that isn't reviewed yet (that book's filter still lists it).
+ */
+export function visibleSpells(list: readonly SpellInfo[], filter: string | null, chosen: ReadonlySet<string> = new Set()): SpellInfo[] {
+  if (filter) return list.filter((sp) => spellInSourceFilter(sp, filter) || chosen.has(sp.id));
+  const srd = new Set(list.filter((sp) => sp.entry.sourceId === SRD_SOURCE_ID).map((sp) => nameKey(sp.name)));
+  const replaced = new Set(list.filter(replacesSrdSpell).map((sp) => nameKey(sp.name)));
+  return list.filter((sp) => {
+    if (chosen.has(sp.id)) return true;
+    const key = nameKey(sp.name);
+    if (sp.entry.sourceId === SRD_SOURCE_ID) return !replaced.has(key);
+    if (sp.entry.id.startsWith('lib:') && !isReviewedImport(sp.entry)) return !srd.has(key);
+    return true;
+  });
 }
 
 /** SRD options that need an "SRD" badge: an imported option of the same list shares their name. */

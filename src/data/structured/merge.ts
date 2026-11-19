@@ -4,8 +4,9 @@
  * without mutating it (an SRD class that gains subclasses is shallow-cloned once).
  *
  * Owner: E4. Rules: only accepted, valid records of switched-on books (the snapshot); explicit fields win;
- * same names coexist (lookups go through options/resolve.ts); SRD first in builder.json order, then
- * imports grouped by book title, then by name; problems are reported, never thrown.
+ * same names coexist in the data (lookups go through options/resolve.ts; the lists hide an SRD option a
+ * 2024 book's stands in for, options/replaced.ts); SRD first in builder.json order, then imports grouped
+ * by book title, then by name; problems are reported, never thrown.
  */
 import { ABILITY_NAMES, SKILL_NAMES } from '@/types';
 import type {
@@ -36,6 +37,8 @@ import type {
   TextSpan,
   TraitData,
 } from '@/types';
+import { nameKey } from '@/lib/id';
+import { replacesSrd } from '../options/replaced';
 import { findEquipment } from '../options/resolve';
 import { refFor, spanLocation } from '../options/refs';
 import type { LibrarySnapshot } from '../rulesIndexStore';
@@ -400,12 +403,21 @@ export function mergeBuilderData(srd: BuilderData, imported: ImportedOptions): {
     const subs = attachTo.get(cls.id);
     return subs ? { ...cls, subclasses: [...cls.subclasses, ...subs] } : cls;
   };
+  const srdClasses = srd.classes.map(attach);
+  // A 2024 book's class stands in for the SRD class of its name (the lists show the book's alone), so it also
+  // offers that class's subclasses after its own: the SRD's, and those attached to it. None goes out of reach
+  // when the book's own subclasses aren't accepted, and the lists show one subclass per name.
+  const srdSubclasses = new Map(srdClasses.map((c) => [nameKey(c.name), c.subclasses]));
+  const standIn = (cls: ClassOption): ClassOption => {
+    const inherited = replacesSrd(cls) ? srdSubclasses.get(nameKey(cls.name)) : undefined;
+    return inherited?.length ? { ...cls, subclasses: [...cls.subclasses, ...inherited] } : cls;
+  };
 
   const mundane = [...srd.equipment, ...imported.equipment];
   const magic = magicItems.map((m) => catalogMagicItem(m, mundane)).filter((o): o is EquipmentOption => o !== null);
   return {
     data: {
-      classes: [...srd.classes.map(attach), ...importedClasses.map(attach)],
+      classes: [...srdClasses, ...importedClasses.map((c) => standIn(attach(c)))],
       species: [...srd.species, ...sorted(imported.species)],
       backgrounds: [...srd.backgrounds, ...sorted(imported.backgrounds)],
       feats: [...srd.feats, ...sorted(imported.feats)],

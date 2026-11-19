@@ -44,7 +44,7 @@ import {
   type BuilderContext,
   type BuilderDraft,
 } from './logic';
-import { letDmBuildAll, letDmDecide } from './autofill';
+import { fillStep, letDmBuildAll, letDmDecide } from './autofill';
 import { rollDice } from '@/engine';
 
 vi.mock('@/engine', async () => (await import('./testing/fakeEngine')).fakeEngine);
@@ -557,5 +557,57 @@ describe('Let the DM decide', () => {
     const draft = letDmDecide('abilities', { ...wizardDraft(), abilityMethod: 'point-buy' }, ctx, fixedRng);
     expect(pointBuySpent(draft.pointBuy)).toBe(27);
     expect(draft.pointBuy.int).toBe(15);
+  });
+});
+
+describe("a 2024 book's spells in place of the SRD's (one per name)", () => {
+  // Invented: a book's accepted copies of SRD spells, with its own wording.
+  const bookSpell = (name: string) => {
+    const srd = spells.find((s) => s.name === name)!;
+    return spellInfo({ ...srd.entry, id: `lib:ember:${srd.id}`, sourceId: 'ember', sourceName: 'The Ember Folio', text: 'Invented: the book’s own words.', data: { ...srd.entry.data, recordId: `rec:ember:${name}`, format: '2024' } });
+  };
+  const book = ['Light', 'Mage Hand', 'Magic Missile', 'Shield'].map(bookSpell);
+  const withBook: BuilderContext = { data, spells: [...spells, ...book] };
+  const nameOf = (id: string) => withBook.spells.find((s) => s.id === id)?.name;
+  const replaced = new Set(['Light', 'Mage Hand', 'Magic Missile', 'Shield'].map(spellId));
+
+  it("the DM picks the book's versions of the recommended spells, never the SRD's beside them", () => {
+    const draft = letDmBuildAll({ ...emptyDraft(), classId: cls('Wizard').id }, withBook, fixedRng);
+    expect(draft.cantrips.map(nameOf)).toEqual(['Light', 'Mage Hand', 'Ray of Frost']);
+    expect(draft.cantrips.slice(0, 2)).toEqual([book[0].id, book[1].id]);
+    for (const ids of [draft.cantrips, draft.spellbook, draft.prepared]) expect(new Set(ids.map(nameOf)).size).toBe(ids.length);
+    expect([...draft.cantrips, ...draft.spellbook]).not.toContain(spellId('Light'));
+    expect(firstIncompleteStep(draft, withBook)).toBeNull();
+  });
+
+  it("keeps a chosen SRD spell the book's now stands in for, and never adds the book's of the same name", () => {
+    const start = { ...wizardDraft(), cantrips: [spellId('Light')], spellbook: [spellId('Magic Missile')], prepared: [], magicInitiate: {} };
+    for (const next of [0, 0.2, 0.4, 0.6, 0.8, 0.99]) {
+      const draft = fillStep('spells', start, withBook, { next: () => next });
+      expect(draft.cantrips[0]).toBe(spellId('Light'));
+      expect(draft.cantrips.filter((id) => nameOf(id) === 'Light')).toHaveLength(1);
+      expect(draft.spellbook.filter((id) => nameOf(id) === 'Magic Missile')).toHaveLength(1);
+      // Magic Initiate never spends a pick on a spell the hero knows by another book's id, nor on an SRD
+      // spell the book's stands in for.
+      const known = new Set([...draft.cantrips, ...draft.spellbook, ...draft.prepared].map(nameOf));
+      const initiate = [...(draft.magicInitiate.Wizard?.cantrips ?? []), draft.magicInitiate.Wizard?.spell ?? ''];
+      expect(initiate.map(nameOf).filter((n) => n && known.has(n))).toEqual([]);
+      expect(initiate.filter((id) => replaced.has(id))).toEqual([]);
+    }
+  });
+
+  it('asks for as many spells as the list has names (a list of two Lights offers one choice)', () => {
+    const tiny = { ...cls('Wizard'), id: 'srd:class:lamp-adept', name: 'Lamp Adept', spellListName: 'Lamp Adept' };
+    const onList = (sp: (typeof spells)[number]) => spellInfo({ ...sp.entry, data: { ...sp.entry.data, classes: ['Lamp Adept'] } });
+    const tinyCtx: BuilderContext = { data: { ...data, classes: [...data.classes, tiny] }, spells: [onList(spells.find((s) => s.name === 'Light')!), onList(book[0])] };
+    const draft = { ...wizardDraft(), classId: tiny.id, cantrips: [book[0].id], spellbook: [], prepared: [], magicInitiate: {} };
+    expect(validateStep('spells', draft, tinyCtx).filter((e) => e.includes('cantrips'))).toEqual([]);
+    // Filling in from a chosen SRD Light never ticks the book's Light as a second cantrip.
+    const third = onList(spells.find((s) => s.name === 'Prestidigitation')!);
+    const threeCtx: BuilderContext = { ...tinyCtx, spells: [...tinyCtx.spells, third] };
+    for (const next of [0, 0.2, 0.4, 0.6, 0.8, 0.99]) {
+      const filled = fillStep('spells', { ...draft, cantrips: [spellId('Light')] }, threeCtx, { next: () => next });
+      expect(filled.cantrips, String(next)).toEqual([spellId('Light'), third.id]);
+    }
   });
 });

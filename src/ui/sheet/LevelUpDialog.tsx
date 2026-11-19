@@ -31,6 +31,7 @@ import {
   type ScoreIncrease,
   type SubclassSpells,
 } from '@/data/options/levelUpChoices';
+import { withoutReplacedSrd } from '@/data/options/replaced';
 import { classOptionFor, primaryRuleOf, subclassOptionFor } from '@/data/options/resolve';
 import { nameKey } from '@/lib/id';
 import { useGame } from '@/state/gameStore';
@@ -291,7 +292,8 @@ function ClassSection({
   const multiId = useId();
   const held = character.classes.map((cl) => classOptionFor(cl, classes)?.id).filter(Boolean);
   const heldNames = new Map(character.classes.map((cl) => [nameKey(cl.name), cl.name]));
-  const notHeld = classes.filter((o) => !held.includes(o.id));
+  // Without the SRD classes a 2024 book's class of the same name stands in for (the one chosen stays).
+  const notHeld = withoutReplacedSrd(classes, [choice.kind === 'new' ? choice.classId : null]).filter((o) => !held.includes(o.id));
   // D29: two "Fighter" entries couldn't be told apart (the DM levels a class by name).
   const multiclassOptions = notHeld.filter((o) => !heldNames.has(nameKey(o.name)));
   const hidden = notHeld.filter((o) => heldNames.has(nameKey(o.name)));
@@ -368,7 +370,7 @@ function SubclassSection({ option, value, onChange }: { option: ClassOption; val
         value={value || null}
         onChange={onChange}
         columns="sm:grid-cols-1"
-        options={option.subclasses.map((s) => ({
+        options={withoutReplacedSrd(option.subclasses, [value]).map((s) => ({
           value: s.id,
           title: s.name,
           meta: s.source ? (
@@ -492,7 +494,12 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
     : [];
   const prereqMet = prereqClasses.every((c) => meetsPrimary(c, character.abilityScores));
   const picks: FeatPick[] = plan.trigger
-    ? featChoices(plan.trigger.kind, builder.data?.feats ?? [], { cls: option, characterLevel: level + 1, have: character.features })
+    ? featChoices(plan.trigger.kind, builder.data?.feats ?? [], {
+        cls: option,
+        characterLevel: level + 1,
+        have: character.features,
+        ...(featChoice.kind === 'feat' ? { keepId: featChoice.pick.id } : {}),
+      })
     : [];
   const xpNeeded = XP_THRESHOLDS[level];
   const shortOnXp = !milestone && character.xp < xpNeeded;

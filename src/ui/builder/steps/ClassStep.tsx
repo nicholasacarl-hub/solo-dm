@@ -5,7 +5,18 @@ import { Badge, Card } from '@/ui/components/ui';
 import { OlderEditionNotes, OptionSourceBadges, PendingReviewHint, SourceFilter } from '../BookBadges';
 import { Detail, Issues, proseSummary, RadioCards, StepHeader, SubHeading } from '../BuilderParts';
 import { classChoiceFeatures, featuresAtLevel, needsFightingStyle } from '../classFeatures';
-import { chosenFightingStyle, choosesSubclassAtLevel1, clashingNames, fightingStyleChoices, filtered, optionBooks, picks, selectClass, validateStep } from '../logic';
+import {
+  chosenFightingStyle,
+  choosesSubclassAtLevel1,
+  clashingNames,
+  filtered,
+  offeredFightingStyles,
+  optionBooks,
+  picks,
+  selectClass,
+  validateStep,
+  withoutReplacedSrd,
+} from '../logic';
 import type { StepProps } from './stepTypes';
 
 const CASTER_LABEL: Record<ClassOption['casterType'], string | null> = {
@@ -64,7 +75,7 @@ export function ClassStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
   const books = optionBooks(data, ctx.spells);
   const classes = filtered(data.classes, draft.sourceFilter, draft.classId);
   const clashes = clashingNames(data.classes);
-  const styles = fightingStyleChoices(cls, data, draft.sourceFilter, draft.fightingStyle);
+  const styles = offeredFightingStyles(cls, data, draft.sourceFilter, draft.fightingStyle);
   // By id: same-named styles of different books are separate cards (an older draft's name picks the first).
   const chosenStyle = chosenFightingStyle(styles, draft.fightingStyle)?.id ?? null;
   const styleClashes = clashingNames(styles.map((s) => ({ name: s.name, source: s.feat?.source })));
@@ -110,7 +121,7 @@ export function ClassStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
                 label={`${cls.name} subclass`}
                 value={draft.subclassId}
                 onChange={(subclassId) => setDraft((d) => ({ ...d, subclassId }))}
-                options={cls.subclasses.map((s) => ({
+                options={withoutReplacedSrd(cls.subclasses, [draft.subclassId]).map((s) => ({
                   value: s.id,
                   title: s.name,
                   meta: <OptionSourceBadges option={s} clashes={clashingNames(cls.subclasses)} />,

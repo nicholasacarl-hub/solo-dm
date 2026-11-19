@@ -80,7 +80,7 @@ import {
   validateSpeciesSkill,
   type Picks,
 } from './origin';
-import { adaptationNotes, inSourceFilter } from './sources';
+import { adaptationNotes, inSourceFilter, withoutReplacedSrd } from './sources';
 import { cantripNames, hpBonusPerLevel, lineageEffects, lineageFeatureText, speciesDisplayName, speciesResistances } from './species';
 import { findSpellByName, knownSpell, spellAttack, spellsForClass, spellsForClassOption, type SpellInfo } from './spells';
 import { BUILDER_STEPS, type BuilderDraft, type BuilderStep } from './types';
@@ -165,6 +165,17 @@ export function fightingStyleChoices(cls: ClassOption | undefined, data: Builder
   );
 }
 
+/**
+ * The Fighting Style picker's cards: fightingStyleChoices, and under "All" without the SRD styles a 2024
+ * book's style of the same name stands in for (the chosen one stays). Lookups use fightingStyleChoices.
+ */
+export function offeredFightingStyles(cls: ClassOption | undefined, data: BuilderData, filter: string | null, keep?: string | null): FightingStyleChoice[] {
+  const choices = fightingStyleChoices(cls, data, filter, keep);
+  if (filter) return choices;
+  const shown = new Set(withoutReplacedSrd(choices.flatMap((c) => (c.feat ? [c.feat] : [])), [chosenFightingStyle(choices, keep)?.id]));
+  return choices.filter((c) => !c.feat || shown.has(c.feat));
+}
+
 // ---------------------------------------------------------------------------
 // Class choices
 // ---------------------------------------------------------------------------
@@ -193,11 +204,12 @@ export function armorTrainingFor(draft: BuilderDraft, cls: ClassOption | undefin
   return unique([...(cls?.armorTraining ?? []), ...classOptionGrants(draft, cls).armor]).filter(notNone);
 }
 
-/** Weapons the class may master, and how many to pick. */
+/** Weapons the class may master (one per name: the choice is stored by name), and how many to pick. */
 export function masteryPlan(draft: BuilderDraft, data: BuilderData): { count: number; candidates: EquipmentOption[] } {
   const { cls } = picks(draft, data);
   if (!cls || cls.weaponMasteryCount <= 0) return { count: 0, candidates: [] };
-  const candidates = masteryCandidates(data.equipment, weaponProficienciesFor(draft, cls), { meleeOnly: masteryMeleeOnly(cls) });
+  const all = masteryCandidates(data.equipment, weaponProficienciesFor(draft, cls), { meleeOnly: masteryMeleeOnly(cls) });
+  const candidates = all.filter((w, i) => all.findIndex((o) => nameKey(o.name) === nameKey(w.name)) === i);
   return { count: Math.min(cls.weaponMasteryCount, candidates.length), candidates };
 }
 
@@ -655,7 +667,7 @@ function validateSpecies(draft: BuilderDraft, data: BuilderData): string[] {
       if (fromBackground?.option && fromBackground.option === draft.speciesFeatList) {
         errors.push(`You already have Magic Initiate (${fromBackground.option}); choose a different spell list.`);
       }
-    } else if (!feat.repeatable && originFeats(draft, data).filter((f) => f.feat?.id === feat.id).length > 1) {
+    } else if (!feat.repeatable && originFeats(draft, data).filter((f) => f.feat && nameKey(f.feat.name) === nameKey(feat.name)).length > 1) {
       errors.push(`You already have ${feat.name} from your background; choose a different feat.`);
     }
   }
@@ -685,31 +697,36 @@ function validateSpells(draft: BuilderDraft, ctx: BuilderContext): string[] {
   if (!ctx.spells.length) return [];
   const plan = spellPlan(draft, ctx.data);
   const errors: string[] = [];
+  // A list offers one spell per name (a book's and the SRD's of the same name are one choice): count names.
+  const names = (spells: readonly SpellInfo[]) => new Set(spells.map((s) => nameKey(s.name))).size;
   if (plan.casting) {
-    const cantripIds = new Set(classSpellOptions(draft, ctx, 0).map((s) => s.id));
-    const levelOneIds = new Set(classSpellOptions(draft, ctx, 1).map((s) => s.id));
+    const cantripOptions = classSpellOptions(draft, ctx, 0);
+    const levelOneOptions = classSpellOptions(draft, ctx, 1);
+    const cantripIds = new Set(cantripOptions.map((s) => s.id));
+    const levelOneIds = new Set(levelOneOptions.map((s) => s.id));
     const cantrips = draft.cantrips.filter((id) => cantripIds.has(id));
-    if (cantrips.length !== Math.min(plan.cantrips, cantripIds.size)) errors.push(`Choose ${plan.cantrips} cantrips (${cantrips.length} chosen).`);
+    if (cantrips.length !== Math.min(plan.cantrips, names(cantripOptions))) errors.push(`Choose ${plan.cantrips} cantrips (${cantrips.length} chosen).`);
     if (plan.spellbook) {
       const book = draft.spellbook.filter((id) => levelOneIds.has(id));
-      if (book.length !== Math.min(plan.spellbook, levelOneIds.size)) errors.push(`Choose ${plan.spellbook} spells for your spellbook (${book.length} chosen).`);
+      if (book.length !== Math.min(plan.spellbook, names(levelOneOptions))) errors.push(`Choose ${plan.spellbook} spells for your spellbook (${book.length} chosen).`);
       const prepared = draft.prepared.filter((id) => book.includes(id));
       if (prepared.length !== Math.min(plan.prepared, book.length)) errors.push(`Prepare ${plan.prepared} spells from your spellbook (${prepared.length} prepared).`);
     } else if (plan.prepared) {
       const prepared = draft.prepared.filter((id) => levelOneIds.has(id));
-      if (prepared.length !== Math.min(plan.prepared, levelOneIds.size)) errors.push(`Prepare ${plan.prepared} level 1 spells (${prepared.length} chosen).`);
+      if (prepared.length !== Math.min(plan.prepared, names(levelOneOptions))) errors.push(`Prepare ${plan.prepared} level 1 spells (${prepared.length} chosen).`);
     }
   }
   for (const { list } of plan.magicInitiate) {
     const choice = draft.magicInitiate[list];
-    const cantripIds = new Set(spellsForClass(ctx.spells, list, 0).map((s) => s.id));
+    const cantripOptions = spellsForClass(ctx.spells, list, 0);
+    const cantripIds = new Set(cantripOptions.map((s) => s.id));
     const levelOneIds = new Set(spellsForClass(ctx.spells, list, 1).map((s) => s.id));
     const label = `Magic Initiate (${list})`;
     if (!choice?.ability || !MENTAL_ABILITIES.includes(choice.ability)) {
       errors.push(`${label}: choose Intelligence, Wisdom or Charisma as its spellcasting ability.`);
     }
     const cantrips = (choice?.cantrips ?? []).filter((id) => cantripIds.has(id));
-    if (cantrips.length !== Math.min(2, cantripIds.size)) errors.push(`${label}: choose two cantrips.`);
+    if (cantrips.length !== Math.min(2, names(cantripOptions))) errors.push(`${label}: choose two cantrips.`);
     if (levelOneIds.size && !(choice?.spell && levelOneIds.has(choice.spell))) errors.push(`${label}: choose a level 1 spell.`);
   }
   return errors;

@@ -22,6 +22,7 @@ import {
   type SubclassOption,
 } from '@/types';
 import { describeOption } from './describe';
+import { withoutReplacedSrd } from './replaced';
 import { optionKind, refFor } from './refs';
 
 /** A package item matched in the equipment catalog. */
@@ -199,7 +200,10 @@ export function findCatalogOption(name: string, catalog: readonly EquipmentOptio
   return key ? best(catalog.filter((o) => nameKey(o.name) === key), preferSourceId) : undefined;
 }
 
-/** DM-typed class names: the hero's own class first, then SRD, then imports; ties are reported. */
+/**
+ * DM-typed class names: the hero's own class first, then the SRD's (unless a 2024 book's class stands in for
+ * it, as in the player's lists), then imports; ties are reported.
+ */
 export function classByName(classes: readonly ClassOption[], name: string, c?: Character): { option?: ClassOption; others: ClassOption[] } {
   const key = nameKey(name);
   const named = classes.filter((o) => nameKey(o.name) === key);
@@ -208,8 +212,17 @@ export function classByName(classes: readonly ClassOption[], name: string, c?: C
     .filter((cl) => nameKey(cl.name) === key)
     .map((cl) => classOptionFor(cl, classes))
     .find((o): o is ClassOption => Boolean(o));
-  const option = own ?? named.find((o) => !o.source) ?? named[0];
+  const offered = withoutReplacedSrd(named);
+  const option = own ?? offered.find((o) => !o.source) ?? offered[0];
   return { option, others: named.filter((o) => o !== option) };
+}
+
+/**
+ * A subclass the DM names now, among those the player's list offers (a 2024 book's in place of the SRD's of
+ * the same name); then the no-id rule of subclassOptionFor (a unique name, or the SRD's on a tie).
+ */
+export function subclassByName(name: string, cls: ClassOption | undefined): SubclassOption | undefined {
+  return cls ? subclassOptionFor({ subclass: name }, { ...cls, subclasses: withoutReplacedSrd(cls.subclasses) }) : undefined;
 }
 
 /** Explicit primaryAbilityRule; else 'any' for srd:class:fighter; else 'all'. Replaces ClassStep.tsx:77, LevelUpDialog.tsx:45 and :97. */

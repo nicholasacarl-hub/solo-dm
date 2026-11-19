@@ -16,7 +16,7 @@ vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 import { characterSheetText, levelUp, weaponCritRange } from '@/engine';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef, TEXT } from '@/test/structuredFixtures';
-import type { BuilderData, Character, ClassLevel, ClassOption, CompendiumEntry, SubclassOption } from '@/types';
+import type { BuilderData, Character, ClassLevel, ClassOption, CompendiumEntry, OptionSource, SubclassOption } from '@/types';
 import { redactImportedDeep } from '@/storage/backup';
 import { redactCopiedImports } from '@/storage/redact';
 import { campaignGraph } from '@/storage/testData';
@@ -49,6 +49,7 @@ const RULES: CompendiumEntry[] = [
 const classOf = (id: string) => EXPECTED_MERGED.classes.find((c) => c.id === id) as ClassOption;
 const FIGHTER = classOf('srd:class:fighter');
 const EMBER = FIGHTER.subclasses.find((s) => s.name === 'Ember Warden')!;
+const CLERIC_OPTION = classOf('srd:class:cleric');
 const DUSK = classOf('srd:class:cleric').subclasses.find((s) => s.name === 'Dusk Domain')!;
 
 function hero(cl: Partial<ClassLevel> & Pick<ClassLevel, 'classId' | 'name' | 'level' | 'hitDie'>, extra: Partial<Character> = {}): Character {
@@ -167,13 +168,33 @@ describe('level_up from the merged builder data', () => {
       expect(out.content).toContain('- Lantern Stride (The Gloamwood Almanac) — get_character_sheet has its text');
     });
 
-    it('a new name two subclasses share takes the SRD one, says so, and keeps no book ref on it', async () => {
+    it("a new name a 2024 book's subclass shares with the SRD's takes the book's (the one the player's list offers), and says so", async () => {
+      expect(bookChampion.source?.format).toBe('2024');
       const h = setup({ builderData: data, character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 2, hitDie: 10 }) });
+      const out = await h.run('level_up', { class_name: 'Fighter', subclass: 'Champion' });
+      expect(h.sheet().classes[0]).toMatchObject({ level: 3, subclass: 'Champion', subclassId: bookChampion.id });
+      expect(h.sheet().classes[0].subclassRef?.entryId).toBe(bookChampion.id);
+      expect(out.content).toContain('Two subclasses of Fighter are named Champion (SRD 5.2.1, The Gloamwood Almanac); used the one from The Gloamwood Almanac.');
+    });
+
+    it("a new name an older book's subclass shares takes the SRD's, says so, and keeps no book ref on it", async () => {
+      const older: SubclassOption = { ...bookChampion, source: { ...(bookChampion.source as OptionSource), format: '2014' } };
+      const olderData: BuilderData = { ...EXPECTED_MERGED, classes: EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, subclasses: [...c.subclasses, older] } : c)) };
+      const h = setup({ builderData: olderData, character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 2, hitDie: 10 }) });
       const out = await h.run('level_up', { class_name: 'Fighter', subclass: 'Champion' });
       expect(h.sheet().classes[0]).toMatchObject({ level: 3, subclass: 'Champion', subclassId: 'srd:subclass:champion' });
       expect(h.sheet().classes[0].subclassRef).toBeUndefined();
       expect(out.content).toContain('Two subclasses of Fighter are named Champion (SRD 5.2.1, The Gloamwood Almanac); used the one from SRD 5.2.1.');
     });
+  });
+
+  it("multiclasses into a 2024 book's class in place of the SRD class of its name (the player's lists offer the book's)", async () => {
+    const bookCleric: ClassOption = { ...CLERIC_OPTION, id: 'lib:gloam:class:cleric', subclasses: [], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:cleric', format: '2024', adaptations: [] } };
+    const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookCleric] };
+    const h = setup({ builderData: data, character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 3, hitDie: 10, subclass: 'Champion' }) });
+    const out = await h.run('level_up', { class_name: 'Cleric' });
+    expect(h.sheet().classes.map((cl) => cl.classId)).toEqual([FIGHTER.id, bookCleric.id]);
+    expect(out.content).toContain('Two classes are named Cleric (SRD 5.2.1, The Gloamwood Almanac); used the one from The Gloamwood Almanac.');
   });
 
   it('B6: a 2014 subclass chosen at level 3 brings its older-edition notes to the sheet text and the result, once', async () => {

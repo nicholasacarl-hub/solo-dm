@@ -87,6 +87,29 @@ describe('mergeBuilderData(importedOptions(snapshot))', () => {
     expect(fighters[0].source).toBeUndefined();
   });
 
+  it("gives a 2024 book's class the SRD class's subclasses after its own (the lists show the book's class alone); an older book's gets none", () => {
+    const snapshot = gloamwoodSnapshot();
+    const wick = snapshot.accepted.find((r) => r.name === 'Wickwright') as StructuredRecord<'class'>;
+    const longWick = snapshot.accepted.find((r) => r.name === 'Order of the Long Wick') as StructuredRecord;
+    const bookFighter = (format: '2024' | '2014') =>
+      structuredRecord('class', 'Fighter', { ...wick, id: 'rec:gloam:class:fighter', name: 'Fighter', publicId: 'lib:gloam:class:fighter', data: { ...(wick.data as ClassData), format } });
+    // The book's own subclass of its Fighter (invented): attached by id, listed first.
+    const nightWard = { ...longWick, id: 'rec:gloam:subclass:night-ward', name: 'Night Ward', publicId: 'lib:gloam:subclass:night-ward', parentClassId: 'lib:gloam:class:fighter' } as StructuredRecord;
+    const fightersOf = (format: '2024' | '2014') => {
+      const { data } = mergeBuilderData(GLOAMWOOD_SRD_SUBSET, importedOptions({ ...snapshot, accepted: [...snapshot.accepted, bookFighter(format), nightWard] }));
+      return data.classes.filter((c) => c.name === 'Fighter');
+    };
+    const [srd, book] = fightersOf('2024');
+    expect(srd.subclasses.map((s) => s.name)).toEqual(['Champion', 'Ember Warden']);
+    expect(book.subclasses.map((s) => s.name)).toEqual(['Night Ward', 'Champion', 'Ember Warden']);
+    // The same options, not copies: a hero's subclass id finds the one they chose under either class.
+    expect(book.subclasses.slice(1)).toEqual(srd.subclasses);
+    const [, older] = fightersOf('2014');
+    expect(older.subclasses.map((s) => s.name)).toEqual(['Night Ward']);
+    // Other classes never inherit: the Wickwright shares no SRD class's name.
+    expect(merged().data.classes.find((c) => c.name === 'Wickwright')?.subclasses.map((s) => s.name)).toEqual(['Order of the Long Wick']);
+  });
+
   it('puts a ref with textHash, location and the book fingerprint on every copied text', () => {
     const { data } = merged();
     const imported: Partial<BuilderData> = {

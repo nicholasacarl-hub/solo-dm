@@ -51,7 +51,7 @@ import { withAdaptationNotes } from '@/data/options/adaptationNotes';
 import { entryRef, inventoryFromEntry } from '@/data/options/inventory';
 import { gainedFeatures } from '@/data/options/leveling';
 import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
-import { classByName, classOptionFor, optionSourceLabel, subclassOptionFor } from '@/data/options/resolve';
+import { classByName, classOptionFor, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
 import { matchByName } from '@/engine/util';
 import { nameKey } from '@/lib/id';
 import { textFingerprint } from '@/lib/importedContent';
@@ -1010,7 +1010,7 @@ function planFromData(c: Character, data: BuilderData, input: ToolInput<'level_u
   // Naming the hero's own subclass again chooses nothing: it stays the one its id names (B2), so a book's
   // "Champion" never turns into the SRD's. Only a new name is looked up among the class's subclasses.
   const subclassChosenNow = Boolean(input.subclass) && nameKey(existing?.subclass ?? '') !== nameKey(input.subclass ?? '');
-  const sub = subclassChosenNow ? subclassOptionFor({ subclass: input.subclass }, option) : existing ? subclassOptionFor(existing, option) : undefined;
+  const sub = subclassChosenNow ? subclassByName(input.subclass ?? '', option) : existing ? subclassOptionFor(existing, option) : undefined;
   const all = gainedFeatures(option, classLevel, sub, { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 }, { have: c.features, subclassChosenNow });
   // SRD classes and subclasses keep today's DM-supplied features: only a book's come from the data.
   const features = all.filter((f) => (f.source === 'subclass' ? Boolean(sub?.source) : Boolean(option.source)));

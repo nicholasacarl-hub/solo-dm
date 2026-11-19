@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef } from '@/test/structuredFixtures';
-import type { Character, ClassOption, EquipmentOption, FeatOption, OptionSource } from '@/types';
+import type { Character, ClassOption, EquipmentOption, FeatOption, OptionSource, SubclassOption } from '@/types';
 import {
   backgroundOptionFor,
   classByName,
@@ -17,6 +17,7 @@ import {
   optionSourceLabel,
   primaryRuleOf,
   speciesOptionFor,
+  subclassByName,
   subclassOptionFor,
   suggestParentClass,
 } from './resolve';
@@ -136,14 +137,42 @@ describe('findEquipment', () => {
 });
 
 describe('classByName', () => {
-  it("prefers the hero's own class, then the SRD, and reports ties", () => {
+  const hero = (classId: string) => ({ classes: [{ classId, name: 'Fighter', level: 3, hitDie: 10, casterType: 'none' }] }) as unknown as Character;
+  const older = (o: ClassOption): ClassOption => ({ ...o, source: { ...(o.source as OptionSource), format: '2014' } });
+
+  it("prefers the hero's own class, then the one the player's lists offer (a 2024 book's in place of the SRD's), and reports ties", () => {
     const tie = classByName(classes, 'fighter');
-    expect(tie.option).toBe(srdFighter);
-    expect(tie.others).toEqual([bookFighter, otherFighter]);
-    const hero = { classes: [{ classId: 'lib:gloam:class:fighter', name: 'Fighter', level: 3, hitDie: 10, casterType: 'none' }] } as unknown as Character;
-    expect(classByName(classes, 'Fighter', hero).option).toBe(bookFighter);
+    expect(tie.option).toBe(bookFighter);
+    expect(tie.others).toEqual([srdFighter, otherFighter]);
+    expect(classByName(classes, 'Fighter', hero('lib:gloam:class:fighter')).option).toBe(bookFighter);
+    expect(classByName(classes, 'Fighter', hero('srd:class:fighter')).option).toBe(srdFighter);
     expect(classByName(classes, 'Wickwright')).toEqual({ option: EXPECTED_MERGED.classes[2], others: [] });
     expect(classByName(classes, 'Nobody')).toEqual({ others: [] });
+  });
+
+  it("keeps the SRD's class beside older-edition books' classes of its name", () => {
+    const list = [...EXPECTED_MERGED.classes, older(bookFighter), older(otherFighter)];
+    expect(classByName(list, 'Fighter').option).toBe(srdFighter);
+  });
+});
+
+describe('subclassByName', () => {
+  const champion = srdFighter.subclasses.find((s) => s.name === 'Champion') as SubclassOption;
+  const bookChampion: SubclassOption = { ...champion, id: 'lib:gloam:subclass:champion', source: source('gloam', GLOAMWOOD_TITLE) };
+  const withBook = (sub: SubclassOption) => ({ ...srdFighter, subclasses: [...srdFighter.subclasses, sub] });
+
+  it("takes a 2024 book's subclass in place of the SRD's of the name, the SRD's beside an older book's", () => {
+    expect(subclassByName('champion', withBook(bookChampion))).toBe(bookChampion);
+    const older: SubclassOption = { ...bookChampion, source: { ...(bookChampion.source as OptionSource), format: '2014' } };
+    expect(subclassByName('Champion', withBook(older))).toBe(champion);
+    expect(subclassByName('Champion', srdFighter)).toBe(champion);
+    expect(subclassByName('Nobody', withBook(bookChampion))).toBeUndefined();
+    expect(subclassByName('Champion', undefined)).toBeUndefined();
+  });
+
+  it("leaves two books' subclasses of one name undecided, as the no-id rule does", () => {
+    const second: SubclassOption = { ...bookChampion, id: 'lib:other:subclass:champion', source: source('other', 'Other Notes') };
+    expect(subclassByName('Champion', { ...srdFighter, subclasses: [bookChampion, second] })).toBeUndefined();
   });
 });
 
