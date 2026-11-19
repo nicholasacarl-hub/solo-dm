@@ -22,7 +22,8 @@ import {
   type SubclassOption,
 } from '@/types';
 import { describeOption } from './describe';
-import { optionKind, refFor } from './refs';
+import { replacesSrd, subclassesOf, withoutReplacedSrd } from './replaced';
+import { optionFingerprint, optionKind, refFor } from './refs';
 
 /** A package item matched in the equipment catalog. */
 export interface CatalogMatch {
@@ -62,19 +63,33 @@ function baseName(name: string): string {
   return name.replace(/\s*\([^()]*\)\s*$/, '').trim() || name.trim();
 }
 
-/** Imported options named like the ref's entry, the ref's own book (by id, then by title) first. */
-function byRef<T extends { name: string } & Sourced>(ref: ImportedRef | undefined, all: readonly T[]): T | undefined {
+type Option = { id: string; name: string } & Sourced;
+
+/**
+ * The imported option named like the ref's entry from the ref's own book: a copy of the same text by its
+ * fingerprint (moved whole to another device, whatever its title), else by source id, then by title. A
+ * fingerprint only adds a match: it covers every entry's text, so the same book read differently (a newer
+ * reader, another file) gets a new one, and its title is what still finds it.
+ */
+function inRefBook<T extends Option>(ref: ImportedRef | undefined, all: readonly T[]): T | undefined {
   if (!ref) return undefined;
   const key = nameKey(ref.entryName);
   const named = all.filter((o) => o.source && nameKey(o.name) === key);
-  return (
-    named.find((o) => o.source?.sourceId === ref.sourceId) ??
-    named.find((o) => o.source && nameKey(o.source.title) === nameKey(ref.sourceTitle)) ??
-    named[0]
-  );
+  const ofRef = (list: readonly T[]) =>
+    list.find((o) => o.source?.sourceId === ref.sourceId) ?? list.find((o) => o.source && nameKey(o.source.title) === nameKey(ref.sourceTitle));
+  // Among copies of the same text (one file imported twice), the ref's source or title too.
+  const sameText = ref.bookFingerprint ? named.filter((o) => optionFingerprint(o) === ref.bookFingerprint) : [];
+  return ofRef(sameText) ?? sameText[0] ?? ofRef(named);
 }
 
-/** By id; else, for an imported id, by ref (kind + nameKey(entryName), preferring ref.sourceTitle's book); else by name among SRD options only. */
+/** Imported options named like the ref's entry, the ref's own book (inRefBook) first, then any book's. */
+function byRef<T extends Option>(ref: ImportedRef | undefined, all: readonly T[]): T | undefined {
+  if (!ref) return undefined;
+  const key = nameKey(ref.entryName);
+  return inRefBook(ref, all) ?? all.find((o) => o.source && nameKey(o.name) === key);
+}
+
+/** By id; else, for an imported id, byRef (the ref's book by fingerprint, source id or title, then any book's class of the name); else by name among SRD options only. */
 export function classOptionFor(cl: Pick<ClassLevel, 'classId' | 'name' | 'ref'>, classes: readonly ClassOption[]): ClassOption | undefined {
   const byId = classes.find((o) => o.id === cl.classId);
   if (byId) return byId;
@@ -83,23 +98,47 @@ export function classOptionFor(cl: Pick<ClassLevel, 'classId' | 'name' | 'ref'>,
   return classes.find((o) => !o.source && nameKey(o.name) === key);
 }
 
+/** One of a class's subclasses of a name: the only one, else the class's own book's (for an SRD class, the SRD's), else the SRD's. */
+function ownBookOrSrd(named: readonly SubclassOption[], cls: ClassOption): SubclassOption | undefined {
+  if (named.length < 2) return named[0];
+  const ownBook = named.filter((s) => s.source?.sourceId === cls.source?.sourceId);
+  const picked = ownBook.length ? ownBook : named.filter((s) => !s.source);
+  return picked.length === 1 ? picked[0] : undefined;
+}
+
 /**
- * By subclassId; else by name only when that name is unique under the class. An imported subclassId
- * only falls back to imported subclasses, an SRD one to SRD subclasses; an entry without an id (made
- * before ids were stored) prefers the SRD subclass of that name when an import shares it.
+ * By subclassId among every subclass the class offers (its own and those it shares, merge.ts), else among every
+ * class's in `classes` (a subclass taken through sharing stays the hero's when the classes stop sharing: one was
+ * renamed, say); else by name. A moved import's id (another device, a re-import) takes the subclass of that name
+ * from its ref's book (inRefBook), else the class's own one imported subclass of the name; an SRD id, the
+ * class's own SRD subclass of the name. An entry without an id (made
+ * before ids were stored, or a name the DM gave that two subclasses shared) takes the class's own subclass of
+ * the name, else one it shares (ownBookOrSrd breaks a tie).
  */
-export function subclassOptionFor(cl: Pick<ClassLevel, 'subclass' | 'subclassId'>, cls: ClassOption | undefined): SubclassOption | undefined {
+export function subclassOptionFor(
+  cl: Pick<ClassLevel, 'subclass' | 'subclassId' | 'subclassRef'>,
+  cls: ClassOption | undefined,
+  classes: readonly ClassOption[] = [],
+): SubclassOption | undefined {
   if (!cls) return undefined;
+  const all = subclassesOf(cls);
   if (cl.subclassId) {
-    const byId = cls.subclasses.find((s) => s.id === cl.subclassId);
+    const id = cl.subclassId;
+    const byId = all.find((s) => s.id === id) ?? classes.flatMap((c) => c.subclasses).find((s) => s.id === id);
     if (byId) return byId;
   }
   if (!cl.subclass) return undefined;
   const key = nameKey(cl.subclass);
-  let named = cls.subclasses.filter((s) => nameKey(s.name) === key);
-  if (cl.subclassId) named = named.filter((s) => Boolean(s.source) === isImportedId(cl.subclassId));
-  else if (named.length > 1) named = named.filter((s) => !s.source);
-  return named.length === 1 ? named[0] : undefined;
+  const named = (list: readonly SubclassOption[]) => list.filter((s) => nameKey(s.name) === key);
+  if (cl.subclassId) {
+    const imported = isImportedId(cl.subclassId);
+    const fromRef = imported ? inRefBook(cl.subclassRef, all) : undefined;
+    if (fromRef) return fromRef;
+    const same = named(cls.subclasses).filter((s) => Boolean(s.source) === imported);
+    return same.length === 1 ? same[0] : undefined;
+  }
+  const own = named(cls.subclasses);
+  return ownBookOrSrd(own.length ? own : named(cls.sharedSubclasses ?? []), cls);
 }
 
 function originOptionFor<T extends { id: string; name: string } & Sourced>(
@@ -199,7 +238,10 @@ export function findCatalogOption(name: string, catalog: readonly EquipmentOptio
   return key ? best(catalog.filter((o) => nameKey(o.name) === key), preferSourceId) : undefined;
 }
 
-/** DM-typed class names: the hero's own class first, then SRD, then imports; ties are reported. */
+/**
+ * DM-typed class names: the hero's own class first, then the SRD's (unless a 2024 book's class stands in for
+ * it, as in the player's lists), then imports; ties are reported.
+ */
 export function classByName(classes: readonly ClassOption[], name: string, c?: Character): { option?: ClassOption; others: ClassOption[] } {
   const key = nameKey(name);
   const named = classes.filter((o) => nameKey(o.name) === key);
@@ -208,8 +250,41 @@ export function classByName(classes: readonly ClassOption[], name: string, c?: C
     .filter((cl) => nameKey(cl.name) === key)
     .map((cl) => classOptionFor(cl, classes))
     .find((o): o is ClassOption => Boolean(o));
-  const option = own ?? named.find((o) => !o.source) ?? named[0];
+  const offered = withoutReplacedSrd(named);
+  // A 2024 book's class standing in for the SRD's takes its place ahead of older books' (whatever their titles).
+  const option = own ?? offered.find((o) => !o.source) ?? offered.find(replacesSrd) ?? offered[0];
   return { option, others: named.filter((o) => o !== option) };
+}
+
+/**
+ * A subclass the DM names now, among those the player's list offers (subclassesOf, with a 2024 book's in place
+ * of the SRD's of the same name). On a tie: the SRD's beside older books'; else, when the SRD's of the name is
+ * hidden, the 2024 book's standing in for it (the class's own first); else the class's own (ownBookOrSrd).
+ */
+export function subclassByName(name: string, cls: ClassOption | undefined): SubclassOption | undefined {
+  if (!cls) return undefined;
+  const key = nameKey(name);
+  const all = subclassesOf(cls);
+  const named = withoutReplacedSrd(all).filter((s) => nameKey(s.name) === key);
+  if (named.length < 2) return named[0];
+  const srd = named.find((s) => !s.source);
+  if (srd) return srd;
+  if (all.some((s) => !s.source && nameKey(s.name) === key)) return named.find(replacesSrd);
+  const own = named.filter((s) => cls.subclasses.includes(s));
+  return ownBookOrSrd(own.length ? own : named, cls);
+}
+
+/**
+ * The multiclass prerequisites of the book classes among a new class and the hero's own (SRD 5.2.1
+ * "Multiclassing": 13+ in each primary ability), for the engine, which knows only the SRD classes'.
+ */
+export function multiclassPrimariesFor(
+  newClass: ClassOption | undefined,
+  c: Pick<Character, 'classes'>,
+  classes: readonly ClassOption[],
+): { name: string; primaryAbilities: ClassOption['primaryAbilities']; primaryRule: 'all' | 'any' }[] {
+  const books = [newClass, ...c.classes.map((cl) => classOptionFor(cl, classes))].filter((o): o is ClassOption => Boolean(o?.source));
+  return [...new Map(books.map((o) => [o.id, { name: o.name, primaryAbilities: o.primaryAbilities, primaryRule: primaryRuleOf(o) }])).values()];
 }
 
 /** Explicit primaryAbilityRule; else 'any' for srd:class:fighter; else 'all'. Replaces ClassStep.tsx:77, LevelUpDialog.tsx:45 and :97. */

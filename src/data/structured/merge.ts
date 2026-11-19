@@ -4,8 +4,9 @@
  * without mutating it (an SRD class that gains subclasses is shallow-cloned once).
  *
  * Owner: E4. Rules: only accepted, valid records of switched-on books (the snapshot); explicit fields win;
- * same names coexist (lookups go through options/resolve.ts); SRD first in builder.json order, then
- * imports grouped by book title, then by name; problems are reported, never thrown.
+ * same names coexist in the data (lookups go through options/resolve.ts; the lists hide an SRD option a
+ * 2024 book's stands in for, options/replaced.ts); SRD first in builder.json order, then imports grouped
+ * by book title, then by name; problems are reported, never thrown.
  */
 import { ABILITY_NAMES, SKILL_NAMES } from '@/types';
 import type {
@@ -36,6 +37,8 @@ import type {
   TextSpan,
   TraitData,
 } from '@/types';
+import { nameKey } from '@/lib/id';
+import { replacesSrd } from '../options/replaced';
 import { findEquipment } from '../options/resolve';
 import { refFor, spanLocation } from '../options/refs';
 import type { LibrarySnapshot } from '../rulesIndexStore';
@@ -327,13 +330,14 @@ const sorted = <T extends Sourced>(list: readonly T[]) => [...list].sort(byBookT
 
 /**
  * A subclass as attached to its parent (§5.1 rule 5): features printed below the parent's subclass level
- * arrive at that level (subclass-early-features), and an older-format subclass on an SRD class notes the
- * possible overlap (subclass-overlap). `firstLevel` keeps the printed level; the option itself is untouched.
+ * arrive at that level (subclass-early-features), and an older-format subclass on an SRD class or a 2024
+ * book's notes the possible overlap (subclass-overlap). `firstLevel` keeps the printed level; the option
+ * itself is untouched.
  */
 function placedSubclass(sub: SubclassOption, parent: ClassOption): SubclassOption {
   const level = parent.subclassLevel;
   const early = sub.features.some((f) => f.level < level);
-  const overlap = sub.source?.format === '2014' && !parent.source;
+  const overlap = sub.source?.format === '2014' && (!parent.source || replacesSrd(parent));
   if (!early && !overlap) return sub;
   const notes: Adaptation[] = [];
   if (early) notes.push(adaptation('subclass-early-features', { name: sub.name, className: parent.name, level }));
@@ -400,12 +404,28 @@ export function mergeBuilderData(srd: BuilderData, imported: ImportedOptions): {
     const subs = attachTo.get(cls.id);
     return subs ? { ...cls, subclasses: [...cls.subclasses, ...subs] } : cls;
   };
+  const srdClasses = srd.classes.map(attach);
+  const bookClasses = importedClasses.map(attach);
+  // A 2024 book's class stands in for the SRD class of its name (the lists show the book's alone), and the two
+  // share their subclasses (sharedSubclasses): the book's class offers the SRD class's (the SRD's, and those
+  // attached to it), so none goes out of reach when the book's own aren't accepted; the SRD class, which a hero
+  // made before the book keeps, offers the book's. Each keeps its own in `subclasses`, which lookups by name
+  // prefer; the lists show one subclass per name.
+  const srdSubclasses = new Map(srdClasses.map((c) => [nameKey(c.name), c.subclasses]));
+  const standInSubclasses = new Map<string, SubclassOption[]>();
+  for (const c of bookClasses) {
+    if (replacesSrd(c)) standInSubclasses.set(nameKey(c.name), [...(standInSubclasses.get(nameKey(c.name)) ?? []), ...c.subclasses]);
+  }
+  const share = (cls: ClassOption, from: ReadonlyMap<string, SubclassOption[]>): ClassOption => {
+    const shared = from.get(nameKey(cls.name));
+    return shared?.length ? { ...cls, sharedSubclasses: [...shared] } : cls;
+  };
 
   const mundane = [...srd.equipment, ...imported.equipment];
   const magic = magicItems.map((m) => catalogMagicItem(m, mundane)).filter((o): o is EquipmentOption => o !== null);
   return {
     data: {
-      classes: [...srd.classes.map(attach), ...importedClasses.map(attach)],
+      classes: [...srdClasses.map((c) => share(c, standInSubclasses)), ...bookClasses.map((c) => (replacesSrd(c) ? share(c, srdSubclasses) : c))],
       species: [...srd.species, ...sorted(imported.species)],
       backgrounds: [...srd.backgrounds, ...sorted(imported.backgrounds)],
       feats: [...srd.feats, ...sorted(imported.feats)],

@@ -280,7 +280,8 @@ function BaseItemEditor() {
         hint="The armor or weapon it is. Matching one in the gear list gives the item that armor's AC."
       />
       <datalist id={listId}>
-        {[...catalog.map((e) => e.name), ...ANY_ITEMS].map((n) => (
+        {/* Once each: the SRD and a book can both list "Chain Mail". */}
+        {[...new Set([...catalog.map((e) => e.name), ...ANY_ITEMS])].map((n) => (
           <option key={n} value={n} />
         ))}
       </datalist>

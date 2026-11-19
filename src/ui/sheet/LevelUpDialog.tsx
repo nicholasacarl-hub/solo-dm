@@ -31,7 +31,8 @@ import {
   type ScoreIncrease,
   type SubclassSpells,
 } from '@/data/options/levelUpChoices';
-import { classOptionFor, primaryRuleOf, subclassOptionFor } from '@/data/options/resolve';
+import { subclassesOf, withoutReplacedSrd } from '@/data/options/replaced';
+import { classOptionFor, multiclassPrimariesFor, primaryRuleOf, subclassOptionFor } from '@/data/options/resolve';
 import { nameKey } from '@/lib/id';
 import { useGame } from '@/state/gameStore';
 import {
@@ -111,8 +112,9 @@ function planLevel(
   const existing = choice.kind === 'existing' ? c.classes[choice.index] : undefined;
   const option = existing ? classOptionFor(existing, classes) : classes.find((o) => choice.kind === 'new' && o.id === choice.classId);
   const classLevel = (existing?.level ?? 0) + 1;
-  const needsSubclass = Boolean(option && classLevel >= option.subclassLevel && !existing?.subclass && option.subclasses.length);
-  const sub = needsSubclass ? option?.subclasses.find((s) => s.id === subclassId) : existing ? subclassOptionFor(existing, option) : undefined;
+  const choices = option ? subclassesOf(option) : [];
+  const needsSubclass = Boolean(option && classLevel >= option.subclassLevel && !existing?.subclass && choices.length);
+  const sub = needsSubclass ? choices.find((s) => s.id === subclassId) : existing ? subclassOptionFor(existing, option, classes) : undefined;
   const ctx = { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 };
   const features = option ? gainedFeatures(option, classLevel, sub, ctx, { have: c.features, subclassChosenNow: needsSubclass }) : [];
   return {
@@ -131,7 +133,7 @@ function planLevel(
 }
 
 /** The engine call for the plan: an existing class by its own id; a new one with its numbers and ref. */
-function levelUpOptions(plan: LevelPlan, data: BuilderData | null, hpMethod: LevelUpOptions['hpMethod']): LevelUpOptions {
+function levelUpOptions(plan: LevelPlan, data: BuilderData | null, hpMethod: LevelUpOptions['hpMethod'], c: Character): LevelUpOptions {
   const { existing, option } = plan;
   const chosen = plan.needsSubclass ? plan.sub : undefined;
   const subclassRef = subclassRefOf(chosen);
@@ -149,6 +151,8 @@ function levelUpOptions(plan: LevelPlan, data: BuilderData | null, hpMethod: Lev
     newFeatures: plan.features,
     // Lets level-up recompute AC (Unarmored Defense, Draconic Resilience...) against real armor stats.
     ...(data ? { equipment: data.equipment } : {}),
+    // A book's classes have no SRD data: the engine checks their multiclass prerequisites from these.
+    ...(data ? { multiclassPrimaries: multiclassPrimariesFor(existing ? undefined : option, c, data.classes) } : {}),
   };
 }
 
@@ -291,7 +295,8 @@ function ClassSection({
   const multiId = useId();
   const held = character.classes.map((cl) => classOptionFor(cl, classes)?.id).filter(Boolean);
   const heldNames = new Map(character.classes.map((cl) => [nameKey(cl.name), cl.name]));
-  const notHeld = classes.filter((o) => !held.includes(o.id));
+  // Without the SRD classes a 2024 book's class of the same name stands in for (the one chosen stays).
+  const notHeld = withoutReplacedSrd(classes, [choice.kind === 'new' ? choice.classId : null]).filter((o) => !held.includes(o.id));
   // D29: two "Fighter" entries couldn't be told apart (the DM levels a class by name).
   const multiclassOptions = notHeld.filter((o) => !heldNames.has(nameKey(o.name)));
   const hidden = notHeld.filter((o) => heldNames.has(nameKey(o.name)));
@@ -360,7 +365,8 @@ function ClassSection({
 }
 
 function SubclassSection({ option, value, onChange }: { option: ClassOption; value: string; onChange: (id: string) => void }) {
-  const notes = option.subclasses.find((s) => s.id === value)?.source?.adaptations.map((a) => a.note) ?? [];
+  const choices = subclassesOf(option);
+  const notes = choices.find((s) => s.id === value)?.source?.adaptations.map((a) => a.note) ?? [];
   return (
     <Section title={`${option.name} subclass`}>
       <RadioCards
@@ -368,7 +374,7 @@ function SubclassSection({ option, value, onChange }: { option: ClassOption; val
         value={value || null}
         onChange={onChange}
         columns="sm:grid-cols-1"
-        options={option.subclasses.map((s) => ({
+        options={withoutReplacedSrd(choices, [value]).map((s) => ({
           value: s.id,
           title: s.name,
           meta: s.source ? (
@@ -492,7 +498,12 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
     : [];
   const prereqMet = prereqClasses.every((c) => meetsPrimary(c, character.abilityScores));
   const picks: FeatPick[] = plan.trigger
-    ? featChoices(plan.trigger.kind, builder.data?.feats ?? [], { cls: option, characterLevel: level + 1, have: character.features })
+    ? featChoices(plan.trigger.kind, builder.data?.feats ?? [], {
+        cls: option,
+        characterLevel: level + 1,
+        have: character.features,
+        ...(featChoice.kind === 'feat' ? { keepId: featChoice.pick.id } : {}),
+      })
     : [];
   const xpNeeded = XP_THRESHOLDS[level];
   const shortOnXp = !milestone && character.xp < xpNeeded;
@@ -508,7 +519,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
   const apply = async () => {
     if (!canApply) return;
     setBusy(true);
-    const opts = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll');
+    const opts = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll', character);
     const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null } = { result: null, uses: [], choice: null };
     const saved = await edit((c) => {
       const r = levelUp(c, opts);

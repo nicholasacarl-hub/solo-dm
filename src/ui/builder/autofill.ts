@@ -4,7 +4,7 @@
  * `letDmDecide` re-decides a whole step. Randomness comes from the engine's Rng.
  */
 import { cryptoRng, rollDice, type Rng } from '@/engine';
-import { ABILITIES, SKILLS, SKILL_ABILITY, type Ability, type BuilderData, type OptionSource, type Skill } from '@/types';
+import { ABILITIES, SKILLS, SKILL_ABILITY, type Ability, type BackgroundOption, type BuilderData, type OptionSource, type Skill } from '@/types';
 import { nameKey } from '@/lib/id';
 import {
   POINT_BUY_BUDGET,
@@ -23,9 +23,11 @@ import { DM_BACKSTORY, defaultPortrait, pick, suggestAlignment, suggestName, sug
 import {
   activeSteps,
   classSpellOptions,
+  grantedSpells,
   chosenFightingStyle,
   fightingStyleChoices,
   masteryPlan,
+  offeredFightingStyles,
   selectClass,
   selectSpecies,
   spellPlan,
@@ -33,7 +35,7 @@ import {
   type BuilderContext,
 } from './logic';
 import { backgroundAbilityPool } from './abilities';
-import { inSourceFilter, spellInSourceFilter } from './sources';
+import { filtered, subclassesOf, visibleSpells, withoutReplacedSrd } from './sources';
 import {
   MAGIC_INITIATE_LISTS,
   STANDARD_LANGUAGES,
@@ -42,12 +44,12 @@ import {
   grantedSkills,
   isMagicInitiate,
   languagePlan,
-  magicInitiateSources,
   originFeatOptions,
   originFeats,
   picks,
   skillPlan,
   skillProficiencies,
+  splitFeatName,
   suggestedLanguages,
 } from './origin';
 import { findSpellByName, spellsForClass, type SpellInfo } from './spells';
@@ -99,12 +101,21 @@ function shuffle<T>(items: readonly T[], rng: Rng): T[] {
   return out;
 }
 
-/** Keep `kept`, then add from `ranked` until there are `count`. */
-function topUp<T>(kept: T[], ranked: T[], count: number): T[] {
-  const out = kept.slice(0, count);
+/**
+ * `kept`, then the best of `ranked` up to `count`: never two with the same key (the item itself by default),
+ * nor one whose key is `taken` (chosen elsewhere).
+ */
+function topUp<T>(kept: T[], ranked: T[], count: number, key: (item: T) => unknown = (item) => item, taken: ReadonlySet<unknown> = new Set()): T[] {
+  // Kept items stay, one per key (a draft from before a book's spell and the SRD's were one choice may hold both).
+  const out: T[] = [];
+  for (const item of kept) if (out.length < count && !out.some((o) => key(o) === key(item))) out.push(item);
+  const seen = new Set([...taken, ...out.map(key)]);
   for (const item of ranked) {
     if (out.length >= count) break;
-    if (!out.includes(item)) out.push(item);
+    if (!seen.has(key(item))) {
+      out.push(item);
+      seen.add(key(item));
+    }
   }
   return out;
 }
@@ -118,8 +129,20 @@ function recommendedPlain(description: string): string | undefined {
 // Per-step fillers (keep what's valid, fill the rest)
 // ---------------------------------------------------------------------------
 
-/** The options of a list the source filter shows (autofill picks only among those). */
-const shown = <T extends { source?: OptionSource }>(list: readonly T[], draft: BuilderDraft): T[] => list.filter((o) => inSourceFilter(o, draft.sourceFilter));
+/**
+ * The options of a list as its step shows them (autofill picks only among those): the source filter's ("All"
+ * without the SRD options a 2024 book's stand in for), and `keep`, the current choice, whatever the filter. A
+ * filter that leaves none `usable` falls back to "All", as the Magic Initiate lists do, so the hero ends up complete.
+ */
+function shown<T extends { id: string; name: string; source?: OptionSource }>(
+  list: readonly T[],
+  draft: BuilderDraft,
+  keep?: string | null,
+  usable: (option: T) => boolean = () => true,
+): T[] {
+  const mine = filtered(list, draft.sourceFilter, keep).filter(usable);
+  return mine.length || !draft.sourceFilter ? mine : filtered(list, null, keep).filter(usable);
+}
 
 function fillClass(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDraft {
   const classes = shown(data.classes, draft);
@@ -128,7 +151,8 @@ function fillClass(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDra
   const next = selectClass(draft, cls.id);
   let fightingStyle = next.fightingStyle;
   if (needsFightingStyle(cls) && !chosenFightingStyle(fightingStyleChoices(cls, data), fightingStyle)) {
-    const styles = fightingStyleChoices(cls, data, draft.sourceFilter);
+    const offered = offeredFightingStyles(cls, data, draft.sourceFilter);
+    const styles = offered.length ? offered : offeredFightingStyles(cls, data, null);
     const recommended = recommendedPlain(findFeatureDef(cls, 'Fighting Style')?.description ?? '');
     fightingStyle = (styles.find((f) => recommended && nameKey(f.name) === nameKey(recommended)) ?? styles[0])?.id ?? null;
   }
@@ -137,7 +161,7 @@ function fillClass(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDra
     if (!options.some((o) => o.name === classOptions[feature.name])) classOptions[feature.name] = pick(options, rng).name;
   }
   const subclassId =
-    choosesSubclassAtLevel1(cls) && !cls.subclasses.some((s) => s.id === next.subclassId) ? pick(cls.subclasses, rng).id : next.subclassId;
+    choosesSubclassAtLevel1(cls) && !subclassesOf(cls).some((s) => s.id === next.subclassId) ? pick(withoutReplacedSrd(subclassesOf(cls)), rng).id : next.subclassId;
   return { ...next, fightingStyle, classOptions, subclassId };
 }
 
@@ -145,18 +169,26 @@ function fillClass(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDra
 function fillBackgroundFeat(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDraft {
   const { background } = picks(draft, data);
   if (!background?.featChoice) return draft;
-  const options = shown(originFeatOptions(data), draft);
+  const options = shown(originFeatOptions(data), draft, draft.backgroundFeat);
   const current = options.find((f) => f.id === draft.backgroundFeat);
   const feat = current ?? (options.length ? pick(options, rng) : undefined);
   if (!feat) return draft;
-  const list = isMagicInitiate(feat.name) ? (draft.backgroundFeatList ?? pick(MAGIC_INITIATE_LISTS, rng)) : null;
+  // Never the species' Magic Initiate list (a feat taken twice needs another list each time).
+  const speciesList = originFeats(draft, data).find((f) => f.from === 'species' && isMagicInitiate(f.name))?.option;
+  const list = isMagicInitiate(feat.name) ? (draft.backgroundFeatList ?? pick(MAGIC_INITIATE_LISTS.filter((l) => l !== speciesList), rng)) : null;
   return { ...draft, backgroundFeat: feat.id, backgroundFeatList: list };
 }
 
 function fillBackground(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDraft {
   const { cls } = picks(draft, data);
   let next = draft;
-  const backgrounds = shown(data.backgrounds, draft);
+  const shownBackgrounds = shown(data.backgrounds, draft);
+  // Not one whose Magic Initiate takes the list the species' already has (a feat taken twice needs another list),
+  // while another fits.
+  const speciesList = originFeats(draft, data).find((f) => f.from === 'species' && isMagicInitiate(f.name))?.option;
+  const clashes = (b: BackgroundOption) => Boolean(speciesList && b.feat && isMagicInitiate(b.feat) && splitFeatName(b.feat).option === speciesList);
+  const fitting = shown(data.backgrounds, draft, undefined, (b) => !clashes(b));
+  const backgrounds = fitting.length ? fitting : shownBackgrounds;
   if (!picks(draft, data).background && backgrounds.length) {
     const priority = abilityPriority(cls);
     // "Any three" backgrounds fit as well as the class's three best abilities.
@@ -200,16 +232,18 @@ function fillSpecies(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderD
     }
   }
   if (choices.originFeat) {
-    const taken = new Set(originFeats(next, data).filter((f) => f.from === 'background').map((f) => f.feat?.id));
-    const options = shown(originFeatOptions(data), next).filter((f) => f.repeatable || !taken.has(f.id));
+    // By name: the background's feat of any book is the same feat.
+    const taken = new Set(originFeats(next, data).filter((f) => f.from === 'background').flatMap((f) => (f.feat ? [nameKey(f.feat.name)] : [])));
+    const options = shown(originFeatOptions(data), next, next.speciesFeat, (f) => f.repeatable || !taken.has(nameKey(f.name)));
     const current = options.find((f) => f.id === next.speciesFeat);
     const recommended = recommendedPlain(p.species.traits.find((t) => t.name === choices.originFeat?.trait)?.description ?? '');
     const feat = current ?? options.find((f) => recommended && nameKey(f.name) === nameKey(recommended)) ?? options[0];
     if (feat) {
       patch.speciesFeat = feat.id;
-      if (isMagicInitiate(feat.name) && !next.speciesFeatList) {
+      if (isMagicInitiate(feat.name)) {
+        // A list the background's Magic Initiate already has (it changed since) gives way too.
         const used = originFeats(next, data).filter((f) => f.from === 'background').map((f) => f.option);
-        patch.speciesFeatList = MAGIC_INITIATE_LISTS.find((l) => !used.includes(l)) ?? 'Wizard';
+        if (!next.speciesFeatList || used.includes(next.speciesFeatList)) patch.speciesFeatList = MAGIC_INITIATE_LISTS.find((l) => !used.includes(l)) ?? 'Wizard';
       }
     }
   }
@@ -322,54 +356,94 @@ function fillEquipment(draft: BuilderDraft, data: BuilderData): BuilderDraft {
   return { ...next, weaponMasteries: topUp(kept, ranked.map((c) => c.name), count) };
 }
 
-function recommendedSpells(draft: BuilderDraft, ctx: BuilderContext): { cantrips: SpellInfo[]; levelOne: SpellInfo[] } {
+/** The spells the class's level 1 features recommend ("Light and Sacred Flame are recommended"), as `options` lists them. */
+function recommendedSpells(draft: BuilderDraft, ctx: BuilderContext, options: SpellInfo[]): string[] {
   const { cls } = picks(draft, ctx.data);
   const names = cls ? featuresAtLevel(cls, 1).flatMap((f) => recommendedNames(f.description)).flat() : [];
-  const found = names.map((n) => findSpellByName(ctx.spells, n)).filter((s): s is SpellInfo => Boolean(s));
-  return { cantrips: found.filter((s) => s.level === 0), levelOne: found.filter((s) => s.level === 1) };
+  return names.map((n) => findSpellByName(options, n)?.id).filter((id): id is string => Boolean(id));
 }
 
 function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): BuilderDraft {
   if (!ctx.spells.length) return draft;
   const plan = spellPlan(draft, ctx.data);
+  const byId = new Map(ctx.spells.map((s) => [s.id, s]));
+  // One spell per name: a book's spell and the SRD's of the same name are one choice.
+  const nameOf = (id: string) => nameKey(byId.get(id)?.name ?? id);
   let next = draft;
+  // Spells the hero already has, by name, from Magic Initiate or granted by the class or species: the class
+  // lists don't take them again.
+  const granted = new Set(grantedSpells(draft, ctx.data).keys());
+  const initiateNames = new Set([
+    ...plan.magicInitiate
+      .flatMap(({ list }) => [...(draft.magicInitiate[list]?.cantrips ?? []), ...(draft.magicInitiate[list]?.spell ? [draft.magicInitiate[list]?.spell as string] : [])])
+      .map(nameOf),
+    ...granted,
+  ]);
   if (plan.casting) {
-    const recommended = recommendedSpells(draft, ctx);
-    const visible = (list: SpellInfo[]) => list.filter((sp) => spellInSourceFilter(sp, draft.sourceFilter));
-    const cantripOptions = visible(classSpellOptions(draft, ctx, 0));
-    const levelOneOptions = visible(classSpellOptions(draft, ctx, 1));
+    // As the step lists them (spells already chosen stay); a filter that leaves too few names falls back to "All",
+    // as Magic Initiate's lists do, so the hero ends up complete.
+    const chosen = new Set([...draft.cantrips, ...draft.spellbook, ...draft.prepared]);
+    const options = (level: 0 | 1, need: number) => {
+      const all = classSpellOptions(draft, ctx, level);
+      const mine = visibleSpells(all, draft.sourceFilter, chosen);
+      // The class's own picks stay (a Magic Initiate pick of the same name gives way to them).
+      const own = new Set((level === 0 ? draft.cantrips : plan.spellbook ? draft.spellbook : draft.prepared).map(nameOf).filter((key) => !granted.has(key)));
+      const free = new Set(mine.map((s) => nameKey(s.name)).filter((key) => own.has(key) || !initiateNames.has(key)));
+      return free.size >= need || !draft.sourceFilter ? mine : visibleSpells(all, null, chosen);
+    };
+    const cantripOptions = options(0, plan.cantrips);
+    const levelOneOptions = options(1, plan.spellbook || plan.prepared);
     const cantripIds = cantripOptions.map((s) => s.id);
     const levelOneIds = levelOneOptions.map((s) => s.id);
+    // Valid picks stay, but not one the hero has since been granted (a species chosen after the spells).
+    const keeps = (ids: string[], options: string[]) => ids.filter((id) => options.includes(id) && !granted.has(nameOf(id)));
+    // At most as many as the list has names (topUp skips the ones the hero already has).
+    const countOf = (ids: string[]) => new Set(ids.map(nameOf)).size;
     const cantrips = topUp(
-      draft.cantrips.filter((id) => cantripIds.includes(id)),
-      [...recommended.cantrips.map((s) => s.id), ...shuffle(cantripIds, rng)],
-      Math.min(plan.cantrips, cantripIds.length),
+      keeps(draft.cantrips, cantripIds),
+      [...recommendedSpells(draft, ctx, cantripOptions), ...shuffle(cantripIds, rng)],
+      Math.min(plan.cantrips, countOf(cantripIds)),
+      nameOf,
+      initiateNames,
     );
-    const rankedLevelOne = [...recommended.levelOne.map((s) => s.id), ...shuffle(levelOneIds, rng)];
+    const rankedLevelOne = [...recommendedSpells(draft, ctx, levelOneOptions), ...shuffle(levelOneIds, rng)];
+    const levelOneCount = countOf(levelOneIds);
     if (plan.spellbook) {
-      const spellbook = topUp(draft.spellbook.filter((id) => levelOneIds.includes(id)), rankedLevelOne, Math.min(plan.spellbook, levelOneIds.length));
+      const spellbook = topUp(keeps(draft.spellbook, levelOneIds), rankedLevelOne, Math.min(plan.spellbook, levelOneCount), nameOf, initiateNames);
       const prepared = topUp(draft.prepared.filter((id) => spellbook.includes(id)), spellbook, Math.min(plan.prepared, spellbook.length));
       next = { ...next, cantrips, spellbook, prepared };
     } else {
-      const prepared = topUp(draft.prepared.filter((id) => levelOneIds.includes(id)), rankedLevelOne, Math.min(plan.prepared, levelOneIds.length));
+      const prepared = topUp(keeps(draft.prepared, levelOneIds), rankedLevelOne, Math.min(plan.prepared, levelOneCount), nameOf, initiateNames);
       next = { ...next, cantrips, prepared };
     }
   }
   const scores = finalAbilityScores(next, picks(next, ctx.data).background);
   const magicInitiate = { ...next.magicInitiate };
-  // Don't spend Magic Initiate picks on spells the character already knows.
-  const known = new Set([...next.cantrips, ...next.spellbook, ...next.prepared]);
-  for (const { list } of magicInitiateSources(next, ctx.data)) {
+  // Don't spend Magic Initiate picks on spells the character already knows or is granted (by name, of any book).
+  const known = new Set([...[...next.cantrips, ...next.spellbook, ...next.prepared].map(nameOf), ...granted]);
+  for (const { list } of plan.magicInitiate) {
     const current = magicInitiate[list];
-    const cantripIds = spellsForClass(ctx.spells, list, 0).map((s) => s.id).filter((id) => !known.has(id) || current?.cantrips.includes(id));
-    const levelOneIds = spellsForClass(ctx.spells, list, 1).map((s) => s.id).filter((id) => !known.has(id) || current?.spell === id);
+    const keep = new Set([...(current?.cantrips ?? []), ...(current?.spell ? [current.spell] : [])]);
+    // As the step lists them (the source filter's); a filter that leaves too few falls back to "All". A spell the
+    // hero knows otherwise is left out, a current pick too (it was made before that list changed).
+    const listed = (level: 0 | 1, need: number, own: (id: string) => boolean = () => false) => {
+      const free = (filter: string | null) =>
+        visibleSpells(spellsForClass(ctx.spells, list, level), filter, keep)
+          .map((s) => s.id)
+          .filter((id) => !known.has(nameOf(id)) || own(id));
+      const shownIds = free(next.sourceFilter);
+      return new Set(shownIds.map(nameOf)).size >= need ? shownIds : free(null);
+    };
+    // The level 1 spell may be a granted one (it adds a free casting).
+    const cantripIds = listed(0, 2);
+    const levelOneIds = listed(1, 1, (id) => current?.spell === id && granted.has(nameOf(id)));
     const mental: Ability[] = ['int', 'wis', 'cha'];
     const ability = current?.ability && mental.includes(current.ability) ? current.ability : [...mental].sort((a, b) => scores[b] - scores[a])[0];
-    const cantrips = topUp((current?.cantrips ?? []).filter((id) => cantripIds.includes(id)), shuffle(cantripIds, rng), Math.min(2, cantripIds.length));
+    const cantrips = topUp((current?.cantrips ?? []).filter((id) => cantripIds.includes(id)), shuffle(cantripIds, rng), Math.min(2, new Set(cantripIds.map(nameOf)).size), nameOf);
     const spell = current?.spell && levelOneIds.includes(current.spell) ? current.spell : (shuffle(levelOneIds, rng)[0] ?? null);
     magicInitiate[list] = { ability, cantrips, spell };
-    cantrips.forEach((id) => known.add(id));
-    if (spell) known.add(spell);
+    cantrips.forEach((id) => known.add(nameOf(id)));
+    if (spell) known.add(nameOf(spell));
   }
   return { ...next, magicInitiate };
 }

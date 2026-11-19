@@ -70,6 +70,11 @@ export interface LevelUpOptions {
   newFeatures?: Omit<Feature, 'id'>[];
   /** Equipment catalog (BuilderData.equipment) for recomputing AC; without it the SRD armor table is used. */
   equipment?: readonly EquipmentOption[];
+  /**
+   * Multiclass prerequisites of the classes the engine has no SRD data for (a book's: the new class, or one the
+   * hero has), checked like the SRD's when the hero multiclasses (SRD 5.2.1 "Multiclassing": 13+ in each).
+   */
+  multiclassPrimaries?: readonly { name: string; primaryAbilities: readonly Ability[]; primaryRule: 'all' | 'any' }[];
   rng?: Rng;
 }
 
@@ -147,9 +152,14 @@ function rollHitPoints(
   return { hp: Math.max(1, value + conMod), detail: `d${die} result ${value} ${con} CON` };
 }
 
-function multiclassPrerequisites(c: Character, newClass: SrdClassInfo | undefined, className: string): string[] {
+function multiclassPrerequisites(
+  c: Character,
+  newClass: SrdClassInfo | undefined,
+  className: string,
+  books: NonNullable<LevelUpOptions['multiclassPrimaries']> = [],
+): string[] {
   const reminders: string[] = [];
-  const toCheck = [newClass, ...c.classes.map((cl) => srdClassFor(cl))].filter((x): x is SrdClassInfo => !!x);
+  const toCheck = [...[newClass, ...c.classes.map((cl) => srdClassFor(cl))].filter((x): x is SrdClassInfo => !!x), ...books];
   const unmet = toCheck.flatMap((info) => {
     const scores = info.primaryAbilities.map((a) => ({ a, score: toInt(c.abilityScores[a], 10) }));
     const ok = info.primaryRule === 'any' ? scores.some((s) => s.score >= 13) : scores.every((s) => s.score >= 13);
@@ -418,7 +428,7 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
   events.push(...ac.events.filter((e) => e.type !== 'warning'));
 
   const reminders: string[] = [];
-  if (!existing && oldTotal > 0) reminders.push(...multiclassPrerequisites(c, info, gained.name));
+  if (!existing && oldTotal > 0) reminders.push(...multiclassPrerequisites(c, info, gained.name, opts.multiclassPrimaries));
   if (info) reminders.push(...srdLevelReminders(info, gained, [...c.features, ...added]));
   else reminders.push(`Check the ${gained.name} class table for level ${gained.level} features and choices.`);
   reminders.push(...slotReminders(c, next));

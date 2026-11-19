@@ -2,6 +2,7 @@ import { useId, useState } from 'react';
 import { Info } from 'lucide-react';
 import { formatModifier, spellAttackBonus, spellSaveDC } from '@/engine';
 import { cn } from '@/lib/cn';
+import { nameKey } from '@/lib/id';
 import { ABILITY_NAMES, type Ability } from '@/types';
 import { Badge, Input, Spinner } from '@/ui/components/ui';
 import { RulesEntryDialog } from '@/ui/sheet/SpellsPanel';
@@ -9,14 +10,15 @@ import { SourceFilter } from '../BookBadges';
 import { Issues, RadioCards, StepHeader, SubHeading } from '../BuilderParts';
 import {
   classSpellOptions,
+  grantedSpells,
   optionBooks,
   picks,
-  spellInSourceFilter,
   spellPlan,
   spellsForClass,
   toggleInList,
   unreviewedImport,
   validateStep,
+  visibleSpells,
   type MagicInitiateChoice,
   type SpellInfo,
 } from '../logic';
@@ -39,7 +41,7 @@ function SpellChoiceList({
   max: number;
   onChange: (next: string[]) => void;
   onInfo: (spell: SpellInfo) => void;
-  /** Spells already known from another source (shown, but not selectable). */
+  /** Spells known by name from a choice in any list (shown, but not selectable unless checked here). */
   taken?: Set<string>;
 }) {
   const [filter, setFilter] = useState('');
@@ -83,9 +85,10 @@ function SpellChoiceList({
                     onChange={() => onChange(toggleInList(valid, spell.id, max))}
                     className="size-4 shrink-0 accent-[var(--arcane)]"
                   />
-                  <span className="truncate font-medium">{spell.name}</span>
+                  {/* The name keeps its width; the book's label and the school give way first. */}
+                  <span className="max-w-full shrink-0 truncate font-medium">{spell.name}</span>
                   {spell.entry.id.startsWith('lib:') && (
-                    <span className="truncate text-xs text-faint">
+                    <span className="min-w-0 truncate text-xs text-faint">
                       From {spell.entry.sourceName}
                       {unreviewedImport(spell) ? ' · not reviewed' : ''}
                     </span>
@@ -163,10 +166,15 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
   };
   const initiateIds = new Set(plan.magicInitiate.flatMap((m) => initiateIdsOf(m.list)));
   const classIds = [...draft.cantrips, ...draft.spellbook, ...draft.prepared];
-  const takenFor = (list: string) => new Set([...classIds, ...plan.magicInitiate.filter((m) => m.list !== list).flatMap((m) => initiateIdsOf(m.list))]);
-  // The source filter narrows what's listed; spells already chosen stay visible.
+  // The source filter narrows what's listed (one spell per name under "All"); spells already chosen stay visible.
   const chosen = new Set([...classIds, ...initiateIds]);
-  const visible = (list: SpellInfo[]) => list.filter((sp) => spellInSourceFilter(sp, draft.sourceFilter) || chosen.has(sp.id));
+  const visible = (list: SpellInfo[]) => visibleSpells(list, draft.sourceFilter, chosen);
+  // Known once chosen in any list, or granted by the class or species, by name: a book's spell and the SRD's
+  // of the same name are one spell. Magic Initiate's level 1 spell may be a granted one (it adds a free casting).
+  const chosenNames = new Set(ctx.spells.filter((s) => chosen.has(s.id)).map((s) => nameKey(s.name)));
+  const named = (keys: ReadonlySet<string>) => new Set(ctx.spells.filter((s) => keys.has(nameKey(s.name))).map((s) => s.id));
+  const taken = named(new Set([...chosenNames, ...grantedSpells(draft, ctx.data).keys()]));
+  const takenByPicks = named(chosenNames);
   const cantripOptions = visible(classSpellOptions(draft, ctx, 0));
   const levelOneOptions = visible(classSpellOptions(draft, ctx, 1));
   const spellbookSpells = classSpellOptions(draft, ctx, 1).filter((s) => draft.spellbook.includes(s.id));
@@ -192,7 +200,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
               max={plan.cantrips}
               onChange={(cantrips) => setDraft((d) => ({ ...d, cantrips }))}
               onInfo={setInfo}
-              taken={initiateIds}
+              taken={taken}
             />
           )}
           {plan.spellbook > 0 ? (
@@ -204,7 +212,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
                 max={plan.spellbook}
                 onChange={(spellbook) => setDraft((d) => ({ ...d, spellbook, prepared: d.prepared.filter((id) => spellbook.includes(id)) }))}
                 onInfo={setInfo}
-                taken={initiateIds}
+                taken={taken}
               />
               <SpellChoiceList
                 label="Prepared from your spellbook"
@@ -224,7 +232,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
                 max={plan.prepared}
                 onChange={(prepared) => setDraft((d) => ({ ...d, prepared }))}
                 onInfo={setInfo}
-                taken={initiateIds}
+                taken={taken}
               />
             )
           )}
@@ -260,7 +268,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
               max={2}
               onChange={(cantrips) => update({ cantrips })}
               onInfo={setInfo}
-              taken={takenFor(list)}
+              taken={taken}
             />
             <SpellChoiceList
               label={`${list} level 1 spell`}
@@ -269,7 +277,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
               max={1}
               onChange={(ids) => update({ spell: ids[0] ?? null })}
               onInfo={setInfo}
-              taken={takenFor(list)}
+              taken={takenByPicks}
             />
           </section>
         );

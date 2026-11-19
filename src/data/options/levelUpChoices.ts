@@ -29,6 +29,7 @@ import { abilityIncreaseSentence } from '../structured/parse/feat';
 import { baseFeatureName, findFeatureDef, inlineFightingStyles, inlineOptionRef, inlineStyleId } from './classFeatures';
 import { inferFeatureUses } from './featureUses';
 import { optionRef } from './refs';
+import { withoutReplacedSrd } from './replaced';
 import { optionSourceLabel } from './resolve';
 
 // ---------------------------------------------------------------------------
@@ -216,6 +217,8 @@ export interface FeatChoiceContext {
   characterLevel: number;
   /** Features already on the sheet (non-repeatable feats there are disabled). */
   have: readonly Pick<Feature, 'name' | 'source'>[];
+  /** The feat picked so far: it stays offered even when a 2024 book's feat of its name stands in for it. */
+  keepId?: string;
 }
 
 const ASI_FEAT = 'ability-score-improvement';
@@ -265,11 +268,13 @@ function inlineStylePicks(cls: ClassOption | undefined): FeatPick[] {
  * What the panel offers (spec §5.4): General feats at Ability Score Improvement levels (the Ability
  * Score Improvement feat itself is the +2 / +1 +1 options); Epic Boons and General feats at Epic Boon;
  * Fighting Style feats plus the styles the class feature prints at Fighting Style (a feat wins over a
- * same-named printed style). Every book's feats count, in builder order (SRD first).
+ * same-named printed style). Every book's feats count, in builder order (SRD first), except the SRD
+ * feats a 2024 book's feat of the same name stands in for (options/replaced.ts).
  */
 export function featChoices(kind: FeatChoiceKind, feats: readonly FeatOption[], ctx: FeatChoiceContext): FeatPick[] {
   const categories: readonly FeatOption['category'][] = kind === 'asi' ? ['general'] : kind === 'epic-boon' ? ['epic-boon', 'general'] : ['fighting-style'];
-  const picks = categories.flatMap((category) => feats.filter((f) => f.category === category && nameKey(f.name) !== ASI_FEAT).map((f) => featPick(f, ctx)));
+  const listed = categories.flatMap((category) => feats.filter((f) => f.category === category && nameKey(f.name) !== ASI_FEAT));
+  const picks = withoutReplacedSrd(listed, [ctx.keepId]).map((f) => featPick(f, ctx));
   if (kind !== 'fighting-style') return picks;
   for (const style of inlineStylePicks(ctx.cls)) {
     if (!picks.some((p) => nameKey(p.name) === nameKey(style.name))) picks.push(style);

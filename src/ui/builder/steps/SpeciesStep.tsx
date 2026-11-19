@@ -1,3 +1,4 @@
+import { nameKey } from '@/lib/id';
 import { ABILITY_NAMES, SKILL_NAMES, type Ability, type CreatureSize, type Skill, type SpeciesOption } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
 import { Badge, Card } from '@/ui/components/ui';
@@ -43,10 +44,16 @@ export function SpeciesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
   const plan = skillPlan(draft, data);
   const granted = grantedSkills(plan);
   const backgroundFeat = originFeats(draft, data).find((f) => f.from === 'background');
-  const featOptions = originFeatOptions(data).filter((f) => f.repeatable || f.id !== backgroundFeat?.feat?.id);
+  // A feat can't be taken twice: the background's (of any book: same name, same feat) leaves the list, unless
+  // it is the one chosen (its card stays, with the reason below it).
+  const featOptions = originFeatOptions(data).filter(
+    (f) => f.repeatable || f.id === draft.speciesFeat || !backgroundFeat?.feat || nameKey(f.name) !== nameKey(backgroundFeat.feat.name),
+  );
   const chosenFeat = data.feats.find((f) => f.id === draft.speciesFeat);
   const skillIssues = validateSpeciesSkill(draft, data).filter((e) => e.includes('already'));
-  const stale = validateStep('species', draft, ctx).filter((e) => e.includes('switched off or removed'));
+  const speciesIssues = validateStep('species', draft, ctx);
+  const stale = speciesIssues.filter((e) => e.includes('switched off or removed'));
+  const featIssues = speciesIssues.filter((e) => e.includes('from your background'));
   const clashes = clashingNames(data.species);
   const featClashes = clashingNames(originFeatOptions(data));
   return (
@@ -175,6 +182,7 @@ export function SpeciesStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
                   description: f.description.replace(/\*\*/g, ''),
                 }))}
               />
+              <Issues issues={featIssues} />
               {chosenFeat && isMagicInitiate(chosenFeat.name) && (
                 <div className="flex flex-col gap-2">
                   <SubHeading>Magic Initiate spell list</SubHeading>

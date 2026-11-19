@@ -10,7 +10,7 @@ import { characterLevel, levelUp } from '@/engine';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
-import type { Character, ClassLevel, ClassOption, CompendiumEntry, SubclassOption } from '@/types';
+import type { Character, ClassLevel, ClassOption, CompendiumEntry, FeatOption, OptionSource, SubclassOption } from '@/types';
 import { gainedFeatures } from './leveling';
 import {
   applyFeatChoice,
@@ -223,6 +223,21 @@ describe('the Feat choice panel', () => {
     expect(picks.find((p) => p.name === 'Defense')?.taken).toBe(true);
     expect(picks.at(-1)).toMatchObject({ id: 'inline:blessed-warrior', sourceLabel: 'SRD 5.2.1' });
     expect(picks.at(-1)?.description).toMatch(/^You learn two Cleric cantrips/);
+  });
+
+  it("offers a 2024 book's feat in place of the SRD feat of its name (the picked one stays); an older book's sits beside it", () => {
+    const grappler = EXPECTED_MERGED.feats.find((f) => f.id === 'srd:feat:grappler') as FeatOption;
+    const lantern = EXPECTED_MERGED.feats.find((f) => f.name === 'Lantern Bearer') as FeatOption;
+    const book = (format: '2024' | '2014'): FeatOption => ({ ...lantern, id: 'lib:gloam:feat:grappler', name: 'Grappler', source: { ...(lantern.source as OptionSource), format } });
+    const asi = (feats: FeatOption[], keepId?: string) => featChoices('asi', feats, { cls: FIGHTER, characterLevel: 4, have: [], ...(keepId ? { keepId } : {}) });
+    const grapplers = (picks: { id: string; name: string }[]) => picks.filter((p) => p.name === 'Grappler').map((p) => p.id);
+    expect(grapplers(asi([...EXPECTED_MERGED.feats, book('2024')]))).toEqual(['lib:gloam:feat:grappler']);
+    expect(grapplers(asi([...EXPECTED_MERGED.feats, book('2024')], grappler.id))).toEqual([grappler.id, 'lib:gloam:feat:grappler']);
+    expect(grapplers(asi([...EXPECTED_MERGED.feats, book('2014')]))).toEqual([grappler.id, 'lib:gloam:feat:grappler']);
+    // A Fighting Style: the book's Archery stands in for the SRD's.
+    const archery: FeatOption = { ...book('2024'), id: 'lib:gloam:feat:archery', name: 'Archery', category: 'fighting-style' };
+    const styles = featChoices('fighting-style', [...EXPECTED_MERGED.feats, archery], { cls: FIGHTER, characterLevel: 2, have: [] });
+    expect(styles.filter((p) => p.name === 'Archery').map((p) => p.id)).toEqual([archery.id]);
   });
 
   it('applies +2 to one ability, capped at 20, and names the choice on the sheet (Ability Score Improvement feat)', () => {

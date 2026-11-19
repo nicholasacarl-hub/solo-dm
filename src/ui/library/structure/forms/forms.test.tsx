@@ -3,7 +3,7 @@ import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useState } from 'react';
 import { EXPECTED_DATA, EXPECTED_MERGED, TEXT, gloamwoodEntries, gloamwoodRecords, type GloamwoodDataName } from '@/test/structuredFixtures';
-import type { StructuredDataByKind, StructuredKind, StructuredRecord } from '@/types';
+import type { BuilderData, EquipmentOption, StructuredDataByKind, StructuredKind, StructuredRecord } from '@/types';
 import { installDialogPolyfill } from '@/ui/shell/testUtils';
 import { blocksFor } from '../bookData';
 import { setViewport } from '../testing/bookPage';
@@ -21,6 +21,7 @@ function Harness<K extends StructuredKind>({
   issues = {},
   onData,
   parentClassId,
+  builder = EXPECTED_MERGED,
 }: {
   kind: K;
   name: GloamwoodDataName;
@@ -28,6 +29,7 @@ function Harness<K extends StructuredKind>({
   issues?: Record<string, string>;
   onData?: (data: StructuredDataByKind[K]) => void;
   parentClassId?: string;
+  builder?: BuilderData;
 }) {
   const record = recordOf(name);
   const [value, setValue] = useState(EXPECTED_DATA[name] as StructuredDataByKind[K]);
@@ -43,7 +45,7 @@ function Harness<K extends StructuredKind>({
       check={check}
       issues={issues}
       blocks={blocksFor(record.entryIds, entriesById)}
-      builder={EXPECTED_MERGED}
+      builder={builder}
       disabled={false}
       name={record.name}
       onNameChange={() => {}}
@@ -109,6 +111,26 @@ describe('each kind renders its key fields from the stored data and emits edits'
     expect(screen.getByRole('radio', { name: 'Required' })).toBeChecked();
     expect(screen.getByLabelText('AC')).toHaveValue('+1');
     expect(screen.getByLabelText('Saving throws')).toHaveValue('+1');
+  });
+
+  it('suggests each base item and tool once, though the SRD and a book both list it', async () => {
+    const user = userEvent.setup();
+    const srdMail = EXPECTED_MERGED.equipment.find((e) => e.name === 'Chain Mail') as EquipmentOption;
+    const source = EXPECTED_MERGED.classes.find((c) => c.source)?.source;
+    const bookMail: EquipmentOption = { ...srdMail, id: 'lib:gloam:item:chain-mail', source };
+    const tools: EquipmentOption[] = [
+      { id: 'srd:item:thieves-tools', name: "Thieves' Tools", category: 'tool' },
+      { id: 'lib:gloam:item:thieves-tools', name: "Thieves' Tools", category: 'tool', source },
+    ];
+    const builder = { ...EXPECTED_MERGED, equipment: [...EXPECTED_MERGED.equipment, bookMail, ...tools] };
+    const view = render(<Harness kind="magic-item" name="Warden's Mail" builder={builder} />);
+    const options = [...view.container.querySelectorAll('datalist option')].map((o) => o.getAttribute('value'));
+    expect(options.filter((v) => v === 'Chain Mail')).toEqual(['Chain Mail']);
+    view.unmount();
+    render(<Harness kind="class" name="Wickwright" builder={builder} />);
+    const more = screen.queryAllByRole('button', { name: /^More/ });
+    for (const b of more) await user.click(b);
+    expect(screen.getAllByRole('button', { name: /^Add Thieves' Tools to / })).toHaveLength(1);
   });
 
   it('gear row', async () => {

@@ -47,6 +47,12 @@ describe('materializeEntries', () => {
     expect(isReviewedImport(drake)).toBe(true);
   });
 
+  it("keeps a spell's edition only (the builder's lists show a 2024 book's spell in place of the SRD's)", () => {
+    const mote = out.find((e) => e.name === 'Cinder Mote') as CompendiumEntry;
+    expect(mote).toMatchObject({ kind: 'spell', data: { format: '2024', recordId: record('Cinder Mote').id } });
+    expect(isReviewedImport(mote)).toBe(true);
+  });
+
   it('rejoins a part chain on the primary chunk and keeps the other parts as aliases', () => {
     const parts: CompendiumEntry[] = [
       { id: 'lib:p:1', sourceId: 'p', sourceName: 'P', kind: 'rule', name: 'Old Bear', text: 'Part one.', path: ['Beasts', 'Old Bear'] },

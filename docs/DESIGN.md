@@ -687,10 +687,31 @@ per batch and tells DMs with a session in progress (names and counts only). Swit
 deleting it says which characters use it ("Used by Ember (The Drowned Lantern)…") and tells their DMs;
 importing a book whose fingerprint is already in the Library warns that it looks like the same book.
 
-**Consumers.** Accepted options join the builder data with a book badge (the SRD badge appears only on
-a name clash, and same-name options coexist); lookups are id-first (`src/data/options/resolve.ts`), and
-the engine never takes an imported class (`lib:` id) for an SRD class of the same name, so an imported
-"Fighter" never borrows the SRD Fighter's numbers. Review warns about feature names the engine treats
+**Consumers.** Accepted options join the builder data with a book badge, and same-name options coexist
+in the data. The lists a player chooses from show one per name (`src/data/options/replaced.ts`): a 2024
+book's option stands in for the SRD option of its name, since SRD 5.2.1 is drawn from the 2024 rules.
+That holds under the builder's "All" view, in the level-up dialog and its feat panel, for "Let the DM
+decide", and for a new class or subclass the DM's `level_up` names. The "SRD" filter and an option
+already chosen still show the SRD's. Older-format (2014) options sit beside the SRD's. The builder's cards
+and the level-up feat panel badge an SRD option whose name an import shares. A 2024 book's class and the
+SRD class of its name share their subclasses (`sharedSubclasses`, offered after the class's own): hiding
+the SRD class strands none, and a hero who kept the SRD class (made before the book) meets the book's
+subclasses at level-up. Each class keeps its own in `subclasses`, and a lookup by name prefers those, so a
+subclass attached to the SRD class never ties with the stand-in's of the same name. A hero's subclass id is
+found among every class's (one taken through sharing stays the hero's when the classes stop sharing). An
+option whose id moved (another device, a re-import) is looked up by its book's fingerprint first (the same
+text, whatever the book is called there), then by source id, then title, then any book's option of its name
+(the fingerprint changes when the book's text is read differently; parts without copied text carry none). An older-format
+subclass notes its possible overlap on a 2024 book's class as it does on the SRD's. Spell lists show a book's accepted 2024
+spell in place of the SRD's, and the SRD's in place of a book's spell not yet reviewed (materialized
+spells keep `data.format` for this). Weapon Mastery offers one chip per weapon name, and a feat or spell
+counts as taken by name, whichever book's it is: review flags a spell picked in two lists (a pick made before
+a Magic Initiate list changed), and Magic Initiate's level 1 spell may repeat only a spell the class or species
+grants, whose entry gains the free casting. With the source filter on a book, "Let the DM decide" picks from
+that book and falls back to "All" for any list the book leaves short, so the hero ends up complete. Lookups are id-first (`src/data/options/resolve.ts`),
+so a hero who chose the SRD option keeps it, and the engine never takes an imported class (`lib:` id)
+for an SRD class of the same name, so an imported "Fighter" never borrows the SRD Fighter's numbers.
+Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
 adaptations, shown in review, on builder cards, in the DM's stats line and on the sheet. Level-up adds
 an imported class's or subclass's features with their text (catching up subclass features a book

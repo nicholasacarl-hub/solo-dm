@@ -65,6 +65,20 @@ The first version of structured imports deliberately leaves these out:
   from items, and enforcing attunement limits.
 - **Monster detail**: structured actions and legendary actions, and senses on the battle map (the DM reads them from
   the text today).
+- **SRD class rules for a 2024 book's class**: a book's class gets the engine's name-based rules (Improved Critical,
+  Unarmored Defense, Aura of Protection, Tireless…) but not the few it ties to the SRD class itself: the Martial Arts
+  die growing with Monk level, a Monk's unarmed strike off the sheet using Dexterity, and Draconic Resilience's extra
+  Hit Points. Since the builder lists a 2024 book's class in place of the SRD's, more heroes now meet this; the DM
+  adjusts those numbers. The fix needs the sheet to record a class's edition (a 2014 Monk's dice differ).
+- **Telling a book read again from another book**: a hero's class, subclass, species or background whose book is
+  switched off or gone is looked up again by its book's fingerprint, then its source and title, then any book's
+  option of its name, so another book's option of that name stands in (a 2014 printing for a 2024 one of the same
+  title, say). The fingerprint can't decide it alone: it changes when the book's text is read differently (a newer
+  reader, another file). An edition on option refs, or the hero's copied text compared with the candidate's, would
+  tell them apart.
+- **Homebrew spells in the builder by campaign**: the builder's spell lists include homebrew spells saved in other
+  campaigns (`RulesIndex.list()` skips the campaign check that search and name lookups make), unlabeled, so a hero
+  can pick one its DM can't look up. List only this campaign's and shared homebrew, and label them.
 - **Book text the DM repeats elsewhere**: the book's words in the journal, quests, recaps or narration, in a feature
   the DM names otherwise than the book does, or in a quote shorter than about 80 characters among the DM's own words
   (a text under 60 characters counts only when its first 40 are the book's) aren't marked as copied, so exports keep

@@ -51,7 +51,8 @@ import { withAdaptationNotes } from '@/data/options/adaptationNotes';
 import { entryRef, inventoryFromEntry } from '@/data/options/inventory';
 import { gainedFeatures } from '@/data/options/leveling';
 import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
-import { classByName, classOptionFor, optionSourceLabel, subclassOptionFor } from '@/data/options/resolve';
+import { subclassesOf } from '@/data/options/replaced';
+import { classByName, classOptionFor, multiclassPrimariesFor, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
 import { matchByName } from '@/engine/util';
 import { nameKey } from '@/lib/id';
 import { textFingerprint } from '@/lib/importedContent';
@@ -994,7 +995,7 @@ function tieNote(option: ClassOption, classes: readonly ClassOption[], own: bool
 
 /** "Two subclasses of Fighter are named Champion (SRD 5.2.1, The Gloamwood Almanac); used the one from SRD 5.2.1." */
 function subclassTieNote(option: ClassOption, sub: SubclassOption | undefined, name: string): string | null {
-  const named = option.subclasses.filter((s) => nameKey(s.name) === nameKey(name));
+  const named = subclassesOf(option).filter((s) => nameKey(s.name) === nameKey(name));
   if (named.length < 2) return null;
   const count = COUNT_WORDS[named.length] ?? String(named.length);
   const used = sub ? `used the one from ${optionSourceLabel(sub)}` : 'used the name only';
@@ -1010,10 +1011,11 @@ function planFromData(c: Character, data: BuilderData, input: ToolInput<'level_u
   // Naming the hero's own subclass again chooses nothing: it stays the one its id names (B2), so a book's
   // "Champion" never turns into the SRD's. Only a new name is looked up among the class's subclasses.
   const subclassChosenNow = Boolean(input.subclass) && nameKey(existing?.subclass ?? '') !== nameKey(input.subclass ?? '');
-  const sub = subclassChosenNow ? subclassOptionFor({ subclass: input.subclass }, option) : existing ? subclassOptionFor(existing, option) : undefined;
+  const sub = subclassChosenNow ? subclassByName(input.subclass ?? '', option) : existing ? subclassOptionFor(existing, option, data.classes) : undefined;
   const all = gainedFeatures(option, classLevel, sub, { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 }, { have: c.features, subclassChosenNow });
-  // SRD classes and subclasses keep today's DM-supplied features: only a book's come from the data.
-  const features = all.filter((f) => (f.source === 'subclass' ? Boolean(sub?.source) : Boolean(option.source)));
+  // SRD classes and subclasses keep today's DM-supplied features: only a book's come from the data, and an SRD
+  // subclass's under a book's class (a 2024 book's class also offers the SRD's subclasses, as the dialog adds them).
+  const features = all.filter((f) => (f.source === 'subclass' ? Boolean(sub?.source) || Boolean(option.source) : Boolean(option.source)));
   const ties = [tieNote(option, data.classes, Boolean(existing)), subclassChosenNow ? subclassTieNote(option, sub, input.subclass ?? '') : null];
   return { option, existing, classLevel, sub, subclassChosenNow, features, tie: ties.filter(Boolean).join(' ') || null };
 }
@@ -1029,7 +1031,7 @@ function dmFeatures(
   plan: DataLevel | null,
   have: readonly Feature[],
   data: BuilderData | null,
-): { features: Omit<Feature, 'id'>[]; replaced: string[]; kept: string[] } {
+): { features: Omit<Feature, 'id'>[]; replaced: string[]; replacedBySrd: string[]; kept: string[] } {
   // A copied feature on the sheet blocks a second copy only under a name the SRD doesn't print (an SRD class's own
   // "Spellcasting" is not the book's), and only with the data (a failure → today's behavior exactly).
   const srd = srdNameKeys(data);
@@ -1046,11 +1048,16 @@ function dmFeatures(
       ...(ref ? { ref } : {}),
     };
   });
-  const replaced = all.filter((f) => fromData.has(nameKey(f.name)));
+  const replacedAll = all.filter((f) => fromData.has(nameKey(f.name)));
+  // A part the data adds without a book's ref is the SRD's (an SRD subclass under a book's class).
+  const fromBook = new Set((plan?.features ?? []).filter((f) => f.ref).map((f) => nameKey(f.name)));
+  const replaced = replacedAll.filter((f) => fromBook.has(nameKey(f.name)));
+  const replacedBySrd = replacedAll.filter((f) => !fromBook.has(nameKey(f.name)));
   const kept = all.filter((f) => !fromData.has(nameKey(f.name)) && onSheet.has(nameKey(f.name)));
   return {
     features: all.filter((f) => !fromData.has(nameKey(f.name)) && !onSheet.has(nameKey(f.name))),
     replaced: replaced.map((f) => f.name),
+    replacedBySrd: replacedBySrd.map((f) => f.name),
     kept: kept.map((f) => f.name),
   };
 }
@@ -1082,13 +1089,14 @@ function dataLevelOptions(plan: DataLevel, data: BuilderData, input: ToolInput<'
 }
 
 /** The result's lines about the books: features added with their text (names only), copies not added, ties, spells. */
-function bookLines(plan: DataLevel | null, replaced: string[], kept: string[], spells: { added: string[]; missing: string[] }): string[] {
+function bookLines(plan: DataLevel | null, replaced: string[], replacedBySrd: string[], kept: string[], spells: { added: string[]; missing: string[] }): string[] {
   const already = kept.length ? [`Already on the sheet with the book's text, kept as they are (uses included): ${kept.join(', ')}.`] : [];
   if (!plan) return already;
   const lines: string[] = [...already];
   const fromBooks = plan.features.filter((f) => f.ref).map((f) => `- ${f.name} (${f.ref?.sourceTitle}) — get_character_sheet has its text`);
   if (fromBooks.length) lines.push("Features from the player's books (added with their text):", ...fromBooks);
   if (replaced.length) lines.push(`Used the book's text instead of your description for: ${replaced.join(', ')}.`);
+  if (replacedBySrd.length) lines.push(`Used the SRD's text instead of your description for: ${replacedBySrd.join(', ')}.`);
   if (plan.tie) lines.push(plan.tie);
   if (spells.added.length && plan.sub) lines.push(`Always-prepared ${plan.sub.name} spells added: ${spells.added.join(', ')}.`);
   if (spells.missing.length) lines.push(`Not in the rules you can consult: ${spells.missing.join(', ')} — add with update_character spells_add if they apply.`);
@@ -1112,7 +1120,7 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   const plan = data ? planFromData(before, data, input) : null;
   const index = plan?.sub?.source && plan.sub.alwaysPreparedSpells?.length ? await loadIndexOrNull(ctx) : null;
   const findSpell = (name: string) => exactEntry(index, campaign, name, 'spell') ?? undefined;
-  const { features: extra, replaced, kept } = dmFeatures(input, level, plan, before.features, data);
+  const { features: extra, replaced, replacedBySrd, kept } = dmFeatures(input, level, plan, before.features, data);
   const spells = { added: [] as string[], missing: [] as string[] };
   const change = await mutateCharacter(ctx, (c) => {
     const r = levelUp(c, {
@@ -1126,6 +1134,8 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
         spellcastingAbility: input.spellcasting_ability,
       }),
       ...(plan && data ? dataLevelOptions(plan, data, input) : {}),
+      // A book's classes (the new one, or one the hero has) have no SRD data: the engine checks their prerequisites from these.
+      ...(data ? { multiclassPrimaries: multiclassPrimariesFor(plan?.option, c, data.classes) } : {}),
       newFeatures: [...(plan?.features ?? []), ...extra],
     });
     if (r.character === c || !plan) return r;
@@ -1141,7 +1151,7 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   const summary = `Level up! Level ${change.newLevel} (${className}) · HP +${change.hpGained} (max ${change.character.hp.max})`;
   const uses = updatedUses(before, change.character);
   const notes = (change.character.adaptationNotes ?? []).filter((n) => !(before.adaptationNotes ?? []).includes(n));
-  const books = [...bookLines(plan, replaced, kept, spells), ...(notes.length ? ['Older-edition notes now on the sheet (app notes):', ...notes.map((n) => `- ${n}`)] : [])];
+  const books = [...bookLines(plan, replaced, replacedBySrd, kept, spells), ...(notes.length ? ['Older-edition notes now on the sheet (app notes):', ...notes.map((n) => `- ${n}`)] : [])];
   await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...books, ...change.reminders].join('\n') || undefined });
   const lines = [summary, ...eventLines(change.events), ...books];
   if (uses.length) lines.push('Limited-use features that grew with the level (already on the sheet):', ...uses.map((u) => `- ${u}`));

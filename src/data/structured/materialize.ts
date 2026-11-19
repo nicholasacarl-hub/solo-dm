@@ -412,6 +412,8 @@ function monsterData(m: MonsterData): Data {
 
 function spellData(s: SpellData): Data {
   return defined({
+    // The edition: the builder's lists show a 2024 book's spell in place of the SRD's (ui/builder/sources.ts).
+    format: s.format,
     level: s.level,
     school: s.school,
     classes: s.classes,

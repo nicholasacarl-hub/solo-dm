@@ -49,6 +49,9 @@ function partNames(data: unknown): string[] {
   return [...(d.features ?? []), ...(d.traits ?? []), ...(d.lineages ?? [])].map((p) => p.name).filter((n): n is string => typeof n === 'string');
 }
 
+/** Kinds a player chooses from lists (the character builder, level-up), where a 2024 book's stands in for the SRD's. */
+const LISTED = new Set<StructuredKind>(['class', 'subclass', 'species', 'background', 'feat', 'spell']);
+
 /** name-collision and engine-name notices for one record. */
 export function nameNotices(
   record: { kind: StructuredKind; name: string; sourceId: string; data: unknown },
@@ -59,8 +62,11 @@ export function nameNotices(
   const srd = others.find((e) => e.sourceId === SRD_SOURCE_ID);
   const book = others.find((e) => e.sourceId !== SRD_SOURCE_ID && e.sourceId !== 'homebrew');
   if (srd) {
+    // What the lists do once it's accepted (options/replaced.ts), as a rule: the notice is kept as written when the
+    // player edits the record (warnings.ts), and its Edition or a feat's category may change in review.
+    const lists = LISTED.has(record.kind) ? " If its Edition is 2024, the lists a player chooses from show it in place of the SRD's." : '';
     out.push(warning('name-collision', 'info',
-      `The SRD also has ${KIND_NOUN[record.kind]} called ${quote(record.name)}. Once you accept this one, combat and the DM use this book's version when they look that name up. Both stay in the Library.`, 'name'));
+      `The SRD also has ${KIND_NOUN[record.kind]} called ${quote(record.name)}. Once you accept this one, combat and the DM use this book's version when they look that name up.${lists} Both stay in the Library.`, 'name'));
   } else if (book) {
     out.push(warning('name-collision', 'info', `“${book.sourceName}” also has ${KIND_NOUN[record.kind]} called ${quote(record.name)}. Both stay in the Library.`, 'name'));
   }
