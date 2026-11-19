@@ -50,7 +50,8 @@ function suggestionsFor(field: FieldSpec, ctx: RecordFormContext): readonly stri
     for (const r of ctx.bookRecords) if (r.kind === 'class' && r.status !== 'rejected') names.add(r.name);
     return [...names].sort((a, b) => a.localeCompare(b));
   }
-  if (field.suggest === 'tools') return (ctx.builder?.equipment ?? []).filter((e) => e.category === 'tool').map((e) => e.name);
+  // Once each: the SRD and a book can both list "Thieves' Tools".
+  if (field.suggest === 'tools') return [...new Set((ctx.builder?.equipment ?? []).filter((e) => e.category === 'tool').map((e) => e.name))];
   return SUGGESTIONS[field.suggest];
 }
 

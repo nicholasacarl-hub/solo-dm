@@ -84,9 +84,10 @@ function SpellChoiceList({
                     onChange={() => onChange(toggleInList(valid, spell.id, max))}
                     className="size-4 shrink-0 accent-[var(--arcane)]"
                   />
-                  <span className="truncate font-medium">{spell.name}</span>
+                  {/* The name keeps its width; the book's label and the school give way first. */}
+                  <span className="max-w-full shrink-0 truncate font-medium">{spell.name}</span>
                   {spell.entry.id.startsWith('lib:') && (
-                    <span className="truncate text-xs text-faint">
+                    <span className="min-w-0 truncate text-xs text-faint">
                       From {spell.entry.sourceName}
                       {unreviewedImport(spell) ? ' · not reviewed' : ''}
                     </span>
