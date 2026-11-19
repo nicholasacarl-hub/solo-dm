@@ -249,6 +249,19 @@ export function subclassByName(name: string, cls: ClassOption | undefined): Subc
   return srdHidden ? offered.find((s) => replacesSrd(s) && nameKey(s.name) === key) : undefined;
 }
 
+/**
+ * The multiclass prerequisites of the book classes among a new class and the hero's own (SRD 5.2.1
+ * "Multiclassing": 13+ in each primary ability), for the engine, which knows only the SRD classes'.
+ */
+export function multiclassPrimariesFor(
+  newClass: ClassOption | undefined,
+  c: Pick<Character, 'classes'>,
+  classes: readonly ClassOption[],
+): { name: string; primaryAbilities: ClassOption['primaryAbilities']; primaryRule: 'all' | 'any' }[] {
+  const books = [newClass, ...c.classes.map((cl) => classOptionFor(cl, classes))].filter((o): o is ClassOption => Boolean(o?.source));
+  return [...new Map(books.map((o) => [o.id, { name: o.name, primaryAbilities: o.primaryAbilities, primaryRule: primaryRuleOf(o) }])).values()];
+}
+
 /** Explicit primaryAbilityRule; else 'any' for srd:class:fighter; else 'all'. Replaces ClassStep.tsx:77, LevelUpDialog.tsx:45 and :97. */
 export function primaryRuleOf(cls: Pick<ClassOption, 'id' | 'primaryAbilityRule'>): 'all' | 'any' {
   return cls.primaryAbilityRule ?? (cls.id === 'srd:class:fighter' ? 'any' : 'all');

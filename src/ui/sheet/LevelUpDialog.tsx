@@ -32,7 +32,7 @@ import {
   type SubclassSpells,
 } from '@/data/options/levelUpChoices';
 import { withoutReplacedSrd } from '@/data/options/replaced';
-import { classOptionFor, primaryRuleOf, subclassOptionFor } from '@/data/options/resolve';
+import { classOptionFor, multiclassPrimariesFor, primaryRuleOf, subclassOptionFor } from '@/data/options/resolve';
 import { nameKey } from '@/lib/id';
 import { useGame } from '@/state/gameStore';
 import {
@@ -132,7 +132,7 @@ function planLevel(
 }
 
 /** The engine call for the plan: an existing class by its own id; a new one with its numbers and ref. */
-function levelUpOptions(plan: LevelPlan, data: BuilderData | null, hpMethod: LevelUpOptions['hpMethod']): LevelUpOptions {
+function levelUpOptions(plan: LevelPlan, data: BuilderData | null, hpMethod: LevelUpOptions['hpMethod'], c: Character): LevelUpOptions {
   const { existing, option } = plan;
   const chosen = plan.needsSubclass ? plan.sub : undefined;
   const subclassRef = subclassRefOf(chosen);
@@ -150,6 +150,8 @@ function levelUpOptions(plan: LevelPlan, data: BuilderData | null, hpMethod: Lev
     newFeatures: plan.features,
     // Lets level-up recompute AC (Unarmored Defense, Draconic Resilience...) against real armor stats.
     ...(data ? { equipment: data.equipment } : {}),
+    // A book's classes have no SRD data: the engine checks their multiclass prerequisites from these.
+    ...(data ? { multiclassPrimaries: multiclassPrimariesFor(existing ? undefined : option, c, data.classes) } : {}),
   };
 }
 
@@ -515,7 +517,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
   const apply = async () => {
     if (!canApply) return;
     setBusy(true);
-    const opts = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll');
+    const opts = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll', character);
     const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null } = { result: null, uses: [], choice: null };
     const saved = await edit((c) => {
       const r = levelUp(c, opts);

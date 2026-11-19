@@ -305,6 +305,19 @@ describe('LevelUpDialog with imported options', () => {
     expect(within(screen.getByLabelText('Or multiclass into')).queryByText(/^Cleric/)).toBeNull();
   });
 
+  it("tells the DM when the hero doesn't meet a book class's multiclass prerequisites, as for the SRD's", async () => {
+    const user = userEvent.setup();
+    const bookCleric: ClassOption = { ...CLERIC, id: 'lib:gloam:class:cleric', subclasses: [], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:cleric', format: '2024', adaptations: [] } };
+    mocks.data = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookCleric] };
+    const start = fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' });
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...start, abilityScores: { ...start.abilityScores, wis: 8 } } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.selectOptions(screen.getByLabelText('Or multiclass into'), `Cleric · ${GLOAMWOOD_TITLE} (d8)`);
+    await user.click(screen.getByLabelText('My DM allows it anyway'));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(notices()[0]).toMatch(/Multiclass prerequisite not met: Cleric needs 13\+ \(Wisdom 8\)/);
+  });
+
   it("says when an imported class's data isn't on this device", () => {
     const ref = { sourceId: 'other', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:other:class:lampwright', kind: 'class' as const, entryName: 'Lampwright', textHash: '', textCopied: false };
     resetFakeGame({ campaign: sampleCampaign(), character: hero({ classId: ref.entryId, name: 'Lampwright', level: 2, hitDie: 8, ref }) });

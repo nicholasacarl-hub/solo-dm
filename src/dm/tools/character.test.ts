@@ -202,6 +202,26 @@ describe('level_up from the merged builder data', () => {
     for (const name of level3) expect(h.sheet().features.map((f) => f.name)).toContain(name);
   });
 
+  it("checks the hero's own book class's prerequisites even when the new class isn't in the data", async () => {
+    const bookCleric: ClassOption = { ...CLERIC_OPTION, id: 'lib:gloam:class:cleric', subclasses: [], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:cleric', format: '2024', adaptations: [] } };
+    const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookCleric] };
+    const base = hero({ classId: bookCleric.id, name: 'Cleric', level: 3, hitDie: 8, casterType: 'full', spellcastingAbility: 'wis' });
+    const h = setup({ builderData: data, character: { ...base, abilityScores: { ...base.abilityScores, wis: 8 } } });
+    const out = await h.run('level_up', { class_name: 'Lamp Seeker', hit_die: 10 });
+    expect(out.content).toMatch(/Multiclass prerequisite not met: Cleric needs 13\+ \(Wisdom 8\)/);
+  });
+
+  it("says the SRD's text, not the book's, replaced the DM's words for an SRD subclass under a book's class", async () => {
+    const srdFighter = EXPECTED_MERGED.classes.find((c) => c.id === FIGHTER.id)!;
+    const bookFighter: ClassOption = { ...srdFighter, id: 'lib:gloam:class:fighter', subclasses: [...srdFighter.subclasses], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2024', adaptations: [] } };
+    const feature = srdFighter.subclasses.find((s) => s.name === 'Champion')!.features.find((f) => f.level === 3)!;
+    const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookFighter] };
+    const h = setup({ builderData: data, character: hero({ classId: bookFighter.id, name: 'Fighter', level: 2, hitDie: 10 }) });
+    const out = await h.run('level_up', { class_name: 'Fighter', subclass: 'Champion', new_features: [{ name: feature.name, description: 'A ruling of the DM.' }] });
+    expect(out.content).toContain(`Used the SRD's text instead of your description for: ${feature.name}.`);
+    expect(out.content).not.toContain("Used the book's text");
+  });
+
   it("warns when the hero doesn't meet a book class's multiclass prerequisites, as for the SRD's", async () => {
     const bookCleric: ClassOption = { ...CLERIC_OPTION, id: 'lib:gloam:class:cleric', subclasses: [], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:cleric', format: '2024', adaptations: [] } };
     const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookCleric] };
