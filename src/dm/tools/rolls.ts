@@ -114,8 +114,9 @@ function findKnownSpell(c: Character, name: string): KnownSpell | undefined {
   return loose.length === 1 ? loose[0] : undefined;
 }
 
+/** An unarmed strike by name ("Kick", "Punch", "Unarmed Strike (Bonus Action)", "Fist"); never "Clenched Fist" (Arcane Hand). */
 function isUnarmedName(name: string): boolean {
-  return /\b(unarmed|punch|kick|fist|headbutt)/i.test(name);
+  return /\b(unarmed|punch|kick|headbutt)|^\s*fists?\s*(\(|$)/i.test(name);
 }
 
 /** Check the request makes sense for its roll type and fill in what the sheet knows. */
@@ -178,6 +179,14 @@ function prepareRequest(c: Character, req: PlayerRollRequest): PlayerRollRequest
       return { ...req, dc: 10, revealDc: true };
     default:
       return req;
+  }
+}
+
+function rollsADie(expression: string | undefined): boolean {
+  try {
+    return parseDice(expression ?? '1d20').some((t) => t.kind === 'dice');
+  } catch {
+    return true;
   }
 }
 
@@ -271,7 +280,8 @@ export async function performPlayerRoll(ctx: ToolContext, input: PlayerRollReque
     return { request, label, modifier, result, manual: false, autoFail: situation.autoFail, notes };
   }
 
-  const auto = campaign.settings.playerRollMode === 'auto';
+  // A roll without dice (an Unarmed Strike's flat 1 + STR) has nothing to roll and no die for Heroic Inspiration.
+  const auto = campaign.settings.playerRollMode === 'auto' || (!d20 && !rollsADie(request.expression));
   const rolled = auto ? { result: rollLocally(ctx, request, modifier), manual: false } : await rollWithPlayer(ctx, request, modifier, label);
   let result = rolled.result;
 

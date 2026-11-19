@@ -118,7 +118,7 @@ describe('refreshClassEditions', () => {
     expect(after?.hp).toMatchObject({ max: 32, current: 25 });
     expect(after?.classes[0].ref?.format).toBe('2024');
     expect(after?.updatedAt).not.toBe(before?.updatedAt);
-    expect(game().pendingDmNotices.filter((n) => n.includes('Hit Point maximum rose by 5 to 32'))).toHaveLength(1);
+    await vi.waitFor(() => expect(game().pendingDmNotices.filter((n) => n.includes('Hit Point maximum rose by 5 to 32'))).toHaveLength(1));
     // Once: nothing more is owed.
     expect(await game().refreshClassEditions()).toBe(false);
     expect(game().character?.hp.max).toBe(32);
@@ -167,11 +167,30 @@ describe('refreshClassEditions', () => {
     game().unloadCampaign();
     await game().loadCampaign('b-camp');
     release();
-    await vi.waitFor(async () => expect((await db.characters.get(graph.character?.id as string))?.hp.max).toBe(32));
+    await vi.waitFor(async () => expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter(topUp)).toHaveLength(1));
     await whenPersisted();
+    expect((await db.characters.get(graph.character?.id as string))?.hp.max).toBe(32);
     expect(game().pendingDmNotices.filter(topUp)).toEqual([]);
     expect((await db.campaigns.get('b-camp'))?.pendingDmNotices?.filter(topUp) ?? []).toEqual([]);
-    expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter(topUp)).toHaveLength(1);
+  });
+
+  it('tells no DM when the top-up save is refused (the campaign is open at the table in another tab)', async () => {
+    const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:sorcerer', kind: 'class' as const, entryName: 'Sorcerer', textHash: '', textCopied: false };
+    const classes = [{ classId: 'lib:gloam:class:sorcerer', name: 'Sorcerer', level: 5, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const, ref }];
+    const features = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass' as const, description: '' }];
+    const graph = await seedCampaign('a', { character: { classes, features, hp: { max: 27, current: 20, temp: 0 } } });
+    vi.mocked(storage.isCampaignOpenElsewhere).mockResolvedValue(true);
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const refusals = vi.spyOn(storage, 'isCampaignOpenElsewhere');
+    await game().loadCampaign('a-camp');
+    await vi.waitFor(() => expect(refusals).toHaveBeenCalled());
+    await whenPersisted();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await whenPersisted();
+    expect((await db.characters.get(graph.character?.id as string))?.hp.max).toBe(27);
+    expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter((n) => n.includes('Hit Point maximum rose')) ?? []).toEqual([]);
+    expect(game().pendingDmNotices.filter((n) => n.includes('Hit Point maximum rose'))).toEqual([]);
   });
 
   it('writes nothing over a campaign replaced (a GitHub pull, a save-file import) while it waits for the builder data', async () => {

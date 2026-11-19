@@ -1255,17 +1255,17 @@ export const useGame = create<GameStore>()((set, get) => ({
     if (next === s.character) return false;
     const owed = data.hitPointsOwedForEditions(s.character, next);
     if (owed > 0) {
-      // Hit Points are game state: a normal save (sync sees it). The DM of this campaign hears why the maximum rose,
-      // queued with the save (memory first), so leaving the table before the save lands can't send it elsewhere.
-      const saving = get().updateCharacter((c) => {
+      // Hit Points are game state: a normal save (sync sees it). Once it's saved, this campaign's DM hears why the
+      // maximum rose: by the campaign's id, so leaving the table meanwhile can't send it elsewhere, and a refused save
+      // (another tab at the table, a pull) tells no one.
+      const saved = await get().updateCharacter((c) => {
         const edited = data.withClassEditions(c, builder.classes);
         return { ...edited, hp: { ...edited.hp, max: edited.hp.max + owed, current: edited.hp.current > 0 ? edited.hp.current + owed : edited.hp.current } };
       });
       void queueCampaignNotice(
         campaign.id,
-        `${s.character.name}'s Hit Point maximum rose by ${owed} to ${s.character.hp.max + owed}: Draconic Resilience now adds its Hit Points for a book's Sorcerer, and the Sorcerer levels gained before didn't get them.`,
+        `${saved.name}'s Hit Point maximum rose by ${owed} to ${saved.hp.max}: Draconic Resilience now adds its Hit Points for a book's Sorcerer, and the Sorcerer levels gained before didn't get them.`,
       ).catch(noop);
-      await saving;
       return true;
     }
     set({ character: next });

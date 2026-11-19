@@ -497,6 +497,13 @@ describe('damage dice that grow with level', () => {
     expect(unarmedDamageExpression(fighter(6))).toBe('0');
     const brawler: Attack = { id: 'us', name: 'Unarmed Strike', ability: 'str', proficient: true, damage: '1d4', damageType: 'bludgeoning' };
     expect(unarmedDamageExpression(fighter(16, [brawler]))).toBe('1d4+3');
+    // A blank damage on the sheet's falls back to everyone's.
+    expect(unarmedDamageExpression(fighter(16, [{ ...brawler, damage: '' }]))).toBe('4');
+    // "Clenched Fist" (SRD 5.2.1 Arcane Hand) isn't an unarmed strike; "Fist (Bonus Action)" is.
+    expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Clenched Fist' }))).toThrow(/needs an attack/);
+    expect(rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Fist (Bonus Action)' }))).toBe('4');
+    expect(rollRequestModifier(fighter(16), request({ rollType: 'attack', attackName: 'Clenched Fist' })).label).not.toMatch(/Unarmed Strike/);
+    expect(rollRequestModifier(fighter(16), request({ rollType: 'attack', attackName: 'Spinning Kick' })).label).toBe('Unarmed Strike attack');
   });
 
   it('Martial Arts follows the Monk level, not the character level, and replaces the flat 1', () => {

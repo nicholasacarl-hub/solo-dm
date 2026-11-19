@@ -718,8 +718,9 @@ export function findAttack(c: Character, name: string): Attack | undefined {
   return matchByName(c.attacks, name, (a) => a.name).match;
 }
 
+/** An unarmed strike by name ("Kick", "Punch", "Unarmed Strike (Bonus Action)", "Fist"); never "Clenched Fist" (Arcane Hand). */
 function isUnarmed(name: string): boolean {
-  return /\b(unarmed|punch|kick|fist|headbutt)/i.test(name);
+  return /\b(unarmed|punch|kick|headbutt)|^\s*fists?\s*(\(|$)/i.test(name);
 }
 
 function isMonk(c: Character): boolean {
@@ -747,7 +748,8 @@ const UNARMED_STRIKE: Attack = { id: 'unarmed-strike', name: 'Unarmed Strike', a
  * Martial Arts die and Dexterity while unarmored (SRD 5.2.1 Monk, Martial Arts); never below 0.
  */
 export function unarmedDamageExpression(c: Character, critical = false): string {
-  const expression = attackDamageExpression(c, findAttack(c, 'Unarmed Strike') ?? UNARMED_STRIKE, critical);
+  const sheet = findAttack(c, 'Unarmed Strike');
+  const expression = (sheet && attackDamageExpression(c, sheet, critical)) || attackDamageExpression(c, UNARMED_STRIKE, critical);
   return /^-\d+$/.test(expression) ? '0' : expression;
 }
 
