@@ -614,8 +614,8 @@ describe('spells the class or species already gives (the sheet keeps one spell p
     // Magic Initiate (Wizard) picks the class has since taken too: Fire Bolt (a cantrip) and Shield (prepared).
     const stale = { ...wizardDraft(), magicInitiate: { Wizard: { ability: 'int' as const, cantrips: [spellId('Fire Bolt'), spellId('Ray of Frost')], spell: spellId('Shield') } } };
     const errors = validateStep('spells', stale, ctx);
-    expect(errors).toContain('You chose Fire Bolt twice (Wizard and Magic Initiate (Wizard)); choose a different spell in one of them.');
-    expect(errors).toContain('You chose Shield twice (Wizard and Magic Initiate (Wizard)); choose a different spell in one of them.');
+    expect(errors).toContain('You chose Fire Bolt twice (Wizard cantrips and Magic Initiate (Wizard)); choose a different spell in one of them.');
+    expect(errors).toContain('You chose Shield twice (Wizard level 1 spells and Magic Initiate (Wizard)); choose a different spell in one of them.');
     expect(errors.filter((e) => e.startsWith('You chose'))).toHaveLength(2);
     // The sheet never folds the Magic Initiate spell into the class's prepared copy.
     const shield = buildCharacter(stale, ctx, { campaignId: 'c' }).spellcasting?.spells.filter((s) => s.name === 'Shield');
@@ -629,6 +629,56 @@ describe('spells the class or species already gives (the sheet keeps one spell p
       expect(draft.magicInitiate.Wizard?.cantrips).not.toContain(spellId('Fire Bolt'));
       expect(draft.magicInitiate.Wizard?.spell).not.toBe(spellId('Shield'));
       expect(validateStep('spells', draft, ctx)).toEqual([]);
+    }
+  });
+
+  it('treats a Magic Initiate list two sources give once: the Species step says what to fix, the Spells step adds nothing', () => {
+    // A Human Sage: Versatile's Magic Initiate on the Wizard list too (the draft keeps one choice per list).
+    const twice = { ...wizardDraft(), speciesId: species('Human').id, lineage: null, lineageAbility: null, speciesFeat: 'srd:feat:magic-initiate', speciesFeatList: 'Wizard' };
+    expect(validateStep('species', twice, ctx)).toContain('You already have Magic Initiate (Wizard); choose a different spell list.');
+    expect(spellPlan(twice, data).magicInitiate.map((m) => m.list)).toEqual(['Wizard']);
+    expect(validateStep('spells', twice, ctx)).toEqual([]);
+    for (const next of [0, 0.5, 0.99]) expect(fillStep('spells', twice, ctx, { next: () => next }).magicInitiate.Wizard).toEqual(twice.magicInitiate.Wizard);
+    const thunderwave = buildCharacter(twice, ctx, { campaignId: 'c' }).spellcasting?.spells.filter((sp) => sp.name === 'Thunderwave');
+    expect(thunderwave?.map((sp) => sp.source)).toEqual(['Magic Initiate (Wizard)']);
+    // "Let the DM build the rest" gives the species another list.
+    const built = letDmBuildAll(twice, ctx, fixedRng);
+    expect(built.speciesFeatList).not.toBe('Wizard');
+    expect(firstIncompleteStep(built, ctx)).toBeNull();
+  });
+
+  it('drops a second pick of one name in a list (a draft from before a book’s spell and the SRD’s were one choice)', () => {
+    const light = spells.find((sp) => sp.name === 'Light')!;
+    const bookLight = spellInfo({ ...light.entry, id: 'lib:ember:light', sourceId: 'ember', sourceName: 'The Ember Folio', data: { ...light.entry.data, recordId: 'rec:ember:light', format: '2024' } });
+    const withBook: BuilderContext = { data, spells: [...spells, bookLight] };
+    const old = { ...wizardDraft(), cantrips: [spellId('Fire Bolt'), spellId('Light'), bookLight.id] };
+    expect(validateStep('spells', old, withBook)).toEqual(['You chose Light twice in Wizard cantrips; choose a different spell for one of them.']);
+    for (const next of [0, 0.5, 0.99]) {
+      const draft = fillStep('spells', old, withBook, { next: () => next });
+      expect(draft.cantrips.slice(0, 2)).toEqual([spellId('Fire Bolt'), spellId('Light')]);
+      expect(draft.cantrips).not.toContain(bookLight.id);
+      expect(validateStep('spells', draft, withBook)).toEqual([]);
+    }
+  });
+
+  it("with a book filter, counts the class's own pick a stale Magic Initiate pick shares (no fallback while the book has enough)", () => {
+    const ember = (name: string) => {
+      const srd = spells.find((sp) => sp.name === name)!;
+      return spellInfo({ ...srd.entry, id: `lib:ember:${srd.id}`, sourceId: 'ember', sourceName: 'The Ember Folio', data: { ...srd.entry.data, recordId: `rec:ember:${name}`, format: '2024' } });
+    };
+    const book = ['Fire Bolt', 'Mage Hand', 'Ray of Frost'].map(ember);
+    const withBook: BuilderContext = { data, spells: [...spells, ...book] };
+    const sourceOf = (id: string) => withBook.spells.find((sp) => sp.id === id)?.entry.sourceId;
+    const stale = {
+      ...wizardDraft(),
+      sourceFilter: 'ember',
+      cantrips: [book[0].id],
+      magicInitiate: { Wizard: { ability: 'int' as const, cantrips: [book[0].id, spellId('Dancing Lights')], spell: spellId('Thunderwave') } },
+    };
+    for (const next of [0, 0.4, 0.8]) {
+      const draft = fillStep('spells', stale, withBook, { next: () => next });
+      expect(draft.cantrips.map(sourceOf)).toEqual(['ember', 'ember', 'ember']);
+      expect(validateStep('spells', draft, withBook)).toEqual([]);
     }
   });
 

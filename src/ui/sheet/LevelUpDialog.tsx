@@ -114,7 +114,7 @@ function planLevel(
   const classLevel = (existing?.level ?? 0) + 1;
   const choices = option ? subclassesOf(option) : [];
   const needsSubclass = Boolean(option && classLevel >= option.subclassLevel && !existing?.subclass && choices.length);
-  const sub = needsSubclass ? choices.find((s) => s.id === subclassId) : existing ? subclassOptionFor(existing, option) : undefined;
+  const sub = needsSubclass ? choices.find((s) => s.id === subclassId) : existing ? subclassOptionFor(existing, option, classes) : undefined;
   const ctx = { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 };
   const features = option ? gainedFeatures(option, classLevel, sub, ctx, { have: c.features, subclassChosenNow: needsSubclass }) : [];
   return {

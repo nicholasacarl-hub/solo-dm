@@ -52,6 +52,19 @@ describe('classOptionFor', () => {
     expect(classOptionFor({ classId: 'lib:gone:class:fighter', name: 'Fighter', ref: other }, classes)).toBe(otherFighter);
   });
 
+  it("never binds a moved import's id to another book's class of the name, by the ref's book fingerprint", () => {
+    // A class of another book: its parts' refs carry that book's fingerprint.
+    const otherBookFighter: ClassOption = {
+      ...otherFighter,
+      features: srdFighter.features.map((f) => ({ ...f, ref: importedRef({ sourceId: 'other', sourceTitle: 'Other Notes', bookFingerprint: 'fp-other' }) })),
+    };
+    const ref = importedRef({ entryId: 'lib:gone:class:fighter', kind: 'class', entryName: 'Fighter', part: undefined, sourceId: 'gone', sourceTitle: 'Gone', bookFingerprint: 'fp-gone' });
+    expect(classOptionFor({ classId: ref.entryId, name: 'Fighter', ref }, [srdFighter, otherBookFighter])).toBeUndefined();
+    // The same book moved (its fingerprint) is found whatever its title; a ref without a fingerprint binds by name as before.
+    expect(classOptionFor({ classId: ref.entryId, name: 'Fighter', ref: { ...ref, bookFingerprint: 'fp-other' } }, [srdFighter, otherBookFighter])).toBe(otherBookFighter);
+    expect(classOptionFor({ classId: ref.entryId, name: 'Fighter', ref: { ...ref, bookFingerprint: undefined } }, [srdFighter, otherBookFighter])).toBe(otherBookFighter);
+  });
+
   it('falls back to the name among SRD options only (old sheets without SRD ids)', () => {
     expect(classOptionFor({ classId: 'class:fighter', name: 'Fighter' }, classes)).toBe(srdFighter);
     expect(classOptionFor({ classId: 'class:wickwright', name: 'Wickwright' }, classes)).toBeUndefined();
@@ -189,16 +202,63 @@ describe('subclassOptionFor with the subclasses a class shares (merge.ts)', () =
   });
 
   it("gives a moved import's id its ref's book's subclass (shared or not), else only the class's own import of the name", () => {
-    const ref = (sourceId: string, sourceTitle: string) => importedRef({ entryId: `lib:${sourceId}:subclass:ember-warden`, kind: 'subclass', entryName: 'Ember Warden', sourceId, sourceTitle });
+    // The Ashen Folio's subclass carries no fingerprint of its own here (its parts' refs are another book's).
+    const ref = (sourceId: string, sourceTitle: string, bookFingerprint = 'fp-ashen') =>
+      importedRef({ entryId: `lib:${sourceId}:subclass:ember-warden`, kind: 'subclass', entryName: 'Ember Warden', sourceId, sourceTitle, bookFingerprint });
     // Re-imported elsewhere: the same title finds the Ashen Folio's, which the SRD Fighter only shares.
     expect(subclassOptionFor({ subclass: 'Ember Warden', subclassId: 'lib:old:subclass:ember-warden', subclassRef: ref('old', 'The Ashen Folio') }, sharing)).toBe(ashenEmber);
     expect(subclassOptionFor({ subclass: 'Ember Warden', subclassId: 'lib:ashen:subclass:gone', subclassRef: ref('ashen', 'Renamed') }, sharing)).toBe(ashenEmber);
     // The hero's own book is switched off: never another book's the class only shares.
     const switchedOff = { ...srdFighter, subclasses: [champion], sharedSubclasses: [ashenEmber] };
-    expect(subclassOptionFor({ subclass: 'Ember Warden', subclassId: ember.id, subclassRef: ref('gloam', GLOAMWOOD_TITLE) }, switchedOff)).toBeUndefined();
+    expect(subclassOptionFor({ subclass: 'Ember Warden', subclassId: ember.id, subclassRef: importedRef() }, switchedOff)).toBeUndefined();
     expect(subclassOptionFor({ subclass: 'Ember Warden', subclassId: ember.id }, switchedOff)).toBeUndefined();
     // Without a ref, the class's own one import of the name, as before.
     expect(subclassOptionFor({ subclass: 'Ember Warden', subclassId: 'lib:old:subclass:ember-warden' }, sharing)).toBe(ember);
+  });
+
+  describe('by the book fingerprint a ref carries', () => {
+    // A subclass of a book: its parts' refs carry the book's fingerprint, as merge.ts gives them.
+    const ofBook = (sub: SubclassOption, sourceId: string, title: string, bookFingerprint: string): SubclassOption => ({
+      ...sub,
+      id: `lib:${sourceId}:subclass:ember-warden`,
+      source: source(sourceId, title),
+      features: sub.features.map((f) => ({ ...f, ref: { ...(f.ref ?? importedRef()), sourceId, sourceTitle: title, bookFingerprint } })),
+    });
+    const refOf = (sub: SubclassOption) => importedRef({ entryId: sub.id, kind: 'subclass', entryName: sub.name, sourceId: sub.source!.sourceId, sourceTitle: sub.source!.title, bookFingerprint: sub.features[0].ref!.bookFingerprint });
+    const older = ofBook(ember, 't14', 'The Wanderer’s Handbook', 'fp-older');
+    const newer = ofBook(ember, 't24', 'The Wanderer’s Handbook', 'fp-newer');
+
+    it("never takes a different book's subclass of the same title once the hero's book is switched off", () => {
+      const hero = { subclass: 'Ember Warden', subclassId: older.id, subclassRef: refOf(older) };
+      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, older], sharedSubclasses: [newer] })).toBe(older);
+      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion], sharedSubclasses: [newer] })).toBeUndefined();
+      // Nor one the class owns: only a moved copy of the same book rebinds by name.
+      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, newer] })).toBeUndefined();
+      const moved = ofBook(ember, 'elsewhere', 'Wanderer (scan)', 'fp-older');
+      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, newer, moved] })).toBe(moved);
+      // A ref without a fingerprint (an older sheet) binds by name as before.
+      expect(subclassOptionFor({ ...hero, subclassRef: { ...refOf(older), bookFingerprint: undefined } }, { ...srdFighter, subclasses: [champion, newer] })).toBe(newer);
+    });
+
+    it('finds the same book on another device under another title, a subclass the class only shares too', () => {
+      const here = ofBook(ember, 'gloam', GLOAMWOOD_TITLE, 'fp-gloam');
+      const there = ofBook(ember, 'g2', 'Gloamwood (PDF)', 'fp-gloam');
+      const hero = { subclass: 'Ember Warden', subclassId: here.id, subclassRef: refOf(here) };
+      expect(subclassOptionFor(hero, { ...bookFighter, subclasses: [], sharedSubclasses: [there] })).toBe(there);
+      // Ahead of another book that has the ref's source id or title.
+      const sameTitle = ofBook(ember, 'x', GLOAMWOOD_TITLE, 'fp-x');
+      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, sameTitle], sharedSubclasses: [there] })).toBe(there);
+    });
+  });
+
+  it('finds a subclass by id under another class (it was shared, and the classes no longer share)', () => {
+    const order: SubclassOption = { ...ember, id: 'lib:gloam:subclass:order', name: 'Order of the Lamp' };
+    const renamed: ClassOption = { ...bookFighter, name: 'Fighter (Gloamwood)', subclasses: [order] };
+    const hero = { subclass: 'Order of the Lamp', subclassId: order.id };
+    expect(subclassOptionFor(hero, srdFighter, [srdFighter, renamed])).toBe(order);
+    expect(subclassOptionFor({ subclass: 'Champion', subclassId: champion.id }, renamed, [srdFighter, renamed])).toBe(champion);
+    // Without the classes: by the class's own lists only.
+    expect(subclassOptionFor(hero, srdFighter)).toBeUndefined();
   });
 });
 

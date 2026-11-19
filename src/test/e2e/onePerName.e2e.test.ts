@@ -14,10 +14,17 @@ import { saveLibrarySourceWithRecords } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
 import { GLOAMWOOD_SOURCE_ID, gloamwoodEntries, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
 import { SRD_SOURCE_ID, type SpellData, type StructuredRecord } from '@/types';
-import { letDmBuildAll } from '@/ui/builder/autofill';
+import { fillStep, letDmBuildAll } from '@/ui/builder/autofill';
 import { emptyDraft, filtered, firstIncompleteStep, spellInfo, spellsForClass, subclassesOf, visibleSpells, withoutReplacedSrd } from '@/ui/builder/logic';
 
 const BOOK_FIGHTER = 'lib:gloam:class:wickwright';
+/** A fixed sequence per seed (Park–Miller, past its first few values, which stay near 0 for small seeds). */
+function seeded(seed: number) {
+  let state = seed;
+  const next = () => (state = (state * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 4; i++) next();
+  return { next };
+}
 
 beforeAll(async () => {
   await resetDatabase();
@@ -62,8 +69,6 @@ describe('a 2024 book’s options in place of the SRD’s of their names (end to
     const data = await loadBuilderData();
     const index = await getRulesIndex();
     const ctx = { data, spells: index.list({ kind: 'spell' }).map(spellInfo) };
-    // A fixed sequence per seed (Park–Miller), so a failure names its class and seed.
-    const seeded = (seed: number) => ({ next: () => (seed = (seed * 16807) % 2147483647) / 2147483647 });
     for (const cls of data.classes) {
       // A Human too: Versatile's Origin feat can't be the background's, and the book has one Origin feat.
       for (const [seed, speciesId] of [[1, null], [7, null], [42, 'srd:species:human']] as const) {
@@ -75,6 +80,18 @@ describe('a 2024 book’s options in place of the SRD’s of their names (end to
     for (const cls of [undefined, ...data.classes]) {
       const draft = letDmBuildAll({ ...emptyDraft(), classId: cls?.id ?? null, sourceFilter: 'a-book-with-no-options' }, ctx, seeded(3));
       expect({ cls: cls?.name, step: firstIncompleteStep(draft, ctx) }).toEqual({ cls: cls?.name, step: null });
+    }
+  });
+
+  it("gives a background's Magic Initiate a list other than the species' (SRD 5.2.1: another list each time)", async () => {
+    const data = await loadBuilderData();
+    const index = await getRulesIndex();
+    const ctx = { data, spells: index.list({ kind: 'spell' }).map(spellInfo) };
+    const ferry = data.backgrounds.find((b) => b.name === 'Ferry Hand' && b.featChoice);
+    const human = { ...emptyDraft(), speciesId: 'srd:species:human', speciesFeat: 'srd:feat:magic-initiate', speciesFeatList: 'Wizard' };
+    for (const value of [0, 0.4, 0.8, 0.99]) {
+      const draft = fillStep('background', { ...human, backgroundId: ferry?.id ?? null, backgroundFeat: 'srd:feat:magic-initiate' }, ctx, { next: () => value });
+      expect(draft.backgroundFeatList).toMatch(/^(Cleric|Druid)$/);
     }
   });
 

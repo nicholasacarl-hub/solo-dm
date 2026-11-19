@@ -696,9 +696,11 @@ already chosen still show the SRD's. Older-format (2014) options sit beside the 
 and the level-up feat panel badge an SRD option whose name an import shares. A 2024 book's class and the
 SRD class of its name share their subclasses (`sharedSubclasses`, offered after the class's own): hiding
 the SRD class strands none, and a hero who kept the SRD class (made before the book) meets the book's
-subclasses at level-up. Each class keeps its own in `subclasses`, and a lookup by name prefers those: a
-subclass attached to the SRD class never ties with the stand-in's of the same name, and a hero's subclass
-whose book is switched off never turns into another book's the class only shares. An older-format
+subclasses at level-up. Each class keeps its own in `subclasses`, and a lookup by name prefers those, so a
+subclass attached to the SRD class never ties with the stand-in's of the same name. A hero's subclass id is
+found among every class's (one taken through sharing stays the hero's when the classes stop sharing). An
+option whose id moved (another device, a re-import) is found by its book's fingerprint whatever the book's
+title, and never turns into another book's option of its name. An older-format
 subclass notes its possible overlap on a 2024 book's class as it does on the SRD's. Spell lists show a book's accepted 2024
 spell in place of the SRD's, and the SRD's in place of a book's spell not yet reviewed (materialized
 spells keep `data.format` for this). Weapon Mastery offers one chip per weapon name, and a feat or spell

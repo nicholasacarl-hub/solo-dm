@@ -314,6 +314,13 @@ describe('LevelUpDialog with imported options', () => {
     await user.click(radios()[1]);
     await user.click(screen.getByRole('button', { name: 'Level up' }));
     expect(sheet().classes[0]).toMatchObject({ classId: bookFighter.id, level: 3, subclass: 'Champion', subclassId: 'srd:subclass:champion' });
+    cleanup();
+    // The book's class renamed in review: the classes no longer share, and the hero's subclass stays theirs (by id).
+    mocks.data = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, { ...bookFighter, name: 'Fighter (Gloamwood)', sharedSubclasses: undefined }] };
+    resetFakeGame({ campaign: sampleCampaign(), character: fighter(6, { subclass: 'Night Ward', subclassId: nightWard.id }) });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().features.map((f) => f.name)).toContain('Smoke Step');
   });
 
   it("offers a 2024 book's class and subclass in place of the SRD's of their names; a hero on the book's class sees no SRD note", async () => {

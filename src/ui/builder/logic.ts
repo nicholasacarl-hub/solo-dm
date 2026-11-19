@@ -231,12 +231,13 @@ export interface SpellPlan {
   prepared: number;
   /** Wizard-style spellbook size (0 = no spellbook). */
   spellbook: number;
+  /** One entry per spell list (the draft keeps one choice per list; two sources of a list are the Species step's to fix). */
   magicInitiate: { list: string; source: string }[];
 }
 
 export function spellPlan(draft: BuilderDraft, data: BuilderData): SpellPlan {
   const { cls } = picks(draft, data);
-  const magicInitiate = magicInitiateSources(draft, data);
+  const magicInitiate = magicInitiateSources(draft, data).filter((m, i, all) => all.findIndex((o) => o.list === m.list) === i);
   if (!cls || cls.casterType === 'none') {
     return { casting: false, cantrips: 0, prepared: 0, spellbook: 0, magicInitiate };
   }
@@ -749,10 +750,20 @@ function validateSpells(draft: BuilderDraft, ctx: BuilderContext): string[] {
     }
   };
   const { cls } = picks(draft, ctx.data);
-  if (plan.casting && cls) place([...draft.cantrips, ...(plan.spellbook ? draft.spellbook : draft.prepared)], cls.name);
+  if (plan.casting && cls) {
+    place(draft.cantrips, `${cls.name} cantrips`);
+    place(plan.spellbook ? draft.spellbook : draft.prepared, `${cls.name} level 1 spells`);
+  }
   for (const { list } of plan.magicInitiate) place([...(draft.magicInitiate[list]?.cantrips ?? []), draft.magicInitiate[list]?.spell], `Magic Initiate (${list})`);
   for (const { name, where } of places.values()) {
-    if (where.length > 1) errors.push(`You chose ${name} twice (${where.join(' and ')}); choose a different spell in one of them.`);
+    if (where.length < 2) continue;
+    // Twice in one list: a book's spell and the SRD's of its name, from a draft made before they were one choice.
+    const lists = [...new Set(where)];
+    errors.push(
+      lists.length > 1
+        ? `You chose ${name} twice (${lists.join(' and ')}); choose a different spell in one of them.`
+        : `You chose ${name} twice in ${lists[0]}; choose a different spell for one of them.`,
+    );
   }
   if (plan.casting) {
     const cantripOptions = classSpellOptions(draft, ctx, 0);

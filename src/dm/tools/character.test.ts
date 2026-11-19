@@ -148,7 +148,7 @@ describe('level_up from the merged builder data', () => {
       ...EMBER,
       id: 'lib:ashen:subclass:ember-warden',
       source: { ...ashen, recordId: 'rec:ashen:subclass:ember-warden' },
-      features: EMBER.features.map((f) => ({ ...f, ...(f.ref ? { ref: { ...f.ref, sourceId: 'ashen', sourceTitle: 'The Ashen Folio', entryId: 'lib:ashen:subclass:ember-warden' } } : {}) })),
+      features: EMBER.features.map((f) => ({ ...f, ...(f.ref ? { ref: { ...f.ref, sourceId: 'ashen', sourceTitle: 'The Ashen Folio', bookFingerprint: 'fp-ashen', entryId: 'lib:ashen:subclass:ember-warden' } } : {}) })),
     };
     const ashenFighter: ClassOption = { ...FIGHTER, id: 'lib:ashen:class:fighter', source: ashen, subclasses: [ashenEmber], sharedSubclasses: [...FIGHTER.subclasses] };
     const withAshen = (srd: ClassOption): BuilderData => ({
@@ -165,10 +165,18 @@ describe('level_up from the merged builder data', () => {
     });
 
     it("a hero on the SRD Fighter with the other book's (by id) gets its later features", async () => {
-      const subclassRef = importedRef({ entryId: ashenEmber.id, kind: 'subclass', entryName: 'Ember Warden', sourceId: 'ashen', sourceTitle: 'The Ashen Folio' });
+      const subclassRef = importedRef({ entryId: ashenEmber.id, kind: 'subclass', entryName: 'Ember Warden', sourceId: 'ashen', sourceTitle: 'The Ashen Folio', bookFingerprint: 'fp-ashen' });
       const h = setup({ builderData: withAshen(FIGHTER), character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 6, hitDie: 10, subclass: 'Ember Warden', subclassId: ashenEmber.id, subclassRef }) });
       const out = await h.run('level_up', { class_name: 'Fighter' });
       expect(h.sheet().features.map((f) => f.name)).toContain('Smoke Step');
+      expect(out.content).toContain('- Smoke Step (The Ashen Folio)');
+    });
+
+    it("keeps the other book's (by id) once its class is renamed in review and the classes no longer share", async () => {
+      const renamed: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, { ...ashenFighter, name: 'Fighter (Ashen)', sharedSubclasses: undefined }] };
+      const subclassRef = importedRef({ entryId: ashenEmber.id, kind: 'subclass', entryName: 'Ember Warden', sourceId: 'ashen', sourceTitle: 'The Ashen Folio', bookFingerprint: 'fp-ashen' });
+      const h = setup({ builderData: renamed, character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 6, hitDie: 10, subclass: 'Ember Warden', subclassId: ashenEmber.id, subclassRef }) });
+      const out = await h.run('level_up', { class_name: 'Fighter' });
       expect(out.content).toContain('- Smoke Step (The Ashen Folio)');
     });
 

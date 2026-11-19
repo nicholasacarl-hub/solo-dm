@@ -44,7 +44,6 @@ import {
   grantedSkills,
   isMagicInitiate,
   languagePlan,
-  magicInitiateSources,
   originFeatOptions,
   originFeats,
   picks,
@@ -106,7 +105,9 @@ function shuffle<T>(items: readonly T[], rng: Rng): T[] {
  * nor one whose key is `taken` (chosen elsewhere).
  */
 function topUp<T>(kept: T[], ranked: T[], count: number, key: (item: T) => unknown = (item) => item, taken: ReadonlySet<unknown> = new Set()): T[] {
-  const out = kept.slice(0, count);
+  // Kept items stay, one per key (a draft from before a book's spell and the SRD's were one choice may hold both).
+  const out: T[] = [];
+  for (const item of kept) if (out.length < count && !out.some((o) => key(o) === key(item))) out.push(item);
   const seen = new Set([...taken, ...out.map(key)]);
   for (const item of ranked) {
     if (out.length >= count) break;
@@ -171,7 +172,9 @@ function fillBackgroundFeat(draft: BuilderDraft, data: BuilderData, rng: Rng): B
   const current = options.find((f) => f.id === draft.backgroundFeat);
   const feat = current ?? (options.length ? pick(options, rng) : undefined);
   if (!feat) return draft;
-  const list = isMagicInitiate(feat.name) ? (draft.backgroundFeatList ?? pick(MAGIC_INITIATE_LISTS, rng)) : null;
+  // Never the species' Magic Initiate list (a feat taken twice needs another list each time).
+  const speciesList = originFeats(draft, data).find((f) => f.from === 'species' && isMagicInitiate(f.name))?.option;
+  const list = isMagicInitiate(feat.name) ? (draft.backgroundFeatList ?? pick(MAGIC_INITIATE_LISTS.filter((l) => l !== speciesList), rng)) : null;
   return { ...draft, backgroundFeat: feat.id, backgroundFeatList: list };
 }
 
@@ -230,9 +233,10 @@ function fillSpecies(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderD
     const feat = current ?? options.find((f) => recommended && nameKey(f.name) === nameKey(recommended)) ?? options[0];
     if (feat) {
       patch.speciesFeat = feat.id;
-      if (isMagicInitiate(feat.name) && !next.speciesFeatList) {
+      if (isMagicInitiate(feat.name)) {
+        // A list the background's Magic Initiate already has (it changed since) gives way too.
         const used = originFeats(next, data).filter((f) => f.from === 'background').map((f) => f.option);
-        patch.speciesFeatList = MAGIC_INITIATE_LISTS.find((l) => !used.includes(l)) ?? 'Wizard';
+        if (!next.speciesFeatList || used.includes(next.speciesFeatList)) patch.speciesFeatList = MAGIC_INITIATE_LISTS.find((l) => !used.includes(l)) ?? 'Wizard';
       }
     }
   }
@@ -363,7 +367,7 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
   // lists don't take them again.
   const granted = new Set(grantedSpells(draft, ctx.data).keys());
   const initiateNames = new Set([
-    ...magicInitiateSources(draft, ctx.data)
+    ...plan.magicInitiate
       .flatMap(({ list }) => [...(draft.magicInitiate[list]?.cantrips ?? []), ...(draft.magicInitiate[list]?.spell ? [draft.magicInitiate[list]?.spell as string] : [])])
       .map(nameOf),
     ...granted,
@@ -375,7 +379,9 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
     const options = (level: 0 | 1, need: number) => {
       const all = classSpellOptions(draft, ctx, level);
       const mine = visibleSpells(all, draft.sourceFilter, chosen);
-      const free = new Set(mine.map((s) => nameKey(s.name)).filter((key) => !initiateNames.has(key)));
+      // The class's own picks stay (a Magic Initiate pick of the same name gives way to them).
+      const own = new Set((level === 0 ? draft.cantrips : plan.spellbook ? draft.spellbook : draft.prepared).map(nameOf).filter((key) => !granted.has(key)));
+      const free = new Set(mine.map((s) => nameKey(s.name)).filter((key) => own.has(key) || !initiateNames.has(key)));
       return free.size >= need || !draft.sourceFilter ? mine : visibleSpells(all, null, chosen);
     };
     const cantripOptions = options(0, plan.cantrips);
@@ -408,7 +414,7 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
   const magicInitiate = { ...next.magicInitiate };
   // Don't spend Magic Initiate picks on spells the character already knows or is granted (by name, of any book).
   const known = new Set([...[...next.cantrips, ...next.spellbook, ...next.prepared].map(nameOf), ...granted]);
-  for (const { list } of magicInitiateSources(next, ctx.data)) {
+  for (const { list } of plan.magicInitiate) {
     const current = magicInitiate[list];
     const keep = new Set([...(current?.cantrips ?? []), ...(current?.spell ? [current.spell] : [])]);
     // As the step lists them (the source filter's); a filter that leaves too few falls back to "All". A spell the
