@@ -381,6 +381,20 @@ describe('parseCampaignBundle', () => {
     expect(c?.adaptationNotes).toEqual(['Older edition: a note.']);
   });
 
+  it("keeps a class ref's edition (the engine's class rules read it) and drops one it doesn't know, never the ref", () => {
+    const data = valid();
+    const character = data.character as Record<string, unknown>;
+    const ref = { sourceId: 'gloam', sourceTitle: 'The Gloamwood Almanac', entryId: 'lib:gloam:class:wickwright', kind: 'class', entryName: 'Wickwright', textHash: '', textCopied: false };
+    const classes = [
+      { name: 'Wickwright', level: 1, classId: 'lib:gloam:class:wickwright', hitDie: 8, ref: { ...ref, format: '2024' } },
+      { name: 'Wickwright', level: 1, classId: 'lib:gloam:class:wickwright', hitDie: 8, ref: { ...ref, format: '1999' } },
+    ];
+    const c = parseCampaignBundle({ ...data, character: { ...character, classes } }).character;
+    expect(c?.classes[0].ref?.format).toBe('2024');
+    expect(c?.classes[1].ref).toMatchObject({ entryId: ref.entryId });
+    expect(c?.classes[1].ref?.format).toBeUndefined();
+  });
+
   it('drops display-log entries that lack what their kind needs, and fills the rest', () => {
     const data = valid();
     const log = data.log as Record<string, unknown>[];

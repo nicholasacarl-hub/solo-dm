@@ -93,6 +93,8 @@ export const requestPersistentStorage: () => Promise<boolean> = database.request
 // ---------------------------------------------------------------------------
 
 export const loadCampaignRecords: (campaignId: string) => Promise<CampaignRecords | null> = records.loadCampaignRecords;
+/** One stored character record (e.g. to see whether a failed write stored it before failing). */
+export const getCharacter: (id: string) => Promise<Character | undefined> = records.getCharacter;
 export const putCampaign: (c: Campaign) => Promise<void> = records.putCampaign;
 /**
  * putCampaign that keeps DM notices queued elsewhere since the caller last saw the record (stored

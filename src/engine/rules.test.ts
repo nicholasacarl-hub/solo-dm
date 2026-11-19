@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Attack, Character, EquipmentOption, Feature, InventoryItem, PlayerRollRequest, SkillBonus } from '@/types';
+import type { Attack, Character, EquipmentOption, Feature, ImportedRef, InventoryItem, PlayerRollRequest, SkillBonus } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import { applyAttackRollRules, manualD20Result } from './dice';
 import {
@@ -21,6 +21,7 @@ import {
   passivePerception,
   proficiencyBonus,
   rollRequestExpression,
+  unarmedDamageExpression,
   rollRequestModifier,
   saveBonusSources,
   savingThrowModifier,
@@ -424,6 +425,96 @@ describe('damage dice that grow with level', () => {
     expect(attackDamageExpression(monk(5), { ...strike, damage: '1d10' })).toBe('1d10+3');
   });
 
+  it("a 2024 book's Monk rolls the same Martial Arts die and makes Dexterous Attacks; an older book's keeps its own die (SRD 5.2.1 Monk: Martial Arts)", () => {
+    const strike: Attack = { id: 'us', name: 'Unarmed Strike', ability: 'finesse', proficient: true, damage: '1d6', damageType: 'bludgeoning', scaling: 'martial-arts' };
+    const ref = (format: '2024' | '2014'): ImportedRef => ({ sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:monk', kind: 'class', entryName: 'Monk', textHash: '', textCopied: false, format });
+    const bookMonk = (level: number, format: '2024' | '2014', attacks: Attack[] = [strike]) =>
+      mira({
+        abilityScores: { str: 10, dex: 16, con: 12, int: 8, wis: 16, cha: 10 },
+        classes: [{ classId: 'lib:lamp:class:monk', name: 'Monk', level, hitDie: 8, casterType: 'none', ref: ref(format) }],
+        spellcasting: undefined,
+        attacks,
+        inventory: [],
+        features: [],
+      });
+    expect([1, 5, 11, 17].map((l) => attackDamageExpression(bookMonk(l, '2024'), strike))).toEqual(['1d6+3', '1d8+3', '1d10+3', '1d12+3']);
+    // An older book's Monk: its own Martial Arts die (a 2014 Monk's grows differently), as on the sheet.
+    expect(attackDamageExpression(bookMonk(11, '2014'), strike)).toBe('1d6+3');
+    // Dexterous Attacks: an Unarmed Strike off the sheet uses DEX 3 (not STR 0), plus the Proficiency Bonus 3.
+    expect(rollRequestModifier(bookMonk(5, '2024', []), request({ rollType: 'attack', attackName: 'Unarmed Strike' }))).toEqual({ modifier: 6, label: 'Unarmed Strike attack' });
+    // Unarmored Defense (SRD 5.2.1 Monk): 10 + DEX 3 + WIS 3, from the class itself.
+    expect(computeArmorClass(bookMonk(1, '2024')).ac).toBe(16);
+  });
+
+  it("Dexterous Attacks: a Monk's Unarmed Strike made before the Monk levels uses DEX, never in armor or with a Shield (SRD 5.2.1 Monk, Martial Arts)", () => {
+    // A Fighter's Unarmed Strike (STR), the hero now a Monk too.
+    const strike: Attack = { id: 'us', name: 'Unarmed Strike', ability: 'str', proficient: true, damage: '1', damageType: 'bludgeoning' };
+    // A Greataxe isn't a Monk weapon (Heavy, Two-Handed): it keeps Strength.
+    const greataxe: Attack = { id: 'ga', name: 'Greataxe', ability: 'str', proficient: true, damage: '1d12', damageType: 'slashing' };
+    const ref: ImportedRef = { sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:monk', kind: 'class', entryName: 'Monk', textHash: '', textCopied: false, format: '2024' };
+    const hero = (monk: Character['classes'][number], inventory: InventoryItem[] = []) =>
+      mira({
+        abilityScores: { str: 10, dex: 16, con: 12, int: 8, wis: 14, cha: 10 },
+        classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level: 1, hitDie: 10, casterType: 'none' }, monk],
+        spellcasting: undefined,
+        attacks: [strike, greataxe],
+        inventory,
+        features: [],
+      });
+    for (const monk of [
+      { classId: 'srd:class:monk', name: 'Monk', level: 4, hitDie: 8 as const, casterType: 'none' as const },
+      { classId: 'lib:lamp:class:monk', name: 'Monk', level: 4, hitDie: 8 as const, casterType: 'none' as const, ref },
+    ]) {
+      // DEX 3 + Proficiency Bonus 3 to hit; the Martial Arts die with DEX for damage.
+      expect(attackBonus(hero(monk), strike)).toBe(6);
+      expect(attackDamageExpression(hero(monk), strike)).toBe('1d6+3');
+      expect(attackBonus(hero(monk), greataxe)).toBe(3);
+      const shield: InventoryItem = { id: 'sh', name: 'Shield', quantity: 1, equipped: true, category: 'armor' };
+      expect(attackBonus(hero(monk, [shield]), strike)).toBe(3);
+      expect(rollRequestModifier({ ...hero(monk, [shield]), attacks: [] }, request({ rollType: 'attack', attackName: 'Unarmed Strike' })).modifier).toBe(3);
+    }
+  });
+
+  it("prices an unarmed strike the sheet doesn't list by that name: 1 + STR, or a Monk's Martial Arts die and DEX (SRD 5.2.1 Unarmed Strike; Monk, Martial Arts)", () => {
+    const ref: ImportedRef = { sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:monk', kind: 'class', entryName: 'Monk', textHash: '', textCopied: false, format: '2024' };
+    const shield: InventoryItem = { id: 'sh', name: 'Shield', quantity: 1, equipped: true, category: 'armor' };
+    const monk = (classLevel: Character['classes'][number], inventory: InventoryItem[] = []) =>
+      mira({ abilityScores: { str: 10, dex: 16, con: 12, int: 8, wis: 16, cha: 10 }, classes: [classLevel], spellcasting: undefined, attacks: [], inventory, features: [] });
+    for (const cl of [
+      { classId: 'srd:class:monk', name: 'Monk', level: 5, hitDie: 8 as const, casterType: 'none' as const },
+      { classId: 'lib:lamp:class:monk', name: 'Monk', level: 5, hitDie: 8 as const, casterType: 'none' as const, ref },
+    ]) {
+      expect(unarmedDamageExpression(monk(cl))).toBe('1d8+3');
+      expect(unarmedDamageExpression(monk(cl), true)).toBe('2d8+3');
+      expect(rollRequestExpression(monk(cl), request({ rollType: 'damage', attackName: 'Kick' }))).toBe('1d8+3');
+      // With a Shield, no Martial Arts: 1 + STR 0.
+      expect(unarmedDamageExpression(monk(cl, [shield]))).toBe('1');
+    }
+    // Anyone else: 1 + STR, never below 0; the sheet's Unarmed Strike when it has one.
+    const fighter = (str: number, attacks: Attack[] = []) =>
+      mira({ abilityScores: { ...mira().abilityScores, str }, classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level: 1, hitDie: 10, casterType: 'none' }], spellcasting: undefined, attacks });
+    expect(unarmedDamageExpression(fighter(16))).toBe('4');
+    expect(unarmedDamageExpression(fighter(6))).toBe('0');
+    const brawler: Attack = { id: 'us', name: 'Unarmed Strike', ability: 'str', proficient: true, damage: '1d4', damageType: 'bludgeoning' };
+    expect(unarmedDamageExpression(fighter(16, [brawler]))).toBe('1d4+3');
+    // A blank damage on the sheet's falls back to everyone's.
+    expect(unarmedDamageExpression(fighter(16, [{ ...brawler, damage: '' }]))).toBe('4');
+    // "Clenched Fist" (SRD 5.2.1 Arcane Hand) isn't an unarmed strike; "Fist (Bonus Action)" is.
+    expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Clenched Fist' }))).toThrow(/needs an attack/);
+    expect(rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Fist (Bonus Action)' }))).toBe('4');
+    expect(rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Bare Fists' }))).toBe('4');
+    expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Arcane Hand (Clenched Fist)' }))).toThrow(/needs an attack/);
+    expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Fist (Arcane Hand)' }))).toThrow(/needs an attack/);
+    for (const name of ['Clenched-Fist', 'Spectral Fist', 'Fist of Force', 'Fist (Arcane-Hand)']) {
+      expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: name }))).toThrow(/needs an attack/);
+    }
+    expect(rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Fist Strike' }))).toBe('4');
+    // A weapon that names a fist keeps the DM's `ability`.
+    expect(rollRequestModifier(fighter(16), request({ rollType: 'attack', attackName: 'Fist-sized Rock', ability: 'dex' })).label).toMatch(/^Fist-sized Rock attack \(DEX/);
+    expect(rollRequestModifier(fighter(16), request({ rollType: 'attack', attackName: 'Clenched Fist' })).label).not.toMatch(/Unarmed Strike/);
+    expect(rollRequestModifier(fighter(16), request({ rollType: 'attack', attackName: 'Spinning Kick' })).label).toBe('Unarmed Strike attack');
+  });
+
   it('Martial Arts follows the Monk level, not the character level, and replaces the flat 1', () => {
     const fighterMonk = mira({
       abilityScores: { ...mira().abilityScores, str: 16 },
@@ -521,6 +612,26 @@ describe('imported classes and subclasses keep to their own rules (SRD 5.2.1 Cla
     expect(weaponCritRange(asFighter({ subclass: 'Champion' }))).toBe(19);
     expect(weaponCritRange(asFighter({ subclass: 'Champion', subclassId: 'lib:gloam:subclass:champion' }))).toBe(20);
     expect(weaponCritRange(asFighter({ classId: 'lib:gloam:class:fighter', subclass: 'Champion' }))).toBe(20);
+  });
+
+  it("a 2024 book's Fighter and Paladin play by the SRD's: Improved Critical with the SRD Champion, Aura of Protection at 6; a 2014 book's don't (SRD 5.2.1 Champion; Paladin)", () => {
+    const ref = (entryName: string, format: '2024' | '2014'): ImportedRef => ({
+      sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: `lib:lamp:class:${entryName.toLowerCase()}`, kind: 'class', entryName, textHash: '', textCopied: false, format,
+    });
+    const bookFighter = (format: '2024' | '2014') =>
+      asFighter({ classId: 'lib:lamp:class:fighter', ref: ref('Fighter', format), subclass: 'Champion', subclassId: 'srd:subclass:champion' });
+    expect(weaponCritRange(bookFighter('2024'))).toBe(19);
+    expect(weaponCritRange(bookFighter('2014'))).toBe(20);
+    const bookPaladin = (format: '2024' | '2014') =>
+      mira({
+        abilityScores: { str: 16, dex: 10, con: 14, int: 8, wis: 10, cha: 16 },
+        savingThrows: ['wis', 'cha'],
+        classes: [{ classId: 'lib:lamp:class:paladin', name: 'Paladin', level: 6, hitDie: 10, casterType: 'half', spellcastingAbility: 'cha', ref: ref('Paladin', format) }],
+        features: [],
+      });
+    // A Strength save: STR 3, plus CHA 3 from the aura.
+    expect(savingThrowModifier(bookPaladin('2024'), 'str')).toBe(6);
+    expect(savingThrowModifier(bookPaladin('2014'), 'str')).toBe(3);
   });
 
   it('gives Draconic Resilience only to the SRD Draconic Sorcery by id', () => {

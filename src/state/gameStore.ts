@@ -222,6 +222,12 @@ export interface GameStoreActions {
    */
   restoreImportedText(): Promise<RestoreReport | null>;
   /**
+   * Bring the loaded character's imported classes' editions in step with their books' records (withClassEditions:
+   * the engine's class rules read them). Loads @/data with a dynamic import and writes the character AS IS, as
+   * restoreImportedText does. Resolves true when anything changed.
+   */
+  refreshClassEditions(): Promise<boolean>;
+  /**
    * Return and clear pending DM notices. The stored copy is cleared by the campaign's next save —
    * normally the transcript append that delivers them — so a failed append can't lose them.
    */
@@ -353,6 +359,27 @@ function saveNotice(campaignId: string, notice: string, updatedAt?: number): Pro
     console.error("[gameStore] Couldn't save a note for the DM:", cause);
     throw new Error(`Couldn't save the note for the DM: ${detail}`, { cause });
   });
+}
+
+/** The stored character row, or `unsure` when it can't be read. */
+async function storedCharacter(id: string, unsure: Character | null): Promise<Character | null | undefined> {
+  try {
+    return await storage.getCharacter(id);
+  } catch {
+    return unsure;
+  }
+}
+
+/**
+ * Add a notice to the loaded campaign in memory only: the caller's own write saves it with the campaign row. False
+ * when nothing was added (no campaign, or the same notice is already pending).
+ */
+function noteInMemory(notice: string): boolean {
+  const s = useGame.getState();
+  if (!notice || !s.campaign || s.pendingDmNotices.includes(notice)) return false;
+  const pendingDmNotices = [...s.pendingDmNotices, notice];
+  useGame.setState({ pendingDmNotices, campaign: { ...s.campaign, pendingDmNotices } });
+  return true;
 }
 
 /** Queue a notice on the loaded campaign (memory first, then saved). Resolves once it is saved. */
@@ -679,6 +706,8 @@ export const useGame = create<GameStore>()((set, get) => ({
       // A device that has the book fills its text back into the sheet (spec §7.4). This covers GitHub pulls and
       // bundle imports too, since both reload the campaign. It never touches the campaign row.
       void get().restoreImportedText().catch(noop);
+      // Its imported classes' editions too, for the class rules (a hero made before refs recorded them).
+      void get().refreshClassEditions().catch(noop);
     } catch (error) {
       if (token !== loadToken) return;
       console.error('[gameStore] Failed to load the campaign:', error);
@@ -1220,11 +1249,12 @@ export const useGame = create<GameStore>()((set, get) => ({
   async restoreImportedText() {
     const { campaign, character } = get();
     if (!campaign || !character || !character.features.some(needsRestore)) return null;
+    const replacement = replacementOf(campaign.id);
     // Loaded lazily: the store never imports @/data statically (no gameStore → @/data edge, no cycle).
     const data = await import('@/data');
     const lookup = await data.buildLibraryLookup();
     const s = get();
-    if (s.campaign?.id !== campaign.id || !s.character || s.character.id !== character.id) return null;
+    if (!stillLoaded(campaign.id, character.id, replacement) || !s.character) return null;
     const { character: restored, report } = data.restoreImportedText(s.character, lookup);
     if (report.restored > 0) {
       set({ character: restored });
@@ -1233,7 +1263,69 @@ export const useGame = create<GameStore>()((set, get) => ({
     }
     return report;
   },
+
+  async refreshClassEditions() {
+    const { campaign, character } = get();
+    if (!campaign || !character || !character.classes.some((cl) => cl.ref && cl.classId.startsWith('lib:'))) return false;
+    const replacement = replacementOf(campaign.id);
+    const data = await import('@/data');
+    const builder = await data.loadBuilderData();
+    const s = get();
+    if (!stillLoaded(campaign.id, character.id, replacement) || !s.character) return false;
+    const next = data.withClassEditions(s.character, builder.classes);
+    if (next === s.character) return false;
+    const owed = data.hitPointsOwedForEditions(s.character, next);
+    if (owed > 0) {
+      // Hit Points are game state: a normal save (sync sees it). The DM hears why the maximum rose: the notice goes
+      // into memory with the top-up and the same write saves both (the campaign row carries it), so leaving the table
+      // meanwhile can't send it to another campaign. All or nothing: if the write is refused (another tab at the table,
+      // a pull) or fails before the hero's row is stored, both come back out of memory, so no later write saves one
+      // without the other, and the next load tries again. Stored, then failed on the campaign row: memory keeps both,
+      // and the notice is saved on its own at once.
+      const before = s.character;
+      const notice = `${before.name}'s Hit Point maximum rose by ${owed} to ${before.hp.max + owed}: Draconic Resilience now adds its Hit Points for a book's Sorcerer, and the Sorcerer levels gained before didn't get them.`;
+      const noted = noteInMemory(notice);
+      const writing = get().updateCharacter((c) => {
+        const edited = data.withClassEditions(c, builder.classes);
+        return { ...edited, hp: { ...edited.hp, max: edited.hp.max + owed, current: edited.hp.current > 0 ? edited.hp.current + owed : edited.hp.current } };
+      });
+      const topped = get().character; // updateCharacter sets memory before its first await
+      try {
+        await writing;
+      } catch (cause) {
+        const stored = await storedCharacter(before.id, topped);
+        const now = get();
+        // The hero's row holds the raise (the campaign row's write failed after it), or the read failed (unsure).
+        const raiseStored = topped !== before && stored?.updatedAt === topped?.updatedAt;
+        if (now.character === topped && !raiseStored) {
+          // Neither storage nor a later write carries the raised maximum: take the top-up and its notice back.
+          const pendingDmNotices = noted ? now.pendingDmNotices.filter((n) => n !== notice) : now.pendingDmNotices;
+          set({ character: before, pendingDmNotices, ...(now.campaign ? { campaign: { ...now.campaign, pendingDmNotices } } : {}) });
+        } else if (noted && (raiseStored || (now.campaign?.id === campaign.id && now.pendingDmNotices.includes(notice)))) {
+          // The raise is stored, or a later write in memory will store it: save the notice now with the merge write,
+          // since a reload or leaving the table makes no later write of the campaign row.
+          void saveNotice(campaign.id, notice).catch(noop);
+        }
+        throw cause;
+      }
+      return true;
+    }
+    set({ character: next });
+    // As is, like restoreImportedText: character.updatedAt and the campaign row are left alone.
+    await persist(campaign.id, 'the character', () => storage.putCharacter(next)).catch(noop);
+    return true;
+  },
 }));
+
+/**
+ * After an await: the same campaign and character are still loaded, and the campaign wasn't replaced (a GitHub pull, a
+ * save-file import) or reloaded meanwhile. A stale in-memory copy must not be written over the new one; the reload
+ * runs its own restore and refresh.
+ */
+function stillLoaded(campaignId: string, characterId: string, replacement: number): boolean {
+  const s = useGame.getState();
+  return replacementOf(campaignId) === replacement && !s.loading && s.campaign?.id === campaignId && s.character?.id === characterId;
+}
 
 // A campaign replaced by an import / GitHub pull, or deleted from the save slots (in this tab or
 // another), must not keep being written from a stale in-memory copy.

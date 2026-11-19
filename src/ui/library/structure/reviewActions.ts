@@ -54,13 +54,18 @@ export function scheduleRefresh(): void {
   }, REFRESH_MS);
 }
 
-/** Restore book text onto the loaded character (spec §7.4); never throws. */
+/** Restore book text onto the loaded character (spec §7.4), and its classes' editions (a review may change one); never throws. */
 export async function restoreLoadedCharacter(): Promise<void> {
   if (!loadedCampaignId()) return;
   try {
     await useGame.getState().restoreImportedText();
   } catch (error) {
     console.warn('[library] Could not restore book text onto the character:', error);
+  }
+  try {
+    await useGame.getState().refreshClassEditions();
+  } catch (error) {
+    console.warn("[library] Could not bring the character's class editions up to date:", error);
   }
 }
 

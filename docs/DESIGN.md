@@ -154,7 +154,7 @@ tool_result so Claude can correct itself.
 | Tool | Purpose |
 |---|---|
 | `roll_dice` | DM rolls (NPC attacks, damage, random tables, secret checks). `secret` hides it unless the campaign shows DM rolls. On a battle map, `attacker` and `target` add distance, reach, line of sight and cover, and warn when a melee attacker is out of reach. |
-| `request_player_roll` | Ask the player to roll a check/save/attack/damage/initiative/death save. Uses the sheet's modifiers; resolves per roll mode (auto / tap / physical). Returns total, natural, success vs DC. |
+| `request_player_roll` | Ask the player to roll a check/save/attack/damage/initiative/death save. Uses the sheet's modifiers; resolves per roll mode (auto / tap / physical). Returns total, natural, success vs DC. An unarmed strike by another name (`isUnarmedStrikeName`: "Kick", "Punch", a fist named alone such as "Bare Fists"; never a spell or weapon that names one, such as Arcane Hand's "Clenched Fist") rolls the engine's damage for it (`unarmedDamageExpression`: the sheet's Unarmed Strike, else 1 + STR, with a Monk's Martial Arts die and Dexterity). A roll with no dice (a flat 1 + STR) resolves without the dialog: nothing to roll, no die for Heroic Inspiration. |
 | `update_character` | Batched sheet changes: HP (damage/healing/temp), conditions, exhaustion, slots, feature uses, inventory, currency, XP, inspiration, features, spells, concentration, AC/speed. Returns a summary and warnings. |
 | `take_rest` | Short rest (player chooses hit dice in a dialog) or long rest. |
 | `level_up` | Apply a level (HP, hit dice, slots, proficiency, new features) and return reminders for choices. For an imported class or subclass the app adds that level's features with their text. |
@@ -710,7 +710,22 @@ a Magic Initiate list changed), and Magic Initiate's level 1 spell may repeat on
 grants, whose entry gains the free casting. With the source filter on a book, "Let the DM decide" picks from
 that book and falls back to "All" for any list the book leaves short, so the hero ends up complete. Lookups are id-first (`src/data/options/resolve.ts`),
 so a hero who chose the SRD option keeps it, and the engine never takes an imported class (`lib:` id)
-for an SRD class of the same name, so an imported "Fighter" never borrows the SRD Fighter's numbers.
+for an SRD class of the same name for its numbers (hit die, level-up reminders). A 2024 book's class does play
+by the SRD class's rules (`rulesClassFor`): the Martial Arts die and a Monk's Dexterity for unarmed strikes,
+Unarmored Defense, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
+the edition (`ImportedRef.format`), set when the class is taken and kept in step with the book's record on load
+and after review (`withClassEditions`, `src/data/options/editions.ts`): by the class's id, and otherwise only filled,
+never changed, from a copy of the same text (the book's fingerprint), so another book's class of the name never lends
+its edition. An older-edition book's class gets only the rules that go by feature name. When a class's edition is
+recorded for the first time (a hero made before refs recorded it) and its book Sorcerer now plays by the SRD's rules,
+the Draconic Resilience Hit Points its earlier levels missed are added once, with a notice for that campaign's DM put in
+memory with them and saved by the same write (the campaign row carries it). All or nothing: if that write is refused or
+fails before the hero's row is stored, both come back out of memory (unless a later write already carries them), so
+nothing saves one without the other, and the next load tries again; if the hero's row was stored and the campaign row
+then failed (they are two writes), memory keeps both and the notice is saved on its own at once, so a reload or leaving
+the table doesn't lose it (`refreshClassEditions`, `hitPointsOwedForEditions`; nothing else in the app raises the
+maximum). An Edition changed in review later adds and takes back nothing, so a round trip never pays twice. That and
+the text restore write nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
 adaptations, shown in review, on builder cards, in the DM's stats line and on the sheet. Level-up adds

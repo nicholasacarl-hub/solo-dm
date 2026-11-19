@@ -5,8 +5,8 @@ vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
 import { redactImported, wrapImported } from '@/lib/importedContent';
-import { sampleCombat } from '@/test/fixtures';
-import type { LogEntry, ToolLogEntry } from '@/types';
+import { sampleCharacter, sampleCombat } from '@/test/fixtures';
+import type { InteractionRequest, InteractionResponse, LogEntry, ToolLogEntry } from '@/types';
 import type { CompendiumEntry } from '@/types';
 import { deps, resetDmDeps, setDmDeps } from '../deps';
 import { createFakeRulesIndex, SAMPLE_RULES } from '../testing/fakeData';
@@ -126,6 +126,60 @@ describe('request_player_roll: attacks that are not on the sheet', () => {
     expect(bow.isError).toBeUndefined();
     // DEX 14 (+2) + proficiency 2 = +4 → 14.
     expect(bow.content).toMatch(/Longbow attack \(DEX, not on sheet\): 14 .*→ hit/);
+  });
+
+  it('rolls an off-sheet unarmed strike\'s damage ("Kick") from the engine, not a d20', async () => {
+    const h = setup({ character: { ...sampleCharacter(), abilityScores: { ...sampleCharacter().abilityScores, str: 14 } } });
+    const kick = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'Kick', reason: 'Kick the door guard' });
+    expect(kick.isError).toBeUndefined();
+    // 1 + STR 2 (the stand-in engine has no Martial Arts; the real one's is tested in engine/rules.test.ts).
+    expect(kick.content).toMatch(/Kick damage: 3\b/);
+    expect(kick.content).not.toMatch(/d20|natural/);
+  });
+
+  it("rolls an off-sheet unarmed strike's flat damage itself, whatever the roll mode: nothing to roll, no die for Heroic Inspiration", async () => {
+    const hero = { ...sampleCharacter(), heroicInspiration: true, abilityScores: { ...sampleCharacter().abilityScores, str: 14 } };
+    for (const playerRollMode of ['prompt', 'physical'] as const) {
+      const h = setup({ campaignSettings: { playerRollMode }, character: hero });
+      // Were the dialog opened, it would answer 99.
+      const asked = vi.fn((req: InteractionRequest): InteractionResponse | null =>
+        req.kind === 'roll' ? { kind: 'roll', response: { result: dialogRoll(19, 80), manual: false } } : null,
+      );
+      autoRespond(h.store, asked);
+      const kick = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'Kick', reason: 'Kick the door guard' });
+      expect(kick.content).toMatch(/Kick damage: 3\b/);
+      expect(asked).not.toHaveBeenCalled();
+      expect(h.s().character?.heroicInspiration).toBe(true);
+    }
+  });
+
+  it("doubles an off-sheet unarmed strike's dice once on a critical", async () => {
+    const strike = { id: 'us', name: 'Unarmed Strike', ability: 'finesse' as const, proficient: true, damage: '1d6', damageType: 'bludgeoning' };
+    const h = setup({ character: { ...sampleCharacter(), attacks: [...sampleCharacter().attacks, strike] } });
+    fakeDice.queue(3, 4);
+    const kick = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'Kick', critical: true, reason: 'Flying kick' });
+    // The sheet's 1d6, doubled once (3 + 4), + DEX 2.
+    expect(kick.content).toMatch(/: 9 /);
+    expect(fakeDice.remaining()).toBe(0);
+  });
+
+  it('asks for dice when a damage name only contains an unarmed word ("Clenched Fist" is Arcane Hand, not a punch)', async () => {
+    const h = setup();
+    const hand = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'Clenched Fist', reason: 'The hand strikes' });
+    expect(hand.isError).toBe(true);
+    expect(hand.content).toMatch(/`expression`/);
+    for (const name of ['Arcane Hand (Clenched Fist)', 'Fist (Arcane Hand)', 'Clenched-Fist', 'Arcane Fist']) {
+      const spell = await h.run('request_player_roll', { roll_type: 'damage', attack_name: name, reason: 'The hand strikes' });
+      expect(spell.isError).toBe(true);
+    }
+    for (const name of ['Fists', 'Bare Fists', 'Fist Strike', 'Fist (Bonus Action)']) {
+      const punch = await h.run('request_player_roll', { roll_type: 'damage', attack_name: name, reason: 'Brawl' });
+      expect(punch.isError).toBeUndefined();
+    }
+    // A thrown rock the size of a fist is a weapon: the DM gives its `ability`.
+    const rock = await h.run('request_player_roll', { roll_type: 'attack', attack_name: 'Fist-sized Rock', dc: 12, reason: 'Throw it' });
+    expect(rock.isError).toBe(true);
+    expect(rock.content).toMatch(/`ability`/);
   });
 
   it('explains how to roll an off-sheet weapon when `ability` is missing', async () => {

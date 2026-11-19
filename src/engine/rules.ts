@@ -20,7 +20,7 @@ import {
 } from '@/types';
 import { nameKey } from '@/lib/id';
 import { resolveArmor, wornArmor, type WornArmor } from './armorData';
-import { isLibraryId, srdClassFor } from './classData';
+import { rulesClassFor } from './classData';
 import { INCAPACITATING_CONDITIONS, SPEED_ZERO_CONDITIONS, conditionKey, conditionName } from './conditions';
 import {
   DiceError,
@@ -180,8 +180,9 @@ export interface SaveBonusSource {
   bonus: number;
 }
 
+/** Levels in an SRD class, a 2024 book's class standing in for it included (rulesClassFor). */
 function classLevelOf(c: Character, className: string): number {
-  return c.classes.filter((cl) => srdClassFor(cl)?.name === className).reduce((sum, cl) => sum + cl.level, 0);
+  return c.classes.filter((cl) => rulesClassFor(cl)?.name === className).reduce((sum, cl) => sum + cl.level, 0);
 }
 
 function hasFeature(c: Character, name: string): boolean {
@@ -279,9 +280,17 @@ function bestMentalAbility(c: Character): Ability {
 
 /** Ability modifier used by an attack (resolves 'finesse' and 'spell'). */
 export function attackAbilityModifier(c: Character, attack: Attack): number {
-  if (attack.ability === 'finesse') return Math.max(mod(c, 'str'), mod(c, 'dex'));
+  if (attack.ability === 'finesse' || dexterousUnarmedStrike(c, attack)) return Math.max(mod(c, 'str'), mod(c, 'dex'));
   if (attack.ability === 'spell') return mod(c, spellcastingAbility(c) ?? bestMentalAbility(c));
   return mod(c, attack.ability);
+}
+
+/**
+ * A Monk's Unarmed Strike on the sheet made before the Monk levels (a Fighter's, say): Dexterous Attacks lets it use
+ * DEX while no armor or Shield is worn (SRD 5.2.1 Monk, Martial Arts).
+ */
+function dexterousUnarmedStrike(c: Character, attack: Attack): boolean {
+  return attack.ability === 'str' && nameKey(attack.name) === 'unarmed-strike' && isMonk(c) && !wearsArmorOrShield(c);
 }
 
 /** Attack roll bonus: ability mod + PB (if proficient) + attackBonusExtra. */
@@ -428,7 +437,7 @@ export function weaponCritRange(c: Character): number {
   // By id when the entry has one (an imported "Champion" isn't the SRD's); by name for older sheets.
   const isChampion = (cl: Character['classes'][number]) => (cl.subclassId ? cl.subclassId === 'srd:subclass:champion' : /champion/i.test(cl.subclass ?? ''));
   const champion = c.classes
-    .filter((cl) => srdClassFor(cl)?.name === 'Fighter' && isChampion(cl))
+    .filter((cl) => rulesClassFor(cl)?.name === 'Fighter' && isChampion(cl))
     .reduce((sum, cl) => sum + Math.max(0, toInt(cl.level)), 0);
   if (champion >= 15 || hasFeatureBase(c, 'Superior Critical')) return 18;
   if (champion >= 3 || hasFeatureBase(c, 'Improved Critical')) return 19;
@@ -543,8 +552,8 @@ function armoredOption(c: Character, worn: WornArmor): AcOption {
 function unarmoredOptions(c: Character): AcOption[] {
   const dex = mod(c, 'dex');
   const options: AcOption[] = [{ ac: 10 + dex, parts: ['10', signedPart('DEX', dex)], allowsShield: true }];
-  // An imported class named like an SRD one gets no SRD Unarmored Defense (spec §5.7; SRD 5.2.1 "Classes").
-  const classNames = new Set(c.classes.map((cl) => srdClassFor(cl)?.name ?? (isLibraryId(cl.classId) ? undefined : cl.name)));
+  // An older or other book's class named like an SRD one gets no SRD Unarmored Defense; a 2024 book's does (rulesClassFor).
+  const classNames = new Set(c.classes.map((cl) => rulesClassFor(cl)?.name));
   const udSources = c.features.filter((f) => nameKey(f.name) === 'unarmored-defense').map((f) => (f.sourceName ?? '').toLowerCase());
   if (classNames.has('Barbarian') || udSources.some((s) => s.includes('barbarian'))) {
     const con = mod(c, 'con');
@@ -558,7 +567,7 @@ function unarmoredOptions(c: Character): AcOption[] {
     hasFeature(c, 'Draconic Resilience') ||
     c.classes.some(
       (cl) =>
-        srdClassFor(cl)?.name === 'Sorcerer' &&
+        rulesClassFor(cl)?.name === 'Sorcerer' &&
         (cl.subclassId ? cl.subclassId === 'srd:subclass:draconic-sorcery' : /draconic/i.test(cl.subclass ?? '')),
     );
   if (draconic) {
@@ -709,8 +718,13 @@ export function findAttack(c: Character, name: string): Attack | undefined {
   return matchByName(c.attacks, name, (a) => a.name).match;
 }
 
-function isUnarmed(name: string): boolean {
-  return /\b(unarmed|punch|kick|fist|headbutt)/i.test(name);
+/**
+ * An unarmed strike by name: "Unarmed Strike (Bonus Action)", "Kick", "Punch", "Headbutt", or a fist named alone ("Fist",
+ * "Bare Fists", "Fist Strike", "Fist (…)"). Never a spell or weapon that names a fist: Arcane Hand's "Clenched Fist",
+ * "Spectral Fist", "Fist-sized Rock" (the DM gives those their dice or ability).
+ */
+export function isUnarmedStrikeName(name: string): boolean {
+  return /\b(unarmed|punch|kick|headbutt)|^\s*(bare\s+)?fists?(\s+strikes?)?\s*(\(|$)/i.test(name) && !/\bclenched\W+fists?\b|\barcane\W+hand\b/i.test(name);
 }
 
 function isMonk(c: Character): boolean {
@@ -722,12 +736,25 @@ function improvisedAttack(c: Character, req: PlayerRollRequest): { modifier: num
   const name = (req.attackName ?? '').trim();
   const spell = name && c.spellcasting ? matchByName(c.spellcasting.spells, name, (s) => s.name).match : undefined;
   if (spell) return { modifier: spellAttackBonus(c) ?? pb(c) + mod(c, bestMentalAbility(c)), label: `${spell.name} attack` };
-  if (name && isUnarmed(name)) {
-    const ability = isMonk(c) ? Math.max(mod(c, 'str'), mod(c, 'dex')) : mod(c, 'str');
+  if (name && isUnarmedStrikeName(name)) {
+    const ability = isMonk(c) && !wearsArmorOrShield(c) ? Math.max(mod(c, 'str'), mod(c, 'dex')) : mod(c, 'str');
     return { modifier: ability + pb(c), label: 'Unarmed Strike attack' };
   }
   const ability = req.ability ?? 'str';
   return { modifier: mod(c, ability) + pb(c), label: name ? `${name} attack (${ABBR(ability)}, not on sheet)` : 'Attack roll' };
+}
+
+/** Everyone's Unarmed Strike (SRD 5.2.1 Unarmed Strike: 1 plus the Strength modifier, Bludgeoning), for a sheet without one. */
+const UNARMED_STRIKE: Attack = { id: 'unarmed-strike', name: 'Unarmed Strike', ability: 'str', proficient: true, damage: '1', damageType: 'bludgeoning' };
+
+/**
+ * Damage for an unarmed strike by any name ("Kick", "Punch"): the sheet's Unarmed Strike, else everyone's, with a Monk's
+ * Martial Arts die and Dexterity while unarmored (SRD 5.2.1 Monk, Martial Arts); never below 0.
+ */
+export function unarmedDamageExpression(c: Character, critical = false): string {
+  const sheet = findAttack(c, 'Unarmed Strike');
+  const expression = (sheet && attackDamageExpression(c, sheet, critical)) || attackDamageExpression(c, UNARMED_STRIKE, critical);
+  return /^-\d+$/.test(expression) ? '0' : expression;
 }
 
 /**
@@ -807,9 +834,7 @@ export function rollRequestExpression(c: Character, req: PlayerRollRequest): str
       const attack = req.attackName ? findAttack(c, req.attackName) : undefined;
       if (attack) return attackDamageExpression(c, attack, req.critical);
       if (req.expression) return req.critical ? criticalDice(req.expression) : normalizeDice(req.expression);
-      if (req.attackName && isUnarmed(req.attackName)) {
-        return formatDice([{ kind: 'flat', sign: 1, value: Math.max(0, 1 + mod(c, 'str')) }]);
-      }
+      if (req.attackName && isUnarmedStrikeName(req.attackName)) return unarmedDamageExpression(c, req.critical);
       throw new DiceError('A damage roll needs an attack from the sheet or dice to roll (e.g. 1d8+3)');
     }
     case 'custom':

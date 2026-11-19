@@ -28,6 +28,8 @@ export type DiceTerm = Engine.DiceTerm;
 
 // Transformations and ability score changes run the real engine: pure, and deterministic given ids.
 export { changeAbilityScore } from '@/engine/character';
+// Which names are unarmed strikes runs the real rule (pure).
+export { isUnarmedStrikeName } from '@/engine/rules';
 export {
   activeTransformations,
   advanceTransformation,
@@ -265,6 +267,13 @@ export const attackDamageExpression: typeof Engine.attackDamageExpression = (c, 
 };
 
 const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+/** Off-sheet unarmed damage: the sheet's Unarmed Strike, else 1 + STR (no Martial Arts here). */
+export const unarmedDamageExpression: typeof Engine.unarmedDamageExpression = (c, critical = false) => {
+  const sheet = c.attacks.find((a) => key(a.name) === 'unarmed strike');
+  const expression = sheet ? attackDamageExpression(c, sheet) : String(Math.max(0, 1 + mod(c, 'str')));
+  return critical ? expression.replace(/(\d+)d(\d+)/g, (_, n: string, s: string) => `${Number(n) * 2}d${s}`) : expression;
+};
 
 export const findAttack: typeof Engine.findAttack = (c, name) =>
   c.attacks.find((a) => key(a.name) === key(name)) ?? c.attacks.find((a) => key(a.name).includes(key(name)));

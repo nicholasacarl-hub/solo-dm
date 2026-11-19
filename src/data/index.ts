@@ -195,6 +195,8 @@ export {
   suggestParentClass,
   type CatalogMatch,
 } from './options/resolve';
+/** Imported classes' editions on the sheet, for the engine's class rules. */
+export { hitPointsOwedForEditions, withClassEditions } from './options/editions';
 /** Provenance for copies, and app-written item descriptions (numbers, never book text). */
 export { refFor, type RefOption, type RefText } from './options/refs';
 export { describeOption } from './options/describe';

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CasterType, Character, ClassLevel, HitDie, SpellSlots } from '@/types';
+import type { CasterType, Character, ClassLevel, HitDie, ImportedRef, SourceFormat, SpellSlots } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import { casterLevel, ordinal, recomputeSlots, restoreSlot, spellSlotsForClasses, spendSlot } from './spellcasting';
 
@@ -109,6 +109,14 @@ describe('recomputeSlots', () => {
     const next = recomputeSlots(nowPaladin);
     expect(next.spellcasting?.ability).toBe('cha');
     expect(next.spellcasting?.slots).toEqual({ 1: { max: 2, used: 0 } });
+  });
+
+  it("gives a 2024 book's caster without an ability on its entry the SRD class's (SRD 5.2.1 Cleric: Wisdom)", () => {
+    const ref = (format: SourceFormat): ImportedRef => ({ sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:cleric', kind: 'class', entryName: 'Cleric', textHash: '', textCopied: false, format });
+    const cleric = (format: SourceFormat) =>
+      sampleCharacter({ spellcasting: undefined, classes: [{ ...cls('Cleric', 1, 'full', 8), classId: 'lib:lamp:class:cleric', spellcastingAbility: undefined, ref: ref(format) }] });
+    expect(recomputeSlots(cleric('2024')).spellcasting?.ability).toBe('wis');
+    expect(recomputeSlots(cleric('2014')).spellcasting?.ability).toBe('int');
   });
 
   it('returns the same character when nothing changed', () => {

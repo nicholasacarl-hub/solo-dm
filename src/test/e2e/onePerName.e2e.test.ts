@@ -8,6 +8,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import builderRaw from '../../../public/srd/builder.json?raw';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import { getRulesIndex, loadBuilderData } from '@/data';
+import { rulesClassFor } from '@/engine/classData';
 import { resetRulesIndex } from '@/data/rulesIndexStore';
 import { resetSrdCache } from '@/data/srd';
 import { saveLibrarySourceWithRecords } from '@/storage';
@@ -15,7 +16,7 @@ import { resetDatabase } from '@/storage/testData';
 import { GLOAMWOOD_SOURCE_ID, gloamwoodEntries, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
 import { SRD_SOURCE_ID, type SpellData, type StructuredRecord } from '@/types';
 import { fillStep, letDmBuildAll } from '@/ui/builder/autofill';
-import { emptyDraft, filtered, firstIncompleteStep, spellInfo, spellsForClass, subclassesOf, visibleSpells, withoutReplacedSrd } from '@/ui/builder/logic';
+import { buildCharacter, emptyDraft, filtered, firstIncompleteStep, spellInfo, spellsForClass, subclassesOf, visibleSpells, withoutReplacedSrd } from '@/ui/builder/logic';
 
 const BOOK_FIGHTER = 'lib:gloam:class:wickwright';
 /** A fixed sequence per seed (Park–Miller, past its first few values, which stay near 0 for small seeds). */
@@ -63,6 +64,16 @@ describe('a 2024 book’s options in place of the SRD’s of their names (end to
     expect(withoutReplacedSrd(subclassesOf(srd)).map((s) => s.name)).toEqual(['Champion', 'Ember Warden', 'Order of the Long Wick']);
     // Each class keeps its own: a name lookup prefers them (options/resolve.ts).
     expect([book.subclasses.map((s) => s.name), srd.subclasses.map((s) => s.name)]).toEqual([['Order of the Long Wick'], ['Champion', 'Ember Warden']]);
+  });
+
+  it("a hero built on the book's 2024 Fighter records its edition, and plays by the SRD Fighter's rules", async () => {
+    const data = await loadBuilderData();
+    const index = await getRulesIndex();
+    const ctx = { data, spells: index.list({ kind: 'spell' }).map(spellInfo) };
+    const draft = letDmBuildAll({ ...emptyDraft(), classId: BOOK_FIGHTER }, ctx, seeded(5));
+    const hero = buildCharacter(draft, ctx, { campaignId: 'c' });
+    expect(hero.classes[0]).toMatchObject({ classId: BOOK_FIGHTER, name: 'Fighter', ref: { entryId: BOOK_FIGHTER, kind: 'class', format: '2024' } });
+    expect(rulesClassFor(hero.classes[0])?.id).toBe('srd:class:fighter');
   });
 
   it('"Let the DM build the rest" completes a hero of every class with the filter on the book (too few there: from All)', async () => {

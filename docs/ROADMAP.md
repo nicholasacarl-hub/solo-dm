@@ -65,17 +65,23 @@ The first version of structured imports deliberately leaves these out:
   from items, and enforcing attunement limits.
 - **Monster detail**: structured actions and legendary actions, and senses on the battle map (the DM reads them from
   the text today).
-- **SRD class rules for a 2024 book's class**: a book's class gets the engine's name-based rules (Improved Critical,
-  Unarmored Defense, Aura of Protection, Tireless…) but not the few it ties to the SRD class itself: the Martial Arts
-  die growing with Monk level, a Monk's unarmed strike off the sheet using Dexterity, and Draconic Resilience's extra
-  Hit Points. Since the builder lists a 2024 book's class in place of the SRD's, more heroes now meet this; the DM
-  adjusts those numbers. The fix needs the sheet to record a class's edition (a 2014 Monk's dice differ).
+- **Older-edition classes' own numbers**: a 2024 book's class plays by the SRD class's rules (its ref records its
+  edition), but a 2014 book's class gets only the name-based ones (Improved Critical, Unarmored Defense from its
+  feature, Aura of Protection…): its Martial Arts die stays the one on the sheet (a 2014 Monk's grows d4 → d6 → d8
+  → d10), its unarmed strikes off the sheet use Strength, and Draconic Resilience adds no Hit Points (nothing in the
+  app raises a Hit Point maximum by hand). Nor does a 2024 book's Sorcerer get them for levels gained while its
+  record's Edition said Older. The engine would need each edition's numbers, and the sheet a way to adjust the maximum.
+- **Monk weapons and Martial Arts**: the Martial Arts die replaces only an Unarmed Strike's damage, never a Monk
+  weapon's (a level 5 Monk's Spear still rolls 1d6, not the 1d8 die). Dexterity for a Monk weapon is set when it
+  joins the sheet: one added before the Monk levels (a Fighter's Spear) keeps Strength, and an Unarmed Strike or Monk
+  weapon the builder made for a Monk keeps its Dexterity (the Unarmed Strike its d6 too) in armor or with a Shield.
+  The DM adjusts these.
 - **Telling a book read again from another book**: a hero's class, subclass, species or background whose book is
   switched off or gone is looked up again by its book's fingerprint, then its source and title, then any book's
   option of its name, so another book's option of that name stands in (a 2014 printing for a 2024 one of the same
   title, say). The fingerprint can't decide it alone: it changes when the book's text is read differently (a newer
-  reader, another file). An edition on option refs, or the hero's copied text compared with the candidate's, would
-  tell them apart.
+  reader, another file). Option refs now record their edition, which could break the tie for options taken since;
+  the hero's copied text compared with the candidate's could for older ones.
 - **Homebrew spells in the builder by campaign**: the builder's spell lists include homebrew spells saved in other
   campaigns (`RulesIndex.list()` skips the campaign check that search and name lookups make), unlabeled, so a hero
   can pick one its DM can't look up. List only this campaign's and shared homebrew, and label them.

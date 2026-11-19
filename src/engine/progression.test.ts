@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Character, ClassLevel, Feature } from '@/types';
+import type { Character, ClassLevel, Feature, ImportedRef, SourceFormat } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import { asiLevels, findSrdClass, SRD_CLASSES } from './classData';
 import type { Rng } from './dice';
@@ -7,6 +7,7 @@ import {
   XP_THRESHOLDS,
   applyLongRest,
   applyShortRest,
+  draconicResilienceHitPoints,
   levelForXp,
   levelUp,
   spendHitDie,
@@ -250,6 +251,16 @@ describe('applyShortRest', () => {
     expect(applyShortRest(mira({ exhaustion: 2 })).character.exhaustion).toBe(2);
   });
 
+  it("a 2024 book's Bard and Ranger rest by the SRD's class levels too (SRD 5.2.1 Bard: Font of Inspiration; Ranger: Tireless)", () => {
+    const ref = (name: string, format: SourceFormat): ImportedRef => ({ sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: `lib:lamp:class:${name.toLowerCase()}`, kind: 'class', entryName: name, textHash: '', textCopied: false, format });
+    const book = (name: string, level: number, format: SourceFormat): ClassLevel => ({ ...asClass(name, level), classId: `lib:lamp:class:${name.toLowerCase()}`, ref: ref(name, format) });
+    const inspired = feature('Bardic Inspiration', { max: 3, used: 3, recharge: 'long' });
+    expect(applyShortRest(mira({ classes: [book('Bard', 5, '2024')], features: [inspired] })).character.features[0].uses?.used).toBe(0);
+    expect(applyShortRest(mira({ classes: [book('Bard', 5, '2014')], features: [inspired] })).character.features[0].uses?.used).toBe(3);
+    expect(applyShortRest(mira({ classes: [book('Ranger', 10, '2024')], exhaustion: 2 })).character.exhaustion).toBe(1);
+    expect(applyShortRest(mira({ classes: [book('Ranger', 10, '2014')], exhaustion: 2 })).character.exhaustion).toBe(2);
+  });
+
   it('needs at least 1 HP', () => {
     const r = applyShortRest(mira({ hp: { max: 17, current: 0, temp: 0 } }));
     expect(r.events[0].type).toBe('warning');
@@ -407,6 +418,39 @@ describe('levelUp: Armor Class', () => {
     });
     expect(r.character).toMatchObject({ armorClass: 14, acFormula: 'Draconic Resilience: 10 + DEX 2 + CHA 2' });
     expect(r.events.map((e) => e.message)).toContain('AC 12 → 14 (Draconic Resilience: 10 + DEX 2 + CHA 2)');
+  });
+
+  it("a 2024 book's Sorcerer gains Draconic Resilience's Hit Points as the SRD's does; an older book's doesn't (SRD 5.2.1 Draconic Sorcery)", () => {
+    const ref = (format: SourceFormat): ImportedRef => ({ sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:sorcerer', kind: 'class', entryName: 'Sorcerer', textHash: '', textCopied: false, format });
+    const sorcerer = (format: SourceFormat, level: number, features: Feature[] = []) =>
+      mira({
+        abilityScores: { str: 8, dex: 14, con: 14, int: 10, wis: 12, cha: 15 },
+        classes: [{ classId: 'lib:lamp:class:sorcerer', name: 'Sorcerer', level, hitDie: 6, casterType: 'full', spellcastingAbility: 'cha', ref: ref(format) }],
+        features,
+      });
+    const gain = {
+      className: 'Sorcerer',
+      classId: 'lib:lamp:class:sorcerer',
+      subclass: 'Draconic Sorcery',
+      hpMethod: 'average' as const,
+      newFeatures: [{ name: 'Draconic Resilience', source: 'subclass' as const, description: 'Invented: scales.' }],
+    };
+    // "Your Hit Point maximum increases by 3" at Sorcerer 3: the d6 average 4 + CON 2, then 3.
+    expect(levelUp(sorcerer('2024', 2), gain).hpGained).toBe(4 + 2 + 3);
+    // "...and it increases by 1 whenever you gain another Sorcerer level."
+    const resilient: Feature[] = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass', description: '' }];
+    expect(levelUp(sorcerer('2024', 3, resilient), { className: 'Sorcerer', hpMethod: 'average' }).hpGained).toBe(4 + 2 + 1);
+    expect(levelUp(sorcerer('2014', 2), gain).hpGained).toBe(4 + 2);
+  });
+
+  it("draconicResilienceHitPoints: one per Sorcerer level with the feature, a 2024 book's Sorcerer included (SRD 5.2.1 Draconic Sorcery)", () => {
+    const resilient: Feature[] = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass', description: '' }];
+    const ref = (format: SourceFormat): ImportedRef => ({ sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:sorcerer', kind: 'class', entryName: 'Sorcerer', textHash: '', textCopied: false, format });
+    const book = (level: number, format: SourceFormat): ClassLevel => ({ ...asClass('Sorcerer', level), classId: 'lib:lamp:class:sorcerer', ref: ref(format) });
+    expect(draconicResilienceHitPoints({ classes: [asClass('Sorcerer', 6), asClass('Fighter', 2)], features: resilient })).toBe(6);
+    expect(draconicResilienceHitPoints({ classes: [book(4, '2024')], features: resilient })).toBe(4);
+    expect(draconicResilienceHitPoints({ classes: [book(4, '2014')], features: resilient })).toBe(0);
+    expect(draconicResilienceHitPoints({ classes: [asClass('Sorcerer', 6)], features: [] })).toBe(0);
   });
 
   it('multiclassing into Barbarian adds Unarmored Defense (SRD 5.2.1 Barbarian; Multiclassing)', () => {

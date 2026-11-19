@@ -17,7 +17,7 @@ import type {
   SpellSlots,
   Spellcasting,
 } from '@/types';
-import { srdClassFor } from './classData';
+import { rulesClassFor } from './classData';
 import { clamp, gameEvent, toInt, touch, warning } from './util';
 
 /** Spell slots per slot level (index 0 = 1st) for each spellcaster level 0–20 (SRD 5.2.1 Multiclass Spellcaster table). */
@@ -123,7 +123,7 @@ export function spellSlotsForClasses(classes: ClassLevel[]): { slots: SpellSlots
 function defaultSpellcastingAbility(c: Character): Ability {
   for (const cl of c.classes) {
     if (cl.casterType === 'none') continue;
-    const ability = cl.spellcastingAbility ?? srdClassFor(cl)?.spellcastingAbility;
+    const ability = cl.spellcastingAbility ?? rulesClassFor(cl)?.spellcastingAbility;
     if (ability) return ability;
   }
   return 'int';

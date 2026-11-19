@@ -12,6 +12,7 @@ import {
   exhaustionPenalty,
   findAttack,
   findMapCombatant,
+  isUnarmedStrikeName,
   isValidDice,
   parseDice,
   recordDeathSave,
@@ -20,6 +21,7 @@ import {
   rollDice,
   rollRequestModifier,
   rollSituation,
+  unarmedDamageExpression,
   type RollSituation,
 } from '@/engine';
 import type { AdvantageState, Character, D20TestResult, KnownSpell, PlayerRollRequest } from '@/types';
@@ -113,10 +115,6 @@ function findKnownSpell(c: Character, name: string): KnownSpell | undefined {
   return loose.length === 1 ? loose[0] : undefined;
 }
 
-function isUnarmedName(name: string): boolean {
-  return /\b(unarmed|punch|kick|fist|headbutt)/i.test(name);
-}
-
 /** Check the request makes sense for its roll type and fill in what the sheet knows. */
 function prepareRequest(c: Character, req: PlayerRollRequest): PlayerRollRequest {
   switch (req.rollType) {
@@ -141,7 +139,7 @@ function prepareRequest(c: Character, req: PlayerRollRequest): PlayerRollRequest
       if (attack) return { ...req, attackName: attack.name };
       const spell = findKnownSpell(c, name);
       if (spell) return { ...req, attackName: spell.name };
-      if (req.ability || isUnarmedName(name)) return { ...req, attackName: name };
+      if (req.ability || isUnarmedStrikeName(name)) return { ...req, attackName: name };
       throw new ToolInputError(
         `"${name}" is not an attack on the hero's sheet (attacks: ${sheetAttacks(c)}) or a spell they know. For another weapon, call again with \`ability\` ("str", or "dex" for a ranged or finesse weapon); for a spell attack, use the spell's name.`,
       );
@@ -154,7 +152,8 @@ function prepareRequest(c: Character, req: PlayerRollRequest): PlayerRollRequest
       if (!req.attackName) throw new ToolInputError('A damage roll needs `attack_name` or `expression`.');
       const attack = findAttack(c, req.attackName);
       if (!attack) {
-        if (isUnarmedName(req.attackName)) return req;
+        // An unarmed strike by another name ("Kick"): its damage, not a d20 (the critical flag doubles the dice at roll time).
+        if (isUnarmedStrikeName(req.attackName)) return { ...req, expression: unarmedDamageExpression(c) };
         throw new ToolInputError(
           `"${req.attackName}" is not an attack on the hero's sheet (attacks: ${sheetAttacks(c)}). For a spell or another weapon, give its damage dice in \`expression\` (e.g. "2d6" for one Scorching Ray, "1d8+2" for a longbow).`,
         );
@@ -176,6 +175,14 @@ function prepareRequest(c: Character, req: PlayerRollRequest): PlayerRollRequest
       return { ...req, dc: 10, revealDc: true };
     default:
       return req;
+  }
+}
+
+function rollsADie(expression: string | undefined): boolean {
+  try {
+    return parseDice(expression ?? '1d20').some((t) => t.kind === 'dice');
+  } catch {
+    return true;
   }
 }
 
@@ -269,7 +276,8 @@ export async function performPlayerRoll(ctx: ToolContext, input: PlayerRollReque
     return { request, label, modifier, result, manual: false, autoFail: situation.autoFail, notes };
   }
 
-  const auto = campaign.settings.playerRollMode === 'auto';
+  // A roll without dice (an Unarmed Strike's flat 1 + STR) has nothing to roll and no die for Heroic Inspiration.
+  const auto = campaign.settings.playerRollMode === 'auto' || (!d20 && !rollsADie(request.expression));
   const rolled = auto ? { result: rollLocally(ctx, request, modifier), manual: false } : await rollWithPlayer(ctx, request, modifier, label);
   let result = rolled.result;
 
