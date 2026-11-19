@@ -36,8 +36,9 @@ vi.mock('@/storage', async (importOriginal) => {
 
 // The store loads @/data lazily for restore (spec §7.4): the real pure restore over this device's "library".
 const libraryLookup = vi.hoisted(() => ({ calls: 0 }));
-// The builder data can be held back (a test releases it) to land a campaign replacement while a refresh waits.
-const builderGate = vi.hoisted(() => ({ wait: null as Promise<void> | null }));
+// The builder data can be held back (a test releases it) to land a campaign replacement while a refresh waits,
+// and the book Sorcerer's Edition changed (as review does).
+const builderGate = vi.hoisted(() => ({ wait: null as Promise<void> | null, sorcerer: '2024' as '2024' | '2014' }));
 vi.mock('@/data', async () => {
   const restore = await import('@/data/structured/restore');
   const editions = await import('@/data/options/editions');
@@ -52,7 +53,9 @@ vi.mock('@/data', async () => {
     hitPointsOwedForEditions: editions.hitPointsOwedForEditions,
     loadBuilderData: async () => {
       if (builderGate.wait) await builderGate.wait;
-      return builder;
+      if (builderGate.sorcerer === '2024') return builder;
+      const classes = builder.classes.map((c) => (c.id === 'lib:gloam:class:sorcerer' && c.source ? { ...c, source: { ...c.source, format: builderGate.sorcerer } } : c));
+      return { ...builder, classes };
     },
     buildLibraryLookup: async () => {
       libraryLookup.calls += 1;
@@ -119,6 +122,56 @@ describe('refreshClassEditions', () => {
     // Once: nothing more is owed.
     expect(await game().refreshClassEditions()).toBe(false);
     expect(game().character?.hp.max).toBe(32);
+  });
+
+  it('an Edition changed in review and back adds nothing: the maximum keeps what was given, with one notice', async () => {
+    const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:sorcerer', kind: 'class' as const, entryName: 'Sorcerer', textHash: '', textCopied: false };
+    const classes = [{ classId: 'lib:gloam:class:sorcerer', name: 'Sorcerer', level: 5, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const, ref }];
+    const features = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass' as const, description: '' }];
+    const graph = await seedCampaign('a', { character: { classes, features, hp: { max: 27, current: 20, temp: 0 } } });
+    try {
+      await game().loadCampaign('a-camp');
+      await vi.waitFor(() => expect(game().character?.hp.max).toBe(32));
+      await whenPersisted();
+      for (const edition of ['2014', '2024', '2014', '2024'] as const) {
+        builderGate.sorcerer = edition;
+        expect(await game().refreshClassEditions()).toBe(true);
+        expect(game().character?.classes[0].ref?.format).toBe(edition);
+        expect(game().character?.hp).toMatchObject({ max: 32, current: 25 });
+      }
+      await whenPersisted();
+      expect((await db.characters.get(graph.character?.id as string))?.hp.max).toBe(32);
+      expect(game().pendingDmNotices.filter((n) => n.includes('Hit Point maximum rose'))).toHaveLength(1);
+    } finally {
+      builderGate.sorcerer = '2024';
+    }
+  });
+
+  it("tells the topped-up hero's own DM, even when the player leaves the table before the save lands", async () => {
+    const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:sorcerer', kind: 'class' as const, entryName: 'Sorcerer', textHash: '', textCopied: false };
+    const classes = [{ classId: 'lib:gloam:class:sorcerer', name: 'Sorcerer', level: 5, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const, ref }];
+    const features = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass' as const, description: '' }];
+    const graph = await seedCampaign('a', { character: { classes, features, hp: { max: 27, current: 20, temp: 0 } } });
+    await seedCampaign('b');
+    const topUp = (n: string) => n.includes('Hit Point maximum rose by 5 to 32');
+    // The top-up's save waits at putCharacter while the player opens another campaign.
+    const real = vi.mocked(storage.putCharacter).getMockImplementation();
+    let release = () => undefined as void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    vi.mocked(storage.putCharacter).mockImplementationOnce(async (c) => {
+      await held;
+      return real?.(c);
+    });
+    await game().loadCampaign('a-camp');
+    await vi.waitFor(() => expect(game().character?.hp.max).toBe(32));
+    game().unloadCampaign();
+    await game().loadCampaign('b-camp');
+    release();
+    await vi.waitFor(async () => expect((await db.characters.get(graph.character?.id as string))?.hp.max).toBe(32));
+    await whenPersisted();
+    expect(game().pendingDmNotices.filter(topUp)).toEqual([]);
+    expect((await db.campaigns.get('b-camp'))?.pendingDmNotices?.filter(topUp) ?? []).toEqual([]);
+    expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter(topUp)).toHaveLength(1);
   });
 
   it('writes nothing over a campaign replaced (a GitHub pull, a save-file import) while it waits for the builder data', async () => {

@@ -35,10 +35,12 @@ export function withClassEditions(c: Character, classes: readonly ClassOption[])
 }
 
 /**
- * Hit Points the class rules owe once a class's edition is recorded: Draconic Resilience's for Sorcerer levels gained
- * while a 2024 book's Sorcerer didn't yet play by the SRD's rules (nothing in the app can raise a Hit Point maximum
- * by hand). Never negative: an Edition changed back keeps what was given.
+ * Hit Points owed when a class's edition is recorded for the first time (a hero made before refs recorded it):
+ * Draconic Resilience's for the levels of a 2024 book's Sorcerer, which they didn't get while it didn't play by the
+ * SRD's rules (nothing in the app can raise a Hit Point maximum by hand). An Edition changed in review later owes
+ * nothing and takes nothing back: the maximum keeps what was given, so a round trip never pays twice.
  */
 export function hitPointsOwedForEditions(before: Character, after: Character): number {
-  return Math.max(0, draconicResilienceHitPoints(after) - draconicResilienceHitPoints(before));
+  const firstRecorded = after.classes.filter((cl) => cl.ref?.format && !before.classes.find((b) => b.classId === cl.classId)?.ref?.format);
+  return draconicResilienceHitPoints({ features: after.features, classes: firstRecorded });
 }

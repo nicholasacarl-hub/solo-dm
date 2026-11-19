@@ -68,12 +68,14 @@ The first version of structured imports deliberately leaves these out:
 - **Older-edition classes' own numbers**: a 2024 book's class plays by the SRD class's rules (its ref records its
   edition), but a 2014 book's class gets only the name-based ones (Improved Critical, Unarmored Defense from its
   feature, Aura of Protection…): its Martial Arts die stays the one on the sheet (a 2014 Monk's grows d4 → d6 → d8
-  → d10), its unarmed strikes off the sheet use Strength, and Draconic Resilience's Hit Points at level-up are the
-  DM's to add. The engine would need each edition's numbers.
+  → d10), its unarmed strikes off the sheet use Strength, and Draconic Resilience adds no Hit Points (nothing in the
+  app raises a Hit Point maximum by hand). Nor does a 2024 book's Sorcerer get them for levels gained while its
+  record's Edition said Older. The engine would need each edition's numbers, and the sheet a way to adjust the maximum.
 - **Monk weapons and Martial Arts**: the Martial Arts die replaces only an Unarmed Strike's damage, never a Monk
   weapon's (a level 5 Monk's Spear still rolls 1d6, not the 1d8 die). Dexterity for a Monk weapon is set when it
   joins the sheet: one added before the Monk levels (a Fighter's Spear) keeps Strength, and an Unarmed Strike or Monk
-  weapon the builder gave Dexterity keeps it in armor or with a Shield. The DM adjusts these.
+  weapon the builder made for a Monk keeps its Dexterity (the Unarmed Strike its d6 too) in armor or with a Shield.
+  The DM adjusts these.
 - **Telling a book read again from another book**: a hero's class, subclass, species or background whose book is
   switched off or gone is looked up again by its book's fingerprint, then its source and title, then any book's
   option of its name, so another book's option of that name stands in (a 2014 printing for a 2024 one of the same

@@ -5,7 +5,7 @@ vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
 import { redactImported, wrapImported } from '@/lib/importedContent';
-import { sampleCombat } from '@/test/fixtures';
+import { sampleCharacter, sampleCombat } from '@/test/fixtures';
 import type { LogEntry, ToolLogEntry } from '@/types';
 import type { CompendiumEntry } from '@/types';
 import { deps, resetDmDeps, setDmDeps } from '../deps';
@@ -126,6 +126,15 @@ describe('request_player_roll: attacks that are not on the sheet', () => {
     expect(bow.isError).toBeUndefined();
     // DEX 14 (+2) + proficiency 2 = +4 → 14.
     expect(bow.content).toMatch(/Longbow attack \(DEX, not on sheet\): 14 .*→ hit/);
+  });
+
+  it('rolls an off-sheet unarmed strike\'s damage ("Kick") from the engine, not a d20', async () => {
+    const h = setup({ character: { ...sampleCharacter(), abilityScores: { ...sampleCharacter().abilityScores, str: 14 } } });
+    const kick = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'Kick', reason: 'Kick the door guard' });
+    expect(kick.isError).toBeUndefined();
+    // 1 + STR 2 (the stand-in engine has no Martial Arts; the real one's is tested in engine/rules.test.ts).
+    expect(kick.content).toMatch(/Kick damage: 3\b/);
+    expect(kick.content).not.toMatch(/d20|natural/);
   });
 
   it('explains how to roll an off-sheet weapon when `ability` is missing', async () => {

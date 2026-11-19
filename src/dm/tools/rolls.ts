@@ -20,6 +20,7 @@ import {
   rollDice,
   rollRequestModifier,
   rollSituation,
+  unarmedDamageExpression,
   type RollSituation,
 } from '@/engine';
 import type { AdvantageState, Character, D20TestResult, KnownSpell, PlayerRollRequest } from '@/types';
@@ -154,7 +155,8 @@ function prepareRequest(c: Character, req: PlayerRollRequest): PlayerRollRequest
       if (!req.attackName) throw new ToolInputError('A damage roll needs `attack_name` or `expression`.');
       const attack = findAttack(c, req.attackName);
       if (!attack) {
-        if (isUnarmedName(req.attackName)) return req;
+        // An unarmed strike by another name ("Kick"): its damage, not a d20 (the critical flag doubles the dice at roll time).
+        if (isUnarmedName(req.attackName)) return { ...req, expression: unarmedDamageExpression(c) };
         throw new ToolInputError(
           `"${req.attackName}" is not an attack on the hero's sheet (attacks: ${sheetAttacks(c)}). For a spell or another weapon, give its damage dice in \`expression\` (e.g. "2d6" for one Scorching Ray, "1d8+2" for a longbow).`,
         );

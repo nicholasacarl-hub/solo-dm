@@ -154,7 +154,7 @@ tool_result so Claude can correct itself.
 | Tool | Purpose |
 |---|---|
 | `roll_dice` | DM rolls (NPC attacks, damage, random tables, secret checks). `secret` hides it unless the campaign shows DM rolls. On a battle map, `attacker` and `target` add distance, reach, line of sight and cover, and warn when a melee attacker is out of reach. |
-| `request_player_roll` | Ask the player to roll a check/save/attack/damage/initiative/death save. Uses the sheet's modifiers; resolves per roll mode (auto / tap / physical). Returns total, natural, success vs DC. |
+| `request_player_roll` | Ask the player to roll a check/save/attack/damage/initiative/death save. Uses the sheet's modifiers; resolves per roll mode (auto / tap / physical). Returns total, natural, success vs DC. An unarmed strike by another name ("Kick") rolls the engine's damage for it (`unarmedDamageExpression`: the sheet's Unarmed Strike, else 1 + STR, with a Monk's Martial Arts die and Dexterity). |
 | `update_character` | Batched sheet changes: HP (damage/healing/temp), conditions, exhaustion, slots, feature uses, inventory, currency, XP, inspiration, features, spells, concentration, AC/speed. Returns a summary and warnings. |
 | `take_rest` | Short rest (player chooses hit dice in a dialog) or long rest. |
 | `level_up` | Apply a level (HP, hit dice, slots, proficiency, new features) and return reminders for choices. For an imported class or subclass the app adds that level's features with their text. |
@@ -716,10 +716,12 @@ Unarmored Defense, Draconic Resilience's Hit Points, Aura of Protection and the 
 the edition (`ImportedRef.format`), set when the class is taken and kept in step with the book's record on load
 and after review (`withClassEditions`, `src/data/options/editions.ts`): by the class's id, and otherwise only filled,
 never changed, from a copy of the same text (the book's fingerprint), so another book's class of the name never lends
-its edition. An older-edition book's class gets only the rules that go by feature name. When a hero's book Sorcerer
-first plays by the SRD's rules, the Draconic Resilience Hit Points its earlier levels missed are added once, with a
-normal save and a DM notice (`refreshClassEditions`; nothing else in the app raises the maximum). That and the text
-restore write nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
+its edition. An older-edition book's class gets only the rules that go by feature name. When a class's edition is
+recorded for the first time (a hero made before refs recorded it) and its book Sorcerer now plays by the SRD's rules,
+the Draconic Resilience Hit Points its earlier levels missed are added once, with a normal save and a notice queued
+with it for that campaign's DM (`refreshClassEditions`, `hitPointsOwedForEditions`; nothing else in the app raises the
+maximum). An Edition changed in review later adds and takes back nothing, so a round trip never pays twice. That and
+the text restore write nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
 adaptations, shown in review, on builder cards, in the DM's stats line and on the sheet. Level-up adds

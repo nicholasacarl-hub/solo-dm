@@ -59,9 +59,13 @@ export async function restoreLoadedCharacter(): Promise<void> {
   if (!loadedCampaignId()) return;
   try {
     await useGame.getState().restoreImportedText();
-    await useGame.getState().refreshClassEditions();
   } catch (error) {
     console.warn('[library] Could not restore book text onto the character:', error);
+  }
+  try {
+    await useGame.getState().refreshClassEditions();
+  } catch (error) {
+    console.warn("[library] Could not bring the character's class editions up to date:", error);
   }
 }
 

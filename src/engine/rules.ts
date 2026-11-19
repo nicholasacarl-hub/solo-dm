@@ -739,6 +739,18 @@ function improvisedAttack(c: Character, req: PlayerRollRequest): { modifier: num
   return { modifier: mod(c, ability) + pb(c), label: name ? `${name} attack (${ABBR(ability)}, not on sheet)` : 'Attack roll' };
 }
 
+/** Everyone's Unarmed Strike (SRD 5.2.1 Unarmed Strike: 1 plus the Strength modifier, Bludgeoning), for a sheet without one. */
+const UNARMED_STRIKE: Attack = { id: 'unarmed-strike', name: 'Unarmed Strike', ability: 'str', proficient: true, damage: '1', damageType: 'bludgeoning' };
+
+/**
+ * Damage for an unarmed strike by any name ("Kick", "Punch"): the sheet's Unarmed Strike, else everyone's, with a Monk's
+ * Martial Arts die and Dexterity while unarmored (SRD 5.2.1 Monk, Martial Arts); never below 0.
+ */
+export function unarmedDamageExpression(c: Character, critical = false): string {
+  const expression = attackDamageExpression(c, findAttack(c, 'Unarmed Strike') ?? UNARMED_STRIKE, critical);
+  return /^-\d+$/.test(expression) ? '0' : expression;
+}
+
 /**
  * A skill check, optionally with another ability (the DM's call). Skill bonuses such as Thaumaturge's
  * apply to the skill's usual ability only ("Intelligence (Arcana or Religion) checks").
@@ -816,9 +828,7 @@ export function rollRequestExpression(c: Character, req: PlayerRollRequest): str
       const attack = req.attackName ? findAttack(c, req.attackName) : undefined;
       if (attack) return attackDamageExpression(c, attack, req.critical);
       if (req.expression) return req.critical ? criticalDice(req.expression) : normalizeDice(req.expression);
-      if (req.attackName && isUnarmed(req.attackName)) {
-        return formatDice([{ kind: 'flat', sign: 1, value: Math.max(0, 1 + mod(c, 'str')) }]);
-      }
+      if (req.attackName && isUnarmed(req.attackName)) return unarmedDamageExpression(c, req.critical);
       throw new DiceError('A damage roll needs an attack from the sheet or dice to roll (e.g. 1d8+3)');
     }
     case 'custom':

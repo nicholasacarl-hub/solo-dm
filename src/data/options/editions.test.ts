@@ -68,16 +68,20 @@ describe('hitPointsOwedForEditions', () => {
   });
   const resilient = (c: Character): Character => ({ ...c, features: [...c.features, { id: 'dr', name: 'Draconic Resilience', source: 'subclass', description: '' }] });
 
-  it("owes Draconic Resilience's Hit Points for the Sorcerer levels gained before the class played by the SRD's rules", () => {
-    // Sorcerer 5: 3 at level 3, then 1 at each of levels 4 and 5.
+  it("owes Draconic Resilience's Hit Points once, when a hero made before refs recorded editions gets its book Sorcerer's", () => {
+    // SRD 5.2.1 Draconic Sorcery, Sorcerer 5: 3 at level 3, then 1 at each of levels 4 and 5.
     expect(hitPointsOwedForEditions(resilient(hero(sorcerer(undefined, 5))), resilient(hero(sorcerer('2024', 5))))).toBe(5);
-    expect(hitPointsOwedForEditions(resilient(hero(sorcerer('2014', 3))), resilient(hero(sorcerer('2024', 3))))).toBe(3);
+    // A 2014 book's Sorcerer plays by its own rules: nothing.
+    expect(hitPointsOwedForEditions(resilient(hero(sorcerer(undefined, 5))), resilient(hero(sorcerer('2014', 5))))).toBe(0);
   });
 
-  it('owes nothing without the feature, without a change, or when an Edition goes back to an older one', () => {
+  it('owes nothing without the feature or a change, and nothing for an Edition changed in review, either way or back again', () => {
     expect(hitPointsOwedForEditions(hero(sorcerer(undefined, 5)), hero(sorcerer('2024', 5)))).toBe(0);
     const same = resilient(hero(sorcerer('2024', 5)));
     expect(hitPointsOwedForEditions(same, same)).toBe(0);
-    expect(hitPointsOwedForEditions(resilient(hero(sorcerer('2024', 5))), resilient(hero(sorcerer('2014', 5))))).toBe(0);
+    // 2024 → Older → 2024: the maximum kept what was given, so the way back owes nothing either.
+    const [newer, older] = [resilient(hero(sorcerer('2024', 5))), resilient(hero(sorcerer('2014', 5)))];
+    expect(hitPointsOwedForEditions(newer, older)).toBe(0);
+    expect(hitPointsOwedForEditions(older, newer)).toBe(0);
   });
 });

@@ -13,7 +13,11 @@ vi.mock('@/storage', async () => ({
   listCampaigns: vi.fn(),
   listLibrarySources: vi.fn(),
 }));
-const game = { campaignId: null as string | null, restoreImportedText: vi.fn(async () => null) };
+const game = {
+  campaignId: null as string | null,
+  restoreImportedText: vi.fn(async (): Promise<null> => null),
+  refreshClassEditions: vi.fn(async () => false),
+};
 vi.mock('@/state/gameStore', () => ({ useGame: { getState: () => game }, queueCampaignNotice: vi.fn(async () => undefined) }));
 
 const storage = await import('@/storage');
@@ -35,7 +39,8 @@ beforeEach(() => {
   stored = gloamwoodRecords();
   actions.resetReviewActionsForTests();
   game.campaignId = null;
-  game.restoreImportedText.mockClear();
+  game.restoreImportedText.mockReset().mockImplementation(async () => null);
+  game.refreshClassEditions.mockClear();
   vi.mocked(storage.getRecords).mockImplementation(async (ids: string[]) => ids.map((id) => stored.find((r) => r.id === id)));
   vi.mocked(storage.listRecords).mockImplementation(async () => stored);
   vi.mocked(storage.setRecordStatus).mockReset().mockImplementation(async (ids: string[], status: RecordStatus) => {
@@ -90,6 +95,18 @@ describe('accepting', () => {
     await vi.advanceTimersByTimeAsync(600);
     expect(data.invalidateRulesIndex).toHaveBeenCalledTimes(1);
     expect(game.restoreImportedText).toHaveBeenCalledTimes(1);
+    expect(game.refreshClassEditions).toHaveBeenCalledTimes(1);
+  });
+
+  it("brings the hero's class editions up to date even when the text restore fails, and says which failed", async () => {
+    game.campaignId = 'camp-a';
+    game.restoreImportedText.mockRejectedValueOnce(new Error('library unreadable'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await actions.restoreLoadedCharacter();
+    expect(game.refreshClassEditions).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toMatch(/restore book text/);
+    warn.mockRestore();
   });
 
   it('undoes to the previous statuses', async () => {

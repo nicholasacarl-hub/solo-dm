@@ -266,6 +266,12 @@ export const attackDamageExpression: typeof Engine.attackDamageExpression = (c, 
 
 const key = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
+/** Off-sheet unarmed damage: the sheet's Unarmed Strike, else 1 + STR (no Martial Arts here). */
+export const unarmedDamageExpression: typeof Engine.unarmedDamageExpression = (c) => {
+  const sheet = c.attacks.find((a) => key(a.name) === 'unarmed strike');
+  return sheet ? attackDamageExpression(c, sheet) : String(Math.max(0, 1 + mod(c, 'str')));
+};
+
 export const findAttack: typeof Engine.findAttack = (c, name) =>
   c.attacks.find((a) => key(a.name) === key(name)) ?? c.attacks.find((a) => key(a.name).includes(key(name)));
 
