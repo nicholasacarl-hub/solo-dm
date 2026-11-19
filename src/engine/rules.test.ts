@@ -502,6 +502,9 @@ describe('damage dice that grow with level', () => {
     // "Clenched Fist" (SRD 5.2.1 Arcane Hand) isn't an unarmed strike; "Fist (Bonus Action)" is.
     expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Clenched Fist' }))).toThrow(/needs an attack/);
     expect(rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Fist (Bonus Action)' }))).toBe('4');
+    expect(rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Bare Fists' }))).toBe('4');
+    expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Arcane Hand (Clenched Fist)' }))).toThrow(/needs an attack/);
+    expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Fist (Arcane Hand)' }))).toThrow(/needs an attack/);
     expect(rollRequestModifier(fighter(16), request({ rollType: 'attack', attackName: 'Clenched Fist' })).label).not.toMatch(/Unarmed Strike/);
     expect(rollRequestModifier(fighter(16), request({ rollType: 'attack', attackName: 'Spinning Kick' })).label).toBe('Unarmed Strike attack');
   });

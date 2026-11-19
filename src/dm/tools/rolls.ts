@@ -114,9 +114,9 @@ function findKnownSpell(c: Character, name: string): KnownSpell | undefined {
   return loose.length === 1 ? loose[0] : undefined;
 }
 
-/** An unarmed strike by name ("Kick", "Punch", "Unarmed Strike (Bonus Action)", "Fist"); never "Clenched Fist" (Arcane Hand). */
+/** An unarmed strike by name ("Kick", "Punch", "Bare Fists", "Unarmed Strike (Bonus Action)"); never Arcane Hand's "Clenched Fist". */
 function isUnarmedName(name: string): boolean {
-  return /\b(unarmed|punch|kick|headbutt)|^\s*fists?\s*(\(|$)/i.test(name);
+  return /\b(unarmed|punch|kick|fist|headbutt)/i.test(name) && !/\bclenched\s+fists?\b|\barcane\s+hand\b/i.test(name);
 }
 
 /** Check the request makes sense for its roll type and fill in what the sheet knows. */

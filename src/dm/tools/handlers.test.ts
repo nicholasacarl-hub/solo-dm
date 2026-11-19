@@ -168,8 +168,14 @@ describe('request_player_roll: attacks that are not on the sheet', () => {
     const hand = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'Clenched Fist', reason: 'The hand strikes' });
     expect(hand.isError).toBe(true);
     expect(hand.content).toMatch(/`expression`/);
-    const fists = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'Fists', reason: 'Brawl' });
-    expect(fists.isError).toBeUndefined();
+    for (const name of ['Arcane Hand (Clenched Fist)', 'Fist (Arcane Hand)']) {
+      const spell = await h.run('request_player_roll', { roll_type: 'damage', attack_name: name, reason: 'The hand strikes' });
+      expect(spell.isError).toBe(true);
+    }
+    for (const name of ['Fists', 'Bare Fists', 'Fist Strike']) {
+      const punch = await h.run('request_player_roll', { roll_type: 'damage', attack_name: name, reason: 'Brawl' });
+      expect(punch.isError).toBeUndefined();
+    }
   });
 
   it('explains how to roll an off-sheet weapon when `ability` is missing', async () => {

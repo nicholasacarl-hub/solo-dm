@@ -174,7 +174,7 @@ describe('refreshClassEditions', () => {
     expect((await db.campaigns.get('b-camp'))?.pendingDmNotices?.filter(topUp) ?? []).toEqual([]);
   });
 
-  it('tells no DM when the top-up save is refused (the campaign is open at the table in another tab)', async () => {
+  it('stores neither the Hit Points nor the notice when the top-up save is refused (the campaign is open at the table in another tab)', async () => {
     const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:sorcerer', kind: 'class' as const, entryName: 'Sorcerer', textHash: '', textCopied: false };
     const classes = [{ classId: 'lib:gloam:class:sorcerer', name: 'Sorcerer', level: 5, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const, ref }];
     const features = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass' as const, description: '' }];
@@ -190,7 +190,39 @@ describe('refreshClassEditions', () => {
     await whenPersisted();
     expect((await db.characters.get(graph.character?.id as string))?.hp.max).toBe(27);
     expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter((n) => n.includes('Hit Point maximum rose')) ?? []).toEqual([]);
-    expect(game().pendingDmNotices.filter((n) => n.includes('Hit Point maximum rose'))).toEqual([]);
+    // Memory keeps both, together (the store's optimistic write): a later write saves them as one.
+    expect(game().character?.hp.max).toBe(32);
+    expect(game().pendingDmNotices.filter((n) => n.includes('Hit Point maximum rose by 5 to 32'))).toHaveLength(1);
+  });
+
+  it('keeps the notice with the Hit Points when the top-up save fails: the next write saves both', async () => {
+    const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:sorcerer', kind: 'class' as const, entryName: 'Sorcerer', textHash: '', textCopied: false };
+    const classes = [{ classId: 'lib:gloam:class:sorcerer', name: 'Sorcerer', level: 5, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const, ref }];
+    const features = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass' as const, description: '' }];
+    const graph = await seedCampaign('a', { character: { classes, features, hp: { max: 27, current: 20, temp: 0 } } });
+    const topUp = (n: string) => n.includes('Hit Point maximum rose by 5 to 32');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    // The top-up's own write fails once (a full disk, a closed connection).
+    const real = vi.mocked(storage.putCharacter).getMockImplementation();
+    let failed = false;
+    vi.mocked(storage.putCharacter).mockImplementation(async (c) => {
+      if (!failed && c.hp.max === 32) {
+        failed = true;
+        throw new Error('The disk is full.');
+      }
+      return real?.(c);
+    });
+    await game().loadCampaign('a-camp');
+    await vi.waitFor(() => expect(failed).toBe(true));
+    await whenPersisted();
+    expect((await db.characters.get(graph.character?.id as string))?.hp.max).toBe(27);
+    expect(game().character?.hp.max).toBe(32);
+    expect(game().pendingDmNotices.filter(topUp)).toHaveLength(1);
+    // The next ordinary write saves the Hit Points and the notice together.
+    await game().updateCharacter((c) => ({ ...c, xp: c.xp + 10 }));
+    expect((await db.characters.get(graph.character?.id as string))?.hp.max).toBe(32);
+    expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter(topUp)).toHaveLength(1);
   });
 
   it('writes nothing over a campaign replaced (a GitHub pull, a save-file import) while it waits for the builder data', async () => {

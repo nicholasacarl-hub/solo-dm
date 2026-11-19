@@ -361,6 +361,15 @@ function saveNotice(campaignId: string, notice: string, updatedAt?: number): Pro
   });
 }
 
+/** Add a notice to the loaded campaign in memory only: the caller's own write saves it with the campaign row. */
+function noteInMemory(text: string): void {
+  const notice = text.trim();
+  const s = useGame.getState();
+  if (!notice || !s.campaign || s.pendingDmNotices.includes(notice)) return;
+  const pendingDmNotices = [...s.pendingDmNotices, notice];
+  useGame.setState({ pendingDmNotices, campaign: { ...s.campaign, pendingDmNotices } });
+}
+
 /** Queue a notice on the loaded campaign (memory first, then saved). Resolves once it is saved. */
 function queueLoadedNotice(text: string): Promise<void> {
   const notice = text.trim();
@@ -1255,17 +1264,17 @@ export const useGame = create<GameStore>()((set, get) => ({
     if (next === s.character) return false;
     const owed = data.hitPointsOwedForEditions(s.character, next);
     if (owed > 0) {
-      // Hit Points are game state: a normal save (sync sees it). Once it's saved, this campaign's DM hears why the
-      // maximum rose: by the campaign's id, so leaving the table meanwhile can't send it elsewhere, and a refused save
-      // (another tab at the table, a pull) tells no one.
-      const saved = await get().updateCharacter((c) => {
+      // Hit Points are game state: a normal save (sync sees it). The DM hears why the maximum rose: the notice goes
+      // into memory with the top-up and the same write saves both (the campaign row carries it), so a refused save
+      // (another tab at the table, a pull) stores neither, a failed one keeps both for the next write, and leaving the
+      // table meanwhile can't send it to another campaign.
+      noteInMemory(
+        `${s.character.name}'s Hit Point maximum rose by ${owed} to ${s.character.hp.max + owed}: Draconic Resilience now adds its Hit Points for a book's Sorcerer, and the Sorcerer levels gained before didn't get them.`,
+      );
+      await get().updateCharacter((c) => {
         const edited = data.withClassEditions(c, builder.classes);
         return { ...edited, hp: { ...edited.hp, max: edited.hp.max + owed, current: edited.hp.current > 0 ? edited.hp.current + owed : edited.hp.current } };
       });
-      void queueCampaignNotice(
-        campaign.id,
-        `${saved.name}'s Hit Point maximum rose by ${owed} to ${saved.hp.max}: Draconic Resilience now adds its Hit Points for a book's Sorcerer, and the Sorcerer levels gained before didn't get them.`,
-      ).catch(noop);
       return true;
     }
     set({ character: next });
