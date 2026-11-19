@@ -505,6 +505,12 @@ describe('damage dice that grow with level', () => {
     expect(rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Bare Fists' }))).toBe('4');
     expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Arcane Hand (Clenched Fist)' }))).toThrow(/needs an attack/);
     expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Fist (Arcane Hand)' }))).toThrow(/needs an attack/);
+    for (const name of ['Clenched-Fist', 'Spectral Fist', 'Fist of Force', 'Fist (Arcane-Hand)']) {
+      expect(() => rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: name }))).toThrow(/needs an attack/);
+    }
+    expect(rollRequestExpression(fighter(16), request({ rollType: 'damage', attackName: 'Fist Strike' }))).toBe('4');
+    // A weapon that names a fist keeps the DM's `ability`.
+    expect(rollRequestModifier(fighter(16), request({ rollType: 'attack', attackName: 'Fist-sized Rock', ability: 'dex' })).label).toMatch(/^Fist-sized Rock attack \(DEX/);
     expect(rollRequestModifier(fighter(16), request({ rollType: 'attack', attackName: 'Clenched Fist' })).label).not.toMatch(/Unarmed Strike/);
     expect(rollRequestModifier(fighter(16), request({ rollType: 'attack', attackName: 'Spinning Kick' })).label).toBe('Unarmed Strike attack');
   });

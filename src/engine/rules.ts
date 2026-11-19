@@ -718,9 +718,13 @@ export function findAttack(c: Character, name: string): Attack | undefined {
   return matchByName(c.attacks, name, (a) => a.name).match;
 }
 
-/** An unarmed strike by name ("Kick", "Punch", "Bare Fists", "Unarmed Strike (Bonus Action)"); never Arcane Hand's "Clenched Fist". */
-function isUnarmed(name: string): boolean {
-  return /\b(unarmed|punch|kick|fist|headbutt)/i.test(name) && !/\bclenched\s+fists?\b|\barcane\s+hand\b/i.test(name);
+/**
+ * An unarmed strike by name: "Unarmed Strike (Bonus Action)", "Kick", "Punch", "Headbutt", or a fist named alone ("Fist",
+ * "Bare Fists", "Fist Strike", "Fist (…)"). Never a spell or weapon that names a fist: Arcane Hand's "Clenched Fist",
+ * "Spectral Fist", "Fist-sized Rock" (the DM gives those their dice or ability).
+ */
+export function isUnarmedStrikeName(name: string): boolean {
+  return /\b(unarmed|punch|kick|headbutt)|^\s*(bare\s+)?fists?(\s+strikes?)?\s*(\(|$)/i.test(name) && !/\bclenched\W+fists?\b|\barcane\W+hand\b/i.test(name);
 }
 
 function isMonk(c: Character): boolean {
@@ -732,7 +736,7 @@ function improvisedAttack(c: Character, req: PlayerRollRequest): { modifier: num
   const name = (req.attackName ?? '').trim();
   const spell = name && c.spellcasting ? matchByName(c.spellcasting.spells, name, (s) => s.name).match : undefined;
   if (spell) return { modifier: spellAttackBonus(c) ?? pb(c) + mod(c, bestMentalAbility(c)), label: `${spell.name} attack` };
-  if (name && isUnarmed(name)) {
+  if (name && isUnarmedStrikeName(name)) {
     const ability = isMonk(c) && !wearsArmorOrShield(c) ? Math.max(mod(c, 'str'), mod(c, 'dex')) : mod(c, 'str');
     return { modifier: ability + pb(c), label: 'Unarmed Strike attack' };
   }
@@ -830,7 +834,7 @@ export function rollRequestExpression(c: Character, req: PlayerRollRequest): str
       const attack = req.attackName ? findAttack(c, req.attackName) : undefined;
       if (attack) return attackDamageExpression(c, attack, req.critical);
       if (req.expression) return req.critical ? criticalDice(req.expression) : normalizeDice(req.expression);
-      if (req.attackName && isUnarmed(req.attackName)) return unarmedDamageExpression(c, req.critical);
+      if (req.attackName && isUnarmedStrikeName(req.attackName)) return unarmedDamageExpression(c, req.critical);
       throw new DiceError('A damage roll needs an attack from the sheet or dice to roll (e.g. 1d8+3)');
     }
     case 'custom':

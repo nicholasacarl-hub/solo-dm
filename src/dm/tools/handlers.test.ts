@@ -168,14 +168,18 @@ describe('request_player_roll: attacks that are not on the sheet', () => {
     const hand = await h.run('request_player_roll', { roll_type: 'damage', attack_name: 'Clenched Fist', reason: 'The hand strikes' });
     expect(hand.isError).toBe(true);
     expect(hand.content).toMatch(/`expression`/);
-    for (const name of ['Arcane Hand (Clenched Fist)', 'Fist (Arcane Hand)']) {
+    for (const name of ['Arcane Hand (Clenched Fist)', 'Fist (Arcane Hand)', 'Clenched-Fist', 'Arcane Fist']) {
       const spell = await h.run('request_player_roll', { roll_type: 'damage', attack_name: name, reason: 'The hand strikes' });
       expect(spell.isError).toBe(true);
     }
-    for (const name of ['Fists', 'Bare Fists', 'Fist Strike']) {
+    for (const name of ['Fists', 'Bare Fists', 'Fist Strike', 'Fist (Bonus Action)']) {
       const punch = await h.run('request_player_roll', { roll_type: 'damage', attack_name: name, reason: 'Brawl' });
       expect(punch.isError).toBeUndefined();
     }
+    // A thrown rock the size of a fist is a weapon: the DM gives its `ability`.
+    const rock = await h.run('request_player_roll', { roll_type: 'attack', attack_name: 'Fist-sized Rock', dc: 12, reason: 'Throw it' });
+    expect(rock.isError).toBe(true);
+    expect(rock.content).toMatch(/`ability`/);
   });
 
   it('explains how to roll an off-sheet weapon when `ability` is missing', async () => {

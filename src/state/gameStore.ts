@@ -361,13 +361,16 @@ function saveNotice(campaignId: string, notice: string, updatedAt?: number): Pro
   });
 }
 
-/** Add a notice to the loaded campaign in memory only: the caller's own write saves it with the campaign row. */
-function noteInMemory(text: string): void {
-  const notice = text.trim();
+/**
+ * Add a notice to the loaded campaign in memory only: the caller's own write saves it with the campaign row. False
+ * when nothing was added (no campaign, or the same notice is already pending).
+ */
+function noteInMemory(notice: string): boolean {
   const s = useGame.getState();
-  if (!notice || !s.campaign || s.pendingDmNotices.includes(notice)) return;
+  if (!notice || !s.campaign || s.pendingDmNotices.includes(notice)) return false;
   const pendingDmNotices = [...s.pendingDmNotices, notice];
   useGame.setState({ pendingDmNotices, campaign: { ...s.campaign, pendingDmNotices } });
+  return true;
 }
 
 /** Queue a notice on the loaded campaign (memory first, then saved). Resolves once it is saved. */
@@ -1265,16 +1268,29 @@ export const useGame = create<GameStore>()((set, get) => ({
     const owed = data.hitPointsOwedForEditions(s.character, next);
     if (owed > 0) {
       // Hit Points are game state: a normal save (sync sees it). The DM hears why the maximum rose: the notice goes
-      // into memory with the top-up and the same write saves both (the campaign row carries it), so a refused save
-      // (another tab at the table, a pull) stores neither, a failed one keeps both for the next write, and leaving the
-      // table meanwhile can't send it to another campaign.
-      noteInMemory(
-        `${s.character.name}'s Hit Point maximum rose by ${owed} to ${s.character.hp.max + owed}: Draconic Resilience now adds its Hit Points for a book's Sorcerer, and the Sorcerer levels gained before didn't get them.`,
-      );
-      await get().updateCharacter((c) => {
+      // into memory with the top-up and the same write saves both (the campaign row carries it), so leaving the table
+      // meanwhile can't send it to another campaign. All or nothing: if the write is refused (another tab at the table,
+      // a pull) or fails, both come back out of memory, so no later write saves one without the other, and the next
+      // load tries again.
+      const before = s.character;
+      const notice = `${before.name}'s Hit Point maximum rose by ${owed} to ${before.hp.max + owed}: Draconic Resilience now adds its Hit Points for a book's Sorcerer, and the Sorcerer levels gained before didn't get them.`;
+      const noted = noteInMemory(notice);
+      const writing = get().updateCharacter((c) => {
         const edited = data.withClassEditions(c, builder.classes);
         return { ...edited, hp: { ...edited.hp, max: edited.hp.max + owed, current: edited.hp.current > 0 ? edited.hp.current + owed : edited.hp.current } };
       });
+      const topped = get().character; // updateCharacter sets memory before its first await
+      try {
+        await writing;
+      } catch (cause) {
+        const now = get();
+        if (now.character === topped) {
+          // No later write carries the raised maximum: take the top-up and its notice back.
+          const pendingDmNotices = noted ? now.pendingDmNotices.filter((n) => n !== notice) : now.pendingDmNotices;
+          set({ character: before, pendingDmNotices, ...(now.campaign ? { campaign: { ...now.campaign, pendingDmNotices } } : {}) });
+        }
+        throw cause;
+      }
       return true;
     }
     set({ character: next });

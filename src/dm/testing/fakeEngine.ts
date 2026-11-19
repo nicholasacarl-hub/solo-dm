@@ -28,6 +28,8 @@ export type DiceTerm = Engine.DiceTerm;
 
 // Transformations and ability score changes run the real engine: pure, and deterministic given ids.
 export { changeAbilityScore } from '@/engine/character';
+// Which names are unarmed strikes runs the real rule (pure).
+export { isUnarmedStrikeName } from '@/engine/rules';
 export {
   activeTransformations,
   advanceTransformation,
