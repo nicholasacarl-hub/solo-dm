@@ -656,6 +656,11 @@ describe('spells the class or species already gives (the sheet keeps one spell p
       expect(built.speciesFeatList).toBe('Wizard');
       expect(firstIncompleteStep(built, ctx)).toBeNull();
     }
+    // Under a book's filter whose backgrounds all clash: from "All", as for any list the book leaves short.
+    const scholar = { ...bg('Sage'), id: 'lib:lamp:background:lamp-scholar', name: 'Lamp Scholar', source: { sourceId: 'lamp', title: 'The Lamp Folio', recordId: 'rec:lamp:background:lamp-scholar', format: '2024' as const, adaptations: [] } };
+    const lamp: BuilderContext = { data: { ...data, backgrounds: [...data.backgrounds, scholar] }, spells };
+    const underFilter = letDmBuildAll({ ...human, sourceFilter: 'lamp' }, lamp, fixedRng);
+    expect([underFilter.backgroundId === scholar.id || underFilter.backgroundId === bg('Sage').id, underFilter.speciesFeatList, firstIncompleteStep(underFilter, lamp)]).toEqual([false, 'Wizard', null]);
     // With no other background to take, the DM takes it and gives Versatile another list instead.
     const onlySage: BuilderContext = { data: { ...data, backgrounds: [bg('Sage')] }, spells };
     const built = letDmBuildAll(human, onlySage, fixedRng);

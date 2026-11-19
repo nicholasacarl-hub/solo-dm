@@ -238,6 +238,15 @@ describe('subclassOptionFor with the subclasses a class shares (merge.ts)', () =
       expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, newer], sharedSubclasses: [moved] })).toBe(moved);
     });
 
+    it('among copies of the same text (one file imported twice), takes the one with the ref’s source or title', () => {
+      const here = ofBook(ember, 'gloam', GLOAMWOOD_TITLE, 'fp-gloam');
+      const copyA = ofBook(ember, 'a', 'Gloamwood (PDF)', 'fp-gloam');
+      const copyB = ofBook(ember, 'b', GLOAMWOOD_TITLE, 'fp-gloam');
+      const hero = { subclass: 'Ember Warden', subclassId: here.id, subclassRef: refOf(here) };
+      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, copyA, copyB] })).toBe(copyB);
+      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, copyA] })).toBe(copyA);
+    });
+
     it('still finds the same book read again (a newer reader, another file): its fingerprint changed, its title not', () => {
       const first = ofBook(ember, 'gloam', GLOAMWOOD_TITLE, 'fp-first-reading');
       const again = ofBook(ember, 'g3', GLOAMWOOD_TITLE, 'fp-second-reading');

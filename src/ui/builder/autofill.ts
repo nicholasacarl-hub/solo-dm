@@ -187,7 +187,7 @@ function fillBackground(draft: BuilderDraft, data: BuilderData, rng: Rng): Build
   // while another fits.
   const speciesList = originFeats(draft, data).find((f) => f.from === 'species' && isMagicInitiate(f.name))?.option;
   const clashes = (b: BackgroundOption) => Boolean(speciesList && b.feat && isMagicInitiate(b.feat) && splitFeatName(b.feat).option === speciesList);
-  const fitting = shownBackgrounds.filter((b) => !clashes(b));
+  const fitting = shown(data.backgrounds, draft, undefined, (b) => !clashes(b));
   const backgrounds = fitting.length ? fitting : shownBackgrounds;
   if (!picks(draft, data).background && backgrounds.length) {
     const priority = abilityPriority(cls);

@@ -66,30 +66,30 @@ function baseName(name: string): string {
 type Option = { id: string; name: string } & Sourced;
 
 /**
- * The imported option named like the ref's entry from the ref's own book: the same book by its fingerprint
- * (moved whole to another device, whatever its title), else by source id, then by title. A fingerprint only
- * adds a match: it covers every entry's text, so the same book read again (a newer reader, another file)
- * gets a new one, and its title is what still finds it.
+ * The imported option named like the ref's entry from the ref's own book: a copy of the same text by its
+ * fingerprint (moved whole to another device, whatever its title), else by source id, then by title. A
+ * fingerprint only adds a match: it covers every entry's text, so the same book read differently (a newer
+ * reader, another file) gets a new one, and its title is what still finds it.
  */
 function inRefBook<T extends Option>(ref: ImportedRef | undefined, all: readonly T[]): T | undefined {
   if (!ref) return undefined;
   const key = nameKey(ref.entryName);
   const named = all.filter((o) => o.source && nameKey(o.name) === key);
-  return (
-    (ref.bookFingerprint ? named.find((o) => optionFingerprint(o) === ref.bookFingerprint) : undefined) ??
-    named.find((o) => o.source?.sourceId === ref.sourceId) ??
-    named.find((o) => o.source && nameKey(o.source.title) === nameKey(ref.sourceTitle))
-  );
+  const ofRef = (list: readonly T[]) =>
+    list.find((o) => o.source?.sourceId === ref.sourceId) ?? list.find((o) => o.source && nameKey(o.source.title) === nameKey(ref.sourceTitle));
+  // Among copies of the same text (one file imported twice), the ref's source or title too.
+  const sameText = ref.bookFingerprint ? named.filter((o) => optionFingerprint(o) === ref.bookFingerprint) : [];
+  return ofRef(sameText) ?? sameText[0] ?? ofRef(named);
 }
 
-/** Imported options named like the ref's entry, the ref's own book (inRefBook) first. */
+/** Imported options named like the ref's entry, the ref's own book (inRefBook) first, then any book's. */
 function byRef<T extends Option>(ref: ImportedRef | undefined, all: readonly T[]): T | undefined {
   if (!ref) return undefined;
   const key = nameKey(ref.entryName);
   return inRefBook(ref, all) ?? all.find((o) => o.source && nameKey(o.name) === key);
 }
 
-/** By id; else, for an imported id, by ref (kind + nameKey(entryName), preferring ref.sourceTitle's book); else by name among SRD options only. */
+/** By id; else, for an imported id, byRef (the ref's book by fingerprint, source id or title, then any book's class of the name); else by name among SRD options only. */
 export function classOptionFor(cl: Pick<ClassLevel, 'classId' | 'name' | 'ref'>, classes: readonly ClassOption[]): ClassOption | undefined {
   const byId = classes.find((o) => o.id === cl.classId);
   if (byId) return byId;
