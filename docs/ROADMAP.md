@@ -70,6 +70,9 @@ The first version of structured imports deliberately leaves these out:
   die growing with Monk level, a Monk's unarmed strike off the sheet using Dexterity, and Draconic Resilience's extra
   Hit Points. Since the builder lists a 2024 book's class in place of the SRD's, more heroes now meet this; the DM
   adjusts those numbers. The fix needs the sheet to record a class's edition (a 2014 Monk's dice differ).
+- **Homebrew spells in the builder by campaign**: the builder's spell lists include homebrew spells saved in other
+  campaigns (`RulesIndex.list()` skips the campaign check that search and name lookups make), unlabeled, so a hero
+  can pick one its DM can't look up. List only this campaign's and shared homebrew, and label them.
 - **Book text the DM repeats elsewhere**: the book's words in the journal, quests, recaps or narration, in a feature
   the DM names otherwise than the book does, or in a quote shorter than about 80 characters among the DM's own words
   (a text under 60 characters counts only when its first 40 are the book's) aren't marked as copied, so exports keep
