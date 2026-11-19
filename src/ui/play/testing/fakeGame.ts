@@ -300,5 +300,8 @@ export function createFakeActions(): GameStoreActions {
     async restoreImportedText() {
       return null;
     },
+    async refreshClassEditions() {
+      return false;
+    },
   };
 }

@@ -193,6 +193,7 @@ export {
   speciesOptionFor,
   subclassOptionFor,
   suggestParentClass,
+  withClassEditions,
   type CatalogMatch,
 } from './options/resolve';
 /** Provenance for copies, and app-written item descriptions (numbers, never book text). */

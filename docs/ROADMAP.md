@@ -65,11 +65,11 @@ The first version of structured imports deliberately leaves these out:
   from items, and enforcing attunement limits.
 - **Monster detail**: structured actions and legendary actions, and senses on the battle map (the DM reads them from
   the text today).
-- **SRD class rules for a 2024 book's class**: a book's class gets the engine's name-based rules (Improved Critical,
-  Unarmored Defense, Aura of Protection, Tireless…) but not the few it ties to the SRD class itself: the Martial Arts
-  die growing with Monk level, a Monk's unarmed strike off the sheet using Dexterity, and Draconic Resilience's extra
-  Hit Points. Since the builder lists a 2024 book's class in place of the SRD's, more heroes now meet this; the DM
-  adjusts those numbers. The fix needs the sheet to record a class's edition (a 2014 Monk's dice differ).
+- **Older-edition classes' own numbers**: a 2024 book's class plays by the SRD class's rules (its ref records its
+  edition), but a 2014 book's class gets only the name-based ones (Improved Critical, Unarmored Defense from its
+  feature, Aura of Protection…): its Martial Arts die stays the one on the sheet (a 2014 Monk's grows d4 → d6 → d8
+  → d10), its unarmed strikes off the sheet use Strength, and Draconic Resilience's Hit Points at level-up are the
+  DM's to add. The engine would need each edition's numbers.
 - **Telling a book read again from another book**: a hero's class, subclass, species or background whose book is
   switched off or gone is looked up again by its book's fingerprint, then its source and title, then any book's
   option of its name, so another book's option of that name stands in (a 2014 printing for a 2024 one of the same

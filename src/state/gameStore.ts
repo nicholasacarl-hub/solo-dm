@@ -222,6 +222,12 @@ export interface GameStoreActions {
    */
   restoreImportedText(): Promise<RestoreReport | null>;
   /**
+   * Bring the loaded character's imported classes' editions in step with their books' records (withClassEditions:
+   * the engine's class rules read them). Loads @/data with a dynamic import and writes the character AS IS, as
+   * restoreImportedText does. Resolves true when anything changed.
+   */
+  refreshClassEditions(): Promise<boolean>;
+  /**
    * Return and clear pending DM notices. The stored copy is cleared by the campaign's next save —
    * normally the transcript append that delivers them — so a failed append can't lose them.
    */
@@ -679,6 +685,8 @@ export const useGame = create<GameStore>()((set, get) => ({
       // A device that has the book fills its text back into the sheet (spec §7.4). This covers GitHub pulls and
       // bundle imports too, since both reload the campaign. It never touches the campaign row.
       void get().restoreImportedText().catch(noop);
+      // Its imported classes' editions too, for the class rules (a hero made before refs recorded them).
+      void get().refreshClassEditions().catch(noop);
     } catch (error) {
       if (token !== loadToken) return;
       console.error('[gameStore] Failed to load the campaign:', error);
@@ -1232,6 +1240,21 @@ export const useGame = create<GameStore>()((set, get) => ({
       await persist(campaign.id, 'the character', () => storage.putCharacter(restored)).catch(noop);
     }
     return report;
+  },
+
+  async refreshClassEditions() {
+    const { campaign, character } = get();
+    if (!campaign || !character || !character.classes.some((cl) => cl.ref && cl.classId.startsWith('lib:'))) return false;
+    const data = await import('@/data');
+    const builder = await data.loadBuilderData();
+    const s = get();
+    if (s.campaign?.id !== campaign.id || !s.character || s.character.id !== character.id) return false;
+    const next = data.withClassEditions(s.character, builder.classes);
+    if (next === s.character) return false;
+    set({ character: next });
+    // As is, like restoreImportedText: character.updatedAt and the campaign row are left alone.
+    await persist(campaign.id, 'the character', () => storage.putCharacter(next)).catch(noop);
+    return true;
   },
 }));
 

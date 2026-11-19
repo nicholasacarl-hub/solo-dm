@@ -82,8 +82,9 @@ export function optionFingerprint(option: RefOption & object): string | undefine
   return visit(option, 0);
 }
 
-/** An option-level ref (no text): ClassLevel.ref, subclassRef, speciesRef, backgroundRef. */
+/** An option-level ref (no text): ClassLevel.ref, subclassRef, speciesRef, backgroundRef, with the option's edition. */
 export function optionRef(option: RefOption, kind: StructuredKind): ImportedRef | undefined {
   const bookFingerprint = optionFingerprint(option);
-  return refFor(option, kind, undefined, undefined, bookFingerprint ? { text: '', bookFingerprint } : undefined);
+  const ref = refFor(option, kind, undefined, undefined, bookFingerprint ? { text: '', bookFingerprint } : undefined);
+  return ref && option.source ? { ...ref, format: option.source.format } : ref;
 }

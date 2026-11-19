@@ -3,6 +3,7 @@
  * reverse; same book → SRD → other books. Invented fixture content only.
  */
 import { describe, expect, it } from 'vitest';
+import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef } from '@/test/structuredFixtures';
 import type { Character, ClassOption, EquipmentOption, FeatOption, OptionSource, SubclassOption } from '@/types';
 import {
@@ -20,6 +21,7 @@ import {
   subclassByName,
   subclassOptionFor,
   suggestParentClass,
+  withClassEditions,
 } from './resolve';
 
 const source = (sourceId: string, title: string): OptionSource => ({ sourceId, title, recordId: `rec:${sourceId}:class:x`, format: '2024', adaptations: [] });
@@ -316,6 +318,39 @@ describe('subclassByName', () => {
     expect(subclassByName('Champion', { ...srdFighter, subclasses: [champion, older], sharedSubclasses: [ashenChampion] })).toBe(ashenChampion);
     // Under a book's class, the SRD's it shares beside an older book's attached to it.
     expect(subclassByName('Champion', { ...bookFighter, subclasses: [older], sharedSubclasses: [champion] })).toBe(champion);
+  });
+});
+
+describe('withClassEditions', () => {
+  const wick = EXPECTED_MERGED.classes.find((c) => c.id === 'lib:gloam:class:wickwright') as ClassOption;
+  const hero = (format?: '2024' | '2014') => ({
+    ...sampleCharacter(),
+    classes: [
+      { classId: 'srd:class:fighter', name: 'Fighter', level: 1, hitDie: 10 as const, casterType: 'none' as const },
+      {
+        classId: wick.id,
+        name: 'Wickwright',
+        level: 2,
+        hitDie: 8 as const,
+        casterType: 'half' as const,
+        ref: { ...importedRef({ entryId: wick.id, kind: 'class', entryName: 'Wickwright', part: undefined }), ...(format ? { format } : {}) },
+      },
+    ],
+  });
+
+  it("records each imported class's edition from its book's record: a hero made before refs did, an Edition changed in review", () => {
+    expect(wick.source?.format).toBe('2024');
+    expect(withClassEditions(hero(), EXPECTED_MERGED.classes).classes[1].ref?.format).toBe('2024');
+    expect(withClassEditions(hero('2014'), EXPECTED_MERGED.classes).classes[1].ref?.format).toBe('2024');
+    const older = { ...wick, source: { ...(wick.source as OptionSource), format: '2014' as const } };
+    expect(withClassEditions(hero('2024'), [older]).classes[1].ref?.format).toBe('2014');
+  });
+
+  it('returns the same character when nothing changes, and leaves a class whose book is gone as it is', () => {
+    const current = hero('2024');
+    expect(withClassEditions(current, EXPECTED_MERGED.classes)).toBe(current);
+    const gone = hero('2014');
+    expect(withClassEditions(gone, EXPECTED_MERGED.classes.filter((c) => !c.source))).toBe(gone);
   });
 });
 

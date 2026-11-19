@@ -186,9 +186,9 @@ export function structuredStorageMock() {
   } satisfies Record<(typeof STRUCTURED_STORAGE_EXPORTS)[number], unknown>;
 }
 
-/** The game store's structured-imports action, to spread into a mocked getState(). */
+/** The game store's structured-imports actions, to spread into a mocked getState(). */
 export function gameStoreRestoreMock() {
-  return { restoreImportedText: vi.fn(async () => null) };
+  return { restoreImportedText: vi.fn(async () => null), refreshClassEditions: vi.fn(async () => false) };
 }
 
 /**

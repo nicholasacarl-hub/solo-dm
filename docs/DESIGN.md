@@ -710,7 +710,11 @@ a Magic Initiate list changed), and Magic Initiate's level 1 spell may repeat on
 grants, whose entry gains the free casting. With the source filter on a book, "Let the DM decide" picks from
 that book and falls back to "All" for any list the book leaves short, so the hero ends up complete. Lookups are id-first (`src/data/options/resolve.ts`),
 so a hero who chose the SRD option keeps it, and the engine never takes an imported class (`lib:` id)
-for an SRD class of the same name, so an imported "Fighter" never borrows the SRD Fighter's numbers.
+for an SRD class of the same name for its numbers (hit die, level-up reminders). A 2024 book's class does play
+by the SRD class's rules (`rulesClassFor`): the Martial Arts die and a Monk's Dexterity for unarmed strikes,
+Unarmored Defense, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
+the edition (`ImportedRef.format`), set when the class is taken and kept in step with the book's record on load
+and after review (`withClassEditions`); an older-edition book's class gets only the rules that go by feature name.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
 adaptations, shown in review, on builder cards, in the DM's stats line and on the sheet. Level-up adds

@@ -308,6 +308,9 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
       async restoreImportedText() {
         return null;
       },
+      async refreshClassEditions() {
+        return false;
+      },
     };
   });
 }

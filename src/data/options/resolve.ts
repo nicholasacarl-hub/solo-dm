@@ -98,6 +98,24 @@ export function classOptionFor(cl: Pick<ClassLevel, 'classId' | 'name' | 'ref'>,
   return classes.find((o) => !o.source && nameKey(o.name) === key);
 }
 
+/**
+ * The character with each imported class's ref recording its book record's current edition (OptionSource.format),
+ * which the engine's class rules read (engine/classData.ts rulesClassFor): heroes made before refs recorded it, and
+ * an Edition changed in review. The same object when nothing changes; a class whose book is switched off or gone
+ * keeps what it has.
+ */
+export function withClassEditions(c: Character, classes: readonly ClassOption[]): Character {
+  let changed = false;
+  const next = c.classes.map((cl) => {
+    if (!cl.ref) return cl;
+    const format = classOptionFor(cl, classes)?.source?.format;
+    if (!format || cl.ref.format === format) return cl;
+    changed = true;
+    return { ...cl, ref: { ...cl.ref, format } };
+  });
+  return changed ? { ...c, classes: next } : c;
+}
+
 /** One of a class's subclasses of a name: the only one, else the class's own book's (for an SRD class, the SRD's), else the SRD's. */
 function ownBookOrSrd(named: readonly SubclassOption[], cls: ClassOption): SubclassOption | undefined {
   if (named.length < 2) return named[0];

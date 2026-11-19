@@ -41,6 +41,8 @@ vi.mock('@/data', async () => {
   const fixtures = await import('@/test/structuredFixtures');
   return {
     restoreImportedText: restore.restoreImportedText,
+    withClassEditions: (await import('@/data/options/resolve')).withClassEditions,
+    loadBuilderData: async () => fixtures.EXPECTED_MERGED,
     buildLibraryLookup: async () => {
       libraryLookup.calls += 1;
       return { entriesById: new Map(), sourcesByFingerprint: new Map(), sourcesByTitle: new Map(), builder: fixtures.EXPECTED_MERGED };
@@ -68,6 +70,24 @@ afterEach(() => {
   for (const fn of [storage.putLog, storage.putTranscript, storage.putCombat, storage.putCharacter, storage.isCampaignOpenElsewhere]) {
     vi.mocked(fn).mockReset();
   }
+});
+
+describe('refreshClassEditions', () => {
+  it("records an imported class's edition after a load and writes the character as is", async () => {
+    const wick = EXPECTED_MERGED.classes.find((c) => c.id === 'lib:gloam:class:wickwright');
+    const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:wickwright', kind: 'class' as const, entryName: 'Wickwright', textHash: '', textCopied: false };
+    const classes = [{ classId: 'lib:gloam:class:wickwright', name: 'Wickwright', level: 2, hitDie: 8 as const, casterType: 'half' as const, ref }];
+    const graph = await seedCampaign('a', { character: { classes } });
+    const storedCharacter = await db.characters.get(graph.character?.id as string);
+    await game().loadCampaign('a-camp');
+    await vi.waitFor(() => expect(game().character?.classes[0].ref?.format).toBe(wick?.source?.format));
+    await whenPersisted();
+    const after = await db.characters.get(graph.character?.id as string);
+    expect(after?.classes[0].ref?.format).toBe('2024');
+    expect(after?.updatedAt).toBe(storedCharacter?.updatedAt);
+    // Run again: nothing to change.
+    expect(await game().refreshClassEditions()).toBe(false);
+  });
 });
 
 describe('restoreImportedText (spec §7.4)', () => {

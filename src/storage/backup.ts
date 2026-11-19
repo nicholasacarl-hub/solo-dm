@@ -187,6 +187,7 @@ const refSchema = z.looseObject({
   entryId: z.string(),
   kind: z.enum(['class', 'subclass', 'species', 'background', 'feat', 'spell', 'magic-item', 'item', 'monster']),
   entryName: z.string(),
+  format: z.enum(['2024', '2014', 'other']).optional().catch(undefined),
   part: z.string().optional().catch(undefined),
   level: z.number().optional().catch(undefined),
   at: z.looseObject({ ordinals: z.array(z.number()), from: z.number(), to: z.number() }).optional().catch(undefined),

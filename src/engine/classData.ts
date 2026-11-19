@@ -238,13 +238,25 @@ export function isLibraryId(id: string | undefined): boolean {
 
 /**
  * The SRD class a character's class entry refers to (by id first, then by name). An imported class is
- * never the SRD class of the same name (SRD 5.2.1 "Classes": an imported "Fighter" gets no SRD Fighter
- * reminders, critical range, Unarmored Defense or Hit Point rules).
+ * never the SRD class of the same name for its numbers (SRD 5.2.1 "Classes": an imported "Fighter" gets no
+ * SRD Fighter hit die or level-up reminders); a 2024 book's plays by its rules (rulesClassFor).
  */
 export function srdClassFor(cl: Pick<ClassLevel, 'classId' | 'name'>): SrdClassInfo | undefined {
   const byId = cl.classId.startsWith('srd:class:') ? findSrdClass(cl.classId) : undefined;
   if (byId || isLibraryId(cl.classId)) return byId;
   return findSrdClass(cl.name);
+}
+
+/**
+ * The SRD class whose rules the engine applies to a class entry: its SRD class (srdClassFor), or the one a 2024
+ * book's class of the same name stands in for (its ref records the 2024 edition; SRD 5.2.1 is drawn from the 2024
+ * rules, so the two are one class, as the builder's lists treat them). The Martial Arts die and a Monk's Dexterity
+ * for unarmed strikes, Unarmored Defense, Draconic Resilience and the rest read it. An older-edition or other
+ * book's class gets none (its numbers can differ: a 2014 Monk's Martial Arts die); its hit die, level-up
+ * reminders and multiclass prerequisites come from its own data (srdClassFor).
+ */
+export function rulesClassFor(cl: Pick<ClassLevel, 'classId' | 'name' | 'ref'>): SrdClassInfo | undefined {
+  return srdClassFor(cl) ?? (isLibraryId(cl.classId) && cl.ref?.format === '2024' ? findSrdClass(cl.name) : undefined);
 }
 
 /** Class levels at which a class gains the Ability Score Improvement feature (Fighter 6/14, Rogue 10 included). */

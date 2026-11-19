@@ -20,7 +20,7 @@ import {
 } from '@/types';
 import { nameKey } from '@/lib/id';
 import { resolveArmor, wornArmor, type WornArmor } from './armorData';
-import { isLibraryId, srdClassFor } from './classData';
+import { rulesClassFor } from './classData';
 import { INCAPACITATING_CONDITIONS, SPEED_ZERO_CONDITIONS, conditionKey, conditionName } from './conditions';
 import {
   DiceError,
@@ -180,8 +180,9 @@ export interface SaveBonusSource {
   bonus: number;
 }
 
+/** Levels in an SRD class, a 2024 book's class standing in for it included (rulesClassFor). */
 function classLevelOf(c: Character, className: string): number {
-  return c.classes.filter((cl) => srdClassFor(cl)?.name === className).reduce((sum, cl) => sum + cl.level, 0);
+  return c.classes.filter((cl) => rulesClassFor(cl)?.name === className).reduce((sum, cl) => sum + cl.level, 0);
 }
 
 function hasFeature(c: Character, name: string): boolean {
@@ -428,7 +429,7 @@ export function weaponCritRange(c: Character): number {
   // By id when the entry has one (an imported "Champion" isn't the SRD's); by name for older sheets.
   const isChampion = (cl: Character['classes'][number]) => (cl.subclassId ? cl.subclassId === 'srd:subclass:champion' : /champion/i.test(cl.subclass ?? ''));
   const champion = c.classes
-    .filter((cl) => srdClassFor(cl)?.name === 'Fighter' && isChampion(cl))
+    .filter((cl) => rulesClassFor(cl)?.name === 'Fighter' && isChampion(cl))
     .reduce((sum, cl) => sum + Math.max(0, toInt(cl.level)), 0);
   if (champion >= 15 || hasFeatureBase(c, 'Superior Critical')) return 18;
   if (champion >= 3 || hasFeatureBase(c, 'Improved Critical')) return 19;
@@ -543,8 +544,8 @@ function armoredOption(c: Character, worn: WornArmor): AcOption {
 function unarmoredOptions(c: Character): AcOption[] {
   const dex = mod(c, 'dex');
   const options: AcOption[] = [{ ac: 10 + dex, parts: ['10', signedPart('DEX', dex)], allowsShield: true }];
-  // An imported class named like an SRD one gets no SRD Unarmored Defense (spec §5.7; SRD 5.2.1 "Classes").
-  const classNames = new Set(c.classes.map((cl) => srdClassFor(cl)?.name ?? (isLibraryId(cl.classId) ? undefined : cl.name)));
+  // An older or other book's class named like an SRD one gets no SRD Unarmored Defense; a 2024 book's does (rulesClassFor).
+  const classNames = new Set(c.classes.map((cl) => rulesClassFor(cl)?.name));
   const udSources = c.features.filter((f) => nameKey(f.name) === 'unarmored-defense').map((f) => (f.sourceName ?? '').toLowerCase());
   if (classNames.has('Barbarian') || udSources.some((s) => s.includes('barbarian'))) {
     const con = mod(c, 'con');
@@ -558,7 +559,7 @@ function unarmoredOptions(c: Character): AcOption[] {
     hasFeature(c, 'Draconic Resilience') ||
     c.classes.some(
       (cl) =>
-        srdClassFor(cl)?.name === 'Sorcerer' &&
+        rulesClassFor(cl)?.name === 'Sorcerer' &&
         (cl.subclassId ? cl.subclassId === 'srd:subclass:draconic-sorcery' : /draconic/i.test(cl.subclass ?? '')),
     );
   if (draconic) {

@@ -356,6 +356,12 @@ export interface ImportedRef {
   entryId: string;                    // option / entry id when copied ("lib:…")
   kind: StructuredKind;
   entryName: string;                  // "Ember Warden"
+  /**
+   * Option-level refs (ClassLevel.ref, subclassRef, speciesRef, backgroundRef): the option's edition, as its book's
+   * record has it (OptionSource.format; kept in step on load, fillClassEditions). A 2024 book's class plays by the
+   * SRD class of its name in the engine (engine/classData.ts rulesClassFor).
+   */
+  format?: SourceFormat;
   part?: string;                      // feature, trait, lineage or background-feature name; absent = whole option
   level?: number;                     // class or subclass feature level
   /** Where the copied text sits: the block's entry ordinals (n of "lib:<sourceId>:<n>") and paragraphs. */

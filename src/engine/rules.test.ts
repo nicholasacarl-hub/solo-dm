@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Attack, Character, EquipmentOption, Feature, InventoryItem, PlayerRollRequest, SkillBonus } from '@/types';
+import type { Attack, Character, EquipmentOption, Feature, ImportedRef, InventoryItem, PlayerRollRequest, SkillBonus } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import { applyAttackRollRules, manualD20Result } from './dice';
 import {
@@ -422,6 +422,27 @@ describe('damage dice that grow with level', () => {
     expect(attackDamageExpression(monk(5), { ...strike, scaling: undefined })).toBe('1d8+3');
     // A bigger weapon die is kept ("in place of the normal damage" only when that's better).
     expect(attackDamageExpression(monk(5), { ...strike, damage: '1d10' })).toBe('1d10+3');
+  });
+
+  it("a 2024 book's Monk rolls the same Martial Arts die and makes Dexterous Attacks; an older book's keeps its own die (SRD 5.2.1 Monk: Martial Arts)", () => {
+    const strike: Attack = { id: 'us', name: 'Unarmed Strike', ability: 'finesse', proficient: true, damage: '1d6', damageType: 'bludgeoning', scaling: 'martial-arts' };
+    const ref = (format: '2024' | '2014'): ImportedRef => ({ sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:monk', kind: 'class', entryName: 'Monk', textHash: '', textCopied: false, format });
+    const bookMonk = (level: number, format: '2024' | '2014', attacks: Attack[] = [strike]) =>
+      mira({
+        abilityScores: { str: 10, dex: 16, con: 12, int: 8, wis: 16, cha: 10 },
+        classes: [{ classId: 'lib:lamp:class:monk', name: 'Monk', level, hitDie: 8, casterType: 'none', ref: ref(format) }],
+        spellcasting: undefined,
+        attacks,
+        inventory: [],
+        features: [],
+      });
+    expect([1, 5, 11, 17].map((l) => attackDamageExpression(bookMonk(l, '2024'), strike))).toEqual(['1d6+3', '1d8+3', '1d10+3', '1d12+3']);
+    // An older book's Monk: its own Martial Arts die (a 2014 Monk's grows differently), as on the sheet.
+    expect(attackDamageExpression(bookMonk(11, '2014'), strike)).toBe('1d6+3');
+    // Dexterous Attacks: an Unarmed Strike off the sheet uses DEX 3 (not STR 0), plus the Proficiency Bonus 3.
+    expect(rollRequestModifier(bookMonk(5, '2024', []), request({ rollType: 'attack', attackName: 'Unarmed Strike' }))).toEqual({ modifier: 6, label: 'Unarmed Strike attack' });
+    // Unarmored Defense (SRD 5.2.1 Monk): 10 + DEX 3 + WIS 3, from the class itself.
+    expect(computeArmorClass(bookMonk(1, '2024')).ac).toBe(16);
   });
 
   it('Martial Arts follows the Monk level, not the character level, and replaces the flat 1', () => {

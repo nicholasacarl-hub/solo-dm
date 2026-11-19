@@ -18,7 +18,7 @@ import {
   type RollResult,
 } from '@/types';
 import { newId, nameKey, slugify } from '@/lib/id';
-import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
+import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, rulesClassFor, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
 import { abilityModifier, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
 import { recomputeSlots, resetSpellSlots } from './spellcasting';
@@ -124,7 +124,7 @@ function featureHpBonuses(before: readonly Feature[], added: readonly { name: st
   if (had('Dwarven Toughness')) bonuses.push({ amount: 1, note: 'Dwarven Toughness' });
   if (had('Tough')) bonuses.push({ amount: 2, note: 'Tough' });
   else if (gains('Tough')) bonuses.push({ amount: 2 * newLevel, note: 'Tough' });
-  const sorcerer = srdClassFor(gained)?.name === 'Sorcerer';
+  const sorcerer = rulesClassFor(gained)?.name === 'Sorcerer';
   if (sorcerer && had('Draconic Resilience')) bonuses.push({ amount: 1, note: 'Draconic Resilience' });
   else if (sorcerer && gains('Draconic Resilience')) bonuses.push({ amount: gained.level, note: 'Draconic Resilience' });
   return bonuses;
@@ -495,7 +495,7 @@ function regainsOneOnShortRest(feature: Feature): boolean {
 }
 
 function bardLevel(c: Character): number {
-  return c.classes.filter((cl) => srdClassFor(cl)?.name === 'Bard').reduce((sum, cl) => sum + cl.level, 0);
+  return c.classes.filter((cl) => rulesClassFor(cl)?.name === 'Bard').reduce((sum, cl) => sum + cl.level, 0);
 }
 
 /** Uses after a Short Rest (unchanged object when nothing recharges). */
@@ -519,7 +519,7 @@ function restedFeatureNames(before: readonly Feature[], after: readonly Feature[
 }
 
 function hasTireless(c: Character): boolean {
-  const rangerLevel = c.classes.filter((cl) => srdClassFor(cl)?.name === 'Ranger').reduce((sum, cl) => sum + cl.level, 0);
+  const rangerLevel = c.classes.filter((cl) => rulesClassFor(cl)?.name === 'Ranger').reduce((sum, cl) => sum + cl.level, 0);
   return rangerLevel >= 10 || hasFeatureNamed(c.features, 'Tireless');
 }
 
