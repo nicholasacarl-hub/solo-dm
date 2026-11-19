@@ -14,7 +14,8 @@ import { saveLibrarySourceWithRecords } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
 import { GLOAMWOOD_SOURCE_ID, gloamwoodEntries, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
 import { SRD_SOURCE_ID, type SpellData, type StructuredRecord } from '@/types';
-import { filtered, spellInfo, spellsForClass, subclassesOf, visibleSpells, withoutReplacedSrd } from '@/ui/builder/logic';
+import { letDmBuildAll } from '@/ui/builder/autofill';
+import { emptyDraft, filtered, firstIncompleteStep, spellInfo, spellsForClass, subclassesOf, visibleSpells, withoutReplacedSrd } from '@/ui/builder/logic';
 
 const BOOK_FIGHTER = 'lib:gloam:class:wickwright';
 
@@ -55,6 +56,26 @@ describe('a 2024 book’s options in place of the SRD’s of their names (end to
     expect(withoutReplacedSrd(subclassesOf(srd)).map((s) => s.name)).toEqual(['Champion', 'Ember Warden', 'Order of the Long Wick']);
     // Each class keeps its own: a name lookup prefers them (options/resolve.ts).
     expect([book.subclasses.map((s) => s.name), srd.subclasses.map((s) => s.name)]).toEqual([['Order of the Long Wick'], ['Champion', 'Ember Warden']]);
+  });
+
+  it('"Let the DM build the rest" completes a hero of every class with the filter on the book (too few there: from All)', async () => {
+    const data = await loadBuilderData();
+    const index = await getRulesIndex();
+    const ctx = { data, spells: index.list({ kind: 'spell' }).map(spellInfo) };
+    // A fixed sequence per seed (Park–Miller), so a failure names its class and seed.
+    const seeded = (seed: number) => ({ next: () => (seed = (seed * 16807) % 2147483647) / 2147483647 });
+    for (const cls of data.classes) {
+      // A Human too: Versatile's Origin feat can't be the background's, and the book has one Origin feat.
+      for (const [seed, speciesId] of [[1, null], [7, null], [42, 'srd:species:human']] as const) {
+        const draft = letDmBuildAll({ ...emptyDraft(), classId: cls.id, speciesId, sourceFilter: GLOAMWOOD_SOURCE_ID }, ctx, seeded(seed));
+        expect({ cls: cls.name, seed, step: firstIncompleteStep(draft, ctx) }).toEqual({ cls: cls.name, seed, step: null });
+      }
+    }
+    // A filter with nothing to choose from: a hero of any class still gets everything (a Fighting Style too).
+    for (const cls of [undefined, ...data.classes]) {
+      const draft = letDmBuildAll({ ...emptyDraft(), classId: cls?.id ?? null, sourceFilter: 'a-book-with-no-options' }, ctx, seeded(3));
+      expect({ cls: cls?.name, step: firstIncompleteStep(draft, ctx) }).toEqual({ cls: cls?.name, step: null });
+    }
   });
 
   it('lists the book’s accepted Light alone on the Wizard’s list; the SRD filter lists the SRD’s', async () => {

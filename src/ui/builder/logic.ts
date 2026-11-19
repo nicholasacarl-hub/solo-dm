@@ -332,8 +332,8 @@ function buildSpellcasting(draft: BuilderDraft, ctx: BuilderContext, p: Picks, c
     }
     const s = choice.spell ? byId.get(choice.spell) : undefined;
     const spellNotes = [notes, 'Once per Long Rest without a spell slot'].filter(Boolean).join('. ');
-    const same = s ? spells.findIndex((k) => nameKey(k.name) === nameKey(s.name)) : -1;
-    // A spell the class already keeps prepared: Magic Initiate adds its free casting to that entry.
+    const same = s ? spells.findIndex((k) => k.alwaysPrepared && nameKey(k.name) === nameKey(s.name)) : -1;
+    // A spell the class or species already keeps prepared: Magic Initiate adds its free casting to that entry.
     if (s && same >= 0) {
       const had = spells[same];
       spells[same] = { ...had, alwaysPrepared: true, source: [had.source, source].filter(Boolean).join('; '), notes: [had.notes, `${source}: ${spellNotes}`].filter(Boolean).join('. ') };
@@ -736,6 +736,23 @@ function validateSpells(draft: BuilderDraft, ctx: BuilderContext): string[] {
   for (const name of new Set(picked.map((id) => byId.get(id)?.name).filter((n): n is string => Boolean(n)))) {
     const grant = granted.get(nameKey(name));
     if (grant) errors.push(`You already have ${grant.name} from ${grant.source}; choose a different spell.`);
+  }
+  // Nor may two lists share a pick (the step's lists leave out what another has, but a pick made before a list
+  // changed stays): the class's lists and each Magic Initiate list.
+  const places = new Map<string, { name: string; where: string[] }>();
+  const place = (ids: readonly (string | null | undefined)[], where: string) => {
+    for (const id of new Set(ids)) {
+      const name = id ? byId.get(id)?.name : undefined;
+      if (!name) continue;
+      const at = places.get(nameKey(name)) ?? { name, where: [] };
+      places.set(nameKey(name), { ...at, where: [...at.where, where] });
+    }
+  };
+  const { cls } = picks(draft, ctx.data);
+  if (plan.casting && cls) place([...draft.cantrips, ...(plan.spellbook ? draft.spellbook : draft.prepared)], cls.name);
+  for (const { list } of plan.magicInitiate) place([...(draft.magicInitiate[list]?.cantrips ?? []), draft.magicInitiate[list]?.spell], `Magic Initiate (${list})`);
+  for (const { name, where } of places.values()) {
+    if (where.length > 1) errors.push(`You chose ${name} twice (${where.join(' and ')}); choose a different spell in one of them.`);
   }
   if (plan.casting) {
     const cantripOptions = classSpellOptions(draft, ctx, 0);

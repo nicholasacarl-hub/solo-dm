@@ -610,6 +610,64 @@ describe('spells the class or species already gives (the sheet keeps one spell p
     }
   });
 
+  it('flags a spell picked in two lists (a pick made before a list changed); the DM keeps the class’s and gives Magic Initiate others', () => {
+    // Magic Initiate (Wizard) picks the class has since taken too: Fire Bolt (a cantrip) and Shield (prepared).
+    const stale = { ...wizardDraft(), magicInitiate: { Wizard: { ability: 'int' as const, cantrips: [spellId('Fire Bolt'), spellId('Ray of Frost')], spell: spellId('Shield') } } };
+    const errors = validateStep('spells', stale, ctx);
+    expect(errors).toContain('You chose Fire Bolt twice (Wizard and Magic Initiate (Wizard)); choose a different spell in one of them.');
+    expect(errors).toContain('You chose Shield twice (Wizard and Magic Initiate (Wizard)); choose a different spell in one of them.');
+    expect(errors.filter((e) => e.startsWith('You chose'))).toHaveLength(2);
+    // The sheet never folds the Magic Initiate spell into the class's prepared copy.
+    const shield = buildCharacter(stale, ctx, { campaignId: 'c' }).spellcasting?.spells.filter((s) => s.name === 'Shield');
+    expect(shield).toHaveLength(1);
+    expect(shield?.[0]).toMatchObject({ source: 'Wizard' });
+    expect(shield?.[0].alwaysPrepared).toBeFalsy();
+    for (const next of [0, 0.5, 0.99]) {
+      const draft = fillStep('spells', stale, ctx, { next: () => next });
+      expect([draft.cantrips, draft.spellbook, draft.prepared]).toEqual([stale.cantrips, stale.spellbook, stale.prepared]);
+      expect(draft.magicInitiate.Wizard?.cantrips).toContain(spellId('Ray of Frost'));
+      expect(draft.magicInitiate.Wizard?.cantrips).not.toContain(spellId('Fire Bolt'));
+      expect(draft.magicInitiate.Wizard?.spell).not.toBe(spellId('Shield'));
+      expect(validateStep('spells', draft, ctx)).toEqual([]);
+    }
+  });
+
+  it('flags a cantrip two Magic Initiate lists both picked, and the DM gives the second list another', () => {
+    const human = {
+      ...wizardDraft(),
+      speciesId: species('Human').id,
+      lineage: null,
+      lineageAbility: null,
+      speciesFeat: 'srd:feat:magic-initiate',
+      speciesFeatList: 'Cleric',
+      cantrips: [spellId('Fire Bolt'), spellId('Mage Hand'), spellId('Prestidigitation')],
+      magicInitiate: {
+        Wizard: { ability: 'int' as const, cantrips: [spellId('Light'), spellId('Ray of Frost')], spell: spellId('Thunderwave') },
+        Cleric: { ability: 'wis' as const, cantrips: [spellId('Light'), spellId('Guidance')], spell: spellId('Bless') },
+      },
+    };
+    expect(spellPlan(human, data).magicInitiate.map((m) => m.list).sort()).toEqual(['Cleric', 'Wizard']);
+    const repeats = validateStep('spells', human, ctx).filter((e) => e.startsWith('You chose'));
+    expect(repeats).toHaveLength(1);
+    expect(repeats[0]).toMatch(/^You chose Light twice \(Magic Initiate \((Wizard|Cleric)\) and Magic Initiate \((Cleric|Wizard)\)\); choose a different spell in one of them\.$/);
+    const draft = fillStep('spells', human, ctx, fixedRng);
+    const lights = Object.values(draft.magicInitiate).filter((m) => m?.cantrips.includes(spellId('Light')));
+    expect(lights).toHaveLength(1);
+    expect(validateStep('spells', draft, ctx)).toEqual([]);
+  });
+
+  it('fills from "All" when the filter leaves fewer names than the hero can still take', () => {
+    const ember = (name: string) => {
+      const srd = spells.find((s) => s.name === name)!;
+      return spellInfo({ ...srd.entry, id: `lib:ember:${srd.id}`, sourceId: 'ember', sourceName: 'The Ember Folio', data: { ...srd.entry.data, recordId: `rec:ember:${name}`, format: '2024' } });
+    };
+    // Three Wizard cantrips in the book, one of which the High Elf already has: two the hero can take, three to choose.
+    const withBook: BuilderContext = { data, spells: [...spells, ...['Fire Bolt', 'Mage Hand', 'Prestidigitation'].map(ember)] };
+    const draft = fillStep('spells', { ...wizardDraft(), cantrips: [], sourceFilter: 'ember' }, withBook, fixedRng);
+    expect(draft.cantrips).toHaveLength(3);
+    expect(validateStep('spells', draft, withBook)).toEqual([]);
+  });
+
   it("lets Magic Initiate's level 1 spell be one the class keeps prepared, and the sheet adds its free casting (SRD 5.2.1 Magic Initiate)", () => {
     const wizard = cls('Wizard');
     // An invented level 1 feature that keeps Bless prepared (a Cleric spell, so Magic Initiate (Cleric) offers it too).
