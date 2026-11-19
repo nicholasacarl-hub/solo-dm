@@ -1,6 +1,6 @@
 /**
  * The review's name-collision notice (spec §3.9.2): what accepting a record that shares an SRD name does,
- * by its edition and kind. Invented names only.
+ * by kind. Invented names only.
  */
 import { describe, expect, it } from 'vitest';
 import { SRD_SOURCE_ID, type StructuredKind } from '@/types';
@@ -17,24 +17,23 @@ const notice = (kind: StructuredKind, name: string, format: string, extra: Recor
   nameNotices({ kind, name, sourceId: 'gloam', data: { format, ...extra } }, index).find((w) => w.code === 'name-collision')?.message ?? '';
 
 describe('nameNotices: a record named like an SRD entry', () => {
-  it("says a 2024 option takes the SRD's place where it is chosen, and an older one sits beside it", () => {
-    expect(notice('class', 'Lamp Warden', '2024')).toContain(`The character builder and level-up offer it in place of the SRD's (the builder's "SRD" filter still shows the SRD's).`);
-    expect(notice('class', 'Lamp Warden', '2014')).toContain("The character builder and level-up offer it beside the SRD's.");
-    expect(notice('class', 'Lamp Warden', '2014')).not.toContain('in place of');
+  const RULE = "If its Edition is 2024, the lists a player chooses from show it in place of the SRD's.";
+
+  it('says what a 2024 option does in the lists a player chooses from', () => {
+    expect(notice('class', 'Lamp Warden', '2024')).toBe(
+      `The SRD also has a class called “Lamp Warden”. Once you accept this one, combat and the DM use this book's version when they look that name up. ${RULE} Both stay in the Library.`,
+    );
+    for (const kind of ['subclass', 'species', 'feat'] as const) expect(notice(kind, { subclass: 'Wick Oath', species: 'Mothfolk', feat: 'Lamp Ward' }[kind], '2014')).toContain(RULE);
   });
 
-  it('names only the places that list the kind: level-up for a subclass or a General feat, the builder for a species or an Origin feat', () => {
-    expect(notice('subclass', 'Wick Oath', '2024')).toContain("Level-up offers it in place of the SRD's.");
-    expect(notice('subclass', 'Wick Oath', '2024')).not.toContain('builder');
-    expect(notice('species', 'Mothfolk', '2014')).toContain("The character builder offers it beside the SRD's.");
-    expect(notice('feat', 'Lamp Ward', '2024', { category: 'general' })).toContain("Level-up offers it in place of the SRD's.");
-    expect(notice('feat', 'Lamp Ward', '2024', { category: 'origin' })).toContain(`The character builder offers it in place of the SRD's (the builder's "SRD" filter still shows the SRD's).`);
-    expect(notice('feat', 'Lamp Ward', '2024', { category: 'fighting-style' })).toContain('The character builder and level-up offer it');
+  it('stays true when review changes the Edition or a feat’s category (the notice is kept as written)', () => {
+    expect(notice('class', 'Lamp Warden', '2014')).toBe(notice('class', 'Lamp Warden', '2024'));
+    expect(notice('feat', 'Lamp Ward', '2024', { category: 'general' })).toBe(notice('feat', 'Lamp Ward', '2014', { category: 'origin' }));
   });
 
   it('says nothing about lists for a kind no list offers (a monster)', () => {
     const text = notice('monster', 'Gloom Drake', '2024');
     expect(text).toContain('combat and the DM use this book');
-    expect(text).not.toContain('character builder');
+    expect(text).not.toContain('lists');
   });
 });
