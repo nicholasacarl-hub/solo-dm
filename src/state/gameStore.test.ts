@@ -228,7 +228,7 @@ describe('refreshClassEditions', () => {
     expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter(topUp)).toHaveLength(1);
   });
 
-  it("keeps both when the hero's row was stored and the campaign row failed: the next write saves the notice", async () => {
+  it("keeps both when the hero's row was stored and the campaign row failed, and saves the notice at once (a reload keeps it)", async () => {
     const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:sorcerer', kind: 'class' as const, entryName: 'Sorcerer', textHash: '', textCopied: false };
     const classes = [{ classId: 'lib:gloam:class:sorcerer', name: 'Sorcerer', level: 5, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const, ref }];
     const features = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass' as const, description: '' }];
@@ -253,12 +253,13 @@ describe('refreshClassEditions', () => {
     expect((await db.characters.get(graph.character?.id as string))?.hp.max).toBe(32);
     expect(game().character?.hp.max).toBe(32);
     expect(game().pendingDmNotices.filter(topUp)).toHaveLength(1);
-    // The next write of the campaign row saves the notice; a reload finds both.
-    await game().appendLog({ kind: 'player', text: 'I look around.' });
-    expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter(topUp)).toHaveLength(1);
-    game().unloadCampaign();
+    await vi.waitFor(async () => expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter(topUp)).toHaveLength(1));
+    // Back to the table with no other write first (the builder's reload), then leaving and coming back.
     await game().loadCampaign('a-camp');
     expect(game().character?.hp.max).toBe(32);
+    expect(game().pendingDmNotices.filter(topUp)).toHaveLength(1);
+    game().unloadCampaign();
+    await game().loadCampaign('a-camp');
     expect(game().pendingDmNotices.filter(topUp)).toHaveLength(1);
   });
 
@@ -285,6 +286,75 @@ describe('refreshClassEditions', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(game().character?.hp.max).toBe(32);
     expect(game().pendingDmNotices.filter((n) => n.includes('Hit Point maximum rose by 5 to 32'))).toHaveLength(1);
+    await vi.waitFor(async () => expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter((n) => n.includes('Hit Point maximum rose'))).toHaveLength(1));
+    // The next load tops up for real and tells the DM once: the stored notice says the same.
+    read.mockRestore();
+    game().unloadCampaign();
+    await game().loadCampaign('a-camp');
+    await vi.waitFor(async () => expect((await db.characters.get('a-char'))?.hp.max).toBe(32));
+    await whenPersisted();
+    expect(game().pendingDmNotices.filter((n) => n.includes('Hit Point maximum rose'))).toHaveLength(1);
+  });
+
+  it('saves the notice of a half-saved top-up even when the player left the table before the write failed', async () => {
+    const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:sorcerer', kind: 'class' as const, entryName: 'Sorcerer', textHash: '', textCopied: false };
+    const classes = [{ classId: 'lib:gloam:class:sorcerer', name: 'Sorcerer', level: 5, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const, ref }];
+    const features = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass' as const, description: '' }];
+    const graph = await seedCampaign('a', { character: { classes, features, hp: { max: 27, current: 20, temp: 0 } } });
+    const topUp = (n: string) => n.includes('Hit Point maximum rose by 5 to 32');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const real = vi.mocked(storage.putCampaignKeepingNotices).getMockImplementation();
+    let release = () => undefined as void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let reached = false;
+    vi.mocked(storage.putCampaignKeepingNotices).mockImplementation(async (c, seen) => {
+      if (!reached && (c.pendingDmNotices ?? []).some(topUp)) {
+        reached = true;
+        await held;
+        throw new Error('The disk is full.');
+      }
+      return real ? real(c, seen) : [];
+    });
+    await game().loadCampaign('a-camp');
+    await vi.waitFor(() => expect(reached).toBe(true));
+    game().unloadCampaign();
+    release();
+    await vi.waitFor(async () => expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter(topUp)).toHaveLength(1));
+    expect((await db.characters.get(graph.character?.id as string))?.hp.max).toBe(32);
+  });
+
+  it('saves the notice when the top-up fails but memory has moved on with the raise (a later write will store it)', async () => {
+    const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:sorcerer', kind: 'class' as const, entryName: 'Sorcerer', textHash: '', textCopied: false };
+    const classes = [{ classId: 'lib:gloam:class:sorcerer', name: 'Sorcerer', level: 5, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const, ref }];
+    const features = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass' as const, description: '' }];
+    await seedCampaign('a', { character: { classes, features, hp: { max: 27, current: 20, temp: 0 } } });
+    const topUp = (n: string) => n.includes('Hit Point maximum rose by 5 to 32');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const real = vi.mocked(storage.putCharacter).getMockImplementation();
+    let failed = false;
+    vi.mocked(storage.putCharacter).mockImplementation(async (c) => {
+      if (!failed && c.hp.max === 32) {
+        failed = true;
+        throw new Error('The disk is full.');
+      }
+      return real?.(c);
+    });
+    // While the failed write's row is read back, memory moves on with the raise (as an as-is write would).
+    let release = () => undefined as void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const read = vi.spyOn(storage, 'getCharacter').mockImplementation(async (id) => {
+      await held;
+      return db.characters.get(id);
+    });
+    await game().loadCampaign('a-camp');
+    await vi.waitFor(() => expect(read).toHaveBeenCalled());
+    const current = game().character;
+    if (current) useGame.setState({ character: { ...current } });
+    release();
+    await vi.waitFor(async () => expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter(topUp)).toHaveLength(1));
+    expect(game().character?.hp.max).toBe(32);
   });
 
   it('takes the top-up and its notice back when its save fails: nothing saves one alone, and the next load tops up once', async () => {

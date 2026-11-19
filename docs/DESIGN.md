@@ -722,8 +722,9 @@ the Draconic Resilience Hit Points its earlier levels missed are added once, wit
 memory with them and saved by the same write (the campaign row carries it). All or nothing: if that write is refused or
 fails before the hero's row is stored, both come back out of memory (unless a later write already carries them), so
 nothing saves one without the other, and the next load tries again; if the hero's row was stored and the campaign row
-then failed (they are two writes), memory keeps both and the next write saves the notice (`refreshClassEditions`,
-`hitPointsOwedForEditions`; nothing else in the app raises the maximum). An Edition changed in review later adds and takes back nothing, so a round trip never pays twice. That and
+then failed (they are two writes), memory keeps both and the notice is saved on its own at once, so a reload or leaving
+the table doesn't lose it (`refreshClassEditions`, `hitPointsOwedForEditions`; nothing else in the app raises the
+maximum). An Edition changed in review later adds and takes back nothing, so a round trip never pays twice. That and
 the text restore write nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written

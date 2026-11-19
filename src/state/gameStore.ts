@@ -1281,7 +1281,7 @@ export const useGame = create<GameStore>()((set, get) => ({
       // meanwhile can't send it to another campaign. All or nothing: if the write is refused (another tab at the table,
       // a pull) or fails before the hero's row is stored, both come back out of memory, so no later write saves one
       // without the other, and the next load tries again. Stored, then failed on the campaign row: memory keeps both,
-      // and the next write saves the notice.
+      // and the notice is saved on its own at once.
       const before = s.character;
       const notice = `${before.name}'s Hit Point maximum rose by ${owed} to ${before.hp.max + owed}: Draconic Resilience now adds its Hit Points for a book's Sorcerer, and the Sorcerer levels gained before didn't get them.`;
       const noted = noteInMemory(notice);
@@ -1295,10 +1295,16 @@ export const useGame = create<GameStore>()((set, get) => ({
       } catch (cause) {
         const stored = await storedCharacter(before.id, topped);
         const now = get();
-        if (now.character === topped && stored?.updatedAt !== topped?.updatedAt) {
+        // The hero's row holds the raise (the campaign row's write failed after it), or the read failed (unsure).
+        const raiseStored = topped !== before && stored?.updatedAt === topped?.updatedAt;
+        if (now.character === topped && !raiseStored) {
           // Neither storage nor a later write carries the raised maximum: take the top-up and its notice back.
           const pendingDmNotices = noted ? now.pendingDmNotices.filter((n) => n !== notice) : now.pendingDmNotices;
           set({ character: before, pendingDmNotices, ...(now.campaign ? { campaign: { ...now.campaign, pendingDmNotices } } : {}) });
+        } else if (noted && (raiseStored || (now.campaign?.id === campaign.id && now.pendingDmNotices.includes(notice)))) {
+          // The raise is stored, or a later write in memory will store it: save the notice now with the merge write,
+          // since a reload or leaving the table makes no later write of the campaign row.
+          void saveNotice(campaign.id, notice).catch(noop);
         }
         throw cause;
       }
