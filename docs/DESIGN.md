@@ -702,7 +702,10 @@ whose book is switched off never turns into another book's the class only shares
 subclass notes its possible overlap on a 2024 book's class as it does on the SRD's. Spell lists show a book's accepted 2024
 spell in place of the SRD's, and the SRD's in place of a book's spell not yet reviewed (materialized
 spells keep `data.format` for this). Weapon Mastery offers one chip per weapon name, and a feat or spell
-counts as taken by name, whichever book's it is. Lookups are id-first (`src/data/options/resolve.ts`),
+counts as taken by name, whichever book's it is: review flags a spell picked in two lists (a pick made before
+a Magic Initiate list changed), and Magic Initiate's level 1 spell may repeat only a spell the class or species
+grants, whose entry gains the free casting. With the source filter on a book, "Let the DM decide" picks from
+that book and falls back to "All" for any list the book leaves short, so the hero ends up complete. Lookups are id-first (`src/data/options/resolve.ts`),
 so a hero who chose the SRD option keeps it, and the engine never takes an imported class (`lib:` id)
 for an SRD class of the same name, so an imported "Fighter" never borrows the SRD Fighter's numbers.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
