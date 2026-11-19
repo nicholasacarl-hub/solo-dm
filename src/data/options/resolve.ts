@@ -207,6 +207,16 @@ export function findCatalogOption(name: string, catalog: readonly EquipmentOptio
 }
 
 /**
+ * Every subclass once. A 2024 book's class also carries the SRD class's subclasses (merge.ts), so a scan over
+ * the classes would meet those twice and could no longer find "the one part" that matches.
+ */
+export function everySubclass(classes: readonly ClassOption[]): SubclassOption[] {
+  const byId = new Map<string, SubclassOption>();
+  for (const cls of classes) for (const sub of cls.subclasses) if (!byId.has(sub.id)) byId.set(sub.id, sub);
+  return [...byId.values()];
+}
+
+/**
  * DM-typed class names: the hero's own class first, then the SRD's (unless a 2024 book's class stands in for
  * it, as in the player's lists), then imports; ties are reported.
  */

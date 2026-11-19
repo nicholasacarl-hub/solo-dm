@@ -492,6 +492,24 @@ describe("book text the DM names on the sheet keeps its book's ref (exports repl
     for (const marker of GLOAMWOOD_MARKERS) expect(text).not.toContain(marker);
   });
 
+  it("a level_up extra that repeats a book subclass's words gets its ref though a 2024 book's class carries that subclass too", async () => {
+    const smoke = EMBER.features.find((f) => f.name === 'Smoke Step')!;
+    const srdFighter = EXPECTED_MERGED.classes.find((c) => c.id === FIGHTER.id)!;
+    const bookFighter: ClassOption = {
+      ...srdFighter,
+      id: 'lib:gloam:class:fighter',
+      subclasses: [...srdFighter.subclasses],
+      source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2024', adaptations: [] },
+    };
+    const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookFighter] };
+    const h = setup({ builderData: data, character: fighter() });
+    const out = await h.run('level_up', { class_name: 'Fighter', subclass: 'Ember Warden', new_features: [{ name: 'Smoke Step', description: smoke.description }] });
+    expect(out.isError).toBeUndefined();
+    expect(h.sheet().features.find((f) => f.name === 'Smoke Step')?.ref?.textCopied).toBe(true);
+    const text = exported(h.sheet());
+    for (const marker of GLOAMWOOD_MARKERS) expect(text).not.toContain(marker);
+  });
+
   describe("free text that repeats a book's spell or item is marked copied, wherever the DM puts it (spec §7.1)", () => {
     // Invented book text; the Ember Burst line shares a sentence with the SRD's Fireball (SAMPLE_RULES).
     const CHOIR = `A choir of ash rises around you and sings until the end of your next turn. ${GLOAMWOOD_MARKERS[3]} Each creature of your choice that hears it has Disadvantage on its next attack roll.`;

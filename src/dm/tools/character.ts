@@ -51,7 +51,7 @@ import { withAdaptationNotes } from '@/data/options/adaptationNotes';
 import { entryRef, inventoryFromEntry } from '@/data/options/inventory';
 import { gainedFeatures } from '@/data/options/leveling';
 import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
-import { classByName, classOptionFor, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
+import { classByName, classOptionFor, everySubclass, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
 import { matchByName } from '@/engine/util';
 import { nameKey } from '@/lib/id';
 import { textFingerprint } from '@/lib/importedContent';
@@ -394,10 +394,8 @@ function bookPartRef(name: string, description: string, data: BuilderData | null
   const take = (n: string, ref: ImportedRef | undefined, text: string) => {
     if (nameKey(n) === key && ref?.textCopied && sharesWords(description, text)) refs.push(ref);
   };
-  for (const cls of data?.classes ?? []) {
-    if (cls.source) for (const f of cls.features) take(f.name, f.ref, f.description);
-    for (const sub of cls.subclasses) if (sub.source) for (const f of sub.features) take(f.name, f.ref, f.description);
-  }
+  for (const cls of data?.classes ?? []) if (cls.source) for (const f of cls.features) take(f.name, f.ref, f.description);
+  for (const sub of everySubclass(data?.classes ?? [])) if (sub.source) for (const f of sub.features) take(f.name, f.ref, f.description);
   for (const sp of data?.species ?? []) if (sp.source) for (const t of [...sp.traits, ...(sp.lineages ?? [])]) take(t.name, t.ref, t.description);
   for (const bg of data?.backgrounds ?? []) if (bg.source && bg.legacyFeature) take(bg.legacyFeature.name, bg.legacyFeature.ref, bg.legacyFeature.description);
   for (const f of data?.feats ?? []) if (f.source) take(f.name, f.ref, f.description);
