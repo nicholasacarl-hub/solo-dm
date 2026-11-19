@@ -692,9 +692,10 @@ in the data. The lists a player chooses from show one per name (`src/data/option
 book's option stands in for the SRD option of its name, since SRD 5.2.1 is drawn from the 2024 rules.
 That holds under the builder's "All" view, in the level-up dialog and its feat panel, for "Let the DM
 decide", and for a new class or subclass the DM's `level_up` names. The "SRD" filter and an option
-already chosen still show the SRD's. Older-format (2014) options sit beside the SRD's, which then gets
-an "SRD" badge. A 2024 book's class also offers the SRD class's subclasses after its own (the SRD's and
-those attached to it), so hiding the SRD class strands none. Spell lists show a book's accepted 2024
+already chosen still show the SRD's. Older-format (2014) options sit beside the SRD's. The builder's cards
+and the level-up feat panel badge an SRD option whose name an import shares. A 2024 book's class and the
+SRD class of its name share their subclasses, each listing its own first: hiding the SRD class strands
+none, and a hero who kept the SRD class (made before the book) meets the book's subclasses at level-up. Spell lists show a book's accepted 2024
 spell in place of the SRD's, and the SRD's in place of a book's spell not yet reviewed (materialized
 spells keep `data.format` for this). Weapon Mastery offers one chip per weapon name, and a feat or spell
 counts as taken by name, whichever book's it is. Lookups are id-first (`src/data/options/resolve.ts`),

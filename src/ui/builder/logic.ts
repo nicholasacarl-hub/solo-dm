@@ -311,6 +311,16 @@ function buildSpellcasting(draft: BuilderDraft, ctx: BuilderContext, p: Picks, c
       }
     }
   }
+  // The species' and lineage's spells before Magic Initiate's: its level 1 spell may be one of them, and joins it.
+  const speciesSource = p.lineage?.name ?? p.species?.name;
+  const speciesNotes = abilityNote(draft.lineageAbility);
+  const fromSpecies = speciesSpellNames(p);
+  for (const name of fromSpecies.cantrips) {
+    add(knownSpell(findSpellByName(ctx.spells, name), { name, level: 0 }, { source: speciesSource, notes: speciesNotes }));
+  }
+  for (const name of fromSpecies.alwaysPrepared) {
+    add(knownSpell(findSpellByName(ctx.spells, name), { name, level: 1 }, { source: speciesSource, alwaysPrepared: true, notes: speciesNotes }));
+  }
   for (const { list } of plan.magicInitiate) {
     const choice = draft.magicInitiate[list];
     if (!choice) continue;
@@ -328,15 +338,6 @@ function buildSpellcasting(draft: BuilderDraft, ctx: BuilderContext, p: Picks, c
       const had = spells[same];
       spells[same] = { ...had, alwaysPrepared: true, source: [had.source, source].filter(Boolean).join('; '), notes: [had.notes, `${source}: ${spellNotes}`].filter(Boolean).join('. ') };
     } else if (s) add(knownSpell(s, s, { source, alwaysPrepared: true, notes: spellNotes }));
-  }
-  const speciesSource = p.lineage?.name ?? p.species?.name;
-  const speciesNotes = abilityNote(draft.lineageAbility);
-  const fromSpecies = speciesSpellNames(p);
-  for (const name of fromSpecies.cantrips) {
-    add(knownSpell(findSpellByName(ctx.spells, name), { name, level: 0 }, { source: speciesSource, notes: speciesNotes }));
-  }
-  for (const name of fromSpecies.alwaysPrepared) {
-    add(knownSpell(findSpellByName(ctx.spells, name), { name, level: 1 }, { source: speciesSource, alwaysPrepared: true, notes: speciesNotes }));
   }
 
   if (!plan.casting && spells.length === 0) return undefined;

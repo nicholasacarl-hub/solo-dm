@@ -234,7 +234,7 @@ describe('the Feat choice panel', () => {
     expect(grapplers(asi([...EXPECTED_MERGED.feats, book('2024')]))).toEqual(['lib:gloam:feat:grappler']);
     expect(grapplers(asi([...EXPECTED_MERGED.feats, book('2024')], grappler.id))).toEqual([grappler.id, 'lib:gloam:feat:grappler']);
     expect(grapplers(asi([...EXPECTED_MERGED.feats, book('2014')]))).toEqual([grappler.id, 'lib:gloam:feat:grappler']);
-    // A Fighting Style: the book's Archery stands in for the SRD's, and still wins over a printed option of its name.
+    // A Fighting Style: the book's Archery stands in for the SRD's.
     const archery: FeatOption = { ...book('2024'), id: 'lib:gloam:feat:archery', name: 'Archery', category: 'fighting-style' };
     const styles = featChoices('fighting-style', [...EXPECTED_MERGED.feats, archery], { cls: FIGHTER, characterLevel: 2, have: [] });
     expect(styles.filter((p) => p.name === 'Archery').map((p) => p.id)).toEqual([archery.id]);

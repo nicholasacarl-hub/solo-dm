@@ -404,20 +404,26 @@ export function mergeBuilderData(srd: BuilderData, imported: ImportedOptions): {
     return subs ? { ...cls, subclasses: [...cls.subclasses, ...subs] } : cls;
   };
   const srdClasses = srd.classes.map(attach);
-  // A 2024 book's class stands in for the SRD class of its name (the lists show the book's alone), so it also
-  // offers that class's subclasses after its own: the SRD's, and those attached to it. None goes out of reach
-  // when the book's own subclasses aren't accepted, and the lists show one subclass per name.
+  const bookClasses = importedClasses.map(attach);
+  // A 2024 book's class stands in for the SRD class of its name (the lists show the book's alone): the two share
+  // their subclasses. The book's class offers the SRD class's after its own (the SRD's, and those attached to it),
+  // so none goes out of reach when the book's own aren't accepted; the SRD class, which a hero made before the book
+  // keeps, offers the book's after its own. The lists show one subclass per name.
   const srdSubclasses = new Map(srdClasses.map((c) => [nameKey(c.name), c.subclasses]));
-  const standIn = (cls: ClassOption): ClassOption => {
-    const inherited = replacesSrd(cls) ? srdSubclasses.get(nameKey(cls.name)) : undefined;
-    return inherited?.length ? { ...cls, subclasses: [...cls.subclasses, ...inherited] } : cls;
+  const standInSubclasses = new Map<string, SubclassOption[]>();
+  for (const c of bookClasses) {
+    if (replacesSrd(c)) standInSubclasses.set(nameKey(c.name), [...(standInSubclasses.get(nameKey(c.name)) ?? []), ...c.subclasses]);
+  }
+  const share = (cls: ClassOption, from: ReadonlyMap<string, SubclassOption[]>): ClassOption => {
+    const shared = from.get(nameKey(cls.name));
+    return shared?.length ? { ...cls, subclasses: [...cls.subclasses, ...shared] } : cls;
   };
 
   const mundane = [...srd.equipment, ...imported.equipment];
   const magic = magicItems.map((m) => catalogMagicItem(m, mundane)).filter((o): o is EquipmentOption => o !== null);
   return {
     data: {
-      classes: [...srdClasses, ...importedClasses.map((c) => standIn(attach(c)))],
+      classes: [...srdClasses.map((c) => share(c, standInSubclasses)), ...bookClasses.map((c) => (replacesSrd(c) ? share(c, srdSubclasses) : c))],
       species: [...srd.species, ...sorted(imported.species)],
       backgrounds: [...srd.backgrounds, ...sorted(imported.backgrounds)],
       feats: [...srd.feats, ...sorted(imported.feats)],

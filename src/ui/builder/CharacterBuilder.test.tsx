@@ -56,7 +56,7 @@ beforeEach(() => {
 });
 
 describe('CharacterBuilder with imported options', () => {
-  it('badges imported options with their book, and an SRD option only when an older book’s option shares its name', () => {
+  it('badges imported options with their book, and an SRD option when an import of its name is listed too', () => {
     const olderFighter: ClassOption = { ...WICKWRIGHT, id: 'lib:gloam:class:fighter', name: 'Fighter', subclasses: [], source: { ...WICKWRIGHT.source!, format: '2014' } };
     renderBuilder({}, { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, olderFighter] });
     expect(within(radio('Class', /Wickwright/)).getByText(`From ${GLOAMWOOD_TITLE}`)).toBeInTheDocument();

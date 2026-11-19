@@ -632,6 +632,21 @@ describe('spells the class or species already gives (the sheet keeps one spell p
     );
   });
 
+  it("joins Magic Initiate's level 1 spell to a lineage's copy of it, keeping both sources", () => {
+    const elf = species('Elf');
+    // An invented lineage that keeps Bless prepared.
+    const lampElf = { name: 'Lamp Elf', description: 'You also always have the Bless spell prepared. You can cast it once without a spell slot.' };
+    const withLamp = { ...elf, id: 'srd:species:lamp-elf-host', lineages: [...(elf.lineages ?? []), lampElf] };
+    const lctx: BuilderContext = { data: { ...data, species: [...data.species, withLamp] }, spells };
+    const base = fillStep('spells', { ...wizardDraft(), speciesId: withLamp.id, lineage: 'Lamp Elf', lineageAbility: 'cha', backgroundId: bg('Acolyte').id, magicInitiate: {} }, lctx, fixedRng);
+    const draft = { ...base, magicInitiate: { Cleric: { ...(base.magicInitiate.Cleric as NonNullable<typeof base.magicInitiate.Cleric>), spell: spellId('Bless') } } };
+    expect(validateStep('spells', draft, lctx)).toEqual([]);
+    const bless = buildCharacter(draft, lctx, { campaignId: 'c' }).spellcasting?.spells.filter((s) => s.name === 'Bless');
+    expect(bless).toHaveLength(1);
+    expect(bless?.[0]).toMatchObject({ alwaysPrepared: true, source: 'Lamp Elf; Magic Initiate (Cleric)' });
+    expect(bless?.[0].notes).toMatch(/^Spellcasting ability: Charisma\. Magic Initiate \(Cleric\): .*Once per Long Rest without a spell slot$/);
+  });
+
   it('asks only for the names the hero can still pick (a granted one is left out of the count)', () => {
     const elfWizard = { ...wizardDraft(), cantrips: [spellId('Fire Bolt'), spellId('Light')] };
     const onList = (sp: (typeof spells)[number]) => spellInfo({ ...sp.entry, data: { ...sp.entry.data, classes: ['Wizard'] } });

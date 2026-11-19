@@ -14,7 +14,7 @@ import { saveLibrarySourceWithRecords } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
 import { GLOAMWOOD_SOURCE_ID, gloamwoodEntries, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
 import { SRD_SOURCE_ID, type SpellData, type StructuredRecord } from '@/types';
-import { filtered, spellInfo, spellsForClass, visibleSpells } from '@/ui/builder/logic';
+import { filtered, spellInfo, spellsForClass, visibleSpells, withoutReplacedSrd } from '@/ui/builder/logic';
 
 const BOOK_FIGHTER = 'lib:gloam:class:wickwright';
 
@@ -50,6 +50,9 @@ describe('a 2024 book’s options in place of the SRD’s of their names (end to
     // The book's Fighter offers its own subclass, then the SRD Fighter's (the SRD's and the one attached to it).
     const book = data.classes.find((c) => c.id === BOOK_FIGHTER);
     expect(book?.subclasses.map((s) => s.name)).toEqual(['Order of the Long Wick', 'Champion', 'Ember Warden']);
+    // A hero who kept the SRD Fighter (made before the book) meets the book's subclasses at level-up too.
+    const srd = data.classes.find((c) => c.id === 'srd:class:fighter');
+    expect(withoutReplacedSrd(srd?.subclasses ?? []).map((s) => s.name)).toEqual(['Champion', 'Ember Warden', 'Order of the Long Wick']);
   });
 
   it('lists the book’s accepted Light alone on the Wizard’s list; the SRD filter lists the SRD’s', async () => {
@@ -59,8 +62,9 @@ describe('a 2024 book’s options in place of the SRD’s of their names (end to
     expect(lights(wizard)).toEqual([SRD_SOURCE_ID, GLOAMWOOD_SOURCE_ID]);
     expect(lights(visibleSpells(wizard, null))).toEqual([GLOAMWOOD_SOURCE_ID]);
     expect(lights(visibleSpells(wizard, SRD_SOURCE_ID))).toEqual([SRD_SOURCE_ID]);
-    // Every other SRD cantrip is still listed once.
+    // Every SRD Wizard cantrip is still listed, once (Light as the book's).
     const names = visibleSpells(wizard, null).map((s) => s.name);
     expect(new Set(names).size).toBe(names.length);
+    expect(names.sort()).toEqual([...new Set(wizard.map((s) => s.name))].sort());
   });
 });

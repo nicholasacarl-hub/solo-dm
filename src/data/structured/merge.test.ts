@@ -87,7 +87,7 @@ describe('mergeBuilderData(importedOptions(snapshot))', () => {
     expect(fighters[0].source).toBeUndefined();
   });
 
-  it("gives a 2024 book's class the SRD class's subclasses after its own (the lists show the book's class alone); an older book's gets none", () => {
+  it("lets a 2024 book's class and the SRD class of its name share their subclasses (each after its own); an older book's shares none", () => {
     const snapshot = gloamwoodSnapshot();
     const wick = snapshot.accepted.find((r) => r.name === 'Wickwright') as StructuredRecord<'class'>;
     const longWick = snapshot.accepted.find((r) => r.name === 'Order of the Long Wick') as StructuredRecord;
@@ -100,12 +100,16 @@ describe('mergeBuilderData(importedOptions(snapshot))', () => {
       return data.classes.filter((c) => c.name === 'Fighter');
     };
     const [srd, book] = fightersOf('2024');
-    expect(srd.subclasses.map((s) => s.name)).toEqual(['Champion', 'Ember Warden']);
+    // The book's class: its own, then the SRD Fighter's (a hero there never lacks a subclass). The SRD Fighter, which
+    // a hero made before the book keeps: its own, then the book's (that hero meets the book's subclasses too).
     expect(book.subclasses.map((s) => s.name)).toEqual(['Night Ward', 'Champion', 'Ember Warden']);
+    expect(srd.subclasses.map((s) => s.name)).toEqual(['Champion', 'Ember Warden', 'Night Ward']);
     // The same options, not copies: a hero's subclass id finds the one they chose under either class.
-    expect(book.subclasses.slice(1)).toEqual(srd.subclasses);
-    const [, older] = fightersOf('2014');
+    book.subclasses.slice(1).forEach((s, i) => expect(s).toBe(srd.subclasses[i]));
+    expect(srd.subclasses[2]).toBe(book.subclasses[0]);
+    const [srdBeside, older] = fightersOf('2014');
     expect(older.subclasses.map((s) => s.name)).toEqual(['Night Ward']);
+    expect(srdBeside.subclasses.map((s) => s.name)).toEqual(['Champion', 'Ember Warden']);
     // Other classes never inherit: the Wickwright shares no SRD class's name.
     expect(merged().data.classes.find((c) => c.name === 'Wickwright')?.subclasses.map((s) => s.name)).toEqual(['Order of the Long Wick']);
   });

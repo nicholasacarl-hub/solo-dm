@@ -49,8 +49,27 @@ function partNames(data: unknown): string[] {
   return [...(d.features ?? []), ...(d.traits ?? []), ...(d.lineages ?? [])].map((p) => p.name).filter((n): n is string => typeof n === 'string');
 }
 
-/** Kinds a player chooses from lists (the builder, level-up): a 2024 book's stands in for the SRD's there. */
-const CHOSEN_KINDS: ReadonlySet<StructuredKind> = new Set<StructuredKind>(['class', 'subclass', 'species', 'background', 'feat', 'spell']);
+/** Where a player chooses an option of this kind from a list (a 2024 book's stands in for the SRD's there), or null. */
+function listPlaces(kind: StructuredKind, data: unknown): 'builder' | 'level-up' | 'both' | null {
+  switch (kind) {
+    case 'class':
+      return 'both';
+    case 'subclass':
+      return 'level-up';
+    case 'species':
+    case 'background':
+    case 'spell':
+      return 'builder';
+    case 'feat': {
+      const category = (data as { category?: unknown } | null)?.category;
+      return category === 'origin' ? 'builder' : category === 'fighting-style' ? 'both' : 'level-up';
+    }
+    default:
+      return null;
+  }
+}
+
+const PLACE_NAMES = { builder: 'The character builder', 'level-up': 'Level-up', both: 'The character builder and level-up' } as const;
 
 /** name-collision and engine-name notices for one record. */
 export function nameNotices(
@@ -64,11 +83,10 @@ export function nameNotices(
   if (srd) {
     // What the lists do once it's accepted (options/replaced.ts): a 2024 book's option stands in for the SRD's.
     const format = (record.data as { format?: unknown } | null)?.format;
-    const lists = !CHOSEN_KINDS.has(record.kind)
-      ? ''
-      : format === '2024'
-        ? ` The character builder and level-up offer it in place of the SRD's (the builder's "SRD" filter still shows the SRD's).`
-        : ` The character builder offers it beside the SRD's.`;
+    const places = listPlaces(record.kind, record.data);
+    const verb = places === 'both' ? 'offer' : 'offers';
+    const filter = places !== 'level-up' ? ` (the builder's "SRD" filter still shows the SRD's)` : '';
+    const lists = !places ? '' : format === '2024' ? ` ${PLACE_NAMES[places]} ${verb} it in place of the SRD's${filter}.` : ` ${PLACE_NAMES[places]} ${verb} it beside the SRD's.`;
     out.push(warning('name-collision', 'info',
       `The SRD also has ${KIND_NOUN[record.kind]} called ${quote(record.name)}. Once you accept this one, combat and the DM use this book's version when they look that name up.${lists} Both stay in the Library.`, 'name'));
   } else if (book) {
