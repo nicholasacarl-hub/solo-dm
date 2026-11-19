@@ -361,6 +361,15 @@ function saveNotice(campaignId: string, notice: string, updatedAt?: number): Pro
   });
 }
 
+/** The stored character row, or `unsure` when it can't be read. */
+async function storedCharacter(id: string, unsure: Character | null): Promise<Character | null | undefined> {
+  try {
+    return await storage.getCharacter(id);
+  } catch {
+    return unsure;
+  }
+}
+
 /**
  * Add a notice to the loaded campaign in memory only: the caller's own write saves it with the campaign row. False
  * when nothing was added (no campaign, or the same notice is already pending).
@@ -1270,8 +1279,9 @@ export const useGame = create<GameStore>()((set, get) => ({
       // Hit Points are game state: a normal save (sync sees it). The DM hears why the maximum rose: the notice goes
       // into memory with the top-up and the same write saves both (the campaign row carries it), so leaving the table
       // meanwhile can't send it to another campaign. All or nothing: if the write is refused (another tab at the table,
-      // a pull) or fails, both come back out of memory, so no later write saves one without the other, and the next
-      // load tries again.
+      // a pull) or fails before the hero's row is stored, both come back out of memory, so no later write saves one
+      // without the other, and the next load tries again. Stored, then failed on the campaign row: memory keeps both,
+      // and the next write saves the notice.
       const before = s.character;
       const notice = `${before.name}'s Hit Point maximum rose by ${owed} to ${before.hp.max + owed}: Draconic Resilience now adds its Hit Points for a book's Sorcerer, and the Sorcerer levels gained before didn't get them.`;
       const noted = noteInMemory(notice);
@@ -1283,9 +1293,10 @@ export const useGame = create<GameStore>()((set, get) => ({
       try {
         await writing;
       } catch (cause) {
+        const stored = await storedCharacter(before.id, topped);
         const now = get();
-        if (now.character === topped) {
-          // No later write carries the raised maximum: take the top-up and its notice back.
+        if (now.character === topped && stored?.updatedAt !== topped?.updatedAt) {
+          // Neither storage nor a later write carries the raised maximum: take the top-up and its notice back.
           const pendingDmNotices = noted ? now.pendingDmNotices.filter((n) => n !== notice) : now.pendingDmNotices;
           set({ character: before, pendingDmNotices, ...(now.campaign ? { campaign: { ...now.campaign, pendingDmNotices } } : {}) });
         }

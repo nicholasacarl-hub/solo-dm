@@ -92,6 +92,11 @@ export async function putCharacter(c: Character): Promise<void> {
   await db.characters.put(c);
 }
 
+/** One stored character record, or undefined. */
+export async function getCharacter(id: string): Promise<Character | undefined> {
+  return db.characters.get(id);
+}
+
 /** Delete one character record (e.g. after the campaign's character was replaced). */
 export async function deleteCharacterRecord(id: string): Promise<void> {
   await db.characters.delete(id);

@@ -720,9 +720,10 @@ its edition. An older-edition book's class gets only the rules that go by featur
 recorded for the first time (a hero made before refs recorded it) and its book Sorcerer now plays by the SRD's rules,
 the Draconic Resilience Hit Points its earlier levels missed are added once, with a notice for that campaign's DM put in
 memory with them and saved by the same write (the campaign row carries it). All or nothing: if that write is refused or
-fails, both come back out of memory (unless a later write already carries them), so nothing saves one without the
-other, and the next load tries again (`refreshClassEditions`, `hitPointsOwedForEditions`; nothing else in the app raises
-the maximum). An Edition changed in review later adds and takes back nothing, so a round trip never pays twice. That and
+fails before the hero's row is stored, both come back out of memory (unless a later write already carries them), so
+nothing saves one without the other, and the next load tries again; if the hero's row was stored and the campaign row
+then failed (they are two writes), memory keeps both and the next write saves the notice (`refreshClassEditions`,
+`hitPointsOwedForEditions`; nothing else in the app raises the maximum). An Edition changed in review later adds and takes back nothing, so a round trip never pays twice. That and
 the text restore write nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
