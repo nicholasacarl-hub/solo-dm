@@ -169,7 +169,14 @@ export interface ClassOption {
   startingEquipment: EquipmentPackage[];
   /** Level at which the subclass is chosen (3 for every 2024 class). */
   subclassLevel: number;
+  /** The class's own subclasses: the SRD's or its book's, and those attached to it. */
   subclasses: SubclassOption[];
+  /**
+   * Merged data only (merge.ts): the subclasses of the SRD class a 2024 book's class stands in for, or of the
+   * 2024 book's classes standing in for this SRD class. Offered after the class's own wherever a subclass is
+   * chosen (options/replaced.ts subclassesOf); a lookup by name prefers the class's own.
+   */
+  sharedSubclasses?: SubclassOption[];
   features: ClassFeatureDef[];
   /** Per-level class table rows: { level, proficiencyBonus, ...class-specific columns }. */
   levelTable: Array<Record<string, string | number>>;

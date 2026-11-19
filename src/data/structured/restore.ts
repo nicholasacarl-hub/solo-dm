@@ -26,7 +26,6 @@ import { copiedTextMissing, textFingerprint } from '@/lib/importedContent';
 import type { BuilderData, Character, CompendiumEntry, Feature, ImportedRef, LibrarySource } from '@/types';
 import { loadBuilderData } from '../builderData';
 import { inlineFightingStyles } from '../options/classFeatures';
-import { everySubclass } from '../options/resolve';
 import { featureText, resolveSpan } from './paragraphs';
 import { lineageRowText, splitRow } from './parse/srdRulesOptions';
 
@@ -152,7 +151,7 @@ function optionParts(builder: BuilderData, kind: ImportedRef['kind']): OptionPar
       }
       break;
     case 'subclass':
-      for (const sub of everySubclass(builder.classes)) for (const f of sub.features) push(sub, f.name, f.description, f.level);
+      for (const cls of builder.classes) for (const sub of cls.subclasses) for (const f of sub.features) push(sub, f.name, f.description, f.level);
       break;
     case 'species':
       for (const sp of builder.species) {

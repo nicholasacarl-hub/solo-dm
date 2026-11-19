@@ -31,7 +31,7 @@ import {
   type ScoreIncrease,
   type SubclassSpells,
 } from '@/data/options/levelUpChoices';
-import { withoutReplacedSrd } from '@/data/options/replaced';
+import { subclassesOf, withoutReplacedSrd } from '@/data/options/replaced';
 import { classOptionFor, multiclassPrimariesFor, primaryRuleOf, subclassOptionFor } from '@/data/options/resolve';
 import { nameKey } from '@/lib/id';
 import { useGame } from '@/state/gameStore';
@@ -112,8 +112,9 @@ function planLevel(
   const existing = choice.kind === 'existing' ? c.classes[choice.index] : undefined;
   const option = existing ? classOptionFor(existing, classes) : classes.find((o) => choice.kind === 'new' && o.id === choice.classId);
   const classLevel = (existing?.level ?? 0) + 1;
-  const needsSubclass = Boolean(option && classLevel >= option.subclassLevel && !existing?.subclass && option.subclasses.length);
-  const sub = needsSubclass ? option?.subclasses.find((s) => s.id === subclassId) : existing ? subclassOptionFor(existing, option) : undefined;
+  const choices = option ? subclassesOf(option) : [];
+  const needsSubclass = Boolean(option && classLevel >= option.subclassLevel && !existing?.subclass && choices.length);
+  const sub = needsSubclass ? choices.find((s) => s.id === subclassId) : existing ? subclassOptionFor(existing, option) : undefined;
   const ctx = { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 };
   const features = option ? gainedFeatures(option, classLevel, sub, ctx, { have: c.features, subclassChosenNow: needsSubclass }) : [];
   return {
@@ -364,7 +365,8 @@ function ClassSection({
 }
 
 function SubclassSection({ option, value, onChange }: { option: ClassOption; value: string; onChange: (id: string) => void }) {
-  const notes = option.subclasses.find((s) => s.id === value)?.source?.adaptations.map((a) => a.note) ?? [];
+  const choices = subclassesOf(option);
+  const notes = choices.find((s) => s.id === value)?.source?.adaptations.map((a) => a.note) ?? [];
   return (
     <Section title={`${option.name} subclass`}>
       <RadioCards
@@ -372,7 +374,7 @@ function SubclassSection({ option, value, onChange }: { option: ClassOption; val
         value={value || null}
         onChange={onChange}
         columns="sm:grid-cols-1"
-        options={withoutReplacedSrd(option.subclasses, [value]).map((s) => ({
+        options={withoutReplacedSrd(choices, [value]).map((s) => ({
           value: s.id,
           title: s.name,
           meta: s.source ? (

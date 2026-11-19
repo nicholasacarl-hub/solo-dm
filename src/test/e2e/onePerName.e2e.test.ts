@@ -14,7 +14,7 @@ import { saveLibrarySourceWithRecords } from '@/storage';
 import { resetDatabase } from '@/storage/testData';
 import { GLOAMWOOD_SOURCE_ID, gloamwoodEntries, gloamwoodRecords, gloamwoodSource } from '@/test/structuredFixtures';
 import { SRD_SOURCE_ID, type SpellData, type StructuredRecord } from '@/types';
-import { filtered, spellInfo, spellsForClass, visibleSpells, withoutReplacedSrd } from '@/ui/builder/logic';
+import { filtered, spellInfo, spellsForClass, subclassesOf, visibleSpells, withoutReplacedSrd } from '@/ui/builder/logic';
 
 const BOOK_FIGHTER = 'lib:gloam:class:wickwright';
 
@@ -48,11 +48,13 @@ describe('a 2024 book’s options in place of the SRD’s of their names (end to
     expect(fighters(filtered(data.classes, null, 'srd:class:fighter'))).toEqual(['srd:class:fighter', BOOK_FIGHTER]);
     expect(fighters(filtered(data.classes, SRD_SOURCE_ID))).toEqual(['srd:class:fighter']);
     // The book's Fighter offers its own subclass, then the SRD Fighter's (the SRD's and the one attached to it).
-    const book = data.classes.find((c) => c.id === BOOK_FIGHTER);
-    expect(book?.subclasses.map((s) => s.name)).toEqual(['Order of the Long Wick', 'Champion', 'Ember Warden']);
+    const book = data.classes.find((c) => c.id === BOOK_FIGHTER)!;
+    expect(withoutReplacedSrd(subclassesOf(book)).map((s) => s.name)).toEqual(['Order of the Long Wick', 'Champion', 'Ember Warden']);
     // A hero who kept the SRD Fighter (made before the book) meets the book's subclasses at level-up too.
-    const srd = data.classes.find((c) => c.id === 'srd:class:fighter');
-    expect(withoutReplacedSrd(srd?.subclasses ?? []).map((s) => s.name)).toEqual(['Champion', 'Ember Warden', 'Order of the Long Wick']);
+    const srd = data.classes.find((c) => c.id === 'srd:class:fighter')!;
+    expect(withoutReplacedSrd(subclassesOf(srd)).map((s) => s.name)).toEqual(['Champion', 'Ember Warden', 'Order of the Long Wick']);
+    // Each class keeps its own: a name lookup prefers them (options/resolve.ts).
+    expect([book.subclasses.map((s) => s.name), srd.subclasses.map((s) => s.name)]).toEqual([['Order of the Long Wick'], ['Champion', 'Ember Warden']]);
   });
 
   it('lists the book’s accepted Light alone on the Wizard’s list; the SRD filter lists the SRD’s', async () => {

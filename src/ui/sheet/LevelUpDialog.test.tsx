@@ -281,6 +281,41 @@ describe('LevelUpDialog with imported options', () => {
     expect(sheet().features.find((f) => f.name === 'Wick Sense')?.ref?.textCopied).toBe(true);
   });
 
+  it("offers the subclasses a 2024 book's Fighter and the SRD Fighter share (each class's own first) and keeps the one chosen by id", async () => {
+    const user = userEvent.setup();
+    const nightWard = { ...EMBER, id: 'lib:gloam:subclass:night-ward', name: 'Night Ward' };
+    const bookFighter: ClassOption = {
+      ...FIGHTER,
+      id: 'lib:gloam:class:fighter',
+      subclasses: [nightWard],
+      sharedSubclasses: [...FIGHTER.subclasses],
+      source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2024', adaptations: [] },
+    };
+    mocks.data = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, sharedSubclasses: [nightWard] } : c)), bookFighter] };
+    const radios = () => within(screen.getByRole('radiogroup', { name: 'Subclass' })).getAllByRole('radio');
+    // A hero made before the book, on the SRD Fighter: its own, then the book's.
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    expect(radios()).toHaveLength(3);
+    [/^Champion/, /^Ember Warden/, /^Night Ward/].forEach((name, i) => expect(radios()[i]).toHaveAccessibleName(name));
+    await user.click(radios()[2]);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().classes[0]).toMatchObject({ classId: FIGHTER.id, level: 3, subclass: 'Night Ward', subclassId: nightWard.id });
+    cleanup();
+    // Its later features arrive by that id, under the SRD Fighter.
+    resetFakeGame({ campaign: sampleCampaign(), character: fighter(6, { subclass: 'Night Ward', subclassId: nightWard.id }) });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().features.map((f) => f.name)).toContain('Smoke Step');
+    cleanup();
+    // A hero on the book's Fighter: the book's own, then the SRD Fighter's.
+    resetFakeGame({ campaign: sampleCampaign(), character: hero({ classId: bookFighter.id, name: 'Fighter', level: 2, hitDie: 10 }) });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    [/^Night Ward/, /^Champion/, /^Ember Warden/].forEach((name, i) => expect(radios()[i]).toHaveAccessibleName(name));
+    await user.click(radios()[1]);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().classes[0]).toMatchObject({ classId: bookFighter.id, level: 3, subclass: 'Champion', subclassId: 'srd:subclass:champion' });
+  });
+
   it("offers a 2024 book's class and subclass in place of the SRD's of their names; a hero on the book's class sees no SRD note", async () => {
     const book = { sourceId: 'gloam', title: GLOAMWOOD_TITLE, format: '2024' as const, adaptations: [] };
     const bookCleric: ClassOption = { ...CLERIC, id: 'lib:gloam:class:cleric', subclasses: [], source: { ...book, recordId: 'rec:gloam:class:cleric' } };

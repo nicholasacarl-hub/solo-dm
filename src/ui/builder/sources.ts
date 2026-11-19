@@ -10,7 +10,7 @@ import { nameKey } from '@/lib/id';
 import { SRD_SOURCE_ID, type BuilderData, type OptionSource } from '@/types';
 import type { SpellInfo } from './spells';
 
-export { replacesSrd, withoutReplacedSrd } from '@/data/options/replaced';
+export { replacesSrd, subclassesOf, withoutReplacedSrd } from '@/data/options/replaced';
 
 export interface OptionBook {
   id: string;

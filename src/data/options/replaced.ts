@@ -7,12 +7,15 @@
  * before the book was accepted keeps it, and the "SRD" source filter still lists the SRD's.
  */
 import { nameKey } from '@/lib/id';
-import type { OptionSource } from '@/types';
+import type { ClassOption, OptionSource, SubclassOption } from '@/types';
 
 type Named = { name: string; source?: OptionSource };
 
 /** An imported option in the 2024 format: it stands in for the SRD option of its name. */
 export const replacesSrd = (o: { source?: OptionSource }): boolean => o.source?.format === '2024';
+
+/** Every subclass a hero of the class may choose: its own, then those it shares (ClassOption.sharedSubclasses). */
+export const subclassesOf = (cls: Pick<ClassOption, 'subclasses' | 'sharedSubclasses'>): SubclassOption[] => [...cls.subclasses, ...(cls.sharedSubclasses ?? [])];
 
 /**
  * `list` without the SRD options that a 2024 book's option of the same name in the list stands in for.

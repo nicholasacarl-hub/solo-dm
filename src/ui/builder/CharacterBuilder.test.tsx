@@ -242,6 +242,27 @@ describe('CharacterBuilder with imported options', () => {
     expect(radio('Lampwright subclass', /Order of the Long Wick/)).toHaveAttribute('aria-checked', 'true');
   });
 
+  it('lists the subclasses a class shares (merge.ts) after its own, for a class that chooses at level 1', async () => {
+    const user = userEvent.setup();
+    const [order] = WICKWRIGHT.subclasses;
+    const atOne = (s: typeof order, id: string, name: string) => ({ ...s, id, name, features: s.features.map((f) => ({ ...f, level: 1 })) });
+    const lampwright: ClassOption = {
+      ...WICKWRIGHT,
+      id: 'lib:gloam:class:lampwright',
+      name: 'Lampwright',
+      subclassLevel: 1,
+      subclasses: [atOne(order, order.id, order.name)],
+      sharedSubclasses: [atOne(order, 'srd:subclass:lamp-oath', 'Lamp Oath')],
+    };
+    renderBuilder({}, { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, lampwright] });
+    await user.click(radio('Class', /Lampwright/));
+    const names = within(screen.getByRole('radiogroup', { name: 'Lampwright subclass' })).getAllByRole('radio');
+    expect(names).toHaveLength(2);
+    expect(names[1]).toHaveAccessibleName(/^Lamp Oath/);
+    await user.click(names[1]);
+    expect(radio('Lampwright subclass', /Lamp Oath/)).toHaveAttribute('aria-checked', 'true');
+  });
+
   it("B4: shows a book's Fighting Style that shares an SRD feat's name as its own card, and checks only the one chosen", async () => {
     const user = userEvent.setup();
     const srdGwf = EXPECTED_MERGED.feats.find((f) => f.id === 'srd:feat:great-weapon-fighting');

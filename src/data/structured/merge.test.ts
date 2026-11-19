@@ -12,6 +12,7 @@ import {
   structuredRecord,
 } from '@/test/structuredFixtures';
 import type { BuilderData, ClassData, ImportedRef, StructuredRecord } from '@/types';
+import { subclassesOf } from '../options/replaced';
 import { importedOptions, mergeBuilderData } from './merge';
 
 const merged = () => mergeBuilderData(GLOAMWOOD_SRD_SUBSET, importedOptions(gloamwoodSnapshot()));
@@ -87,7 +88,7 @@ describe('mergeBuilderData(importedOptions(snapshot))', () => {
     expect(fighters[0].source).toBeUndefined();
   });
 
-  it("lets a 2024 book's class and the SRD class of its name share their subclasses (each after its own); an older book's shares none", () => {
+  it("lets a 2024 book's class and the SRD class of its name share their subclasses (each keeps its own); an older book's shares none", () => {
     const snapshot = gloamwoodSnapshot();
     const wick = snapshot.accepted.find((r) => r.name === 'Wickwright') as StructuredRecord<'class'>;
     const longWick = snapshot.accepted.find((r) => r.name === 'Order of the Long Wick') as StructuredRecord;
@@ -100,18 +101,44 @@ describe('mergeBuilderData(importedOptions(snapshot))', () => {
       return data.classes.filter((c) => c.name === 'Fighter');
     };
     const [srd, book] = fightersOf('2024');
-    // The book's class: its own, then the SRD Fighter's (a hero there never lacks a subclass). The SRD Fighter, which
-    // a hero made before the book keeps: its own, then the book's (that hero meets the book's subclasses too).
-    expect(book.subclasses.map((s) => s.name)).toEqual(['Night Ward', 'Champion', 'Ember Warden']);
-    expect(srd.subclasses.map((s) => s.name)).toEqual(['Champion', 'Ember Warden', 'Night Ward']);
+    const names = (list: readonly { name: string }[] = []) => list.map((s) => s.name);
+    // Each keeps its own. The book's class shares the SRD Fighter's (a hero there never lacks a subclass); the SRD
+    // Fighter, which a hero made before the book keeps, shares the book's (that hero meets them too).
+    expect(names(book.subclasses)).toEqual(['Night Ward']);
+    expect(names(book.sharedSubclasses)).toEqual(['Champion', 'Ember Warden']);
+    expect(names(srd.subclasses)).toEqual(['Champion', 'Ember Warden']);
+    expect(names(srd.sharedSubclasses)).toEqual(['Night Ward']);
+    expect(names(subclassesOf(book))).toEqual(['Night Ward', 'Champion', 'Ember Warden']);
+    expect(names(subclassesOf(srd))).toEqual(['Champion', 'Ember Warden', 'Night Ward']);
     // The same options, not copies: a hero's subclass id finds the one they chose under either class.
-    book.subclasses.slice(1).forEach((s, i) => expect(s).toBe(srd.subclasses[i]));
-    expect(srd.subclasses[2]).toBe(book.subclasses[0]);
+    book.sharedSubclasses?.forEach((s, i) => expect(s).toBe(srd.subclasses[i]));
+    expect(srd.sharedSubclasses?.[0]).toBe(book.subclasses[0]);
     const [srdBeside, older] = fightersOf('2014');
-    expect(older.subclasses.map((s) => s.name)).toEqual(['Night Ward']);
-    expect(srdBeside.subclasses.map((s) => s.name)).toEqual(['Champion', 'Ember Warden']);
-    // Other classes never inherit: the Wickwright shares no SRD class's name.
-    expect(merged().data.classes.find((c) => c.name === 'Wickwright')?.subclasses.map((s) => s.name)).toEqual(['Order of the Long Wick']);
+    expect(names(older.subclasses)).toEqual(['Night Ward']);
+    expect(names(srdBeside.subclasses)).toEqual(['Champion', 'Ember Warden']);
+    expect([older.sharedSubclasses, srdBeside.sharedSubclasses]).toEqual([undefined, undefined]);
+    // Other classes never share: the Wickwright shares no SRD class's name.
+    const wickwright = merged().data.classes.find((c) => c.name === 'Wickwright');
+    expect([names(wickwright?.subclasses), wickwright?.sharedSubclasses]).toEqual([['Order of the Long Wick'], undefined]);
+  });
+
+  it("notes an older-format subclass's overlap on a 2024 book's class too (so under the SRD class it shares with), never on an older book's", () => {
+    const snapshot = gloamwoodSnapshot();
+    const wick = snapshot.accepted.find((r) => r.name === 'Wickwright') as StructuredRecord<'class'>;
+    const dusk = snapshot.accepted.find((r) => r.name === 'Dusk Domain') as StructuredRecord;
+    const notes = (format: '2024' | '2014' | 'other') => {
+      const cleric = structuredRecord('class', 'Cleric', { ...wick, id: 'rec:gloam:class:cleric', name: 'Cleric', publicId: 'lib:gloam:class:cleric', data: { ...(wick.data as ClassData), format } });
+      const accepted = [...snapshot.accepted.filter((r) => r !== dusk), cleric, { ...dusk, parentClassId: 'lib:gloam:class:cleric' } as StructuredRecord];
+      const { data } = mergeBuilderData(GLOAMWOOD_SRD_SUBSET, importedOptions({ ...snapshot, accepted }));
+      const codes = (id: string) => {
+        const cls = data.classes.find((c) => c.id === id);
+        return cls && subclassesOf(cls).find((s) => s.name === 'Dusk Domain')?.source?.adaptations.map((a) => a.code);
+      };
+      return { book: codes('lib:gloam:class:cleric'), srd: codes('srd:class:cleric') };
+    };
+    expect(notes('2024')).toEqual({ book: ['subclass-early-features', 'subclass-overlap'], srd: ['subclass-early-features', 'subclass-overlap'] });
+    expect(notes('2014')).toEqual({ book: ['subclass-early-features'], srd: undefined });
+    expect(notes('other')).toEqual({ book: ['subclass-early-features'], srd: undefined });
   });
 
   it('puts a ref with textHash, location and the book fingerprint on every copied text', () => {

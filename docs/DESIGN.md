@@ -694,8 +694,12 @@ That holds under the builder's "All" view, in the level-up dialog and its feat p
 decide", and for a new class or subclass the DM's `level_up` names. The "SRD" filter and an option
 already chosen still show the SRD's. Older-format (2014) options sit beside the SRD's. The builder's cards
 and the level-up feat panel badge an SRD option whose name an import shares. A 2024 book's class and the
-SRD class of its name share their subclasses, each listing its own first: hiding the SRD class strands
-none, and a hero who kept the SRD class (made before the book) meets the book's subclasses at level-up. Spell lists show a book's accepted 2024
+SRD class of its name share their subclasses (`sharedSubclasses`, offered after the class's own): hiding
+the SRD class strands none, and a hero who kept the SRD class (made before the book) meets the book's
+subclasses at level-up. Each class keeps its own in `subclasses`, and a lookup by name prefers those: a
+subclass attached to the SRD class never ties with the stand-in's of the same name, and a hero's subclass
+whose book is switched off never turns into another book's the class only shares. An older-format
+subclass notes its possible overlap on a 2024 book's class as it does on the SRD's. Spell lists show a book's accepted 2024
 spell in place of the SRD's, and the SRD's in place of a book's spell not yet reviewed (materialized
 spells keep `data.format` for this). Weapon Mastery offers one chip per weapon name, and a feat or spell
 counts as taken by name, whichever book's it is. Lookups are id-first (`src/data/options/resolve.ts`),

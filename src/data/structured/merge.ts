@@ -330,13 +330,14 @@ const sorted = <T extends Sourced>(list: readonly T[]) => [...list].sort(byBookT
 
 /**
  * A subclass as attached to its parent (§5.1 rule 5): features printed below the parent's subclass level
- * arrive at that level (subclass-early-features), and an older-format subclass on an SRD class notes the
- * possible overlap (subclass-overlap). `firstLevel` keeps the printed level; the option itself is untouched.
+ * arrive at that level (subclass-early-features), and an older-format subclass on an SRD class or a 2024
+ * book's notes the possible overlap (subclass-overlap). `firstLevel` keeps the printed level; the option
+ * itself is untouched.
  */
 function placedSubclass(sub: SubclassOption, parent: ClassOption): SubclassOption {
   const level = parent.subclassLevel;
   const early = sub.features.some((f) => f.level < level);
-  const overlap = sub.source?.format === '2014' && !parent.source;
+  const overlap = sub.source?.format === '2014' && (!parent.source || replacesSrd(parent));
   if (!early && !overlap) return sub;
   const notes: Adaptation[] = [];
   if (early) notes.push(adaptation('subclass-early-features', { name: sub.name, className: parent.name, level }));
@@ -405,10 +406,11 @@ export function mergeBuilderData(srd: BuilderData, imported: ImportedOptions): {
   };
   const srdClasses = srd.classes.map(attach);
   const bookClasses = importedClasses.map(attach);
-  // A 2024 book's class stands in for the SRD class of its name (the lists show the book's alone): the two share
-  // their subclasses. The book's class offers the SRD class's after its own (the SRD's, and those attached to it),
-  // so none goes out of reach when the book's own aren't accepted; the SRD class, which a hero made before the book
-  // keeps, offers the book's after its own. The lists show one subclass per name.
+  // A 2024 book's class stands in for the SRD class of its name (the lists show the book's alone), and the two
+  // share their subclasses (sharedSubclasses): the book's class offers the SRD class's (the SRD's, and those
+  // attached to it), so none goes out of reach when the book's own aren't accepted; the SRD class, which a hero
+  // made before the book keeps, offers the book's. Each keeps its own in `subclasses`, which lookups by name
+  // prefer; the lists show one subclass per name.
   const srdSubclasses = new Map(srdClasses.map((c) => [nameKey(c.name), c.subclasses]));
   const standInSubclasses = new Map<string, SubclassOption[]>();
   for (const c of bookClasses) {
@@ -416,7 +418,7 @@ export function mergeBuilderData(srd: BuilderData, imported: ImportedOptions): {
   }
   const share = (cls: ClassOption, from: ReadonlyMap<string, SubclassOption[]>): ClassOption => {
     const shared = from.get(nameKey(cls.name));
-    return shared?.length ? { ...cls, subclasses: [...cls.subclasses, ...shared] } : cls;
+    return shared?.length ? { ...cls, sharedSubclasses: [...shared] } : cls;
   };
 
   const mundane = [...srd.equipment, ...imported.equipment];

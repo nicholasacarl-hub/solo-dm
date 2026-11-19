@@ -14,6 +14,7 @@ import {
   type SpeciesOption,
   type SubclassOption,
 } from '@/types';
+import { subclassesOf } from '@/data/options/replaced';
 import { findFeat as findFeatOption } from '@/data/options/resolve';
 import { nameKey } from '@/lib/id';
 import { classLanguages, expertiseCount } from './classFeatures';
@@ -32,14 +33,14 @@ export interface Picks {
 
 /** Does the class choose its subclass at level 1 (some older imported classes)? */
 export function choosesSubclassAtLevel1(cls: ClassOption | undefined): boolean {
-  return Boolean(cls && cls.subclassLevel === 1 && cls.subclasses.length);
+  return Boolean(cls && cls.subclassLevel === 1 && subclassesOf(cls).length);
 }
 
 export function picks(draft: BuilderDraft, data: BuilderData): Picks {
   const species = data.species.find((s) => s.id === draft.speciesId);
   const choices = speciesChoices(species);
   const cls = data.classes.find((c) => c.id === draft.classId);
-  const subclass = choosesSubclassAtLevel1(cls) ? cls?.subclasses.find((s) => s.id === draft.subclassId) : undefined;
+  const subclass = cls && choosesSubclassAtLevel1(cls) ? subclassesOf(cls).find((s) => s.id === draft.subclassId) : undefined;
   return {
     cls,
     ...(subclass ? { subclass } : {}),

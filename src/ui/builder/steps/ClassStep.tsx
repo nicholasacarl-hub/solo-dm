@@ -14,6 +14,7 @@ import {
   optionBooks,
   picks,
   selectClass,
+  subclassesOf,
   validateStep,
   withoutReplacedSrd,
 } from '../logic';
@@ -121,10 +122,10 @@ export function ClassStep({ draft, setDraft, ctx, onDmDecide }: StepProps) {
                 label={`${cls.name} subclass`}
                 value={draft.subclassId}
                 onChange={(subclassId) => setDraft((d) => ({ ...d, subclassId }))}
-                options={withoutReplacedSrd(cls.subclasses, [draft.subclassId]).map((s) => ({
+                options={withoutReplacedSrd(subclassesOf(cls), [draft.subclassId]).map((s) => ({
                   value: s.id,
                   title: s.name,
-                  meta: <OptionSourceBadges option={s} clashes={clashingNames(cls.subclasses)} />,
+                  meta: <OptionSourceBadges option={s} clashes={clashingNames(subclassesOf(cls))} />,
                   description: s.summary,
                 }))}
               />

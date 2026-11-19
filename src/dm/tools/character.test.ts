@@ -142,6 +142,48 @@ describe('level_up from the merged builder data', () => {
     expect(h.sheet().classes[0]).toMatchObject({ classId: FIGHTER.id, level: 4 });
   });
 
+  describe("two books' Ember Wardens: the Gloamwood's attached to the SRD Fighter, another 2024 book's Fighter's own (shared)", () => {
+    const ashen: OptionSource = { sourceId: 'ashen', title: 'The Ashen Folio', recordId: 'rec:ashen:class:fighter', format: '2024', adaptations: [] };
+    const ashenEmber: SubclassOption = {
+      ...EMBER,
+      id: 'lib:ashen:subclass:ember-warden',
+      source: { ...ashen, recordId: 'rec:ashen:subclass:ember-warden' },
+      features: EMBER.features.map((f) => ({ ...f, ...(f.ref ? { ref: { ...f.ref, sourceId: 'ashen', sourceTitle: 'The Ashen Folio', entryId: 'lib:ashen:subclass:ember-warden' } } : {}) })),
+    };
+    const ashenFighter: ClassOption = { ...FIGHTER, id: 'lib:ashen:class:fighter', source: ashen, subclasses: [ashenEmber], sharedSubclasses: [...FIGHTER.subclasses] };
+    const withAshen = (srd: ClassOption): BuilderData => ({
+      ...EXPECTED_MERGED,
+      classes: [...EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...srd, sharedSubclasses: [ashenEmber] } : c)), ashenFighter],
+    });
+
+    it('a hero on the SRD Fighter who names it takes the one attached to the SRD Fighter, by id, and says so', async () => {
+      const h = setup({ builderData: withAshen(FIGHTER), character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 2, hitDie: 10 }) });
+      const out = await h.run('level_up', { class_name: 'Fighter', subclass: 'Ember Warden' });
+      expect(h.sheet().classes[0]).toMatchObject({ level: 3, subclass: 'Ember Warden', subclassId: EMBER.id });
+      expect(h.sheet().features.map((f) => f.name)).toEqual(expect.arrayContaining(['Ember Ward', 'Kindled Strikes']));
+      expect(out.content).toContain(`Two subclasses of Fighter are named Ember Warden (${GLOAMWOOD_TITLE}, The Ashen Folio); used the one from ${GLOAMWOOD_TITLE}.`);
+    });
+
+    it("a hero on the SRD Fighter with the other book's (by id) gets its later features", async () => {
+      const subclassRef = importedRef({ entryId: ashenEmber.id, kind: 'subclass', entryName: 'Ember Warden', sourceId: 'ashen', sourceTitle: 'The Ashen Folio' });
+      const h = setup({ builderData: withAshen(FIGHTER), character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 6, hitDie: 10, subclass: 'Ember Warden', subclassId: ashenEmber.id, subclassRef }) });
+      const out = await h.run('level_up', { class_name: 'Fighter' });
+      expect(h.sheet().features.map((f) => f.name)).toContain('Smoke Step');
+      expect(out.content).toContain('- Smoke Step (The Ashen Folio)');
+    });
+
+    it("with the hero's book switched off, the hero's subclass never turns into the other book's", async () => {
+      const switchedOff: ClassOption = { ...FIGHTER, subclasses: FIGHTER.subclasses.filter((s) => !s.source) };
+      const subclassRef = importedRef({ entryId: EMBER.id, kind: 'subclass', entryName: 'Ember Warden' });
+      const h = setup({ builderData: withAshen(switchedOff), character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 6, hitDie: 10, subclass: 'Ember Warden', subclassId: EMBER.id, subclassRef }) });
+      const out = await h.run('level_up', { class_name: 'Fighter' });
+      expect(out.isError).toBeUndefined();
+      expect(h.sheet().features.map((f) => f.name)).not.toContain('Smoke Step');
+      expect(out.content).not.toContain("Features from the player's books");
+      expect(h.sheet().classes[0]).toMatchObject({ level: 7, subclassId: EMBER.id, subclassRef });
+    });
+  });
+
   describe('B2: a subclass the hero already has, named again', () => {
     // A book reprinting an SRD subclass's name (invented features): it sits beside the SRD Champion.
     const bookChampion: SubclassOption = {
@@ -188,9 +230,9 @@ describe('level_up from the merged builder data', () => {
     });
   });
 
-  it("a hero on a 2024 book's Fighter who takes the SRD Champion it carries gets the Champion's features (as the dialog adds them)", async () => {
+  it("a hero on a 2024 book's Fighter who takes the SRD Champion it shares gets the Champion's features (as the dialog adds them)", async () => {
     const srdFighter = EXPECTED_MERGED.classes.find((c) => c.id === FIGHTER.id)!;
-    const bookFighter: ClassOption = { ...srdFighter, id: 'lib:gloam:class:fighter', subclasses: [...srdFighter.subclasses], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2024', adaptations: [] } };
+    const bookFighter: ClassOption = { ...srdFighter, id: 'lib:gloam:class:fighter', subclasses: [], sharedSubclasses: [...srdFighter.subclasses], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2024', adaptations: [] } };
     const champion = srdFighter.subclasses.find((s) => s.name === 'Champion')!;
     const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookFighter] };
     const h = setup({ builderData: data, character: hero({ classId: bookFighter.id, name: 'Fighter', level: 2, hitDie: 10 }) });
@@ -213,7 +255,7 @@ describe('level_up from the merged builder data', () => {
 
   it("says the SRD's text, not the book's, replaced the DM's words for an SRD subclass under a book's class", async () => {
     const srdFighter = EXPECTED_MERGED.classes.find((c) => c.id === FIGHTER.id)!;
-    const bookFighter: ClassOption = { ...srdFighter, id: 'lib:gloam:class:fighter', subclasses: [...srdFighter.subclasses], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2024', adaptations: [] } };
+    const bookFighter: ClassOption = { ...srdFighter, id: 'lib:gloam:class:fighter', subclasses: [], sharedSubclasses: [...srdFighter.subclasses], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2024', adaptations: [] } };
     const feature = srdFighter.subclasses.find((s) => s.name === 'Champion')!.features.find((f) => f.level === 3)!;
     const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookFighter] };
     const h = setup({ builderData: data, character: hero({ classId: bookFighter.id, name: 'Fighter', level: 2, hitDie: 10 }) });
@@ -536,13 +578,14 @@ describe("book text the DM names on the sheet keeps its book's ref (exports repl
     for (const marker of GLOAMWOOD_MARKERS) expect(text).not.toContain(marker);
   });
 
-  it("a level_up extra that repeats a book subclass's words gets its ref though a 2024 book's class carries that subclass too", async () => {
+  it("a level_up extra that repeats a book subclass's words gets its ref though a 2024 book's class shares that subclass too", async () => {
     const smoke = EMBER.features.find((f) => f.name === 'Smoke Step')!;
     const srdFighter = EXPECTED_MERGED.classes.find((c) => c.id === FIGHTER.id)!;
     const bookFighter: ClassOption = {
       ...srdFighter,
       id: 'lib:gloam:class:fighter',
-      subclasses: [...srdFighter.subclasses],
+      subclasses: [],
+      sharedSubclasses: [...srdFighter.subclasses],
       source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2024', adaptations: [] },
     };
     const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookFighter] };

@@ -27,6 +27,7 @@ import { fillStep, letDmDecide } from './autofill';
 import {
   backgroundBonuses,
   buildCharacter,
+  choosesSubclassAtLevel1,
   chosenFightingStyle,
   classChoiceFeatures,
   draftAdaptationNotes,
@@ -481,6 +482,13 @@ describe("a 2024 book's option in place of the SRD's: one per name under All", (
       expect(fillStep('class', { ...emptyDraft(), classId: early.id }, bctx, { next: () => next }).subclassId).toBe(bookOath.id);
     }
     expect(fillStep('class', { ...emptyDraft(), classId: early.id, subclassId: srdLike.id }, bctx, { next: () => 0 }).subclassId).toBe(srdLike.id);
+    // The same when they're the ones the class shares (merge.ts): listed, picked from and found by id.
+    const sharing: ClassOption = { ...early, subclasses: [], sharedSubclasses: [srdLike, bookOath] };
+    const sctx: BuilderContext = { ...ctx, data: { ...data, classes: [...data.classes.filter((c) => c.id !== wickwright.id), sharing] } };
+    expect(choosesSubclassAtLevel1(sharing)).toBe(true);
+    expect(fillStep('class', { ...emptyDraft(), classId: sharing.id }, sctx, { next: () => 0 }).subclassId).toBe(bookOath.id);
+    expect(fillStep('class', { ...emptyDraft(), classId: sharing.id, subclassId: srdLike.id }, sctx, { next: () => 0 }).subclassId).toBe(srdLike.id);
+    expect(picks({ ...emptyDraft(), classId: sharing.id, subclassId: srdLike.id }, sctx.data).subclass).toBe(srdLike);
   });
 
   it('Weapon Mastery offers one chip per weapon name (the choice is stored by name)', () => {

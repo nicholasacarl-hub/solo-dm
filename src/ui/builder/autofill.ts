@@ -35,7 +35,7 @@ import {
   type BuilderContext,
 } from './logic';
 import { backgroundAbilityPool } from './abilities';
-import { filtered, visibleSpells, withoutReplacedSrd } from './sources';
+import { filtered, subclassesOf, visibleSpells, withoutReplacedSrd } from './sources';
 import {
   MAGIC_INITIATE_LISTS,
   STANDARD_LANGUAGES,
@@ -150,7 +150,7 @@ function fillClass(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDra
     if (!options.some((o) => o.name === classOptions[feature.name])) classOptions[feature.name] = pick(options, rng).name;
   }
   const subclassId =
-    choosesSubclassAtLevel1(cls) && !cls.subclasses.some((s) => s.id === next.subclassId) ? pick(withoutReplacedSrd(cls.subclasses), rng).id : next.subclassId;
+    choosesSubclassAtLevel1(cls) && !subclassesOf(cls).some((s) => s.id === next.subclassId) ? pick(withoutReplacedSrd(subclassesOf(cls)), rng).id : next.subclassId;
   return { ...next, fightingStyle, classOptions, subclassId };
 }
 
