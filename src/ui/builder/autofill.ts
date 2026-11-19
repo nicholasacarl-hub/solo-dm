@@ -4,7 +4,7 @@
  * `letDmDecide` re-decides a whole step. Randomness comes from the engine's Rng.
  */
 import { cryptoRng, rollDice, type Rng } from '@/engine';
-import { ABILITIES, SKILLS, SKILL_ABILITY, type Ability, type BuilderData, type OptionSource, type Skill } from '@/types';
+import { ABILITIES, SKILLS, SKILL_ABILITY, type Ability, type BackgroundOption, type BuilderData, type OptionSource, type Skill } from '@/types';
 import { nameKey } from '@/lib/id';
 import {
   POINT_BUY_BUDGET,
@@ -49,6 +49,7 @@ import {
   picks,
   skillPlan,
   skillProficiencies,
+  splitFeatName,
   suggestedLanguages,
 } from './origin';
 import { findSpellByName, spellsForClass, type SpellInfo } from './spells';
@@ -181,7 +182,13 @@ function fillBackgroundFeat(draft: BuilderDraft, data: BuilderData, rng: Rng): B
 function fillBackground(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDraft {
   const { cls } = picks(draft, data);
   let next = draft;
-  const backgrounds = shown(data.backgrounds, draft);
+  const shownBackgrounds = shown(data.backgrounds, draft);
+  // Not one whose Magic Initiate takes the list the species' already has (a feat taken twice needs another list),
+  // while another fits.
+  const speciesList = originFeats(draft, data).find((f) => f.from === 'species' && isMagicInitiate(f.name))?.option;
+  const clashes = (b: BackgroundOption) => Boolean(speciesList && b.feat && isMagicInitiate(b.feat) && splitFeatName(b.feat).option === speciesList);
+  const fitting = shownBackgrounds.filter((b) => !clashes(b));
+  const backgrounds = fitting.length ? fitting : shownBackgrounds;
   if (!picks(draft, data).background && backgrounds.length) {
     const priority = abilityPriority(cls);
     // "Any three" backgrounds fit as well as the class's three best abilities.

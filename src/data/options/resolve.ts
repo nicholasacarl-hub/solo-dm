@@ -65,32 +65,28 @@ function baseName(name: string): string {
 
 type Option = { id: string; name: string } & Sourced;
 
-/** An option the ref's book fingerprint shows is from another book (a book of the same title, say). */
-const otherBook = (ref: ImportedRef | undefined, o: Option): boolean => {
-  const fingerprint = ref?.bookFingerprint ? optionFingerprint(o) : undefined;
-  return Boolean(fingerprint && fingerprint !== ref?.bookFingerprint);
-};
-
 /**
- * The imported option named like the ref's entry from the ref's own book: the same book by its fingerprint (on
- * another device, whatever its title), else by source id, then by title, never one the fingerprint shows is
- * another book's.
+ * The imported option named like the ref's entry from the ref's own book: the same book by its fingerprint
+ * (moved whole to another device, whatever its title), else by source id, then by title. A fingerprint only
+ * adds a match: it covers every entry's text, so the same book read again (a newer reader, another file)
+ * gets a new one, and its title is what still finds it.
  */
 function inRefBook<T extends Option>(ref: ImportedRef | undefined, all: readonly T[]): T | undefined {
   if (!ref) return undefined;
   const key = nameKey(ref.entryName);
   const named = all.filter((o) => o.source && nameKey(o.name) === key);
-  const sameBook = ref.bookFingerprint ? named.find((o) => optionFingerprint(o) === ref.bookFingerprint) : undefined;
-  if (sameBook) return sameBook;
-  const maybe = named.filter((o) => !otherBook(ref, o));
-  return maybe.find((o) => o.source?.sourceId === ref.sourceId) ?? maybe.find((o) => o.source && nameKey(o.source.title) === nameKey(ref.sourceTitle));
+  return (
+    (ref.bookFingerprint ? named.find((o) => optionFingerprint(o) === ref.bookFingerprint) : undefined) ??
+    named.find((o) => o.source?.sourceId === ref.sourceId) ??
+    named.find((o) => o.source && nameKey(o.source.title) === nameKey(ref.sourceTitle))
+  );
 }
 
-/** Imported options named like the ref's entry, the ref's own book first; never one another book's by its fingerprint. */
+/** Imported options named like the ref's entry, the ref's own book (inRefBook) first. */
 function byRef<T extends Option>(ref: ImportedRef | undefined, all: readonly T[]): T | undefined {
   if (!ref) return undefined;
   const key = nameKey(ref.entryName);
-  return inRefBook(ref, all) ?? all.find((o) => o.source && nameKey(o.name) === key && !otherBook(ref, o));
+  return inRefBook(ref, all) ?? all.find((o) => o.source && nameKey(o.name) === key);
 }
 
 /** By id; else, for an imported id, by ref (kind + nameKey(entryName), preferring ref.sourceTitle's book); else by name among SRD options only. */
@@ -114,8 +110,8 @@ function ownBookOrSrd(named: readonly SubclassOption[], cls: ClassOption): Subcl
  * By subclassId among every subclass the class offers (its own and those it shares, merge.ts), else among every
  * class's in `classes` (a subclass taken through sharing stays the hero's when the classes stop sharing: one was
  * renamed, say); else by name. A moved import's id (another device, a re-import) takes the subclass of that name
- * from its ref's book (inRefBook), else the class's own one imported subclass of the name that isn't another
- * book's by its fingerprint; an SRD id, the class's own SRD subclass of the name. An entry without an id (made
+ * from its ref's book (inRefBook), else the class's own one imported subclass of the name; an SRD id, the
+ * class's own SRD subclass of the name. An entry without an id (made
  * before ids were stored, or a name the DM gave that two subclasses shared) takes the class's own subclass of
  * the name, else one it shares (ownBookOrSrd breaks a tie).
  */
@@ -138,7 +134,7 @@ export function subclassOptionFor(
     const imported = isImportedId(cl.subclassId);
     const fromRef = imported ? inRefBook(cl.subclassRef, all) : undefined;
     if (fromRef) return fromRef;
-    const same = named(cls.subclasses).filter((s) => Boolean(s.source) === imported && !otherBook(cl.subclassRef, s));
+    const same = named(cls.subclasses).filter((s) => Boolean(s.source) === imported);
     return same.length === 1 ? same[0] : undefined;
   }
   const own = named(cls.subclasses);

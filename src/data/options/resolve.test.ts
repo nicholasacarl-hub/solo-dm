@@ -52,17 +52,20 @@ describe('classOptionFor', () => {
     expect(classOptionFor({ classId: 'lib:gone:class:fighter', name: 'Fighter', ref: other }, classes)).toBe(otherFighter);
   });
 
-  it("never binds a moved import's id to another book's class of the name, by the ref's book fingerprint", () => {
-    // A class of another book: its parts' refs carry that book's fingerprint.
-    const otherBookFighter: ClassOption = {
-      ...otherFighter,
-      features: srdFighter.features.map((f) => ({ ...f, ref: importedRef({ sourceId: 'other', sourceTitle: 'Other Notes', bookFingerprint: 'fp-other' }) })),
-    };
-    const ref = importedRef({ entryId: 'lib:gone:class:fighter', kind: 'class', entryName: 'Fighter', part: undefined, sourceId: 'gone', sourceTitle: 'Gone', bookFingerprint: 'fp-gone' });
-    expect(classOptionFor({ classId: ref.entryId, name: 'Fighter', ref }, [srdFighter, otherBookFighter])).toBeUndefined();
-    // The same book moved (its fingerprint) is found whatever its title; a ref without a fingerprint binds by name as before.
-    expect(classOptionFor({ classId: ref.entryId, name: 'Fighter', ref: { ...ref, bookFingerprint: 'fp-other' } }, [srdFighter, otherBookFighter])).toBe(otherBookFighter);
-    expect(classOptionFor({ classId: ref.entryId, name: 'Fighter', ref: { ...ref, bookFingerprint: undefined } }, [srdFighter, otherBookFighter])).toBe(otherBookFighter);
+  it("finds a moved import's class by its book's fingerprint first, whatever the book is called now", () => {
+    // Classes of two books: their parts' refs carry each book's fingerprint.
+    const ofBook = (cls: ClassOption, sourceId: string, title: string, bookFingerprint: string): ClassOption => ({
+      ...cls,
+      id: `lib:${sourceId}:class:fighter`,
+      source: source(sourceId, title),
+      features: srdFighter.features.map((f) => ({ ...f, ref: importedRef({ sourceId, sourceTitle: title, bookFingerprint }) })),
+    });
+    const moved = ofBook(srdFighter, 'here', 'Gloamwood (PDF)', 'fp-gloam');
+    const sameTitle = ofBook(srdFighter, 'x', GLOAMWOOD_TITLE, 'fp-x');
+    const ref = importedRef({ entryId: 'lib:gloam:class:fighter', kind: 'class', entryName: 'Fighter', part: undefined, bookFingerprint: 'fp-gloam' });
+    expect(classOptionFor({ classId: ref.entryId, name: 'Fighter', ref }, [srdFighter, sameTitle, moved])).toBe(moved);
+    // The book read again (another fingerprint): its title still finds it.
+    expect(classOptionFor({ classId: ref.entryId, name: 'Fighter', ref }, [srdFighter, sameTitle])).toBe(sameTitle);
   });
 
   it('falls back to the name among SRD options only (old sheets without SRD ids)', () => {
@@ -228,16 +231,19 @@ describe('subclassOptionFor with the subclasses a class shares (merge.ts)', () =
     const older = ofBook(ember, 't14', 'The Wanderer’s Handbook', 'fp-older');
     const newer = ofBook(ember, 't24', 'The Wanderer’s Handbook', 'fp-newer');
 
-    it("never takes a different book's subclass of the same title once the hero's book is switched off", () => {
+    it('takes a moved copy of the same book by its fingerprint ahead of another book of the ref’s title', () => {
       const hero = { subclass: 'Ember Warden', subclassId: older.id, subclassRef: refOf(older) };
       expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, older], sharedSubclasses: [newer] })).toBe(older);
-      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion], sharedSubclasses: [newer] })).toBeUndefined();
-      // Nor one the class owns: only a moved copy of the same book rebinds by name.
-      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, newer] })).toBeUndefined();
       const moved = ofBook(ember, 'elsewhere', 'Wanderer (scan)', 'fp-older');
-      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, newer, moved] })).toBe(moved);
-      // A ref without a fingerprint (an older sheet) binds by name as before.
-      expect(subclassOptionFor({ ...hero, subclassRef: { ...refOf(older), bookFingerprint: undefined } }, { ...srdFighter, subclasses: [champion, newer] })).toBe(newer);
+      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, newer], sharedSubclasses: [moved] })).toBe(moved);
+    });
+
+    it('still finds the same book read again (a newer reader, another file): its fingerprint changed, its title not', () => {
+      const first = ofBook(ember, 'gloam', GLOAMWOOD_TITLE, 'fp-first-reading');
+      const again = ofBook(ember, 'g3', GLOAMWOOD_TITLE, 'fp-second-reading');
+      const hero = { subclass: 'Ember Warden', subclassId: first.id, subclassRef: refOf(first) };
+      expect(subclassOptionFor(hero, { ...bookFighter, subclasses: [], sharedSubclasses: [again] })).toBe(again);
+      expect(subclassOptionFor(hero, { ...srdFighter, subclasses: [champion, again] })).toBe(again);
     });
 
     it('finds the same book on another device under another title, a subclass the class only shares too', () => {

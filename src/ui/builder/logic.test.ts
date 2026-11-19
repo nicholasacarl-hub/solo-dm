@@ -647,6 +647,21 @@ describe('spells the class or species already gives (the sheet keeps one spell p
     expect(firstIncompleteStep(built, ctx)).toBeNull();
   });
 
+  it("never gives the hero a background whose Magic Initiate takes the player's Versatile list, while another fits", () => {
+    const human = { ...emptyDraft(), classId: cls('Wizard').id, speciesId: species('Human').id, size: 'Medium' as const, speciesSkill: 'perception' as const, speciesFeat: 'srd:feat:magic-initiate', speciesFeatList: 'Wizard' };
+    expect(validateStep('species', human, ctx)).toEqual([]);
+    for (const next of [0, 0.5, 0.99]) {
+      const built = letDmBuildAll(human, ctx, { next: () => next });
+      expect(built.backgroundId).not.toBe(bg('Sage').id);
+      expect(built.speciesFeatList).toBe('Wizard');
+      expect(firstIncompleteStep(built, ctx)).toBeNull();
+    }
+    // With no other background to take, the DM takes it and gives Versatile another list instead.
+    const onlySage: BuilderContext = { data: { ...data, backgrounds: [bg('Sage')] }, spells };
+    const built = letDmBuildAll(human, onlySage, fixedRng);
+    expect([built.backgroundId, built.speciesFeatList === 'Wizard', firstIncompleteStep(built, onlySage)]).toEqual([bg('Sage').id, false, null]);
+  });
+
   it('drops a second pick of one name in a list (a draft from before a book’s spell and the SRD’s were one choice)', () => {
     const light = spells.find((sp) => sp.name === 'Light')!;
     const bookLight = spellInfo({ ...light.entry, id: 'lib:ember:light', sourceId: 'ember', sourceName: 'The Ember Folio', data: { ...light.entry.data, recordId: 'rec:ember:light', format: '2024' } });
