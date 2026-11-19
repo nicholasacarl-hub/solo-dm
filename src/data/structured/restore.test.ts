@@ -116,15 +116,16 @@ describe('restoreImportedText (spec §7.4)', () => {
     expect(restoreImportedText(one, lookupOf(builder)).report.missing).toHaveLength(1);
   });
 
-  it("restores a book subclass by its words anywhere though a 2024 book's class carries it too (each subclass counts once)", () => {
+  it("restores a book subclass by its words anywhere though a 2024 book's class shares it too (each subclass counts once)", () => {
     const builder = structuredClone(EXPECTED_MERGED) as BuilderData;
     const srdFighter = builder.classes.find((c) => c.id === 'srd:class:fighter');
     const sub = srdFighter?.subclasses.find((s) => s.name === 'Ember Warden');
     if (!srdFighter || !sub?.source) throw new Error('fixture changed');
-    // Another copy of the book (only step 4 can find it), whose own 2024 Fighter carries the SRD Fighter's subclasses.
+    // Another copy of the book (only step 4 can find it), whose own 2024 Fighter shares the SRD Fighter's subclasses
+    // (as mergeBuilderData shares them).
     sub.id = 'lib:renamed:ember';
     sub.source = { ...sub.source, sourceId: 'renamed', title: 'Gloamwood (old copy)' };
-    builder.classes.push({ ...srdFighter, id: 'lib:renamed:class:fighter', source: { ...sub.source, format: '2024' }, subclasses: [...srdFighter.subclasses] });
+    builder.classes.push({ ...srdFighter, id: 'lib:renamed:class:fighter', source: { ...sub.source, format: '2024' }, subclasses: [], sharedSubclasses: [...srdFighter.subclasses] });
     const one = { ...pulled(), features: pulled().features.filter((f) => f.id === 'f1') };
     const { character, report } = restoreImportedText(one, lookupOf(builder));
     expect(report).toEqual({ restored: 1, differs: 0, missing: [] });
