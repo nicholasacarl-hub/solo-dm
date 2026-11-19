@@ -87,7 +87,9 @@ export function classOptionFor(cl: Pick<ClassLevel, 'classId' | 'name' | 'ref'>,
 /**
  * By subclassId; else by name only when that name is unique under the class. An imported subclassId
  * only falls back to imported subclasses, an SRD one to SRD subclasses; an entry without an id (made
- * before ids were stored) prefers the SRD subclass of that name when an import shares it.
+ * before ids were stored) prefers the SRD subclass of that name when an import shares it, except under
+ * a book's class, where the class's own book's subclass wins (that class also carries the SRD class's
+ * subclasses, merge.ts, which an older sheet never meant).
  */
 export function subclassOptionFor(cl: Pick<ClassLevel, 'subclass' | 'subclassId'>, cls: ClassOption | undefined): SubclassOption | undefined {
   if (!cls) return undefined;
@@ -99,7 +101,11 @@ export function subclassOptionFor(cl: Pick<ClassLevel, 'subclass' | 'subclassId'
   const key = nameKey(cl.subclass);
   let named = cls.subclasses.filter((s) => nameKey(s.name) === key);
   if (cl.subclassId) named = named.filter((s) => Boolean(s.source) === isImportedId(cl.subclassId));
-  else if (named.length > 1) named = named.filter((s) => !s.source);
+  else if (named.length > 1) {
+    // The class's own book's subclass (for an SRD class, the SRD's).
+    const ownBook = named.filter((s) => s.source?.sourceId === cls.source?.sourceId);
+    named = ownBook.length ? ownBook : named.filter((s) => !s.source);
+  }
   return named.length === 1 ? named[0] : undefined;
 }
 

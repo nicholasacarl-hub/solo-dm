@@ -156,6 +156,20 @@ describe('classByName', () => {
   });
 });
 
+describe('subclassOptionFor under a book class that also carries the SRD class’s subclasses', () => {
+  it("resolves an older sheet's name to the class's own book's subclass, as before the SRD's were carried", () => {
+    const champion = srdFighter.subclasses.find((s) => s.name === 'Champion') as SubclassOption;
+    const bookChampion: SubclassOption = { ...champion, id: 'lib:gloam:subclass:champion', source: source('gloam', GLOAMWOOD_TITLE) };
+    const otherChampion: SubclassOption = { ...champion, id: 'lib:other:subclass:champion', source: source('other', 'Other Notes') };
+    const fighter = { ...bookFighter, subclasses: [bookChampion, otherChampion, champion] };
+    expect(subclassOptionFor({ subclass: 'Champion' }, fighter)).toBe(bookChampion);
+    // By id, any of them; under the SRD Fighter the SRD's still wins a tie; with no own-book one, the SRD's.
+    expect(subclassOptionFor({ subclass: 'Champion', subclassId: champion.id }, fighter)).toBe(champion);
+    expect(subclassOptionFor({ subclass: 'Champion' }, { ...srdFighter, subclasses: [champion, bookChampion] })).toBe(champion);
+    expect(subclassOptionFor({ subclass: 'Champion' }, { ...bookFighter, subclasses: [otherChampion, champion] })).toBe(champion);
+  });
+});
+
 describe('subclassByName', () => {
   const champion = srdFighter.subclasses.find((s) => s.name === 'Champion') as SubclassOption;
   const bookChampion: SubclassOption = { ...champion, id: 'lib:gloam:subclass:champion', source: source('gloam', GLOAMWOOD_TITLE) };
