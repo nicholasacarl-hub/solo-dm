@@ -150,6 +150,12 @@ describe('classByName', () => {
     expect(classByName(classes, 'Nobody')).toEqual({ others: [] });
   });
 
+  it("lets a 2024 book's class stand in ahead of an older book's whose title sorts first", () => {
+    const ashen: ClassOption = { ...older(bookFighter), id: 'lib:ashen:class:fighter', source: { ...source('ashen', 'The Ashen Folio'), format: '2014' } };
+    const list = [...EXPECTED_MERGED.classes, ashen, bookFighter];
+    expect(classByName(list, 'Fighter').option).toBe(bookFighter);
+  });
+
   it("keeps the SRD's class beside older-edition books' classes of its name", () => {
     const list = [...EXPECTED_MERGED.classes, older(bookFighter), older(otherFighter)];
     expect(classByName(list, 'Fighter').option).toBe(srdFighter);
@@ -182,6 +188,13 @@ describe('subclassByName', () => {
     expect(subclassByName('Champion', srdFighter)).toBe(champion);
     expect(subclassByName('Nobody', withBook(bookChampion))).toBeUndefined();
     expect(subclassByName('Champion', undefined)).toBeUndefined();
+  });
+
+  it("gives a hidden SRD subclass's name to the first 2024 book's when other books share it", () => {
+    const older: SubclassOption = { ...bookChampion, id: 'lib:ashen:subclass:champion', source: { ...source('ashen', 'The Ashen Folio'), format: '2014' } };
+    const second: SubclassOption = { ...bookChampion, id: 'lib:other:subclass:champion', source: source('other', 'Other Notes') };
+    expect(subclassByName('Champion', { ...srdFighter, subclasses: [champion, older, bookChampion] })).toBe(bookChampion);
+    expect(subclassByName('Champion', { ...srdFighter, subclasses: [champion, bookChampion, second] })).toBe(bookChampion);
   });
 
   it("leaves two books' subclasses of one name undecided, as the no-id rule does", () => {

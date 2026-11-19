@@ -188,6 +188,30 @@ describe('level_up from the merged builder data', () => {
     });
   });
 
+  it("a hero on a 2024 book's Fighter who takes the SRD Champion it carries gets the Champion's features (as the dialog adds them)", async () => {
+    const srdFighter = EXPECTED_MERGED.classes.find((c) => c.id === FIGHTER.id)!;
+    const bookFighter: ClassOption = { ...srdFighter, id: 'lib:gloam:class:fighter', subclasses: [...srdFighter.subclasses], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2024', adaptations: [] } };
+    const champion = srdFighter.subclasses.find((s) => s.name === 'Champion')!;
+    const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookFighter] };
+    const h = setup({ builderData: data, character: hero({ classId: bookFighter.id, name: 'Fighter', level: 2, hitDie: 10 }) });
+    const out = await h.run('level_up', { class_name: 'Fighter', subclass: 'Champion' });
+    expect(out.isError).toBeUndefined();
+    expect(h.sheet().classes[0]).toMatchObject({ level: 3, subclassId: champion.id });
+    const level3 = champion.features.filter((f) => f.level === 3).map((f) => f.name);
+    expect(level3.length).toBeGreaterThan(0);
+    for (const name of level3) expect(h.sheet().features.map((f) => f.name)).toContain(name);
+  });
+
+  it("warns when the hero doesn't meet a book class's multiclass prerequisites, as for the SRD's", async () => {
+    const bookCleric: ClassOption = { ...CLERIC_OPTION, id: 'lib:gloam:class:cleric', subclasses: [], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:cleric', format: '2024', adaptations: [] } };
+    const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookCleric] };
+    const base = hero({ classId: FIGHTER.id, name: 'Fighter', level: 3, hitDie: 10, subclass: 'Champion' });
+    const h = setup({ builderData: data, character: { ...base, abilityScores: { ...base.abilityScores, wis: 8 } } });
+    const out = await h.run('level_up', { class_name: 'Cleric' });
+    expect(h.sheet().classes.map((cl) => cl.classId)).toEqual([FIGHTER.id, bookCleric.id]);
+    expect(out.content).toMatch(/Multiclass prerequisite not met: Cleric needs 13\+ \(Wisdom 8\)/);
+  });
+
   it("multiclasses into a 2024 book's class in place of the SRD class of its name (the player's lists offer the book's)", async () => {
     const bookCleric: ClassOption = { ...CLERIC_OPTION, id: 'lib:gloam:class:cleric', subclasses: [], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:cleric', format: '2024', adaptations: [] } };
     const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookCleric] };

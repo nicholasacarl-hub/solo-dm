@@ -135,6 +135,14 @@ describe('levelUp', () => {
     expect(r.reminders[0]).toMatch(/prerequisite not met: Cleric needs 13\+ \(Wisdom 12\)/);
   });
 
+  it("checks a book's class's multiclass prerequisites from the ones its caller gives (SRD 5.2.1 Multiclassing)", () => {
+    const primaries = [{ name: 'Cleric', primaryAbilities: ['wis' as const], primaryRule: 'all' as const }];
+    const r = levelUp(mira(), { className: 'Cleric', classId: 'lib:gloam:class:cleric', hitDie: 8, casterType: 'full', hpMethod: 'average', multiclassPrimaries: primaries });
+    expect(r.reminders[0]).toMatch(/prerequisite not met: Cleric needs 13\+ \(Wisdom 12\)/);
+    const none = levelUp(mira(), { className: 'Cleric', classId: 'lib:gloam:class:cleric', hitDie: 8, casterType: 'full', hpMethod: 'average' });
+    expect(none.reminders.some((m) => m.includes('prerequisite'))).toBe(false);
+  });
+
   it('adds features and per-level HP bonuses (Dwarven Toughness)', () => {
     const dwarf = mira({ features: [...mira().features, { id: 'dt', name: 'Dwarven Toughness', source: 'species', description: '' }] });
     const r = levelUp(dwarf, {

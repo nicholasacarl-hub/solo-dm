@@ -22,7 +22,7 @@ import {
   type SubclassOption,
 } from '@/types';
 import { describeOption } from './describe';
-import { withoutReplacedSrd } from './replaced';
+import { replacesSrd, withoutReplacedSrd } from './replaced';
 import { optionKind, refFor } from './refs';
 
 /** A package item matched in the equipment catalog. */
@@ -229,16 +229,24 @@ export function classByName(classes: readonly ClassOption[], name: string, c?: C
     .map((cl) => classOptionFor(cl, classes))
     .find((o): o is ClassOption => Boolean(o));
   const offered = withoutReplacedSrd(named);
-  const option = own ?? offered.find((o) => !o.source) ?? offered[0];
+  // A 2024 book's class standing in for the SRD's takes its place ahead of older books' (whatever their titles).
+  const option = own ?? offered.find((o) => !o.source) ?? offered.find(replacesSrd) ?? offered[0];
   return { option, others: named.filter((o) => o !== option) };
 }
 
 /**
  * A subclass the DM names now, among those the player's list offers (a 2024 book's in place of the SRD's of
- * the same name); then the no-id rule of subclassOptionFor (a unique name, or the SRD's on a tie).
+ * the same name), by the no-id rule of subclassOptionFor (a unique name; on a tie, the class's own book's or
+ * the SRD's). When the SRD's of the name is hidden behind a tie, the first 2024 book's stands in for it.
  */
 export function subclassByName(name: string, cls: ClassOption | undefined): SubclassOption | undefined {
-  return cls ? subclassOptionFor({ subclass: name }, { ...cls, subclasses: withoutReplacedSrd(cls.subclasses) }) : undefined;
+  if (!cls) return undefined;
+  const offered = withoutReplacedSrd(cls.subclasses);
+  const found = subclassOptionFor({ subclass: name }, { ...cls, subclasses: offered });
+  if (found) return found;
+  const key = nameKey(name);
+  const srdHidden = cls.subclasses.some((s) => !s.source && nameKey(s.name) === key);
+  return srdHidden ? offered.find((s) => replacesSrd(s) && nameKey(s.name) === key) : undefined;
 }
 
 /** Explicit primaryAbilityRule; else 'any' for srd:class:fighter; else 'all'. Replaces ClassStep.tsx:77, LevelUpDialog.tsx:45 and :97. */

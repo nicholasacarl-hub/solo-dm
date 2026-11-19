@@ -51,7 +51,7 @@ import { withAdaptationNotes } from '@/data/options/adaptationNotes';
 import { entryRef, inventoryFromEntry } from '@/data/options/inventory';
 import { gainedFeatures } from '@/data/options/leveling';
 import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
-import { classByName, classOptionFor, everySubclass, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
+import { classByName, classOptionFor, everySubclass, optionSourceLabel, primaryRuleOf, subclassByName, subclassOptionFor } from '@/data/options/resolve';
 import { matchByName } from '@/engine/util';
 import { nameKey } from '@/lib/id';
 import { textFingerprint } from '@/lib/importedContent';
@@ -1010,8 +1010,9 @@ function planFromData(c: Character, data: BuilderData, input: ToolInput<'level_u
   const subclassChosenNow = Boolean(input.subclass) && nameKey(existing?.subclass ?? '') !== nameKey(input.subclass ?? '');
   const sub = subclassChosenNow ? subclassByName(input.subclass ?? '', option) : existing ? subclassOptionFor(existing, option) : undefined;
   const all = gainedFeatures(option, classLevel, sub, { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 }, { have: c.features, subclassChosenNow });
-  // SRD classes and subclasses keep today's DM-supplied features: only a book's come from the data.
-  const features = all.filter((f) => (f.source === 'subclass' ? Boolean(sub?.source) : Boolean(option.source)));
+  // SRD classes and subclasses keep today's DM-supplied features: only a book's come from the data, and an SRD
+  // subclass's under a book's class (a 2024 book's class also offers the SRD's subclasses, as the dialog adds them).
+  const features = all.filter((f) => (f.source === 'subclass' ? Boolean(sub?.source) || Boolean(option.source) : Boolean(option.source)));
   const ties = [tieNote(option, data.classes, Boolean(existing)), subclassChosenNow ? subclassTieNote(option, sub, input.subclass ?? '') : null];
   return { option, existing, classLevel, sub, subclassChosenNow, features, tie: ties.filter(Boolean).join(' ') || null };
 }
@@ -1054,8 +1055,11 @@ function dmFeatures(
 }
 
 /** levelUp's options from the data: the class by id, a new class's numbers and ref, the subclass by id with its ref and casting. */
-function dataLevelOptions(plan: DataLevel, data: BuilderData, input: ToolInput<'level_up'>): Partial<LevelUpOptions> {
+function dataLevelOptions(plan: DataLevel, data: BuilderData, input: ToolInput<'level_up'>, c: Character): Partial<LevelUpOptions> {
   const { option, existing, sub } = plan;
+  // A book's classes (the new one, or one the hero has) have no SRD data: the engine checks their prerequisites from these.
+  const books = [option, ...c.classes.map((cl) => classOptionFor(cl, data.classes))].filter((o): o is ClassOption => Boolean(o?.source));
+  const multiclassPrimaries = [...new Map(books.map((o) => [o.id, { name: o.name, primaryAbilities: o.primaryAbilities, primaryRule: primaryRuleOf(o) }])).values()];
   // A subclass chosen now; the hero's own, named again, keeps its id and ref as they are.
   const chosen = plan.subclassChosenNow && sub ? sub : undefined;
   const subclassRef = subclassRefOf(chosen);
@@ -1075,6 +1079,7 @@ function dataLevelOptions(plan: DataLevel, data: BuilderData, input: ToolInput<'
     ...(chosen ? { subclass: chosen.name, subclassId: chosen.id } : {}),
     ...(subclassRef ? { subclassRef } : {}),
     ...(subclassCasting ? { subclassCasting } : {}),
+    ...(multiclassPrimaries.length ? { multiclassPrimaries } : {}),
     equipment: data.equipment,
   };
 }
@@ -1123,7 +1128,7 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
         casterType: input.caster_type,
         spellcastingAbility: input.spellcasting_ability,
       }),
-      ...(plan && data ? dataLevelOptions(plan, data, input) : {}),
+      ...(plan && data ? dataLevelOptions(plan, data, input, c) : {}),
       newFeatures: [...(plan?.features ?? []), ...extra],
     });
     if (r.character === c || !plan) return r;

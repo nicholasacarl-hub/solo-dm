@@ -49,6 +49,9 @@ function partNames(data: unknown): string[] {
   return [...(d.features ?? []), ...(d.traits ?? []), ...(d.lineages ?? [])].map((p) => p.name).filter((n): n is string => typeof n === 'string');
 }
 
+/** Kinds a player chooses from lists (the builder, level-up): a 2024 book's stands in for the SRD's there. */
+const CHOSEN_KINDS: ReadonlySet<StructuredKind> = new Set<StructuredKind>(['class', 'subclass', 'species', 'background', 'feat', 'spell']);
+
 /** name-collision and engine-name notices for one record. */
 export function nameNotices(
   record: { kind: StructuredKind; name: string; sourceId: string; data: unknown },
@@ -59,8 +62,15 @@ export function nameNotices(
   const srd = others.find((e) => e.sourceId === SRD_SOURCE_ID);
   const book = others.find((e) => e.sourceId !== SRD_SOURCE_ID && e.sourceId !== 'homebrew');
   if (srd) {
+    // What the lists do once it's accepted (options/replaced.ts): a 2024 book's option stands in for the SRD's.
+    const format = (record.data as { format?: unknown } | null)?.format;
+    const lists = !CHOSEN_KINDS.has(record.kind)
+      ? ''
+      : format === '2024'
+        ? ` The character builder and level-up offer it in place of the SRD's (the builder's "SRD" filter still shows the SRD's).`
+        : ` The character builder offers it beside the SRD's.`;
     out.push(warning('name-collision', 'info',
-      `The SRD also has ${KIND_NOUN[record.kind]} called ${quote(record.name)}. Once you accept this one, combat and the DM use this book's version when they look that name up. Both stay in the Library.`, 'name'));
+      `The SRD also has ${KIND_NOUN[record.kind]} called ${quote(record.name)}. Once you accept this one, combat and the DM use this book's version when they look that name up.${lists} Both stay in the Library.`, 'name'));
   } else if (book) {
     out.push(warning('name-collision', 'info', `“${book.sourceName}” also has ${KIND_NOUN[record.kind]} called ${quote(record.name)}. Both stay in the Library.`, 'name'));
   }
