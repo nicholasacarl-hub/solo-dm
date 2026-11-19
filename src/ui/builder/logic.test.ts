@@ -589,6 +589,58 @@ describe('spells the class or species already gives (the sheet keeps one spell p
     expect(validateStep('spells', wizardDraft(), ctx)).toEqual([]);
   });
 
+  it('drops a pick the hero has since been granted (a species chosen after the spells) and fills its place', () => {
+    const picked = { ...wizardDraft(), cantrips: [spellId('Prestidigitation'), spellId('Fire Bolt'), spellId('Light')] };
+    expect(validateStep('spells', picked, ctx)).toContain('You already have Prestidigitation from High Elf; choose a different spell.');
+    for (const next of [0, 0.5, 0.99]) {
+      const draft = fillStep('spells', picked, ctx, { next: () => next });
+      expect(draft.cantrips).not.toContain(spellId('Prestidigitation'));
+      expect(draft.cantrips.slice(0, 2)).toEqual([spellId('Fire Bolt'), spellId('Light')]);
+      expect(validateStep('spells', draft, ctx)).toEqual([]);
+    }
+  });
+
+  it('drops a Magic Initiate cantrip the hero has since been granted', () => {
+    const initiate = { ability: 'int' as const, cantrips: [spellId('Prestidigitation'), spellId('Ray of Frost')], spell: spellId('Thunderwave') };
+    for (const next of [0, 0.5, 0.99]) {
+      const draft = fillStep('spells', { ...wizardDraft(), magicInitiate: { Wizard: initiate } }, ctx, { next: () => next });
+      expect(draft.magicInitiate.Wizard?.cantrips).not.toContain(spellId('Prestidigitation'));
+      expect(draft.magicInitiate.Wizard?.cantrips).toContain(spellId('Ray of Frost'));
+      expect(validateStep('spells', draft, ctx)).toEqual([]);
+    }
+  });
+
+  it("lets Magic Initiate's level 1 spell be one the class keeps prepared, and the sheet adds its free casting (SRD 5.2.1 Magic Initiate)", () => {
+    const wizard = cls('Wizard');
+    // An invented level 1 feature that keeps Bless prepared (a Cleric spell, so Magic Initiate (Cleric) offers it too).
+    const blessed = {
+      ...wizard,
+      id: 'srd:class:blessed-wizard',
+      features: [...wizard.features, { level: 1, name: 'Lantern Vow', description: 'You always have the Bless spell prepared.' }],
+    };
+    const bctx: BuilderContext = { data: { ...data, classes: [...data.classes, blessed] }, spells };
+    const draft = fillStep('spells', { ...wizardDraft(), classId: blessed.id, backgroundId: bg('Acolyte').id, cantrips: [], spellbook: [], prepared: [], magicInitiate: {} }, bctx, fixedRng);
+    const withBless = { ...draft, magicInitiate: { Cleric: { ...(draft.magicInitiate.Cleric as NonNullable<typeof draft.magicInitiate.Cleric>), spell: spellId('Bless') } } };
+    expect(validateStep('spells', withBless, bctx)).toEqual([]);
+    const bless = buildCharacter(withBless, bctx, { campaignId: 'c' }).spellcasting?.spells.filter((s) => s.name === 'Bless');
+    expect(bless).toHaveLength(1);
+    expect(bless?.[0]).toMatchObject({ alwaysPrepared: true, source: 'Lantern Vow; Magic Initiate (Cleric)' });
+    expect(bless?.[0].notes).toMatch(/Magic Initiate \(Cleric\): Spellcasting ability: \w+\. Once per Long Rest without a spell slot/);
+    // A class pick of Bless on top of the vow would be wasted: it is still flagged.
+    expect(validateStep('spells', { ...withBless, spellbook: [...withBless.spellbook.slice(0, -1), spellId('Bless')] }, bctx)).toContain(
+      'You already have Bless from Lantern Vow; choose a different spell.',
+    );
+  });
+
+  it('asks only for the names the hero can still pick (a granted one is left out of the count)', () => {
+    const elfWizard = { ...wizardDraft(), cantrips: [spellId('Fire Bolt'), spellId('Light')] };
+    const onList = (sp: (typeof spells)[number]) => spellInfo({ ...sp.entry, data: { ...sp.entry.data, classes: ['Wizard'] } });
+    // Three cantrips on the list, one of which the High Elf already has: two to choose.
+    const short: BuilderContext = { data, spells: ['Fire Bolt', 'Light', 'Prestidigitation', 'Magic Missile', 'Shield', 'Sleep', 'Detect Magic', 'Feather Fall', 'Mage Armor', 'Thunderwave'].map((n) => onList(spells.find((s) => s.name === n)!)) };
+    expect(validateStep('spells', elfWizard, short).filter((e) => e.startsWith('Choose ') && e.includes('cantrips'))).toEqual([]);
+    expect(validateStep('spells', { ...elfWizard, cantrips: [spellId('Fire Bolt')] }, short)).toContain('Choose 3 cantrips (1 chosen).');
+  });
+
   it("reads an older book's spell line for the level ('2nd-level conjuration'), so its spell never reads as a cantrip", () => {
     const misty = spellInfo({ id: 'lib:reed:7', sourceId: 'reed', sourceName: 'The Reed Primer', kind: 'spell', name: 'Misty Step', summary: '2nd-level conjuration', text: 'Invented.' });
     expect(misty.level).toBe(2);

@@ -170,9 +170,11 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
   const chosen = new Set([...classIds, ...initiateIds]);
   const visible = (list: SpellInfo[]) => visibleSpells(list, draft.sourceFilter, chosen);
   // Known once chosen in any list, or granted by the class or species, by name: a book's spell and the SRD's
-  // of the same name are one spell.
-  const chosenNames = new Set([...ctx.spells.filter((s) => chosen.has(s.id)).map((s) => nameKey(s.name)), ...grantedSpells(draft, ctx.data).keys()]);
-  const taken = new Set(ctx.spells.filter((s) => chosenNames.has(nameKey(s.name))).map((s) => s.id));
+  // of the same name are one spell. Magic Initiate's level 1 spell may be a granted one (it adds a free casting).
+  const chosenNames = new Set(ctx.spells.filter((s) => chosen.has(s.id)).map((s) => nameKey(s.name)));
+  const named = (keys: ReadonlySet<string>) => new Set(ctx.spells.filter((s) => keys.has(nameKey(s.name))).map((s) => s.id));
+  const taken = named(new Set([...chosenNames, ...grantedSpells(draft, ctx.data).keys()]));
+  const takenByPicks = named(chosenNames);
   const cantripOptions = visible(classSpellOptions(draft, ctx, 0));
   const levelOneOptions = visible(classSpellOptions(draft, ctx, 1));
   const spellbookSpells = classSpellOptions(draft, ctx, 1).filter((s) => draft.spellbook.includes(s.id));
@@ -275,7 +277,7 @@ export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoad
               max={1}
               onChange={(ids) => update({ spell: ids[0] ?? null })}
               onInfo={setInfo}
-              taken={taken}
+              taken={takenByPicks}
             />
           </section>
         );

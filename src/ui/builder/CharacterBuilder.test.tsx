@@ -171,6 +171,23 @@ describe('CharacterBuilder with imported options', () => {
     expect(thaumaturgy).toHaveAccessibleName(/already known/);
   });
 
+  it("lets Magic Initiate's level 1 spell be one the class keeps prepared, while the class list shows it as known", () => {
+    const CLERIC = byName(EXPECTED_MERGED.classes, 'Cleric');
+    const ferry = byName(EXPECTED_MERGED.backgrounds, 'Ferry Hand');
+    const vowed: ClassOption = { ...CLERIC, id: 'srd:class:vowed-cleric', features: [...CLERIC.features, { level: 1, name: 'Lantern Vow', description: 'You always have the Bless spell prepared.' }] };
+    const entry = (id: string, name: string, level: number): SpellInfo =>
+      spellInfo({ id, sourceId: 'srd-5.2.1', sourceName: 'SRD 5.2.1', kind: 'spell', name, summary: level ? `Level ${level} Enchantment (Cleric)` : 'Evocation Cantrip (Cleric)', text: 'Invented.', data: { level, classes: ['Cleric'] } });
+    const spells = [entry('srd:spell:light', 'Light', 0), entry('srd:spell:sacred-flame', 'Sacred Flame', 0), entry('srd:spell:bless', 'Bless', 1), entry('srd:spell:heal-light', 'Healing Word', 1)];
+    renderBuilder(
+      { step: 'spells', classId: vowed.id, backgroundId: ferry.id, backgroundFeat: 'srd:feat:magic-initiate', backgroundFeatList: 'Cleric' },
+      { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, vowed] },
+      spells,
+    );
+    const bless = (list: string) => within(screen.getByRole('list', { name: list })).getByRole('checkbox', { name: /^Bless/ });
+    expect(bless('Prepared level 1 spells')).toBeDisabled();
+    expect(bless('Cleric level 1 spell')).toBeEnabled();
+  });
+
   it('narrows the options to one source, and "Let the DM decide" picks among what it shows', async () => {
     const user = userEvent.setup();
     renderBuilder();

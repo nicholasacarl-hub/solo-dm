@@ -366,21 +366,25 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
     const levelOneOptions = visibleSpells(classSpellOptions(draft, ctx, 1), draft.sourceFilter, chosen);
     const cantripIds = cantripOptions.map((s) => s.id);
     const levelOneIds = levelOneOptions.map((s) => s.id);
+    // Valid picks stay, but not one the hero has since been granted (a species chosen after the spells).
+    const keeps = (ids: string[], options: string[]) => ids.filter((id) => options.includes(id) && !granted.has(nameOf(id)));
+    // At most as many as the list has names (topUp skips the ones the hero already has).
+    const countOf = (ids: string[]) => new Set(ids.map(nameOf)).size;
     const cantrips = topUp(
-      draft.cantrips.filter((id) => cantripIds.includes(id)),
+      keeps(draft.cantrips, cantripIds),
       [...recommendedSpells(draft, ctx, cantripOptions), ...shuffle(cantripIds, rng)],
-      Math.min(plan.cantrips, new Set(cantripIds.map(nameOf)).size),
+      Math.min(plan.cantrips, countOf(cantripIds)),
       nameOf,
       initiateNames,
     );
     const rankedLevelOne = [...recommendedSpells(draft, ctx, levelOneOptions), ...shuffle(levelOneIds, rng)];
-    const levelOneCount = new Set(levelOneIds.map(nameOf)).size;
+    const levelOneCount = countOf(levelOneIds);
     if (plan.spellbook) {
-      const spellbook = topUp(draft.spellbook.filter((id) => levelOneIds.includes(id)), rankedLevelOne, Math.min(plan.spellbook, levelOneCount), nameOf, initiateNames);
+      const spellbook = topUp(keeps(draft.spellbook, levelOneIds), rankedLevelOne, Math.min(plan.spellbook, levelOneCount), nameOf, initiateNames);
       const prepared = topUp(draft.prepared.filter((id) => spellbook.includes(id)), spellbook, Math.min(plan.prepared, spellbook.length));
       next = { ...next, cantrips, spellbook, prepared };
     } else {
-      const prepared = topUp(draft.prepared.filter((id) => levelOneIds.includes(id)), rankedLevelOne, Math.min(plan.prepared, levelOneCount), nameOf, initiateNames);
+      const prepared = topUp(keeps(draft.prepared, levelOneIds), rankedLevelOne, Math.min(plan.prepared, levelOneCount), nameOf, initiateNames);
       next = { ...next, cantrips, prepared };
     }
   }
@@ -400,7 +404,8 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
       const shownIds = free(next.sourceFilter);
       return new Set(shownIds.map(nameOf)).size >= need ? shownIds : free(null);
     };
-    const cantripIds = listed(0, 2, (id) => Boolean(current?.cantrips.includes(id)));
+    // A current cantrip stays unless the hero has since been granted it; the level 1 spell may be a granted one.
+    const cantripIds = listed(0, 2, (id) => Boolean(current?.cantrips.includes(id)) && !granted.has(nameOf(id)));
     const levelOneIds = listed(1, 1, (id) => current?.spell === id);
     const mental: Ability[] = ['int', 'wis', 'cha'];
     const ability = current?.ability && mental.includes(current.ability) ? current.ability : [...mental].sort((a, b) => scores[b] - scores[a])[0];

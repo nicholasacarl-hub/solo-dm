@@ -265,7 +265,8 @@ function speciesSpellNames(p: Picks): { cantrips: string[]; alwaysPrepared: stri
 /**
  * The spells the hero has without choosing them, by name key: what the class's level 1 features keep prepared
  * (a caster's) and what the species or lineage grants, with where each comes from. A list treats them as known,
- * since the sheet keeps one spell per name (a pick of the same name would quietly replace one).
+ * since the sheet keeps one spell per name (a pick of the same name would quietly replace one). Magic Initiate's
+ * level 1 spell is the exception: it may be one of these, and adds a free casting (SRD 5.2.1 Magic Initiate).
  */
 export function grantedSpells(draft: BuilderDraft, data: BuilderData): Map<string, { name: string; source: string }> {
   const p = picks(draft, data);
@@ -320,7 +321,13 @@ function buildSpellcasting(draft: BuilderDraft, ctx: BuilderContext, p: Picks, c
       if (s) add(knownSpell(s, s, { source, notes }));
     }
     const s = choice.spell ? byId.get(choice.spell) : undefined;
-    if (s) add(knownSpell(s, s, { source, alwaysPrepared: true, notes: [notes, 'Once per Long Rest without a spell slot'].filter(Boolean).join('. ') }));
+    const spellNotes = [notes, 'Once per Long Rest without a spell slot'].filter(Boolean).join('. ');
+    const same = s ? spells.findIndex((k) => nameKey(k.name) === nameKey(s.name)) : -1;
+    // A spell the class already keeps prepared: Magic Initiate adds its free casting to that entry.
+    if (s && same >= 0) {
+      const had = spells[same];
+      spells[same] = { ...had, alwaysPrepared: true, source: [had.source, source].filter(Boolean).join('; '), notes: [had.notes, `${source}: ${spellNotes}`].filter(Boolean).join('. ') };
+    } else if (s) add(knownSpell(s, s, { source, alwaysPrepared: true, notes: spellNotes }));
   }
   const speciesSource = p.lineage?.name ?? p.species?.name;
   const speciesNotes = abilityNote(draft.lineageAbility);
@@ -717,17 +724,14 @@ function validateSpells(draft: BuilderDraft, ctx: BuilderContext): string[] {
   if (!ctx.spells.length) return [];
   const plan = spellPlan(draft, ctx.data);
   const errors: string[] = [];
-  // A list offers one spell per name (a book's and the SRD's of the same name are one choice): count names.
-  const names = (spells: readonly SpellInfo[]) => new Set(spells.map((s) => nameKey(s.name))).size;
-  // A pick that repeats a spell the hero already has would be lost on the sheet (one spell per name).
+  // A pick that repeats a spell the hero already has would be lost on the sheet (one spell per name); Magic
+  // Initiate's level 1 spell may (it adds a free casting).
   const granted = grantedSpells(draft, ctx.data);
+  // A list offers one spell per name (a book's and the SRD's of the same name are one choice), less the ones the
+  // hero already has: count those names.
+  const names = (spells: readonly SpellInfo[]) => new Set(spells.map((s) => nameKey(s.name)).filter((k) => !granted.has(k))).size;
   const byId = new Map(ctx.spells.map((s) => [s.id, s]));
-  const picked = [
-    ...draft.cantrips,
-    ...draft.spellbook,
-    ...draft.prepared,
-    ...plan.magicInitiate.flatMap(({ list }) => [...(draft.magicInitiate[list]?.cantrips ?? []), ...(draft.magicInitiate[list]?.spell ? [draft.magicInitiate[list]?.spell as string] : [])]),
-  ];
+  const picked = [...draft.cantrips, ...draft.spellbook, ...draft.prepared, ...plan.magicInitiate.flatMap(({ list }) => draft.magicInitiate[list]?.cantrips ?? [])];
   for (const name of new Set(picked.map((id) => byId.get(id)?.name).filter((n): n is string => Boolean(n)))) {
     const grant = granted.get(nameKey(name));
     if (grant) errors.push(`You already have ${grant.name} from ${grant.source}; choose a different spell.`);
