@@ -34,7 +34,7 @@ import {
   type BuilderContext,
 } from './logic';
 import { backgroundAbilityPool } from './abilities';
-import { inSourceFilter, visibleSpells, withoutReplacedSrd } from './sources';
+import { filtered, visibleSpells, withoutReplacedSrd } from './sources';
 import {
   MAGIC_INITIATE_LISTS,
   STANDARD_LANGUAGES,
@@ -100,11 +100,13 @@ function shuffle<T>(items: readonly T[], rng: Rng): T[] {
   return out;
 }
 
-/** Keep `kept`, then add from `ranked` until there are `count`. */
-/** `kept`, then the best of `ranked` up to `count`, never two with the same key (the item itself by default). */
-function topUp<T>(kept: T[], ranked: T[], count: number, key: (item: T) => unknown = (item) => item): T[] {
+/**
+ * `kept`, then the best of `ranked` up to `count`: never two with the same key (the item itself by default),
+ * nor one whose key is `taken` (chosen elsewhere).
+ */
+function topUp<T>(kept: T[], ranked: T[], count: number, key: (item: T) => unknown = (item) => item, taken: ReadonlySet<unknown> = new Set()): T[] {
   const out = kept.slice(0, count);
-  const seen = new Set(out.map(key));
+  const seen = new Set([...taken, ...out.map(key)]);
   for (const item of ranked) {
     if (out.length >= count) break;
     if (!seen.has(key(item))) {
@@ -125,11 +127,11 @@ function recommendedPlain(description: string): string | undefined {
 // ---------------------------------------------------------------------------
 
 /**
- * The options of a list the source filter shows (autofill picks only among those). "All" leaves out the SRD
- * options a 2024 book's stand in for, as the steps do, but keeps `keep` (the current choice).
+ * The options of a list as its step shows them (autofill picks only among those): the source filter's ("All"
+ * without the SRD options a 2024 book's stand in for), and `keep`, the current choice, whatever the filter.
  */
 const shown = <T extends { id: string; name: string; source?: OptionSource }>(list: readonly T[], draft: BuilderDraft, keep?: string | null): T[] =>
-  draft.sourceFilter ? list.filter((o) => inSourceFilter(o, draft.sourceFilter)) : withoutReplacedSrd(list, [keep]);
+  filtered(list, draft.sourceFilter, keep);
 
 function fillClass(draft: BuilderDraft, data: BuilderData, rng: Rng): BuilderDraft {
   const classes = shown(data.classes, draft);
@@ -347,6 +349,12 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
   // One spell per name: a book's spell and the SRD's of the same name are one choice.
   const nameOf = (id: string) => nameKey(byId.get(id)?.name ?? id);
   let next = draft;
+  // Spells the hero already has from Magic Initiate, by name: the class lists don't take them again.
+  const initiateNames = new Set(
+    magicInitiateSources(draft, ctx.data)
+      .flatMap(({ list }) => [...(draft.magicInitiate[list]?.cantrips ?? []), ...(draft.magicInitiate[list]?.spell ? [draft.magicInitiate[list]?.spell as string] : [])])
+      .map(nameOf),
+  );
   if (plan.casting) {
     // As the step lists them (spells already chosen stay).
     const chosen = new Set([...draft.cantrips, ...draft.spellbook, ...draft.prepared]);
@@ -359,15 +367,16 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
       [...recommendedSpells(draft, ctx, cantripOptions), ...shuffle(cantripIds, rng)],
       Math.min(plan.cantrips, new Set(cantripIds.map(nameOf)).size),
       nameOf,
+      initiateNames,
     );
     const rankedLevelOne = [...recommendedSpells(draft, ctx, levelOneOptions), ...shuffle(levelOneIds, rng)];
     const levelOneCount = new Set(levelOneIds.map(nameOf)).size;
     if (plan.spellbook) {
-      const spellbook = topUp(draft.spellbook.filter((id) => levelOneIds.includes(id)), rankedLevelOne, Math.min(plan.spellbook, levelOneCount), nameOf);
+      const spellbook = topUp(draft.spellbook.filter((id) => levelOneIds.includes(id)), rankedLevelOne, Math.min(plan.spellbook, levelOneCount), nameOf, initiateNames);
       const prepared = topUp(draft.prepared.filter((id) => spellbook.includes(id)), spellbook, Math.min(plan.prepared, spellbook.length));
       next = { ...next, cantrips, spellbook, prepared };
     } else {
-      const prepared = topUp(draft.prepared.filter((id) => levelOneIds.includes(id)), rankedLevelOne, Math.min(plan.prepared, levelOneCount), nameOf);
+      const prepared = topUp(draft.prepared.filter((id) => levelOneIds.includes(id)), rankedLevelOne, Math.min(plan.prepared, levelOneCount), nameOf, initiateNames);
       next = { ...next, cantrips, prepared };
     }
   }
@@ -383,7 +392,7 @@ function fillSpells(draft: BuilderDraft, ctx: BuilderContext, rng: Rng): Builder
     const levelOneIds = listed(1).filter((id) => !known.has(nameOf(id)) || current?.spell === id);
     const mental: Ability[] = ['int', 'wis', 'cha'];
     const ability = current?.ability && mental.includes(current.ability) ? current.ability : [...mental].sort((a, b) => scores[b] - scores[a])[0];
-    const cantrips = topUp((current?.cantrips ?? []).filter((id) => cantripIds.includes(id)), shuffle(cantripIds, rng), Math.min(2, cantripIds.length));
+    const cantrips = topUp((current?.cantrips ?? []).filter((id) => cantripIds.includes(id)), shuffle(cantripIds, rng), Math.min(2, new Set(cantripIds.map(nameOf)).size), nameOf);
     const spell = current?.spell && levelOneIds.includes(current.spell) ? current.spell : (shuffle(levelOneIds, rng)[0] ?? null);
     magicInitiate[list] = { ability, cantrips, spell };
     cantrips.forEach((id) => known.add(nameOf(id)));

@@ -126,6 +126,18 @@ describe('CharacterBuilder with imported options', () => {
     expect(feats.some((t) => t.includes('Savage Attacker'))).toBe(true);
   });
 
+  it("keeps a chosen Origin feat that doubles the background's on the species step, and says why it can't stay", () => {
+    const lamplighter = byName(EXPECTED_MERGED.backgrounds, 'Lamplighter');
+    const mothkin = byName(EXPECTED_MERGED.species, 'Mothkin');
+    const bookAlert: FeatOption = { id: 'lib:gloam:feat:alert', name: 'Alert', category: 'origin', description: 'Invented: you wake at the first creak.', source: { ...lamplighter.source!, recordId: 'rec:gloam:feat:alert' } };
+    const watch: BackgroundOption = { ...lamplighter, id: 'lib:gloam:background:night-watch', name: 'Night Watch', feat: 'Alert' };
+    const wayfolk: SpeciesOption = { ...mothkin, id: 'lib:gloam:species:wayfolk', name: 'Wayfolk', traits: [{ name: 'Wayfarer', description: 'You gain an Origin feat of your choice.' }], lineages: undefined, lineageTrait: undefined };
+    const data = { ...EXPECTED_MERGED, feats: [...EXPECTED_MERGED.feats, bookAlert], backgrounds: [...EXPECTED_MERGED.backgrounds, watch], species: [...EXPECTED_MERGED.species, wayfolk] };
+    renderBuilder({ step: 'species', classId: FIGHTER.id, backgroundId: watch.id, speciesId: wayfolk.id, speciesFeat: 'srd:feat:alert' }, data);
+    expect(radio('Origin feat', /^Alert/)).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByText('You already have Alert from your background; choose a different feat.')).toBeInTheDocument();
+  });
+
   it("lists one spell per name: a book's accepted spell in place of the SRD's, and a chosen SRD spell beside it as known", () => {
     const CLERIC = byName(EXPECTED_MERGED.classes, 'Cleric');
     const entry = (id: string, name: string, extra: Partial<CompendiumEntry> = {}): SpellInfo =>

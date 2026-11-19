@@ -458,6 +458,10 @@ describe("a 2024 book's option in place of the SRD's: one per name under All", (
     const ferry = fighterDraft({ backgroundId: ferryHand.id, backgroundFeat: 'srd:feat:alert' });
     expect(fillStep('background', ferry, bctx, { next: () => 0.99 }).backgroundFeat).toBe('srd:feat:alert');
     expect(letDmDecide('background', { ...ferry, backgroundId: null }, bctx, { next: () => 0 }).backgroundFeat).not.toBe('srd:feat:alert');
+    // A filter never makes the DM replace a valid choice its step still shows (filtered keeps it).
+    const kept = fillStep('species', { ...draft('srd:feat:savage-attacker'), sourceFilter: GLOAMWOOD_SOURCE_ID }, bctx, { next: () => 0.99 });
+    expect(kept.speciesFeat).toBe('srd:feat:savage-attacker');
+    expect(fillStep('background', { ...ferry, sourceFilter: GLOAMWOOD_SOURCE_ID }, bctx, { next: () => 0.99 }).backgroundFeat).toBe('srd:feat:alert');
     // Filling in replaces it, under "All" and under the SRD filter (which lists the SRD's Alert).
     for (const sourceFilter of [null, SRD_SOURCE_ID]) {
       for (const next of [0, 0.5, 0.99]) {

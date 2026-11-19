@@ -596,6 +596,28 @@ describe("a 2024 book's spells in place of the SRD's (one per name)", () => {
     }
   });
 
+  it('never gives a class list a spell the hero already has from Magic Initiate, by name', () => {
+    const initiate = { ability: 'int' as const, cantrips: [book[0].id, spellId('Fire Bolt')], spell: book[2].id };
+    for (const next of [0, 0.3, 0.6, 0.99]) {
+      const draft = fillStep('spells', { ...wizardDraft(), cantrips: [], spellbook: [], prepared: [], magicInitiate: { Wizard: initiate } }, withBook, { next: () => next });
+      expect(draft.magicInitiate.Wizard).toEqual(initiate);
+      expect(draft.cantrips.map(nameOf), String(next)).not.toContain('Light');
+      expect(draft.cantrips.map(nameOf), String(next)).not.toContain('Fire Bolt');
+      expect(draft.spellbook.map(nameOf), String(next)).not.toContain('Magic Missile');
+      expect(draft.cantrips).toHaveLength(3);
+    }
+  });
+
+  it("gives Magic Initiate two cantrips of two names, an older book's Light beside the SRD's notwithstanding", () => {
+    const older = spellInfo({ ...book[0].entry, id: 'lib:oldtome:light', sourceId: 'oldtome', sourceName: 'The Old Tome', data: { ...book[0].entry.data, recordId: 'rec:oldtome:light', format: '2014' } });
+    const fighterSage: BuilderContext = { data, spells: [...spells, older] };
+    for (let i = 0; i < 40; i++) {
+      const draft = fillStep('spells', { ...wizardDraft(), classId: cls('Fighter').id, cantrips: [], spellbook: [], prepared: [], magicInitiate: {} }, fighterSage, { next: () => i / 40 });
+      const names = (draft.magicInitiate.Wizard?.cantrips ?? []).map((id) => fighterSage.spells.find((s) => s.id === id)?.name);
+      expect(new Set(names).size, `seed ${i}: ${names.join(', ')}`).toBe(2);
+    }
+  });
+
   it('asks for as many spells as the list has names (a list of two Lights offers one choice)', () => {
     const tiny = { ...cls('Wizard'), id: 'srd:class:lamp-adept', name: 'Lamp Adept', spellListName: 'Lamp Adept' };
     const onList = (sp: (typeof spells)[number]) => spellInfo({ ...sp.entry, data: { ...sp.entry.data, classes: ['Lamp Adept'] } });
