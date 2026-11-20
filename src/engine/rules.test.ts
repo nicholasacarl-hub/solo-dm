@@ -18,6 +18,7 @@ import {
   exhaustionPenalty,
   formatModifier,
   initiativeModifier,
+  isMonkWeapon,
   passivePerception,
   proficiencyBonus,
   rollRequestExpression,
@@ -741,5 +742,79 @@ describe('structured magic item bonuses (SRD 5.2.1 Attunement; Ring of Protectio
     };
     const c = mira({ inventory: [mail], features: [], armorTraining: ['Heavy armor'] });
     expect(computeArmorClass(c)).toEqual({ ac: 17, formula: "Warden's Mail 16 + 1 (magic)" });
+  });
+});
+
+describe('Monk weapons (SRD 5.2.1 Monk, Martial Arts: Simple Melee weapons and Martial Melee weapons that have the Light property)', () => {
+  const weapon = (name: string, damage: string, kind: Pick<Attack, 'weaponCategory' | 'weaponType'> | null, properties: string[] = [], ability: Attack['ability'] = 'str'): Attack => ({
+    id: name, name, ability, proficient: true, damage, damageType: 'piercing', properties, ...(kind ?? {}),
+  });
+  const simpleMelee = { weaponCategory: 'simple', weaponType: 'melee' } as const;
+  const martialMelee = { weaponCategory: 'martial', weaponType: 'melee' } as const;
+  const simpleRanged = { weaponCategory: 'simple', weaponType: 'ranged' } as const;
+  const spear = weapon('Spear', '1d6', simpleMelee, ['Thrown (Range 20/60)', 'Versatile (1d8)']);
+  const knife = weapon('Dagger', '1d4', simpleMelee, ['Finesse', 'Light', 'Thrown (Range 20/60)'], 'finesse');
+  const greatclub = weapon('Greatclub', '1d8', simpleMelee, ['Two-Handed']);
+  const shortsword = weapon('Shortsword', '1d6', martialMelee, ['Finesse', 'Light'], 'finesse');
+  const longsword = weapon('Longsword', '1d8', martialMelee, ['Versatile (1d10)']);
+  const dart = weapon('Dart', '1d4', simpleRanged, ['Finesse', 'Thrown (Range 20/60)'], 'finesse');
+  const shield: InventoryItem = { id: 'sh', name: 'Shield', quantity: 1, equipped: true, category: 'armor' };
+  const monkClass = (level: number): Character['classes'][number] => ({ classId: 'srd:class:monk', name: 'Monk', level, hitDie: 8, casterType: 'none' });
+  const hero = (classes: Character['classes'], inventory: InventoryItem[] = []) =>
+    mira({ abilityScores: { str: 10, dex: 16, con: 12, int: 8, wis: 16, cha: 10 }, classes, spellcasting: undefined, inventory, features: [] });
+  const monk = (level: number, inventory: InventoryItem[] = []) => hero([monkClass(level)], inventory);
+
+  it('counts Simple Melee weapons and Light Martial Melee weapons, never a ranged weapon; older attacks go by their SRD name', () => {
+    expect([spear, knife, greatclub, shortsword].map(isMonkWeapon)).toEqual([true, true, true, true]);
+    expect([longsword, dart].map(isMonkWeapon)).toEqual([false, false]);
+    // A martial melee weapon only with Light ("Lightning" isn't Light); a spell attack never.
+    expect(isMonkWeapon(weapon('Storm Blade', '1d6', martialMelee, ['Lightning']))).toBe(false);
+    expect(isMonkWeapon({ ...spear, ability: 'spell' })).toBe(false);
+    // By the recorded category and type, whatever the name (a book's own weapons); the record beats the name.
+    expect([weapon('Lampwick Knife', '1d4', martialMelee, ['Light']), weapon('Tidewort Cudgel', '1d6', simpleMelee)].map(isMonkWeapon)).toEqual([true, true]);
+    expect(isMonkWeapon(weapon('Spear', '1d6', { weaponCategory: 'martial', weaponType: 'ranged' }))).toBe(false);
+    // Attacks made before the category and type were recorded.
+    expect(['Spear', 'Light Hammer', 'Scimitar', 'Greatclub'].map((n) => isMonkWeapon(weapon(n, '1d6', null)))).toEqual([true, true, true, true]);
+    expect(['Longsword', 'Dart', 'Shortbow', 'Whip'].map((n) => isMonkWeapon(weapon(n, '1d6', null)))).toEqual([false, false, false, false]);
+  });
+
+  it('rolls the Martial Arts die in place of a smaller weapon die by Monk level, never in armor or with a Shield', () => {
+    // DEX 3 for damage (Dexterous Attacks on the Spear; the Dagger and Shortsword are Finesse).
+    expect([1, 5, 11, 17].map((l) => attackDamageExpression(monk(l), spear))).toEqual(['1d6+3', '1d8+3', '1d10+3', '1d12+3']);
+    expect(attackScaling(monk(5), spear)).toBe('martial-arts');
+    expect(attackDamageExpression(monk(1), knife)).toBe('1d6+3');
+    expect(attackDamageExpression(monk(5), shortsword)).toBe('1d8+3');
+    // "You can roll": a bigger weapon die stays (the Greatclub's d8, until the d10 at Monk 11).
+    expect([1, 5, 11].map((l) => attackDamageExpression(monk(l), greatclub))).toEqual(['1d8+3', '1d8+3', '1d10+3']);
+    // Not Monk weapons: a Longsword (STR 0) and a Dart.
+    expect(attackDamageExpression(monk(11), longsword)).toBe('1d8');
+    expect(attackScaling(monk(11), longsword)).toBeUndefined();
+    expect(attackDamageExpression(monk(11), dart)).toBe('1d4+3');
+    // A Critical Hit doubles the Martial Arts die.
+    expect(attackDamageExpression(monk(5), spear, true)).toBe('2d8+3');
+    // With a Shield or in armor: the weapon's own die, and Strength for the Spear.
+    expect(attackDamageExpression(monk(5, [shield]), spear)).toBe('1d6');
+    expect(attackDamageExpression(monk(5, [{ id: 'la', name: 'Leather Armor', quantity: 1, equipped: true, category: 'armor' }]), spear)).toBe('1d6');
+    expect(attackDamageExpression(monk(5, [shield]), knife)).toBe('1d4+3');
+  });
+
+  it('gives a Monk weapon from before the Monk levels (STR) Dexterity; anyone else keeps the weapon as it is', () => {
+    const fighterClass: Character['classes'][number] = { classId: 'srd:class:fighter', name: 'Fighter', level: 1, hitDie: 10, casterType: 'none' };
+    // Fighter 1 / Monk 5: Proficiency Bonus 3, DEX 3.
+    expect(attackBonus(hero([fighterClass, monkClass(5)]), spear)).toBe(6);
+    expect(attackDamageExpression(hero([fighterClass, monkClass(5)]), spear)).toBe('1d8+3');
+    expect(attackBonus(hero([fighterClass, monkClass(5)]), longsword)).toBe(3);
+    expect(attackBonus(hero([fighterClass, monkClass(5)], [shield]), spear)).toBe(3);
+    const fighter = hero([{ ...fighterClass, level: 5 }]);
+    expect(attackScaling(fighter, spear)).toBeUndefined();
+    expect(attackBonus(fighter, spear)).toBe(3);
+    expect(attackDamageExpression(fighter, spear)).toBe('1d6');
+  });
+
+  it("does the same for a 2024 book's Monk; a 2014 book's Monk keeps the weapon's own die", () => {
+    const ref = (format: '2024' | '2014'): ImportedRef => ({ sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:monk', kind: 'class', entryName: 'Monk', textHash: '', textCopied: false, format });
+    const book = (format: '2024' | '2014') => hero([{ ...monkClass(5), classId: 'lib:lamp:class:monk', ref: ref(format) }]);
+    expect(attackDamageExpression(book('2024'), spear)).toBe('1d8+3');
+    expect(attackDamageExpression(book('2014'), spear)).toBe('1d6');
   });
 });

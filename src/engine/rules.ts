@@ -280,17 +280,33 @@ function bestMentalAbility(c: Character): Ability {
 
 /** Ability modifier used by an attack (resolves 'finesse' and 'spell'). */
 export function attackAbilityModifier(c: Character, attack: Attack): number {
-  if (attack.ability === 'finesse' || dexterousUnarmedStrike(c, attack)) return Math.max(mod(c, 'str'), mod(c, 'dex'));
+  if (attack.ability === 'finesse' || dexterousMartialArts(c, attack)) return Math.max(mod(c, 'str'), mod(c, 'dex'));
   if (attack.ability === 'spell') return mod(c, spellcastingAbility(c) ?? bestMentalAbility(c));
   return mod(c, attack.ability);
 }
 
 /**
- * A Monk's Unarmed Strike on the sheet made before the Monk levels (a Fighter's, say): Dexterous Attacks lets it use
- * DEX while no armor or Shield is worn (SRD 5.2.1 Monk, Martial Arts).
+ * A Monk's Strength attack with an Unarmed Strike or a Monk weapon (one on the sheet from before the Monk levels, a
+ * Fighter's Spear, say): Dexterous Attacks lets it use DEX while no armor or Shield is worn (SRD 5.2.1 Monk, Martial Arts).
  */
-function dexterousUnarmedStrike(c: Character, attack: Attack): boolean {
-  return attack.ability === 'str' && nameKey(attack.name) === 'unarmed-strike' && isMonk(c) && !wearsArmorOrShield(c);
+function dexterousMartialArts(c: Character, attack: Attack): boolean {
+  return attack.ability === 'str' && (nameKey(attack.name) === 'unarmed-strike' || isMonkWeapon(attack)) && isMonk(c) && !wearsArmorOrShield(c);
+}
+
+/** SRD 5.2.1 Monk weapons by name, for weapon attacks made before attacks recorded their weapon's category and type. */
+const SRD_MONK_WEAPONS = new Set(
+  ['Club', 'Dagger', 'Greatclub', 'Handaxe', 'Javelin', 'Light Hammer', 'Mace', 'Quarterstaff', 'Sickle', 'Spear', 'Scimitar', 'Shortsword'].map(nameKey),
+);
+
+/**
+ * A Monk weapon (SRD 5.2.1 Monk, Martial Arts): a Simple Melee weapon, or a Martial Melee weapon with the Light
+ * property; never a ranged weapon (a Dart). By the attack's recorded weapon category and type, else by its SRD name.
+ */
+export function isMonkWeapon(attack: Pick<Attack, 'name' | 'ability' | 'properties' | 'weaponCategory' | 'weaponType'>): boolean {
+  if (attack.ability === 'spell') return false;
+  if (!attack.weaponCategory || !attack.weaponType) return SRD_MONK_WEAPONS.has(nameKey(attack.name));
+  if (attack.weaponType !== 'melee') return false;
+  return attack.weaponCategory === 'simple' || (attack.properties ?? []).some((p) => /^light\b/i.test(p.trim()));
 }
 
 /** Attack roll bonus: ability mod + PB (if proficient) + attackBonusExtra. */
@@ -340,7 +356,7 @@ function isEldritchBlast(attack: Attack): boolean {
 }
 
 /**
- * How an attack's damage dice grow with level: its `scaling`; a Monk's Unarmed Strike (Martial Arts);
+ * How an attack's damage dice grow with level: its `scaling`; a Monk's Unarmed Strike or Monk weapon (Martial Arts);
  * or, on sheets made before the `scaling` field existed (no attack has one), a spell-attack cantrip —
  * notes "Cantrip" or a known cantrip of the same name. Newer sheets leave out `scaling` on purpose for
  * cantrips that don't gain dice.
@@ -352,7 +368,7 @@ export function attackScaling(c: Character, attack: Attack): Attack['scaling'] {
     const known = (c.spellcasting?.spells ?? []).some((s) => s.level === 0 && nameKey(s.name) === nameKey(attack.name));
     return known || /\bcantrip\b/i.test(attack.notes ?? '') ? 'cantrip' : undefined;
   }
-  return nameKey(attack.name) === 'unarmed-strike' && isMonk(c) ? 'martial-arts' : undefined;
+  return (nameKey(attack.name) === 'unarmed-strike' || isMonkWeapon(attack)) && isMonk(c) ? 'martial-arts' : undefined;
 }
 
 /**
@@ -373,8 +389,9 @@ function wearsArmorOrShield(c: Character): boolean {
  * Damage dice after level scaling (`flat` = the damage string's own flat bonus):
  * - cantrip: every die rolled ×1/2/3/4 by character level — except Eldritch Blast, which gains beams
  *   instead. Sheets without a `scaling` field are scaled only from the cantrip's single base die.
- * - martial-arts: the Martial Arts die for the Monk level replaces a smaller die, or the Unarmed Strike's
- *   flat 1 ("roll 1d6 in place of the normal damage", SRD 5.2.1 Monk), unless armor or a Shield is worn.
+ * - martial-arts: the Martial Arts die for the Monk level replaces a smaller die (a Monk weapon's, a Dagger's d4), or
+ *   the Unarmed Strike's flat 1 ("roll 1d6 in place of the normal damage", SRD 5.2.1 Monk), unless armor or a Shield
+ *   is worn.
  */
 function scaledDamage(c: Character, attack: Attack, dice: DiceGroup[], flat: number): { dice: DiceGroup[]; flat: number } {
   const scaling = attackScaling(c, attack);

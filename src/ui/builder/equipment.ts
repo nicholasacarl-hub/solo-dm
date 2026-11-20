@@ -10,6 +10,7 @@ import type {
   ItemCategory,
 } from '@/types';
 import { findEquipment as findCatalogMatch, inventoryFromOption, type CatalogMatch } from '@/data/options/resolve';
+import { isMonkWeapon } from '@/engine/rules';
 import { newId, nameKey } from '@/lib/id';
 
 export type { CatalogMatch };
@@ -136,25 +137,26 @@ export interface AttackContext {
   martialArts?: boolean;
 }
 
-function isMonkWeapon(option: EquipmentOption): boolean {
-  if (isRangedWeapon(option)) return false;
-  return weaponCategory(option) === 'simple' || hasProperty(option, 'light');
-}
-
-/** An Attack for a weapon from the catalog. */
+/** An Attack for a weapon from the catalog, with the weapon's category and type (Martial Arts reads them). */
 export function weaponAttack(option: EquipmentOption, ctx: AttackContext, name = option.name): Attack {
-  const finesse = hasProperty(option, 'finesse') || (ctx.martialArts === true && isMonkWeapon(option));
+  // The type only where the catalog gives it or Ammunition shows it: a guessed "melee" would make a book's Dart, read
+  // without its table's group row, a Monk weapon. Without one, the engine goes by the SRD name.
+  const type = option.weaponType ?? (isRangedWeapon(option) ? 'ranged' : undefined);
+  const kind = { weaponCategory: weaponCategory(option), ...(type ? { weaponType: type } : {}) };
+  const monkWeapon = isMonkWeapon({ name: option.name, ability: 'str', properties: option.properties, ...kind });
+  const finesse = hasProperty(option, 'finesse') || (ctx.martialArts === true && monkWeapon);
   const masteryKeys = new Set(ctx.masteries.map((m) => singular(nameKey(m))));
   const mastered = masteryKeys.has(singular(nameKey(option.name)));
   return {
     id: newId(),
     name,
-    ability: finesse ? 'finesse' : isRangedWeapon(option) ? 'dex' : 'str',
+    ability: finesse ? 'finesse' : type === 'ranged' ? 'dex' : 'str',
     proficient: isWeaponProficient(option, ctx.weaponProficiencies),
     damage: option.damage ?? '1',
     damageType: (option.damageType ?? 'bludgeoning').toLowerCase(),
     range: weaponRange(option),
     properties: option.properties,
+    ...kind,
     mastery: mastered ? option.mastery : undefined,
     notes: versatileNote(option),
   };
