@@ -321,8 +321,8 @@ export interface Attack {
   properties?: string[];
   /**
    * Weapons: the catalog's category and type, which Martial Arts reads (SRD 5.2.1 Monk: Monk weapons are Simple Melee
-   * weapons and Martial Melee weapons with the Light property). An attack made before these were recorded goes by its
-   * SRD name (engine isMonkWeapon).
+   * weapons and Martial Melee weapons with the Light property). An attack without both (made before they were recorded,
+   * or a book weapon whose type the catalog doesn't know) goes by its SRD name (engine isMonkWeapon).
    */
   weaponCategory?: 'simple' | 'martial';
   weaponType?: 'melee' | 'ranged';

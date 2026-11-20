@@ -770,6 +770,9 @@ describe('Monk weapons (SRD 5.2.1 Monk, Martial Arts: Simple Melee weapons and M
     // A martial melee weapon only with Light ("Lightning" isn't Light); a spell attack never.
     expect(isMonkWeapon(weapon('Storm Blade', '1d6', martialMelee, ['Lightning']))).toBe(false);
     expect(isMonkWeapon({ ...spear, ability: 'spell' })).toBe(false);
+    // By the recorded category and type, whatever the name (a book's own weapons); the record beats the name.
+    expect([weapon('Lampwick Knife', '1d4', martialMelee, ['Light']), weapon('Tidewort Cudgel', '1d6', simpleMelee)].map(isMonkWeapon)).toEqual([true, true]);
+    expect(isMonkWeapon(weapon('Spear', '1d6', { weaponCategory: 'martial', weaponType: 'ranged' }))).toBe(false);
     // Attacks made before the category and type were recorded.
     expect(['Spear', 'Light Hammer', 'Scimitar', 'Greatclub'].map((n) => isMonkWeapon(weapon(n, '1d6', null)))).toEqual([true, true, true, true]);
     expect(['Longsword', 'Dart', 'Shortbow', 'Whip'].map((n) => isMonkWeapon(weapon(n, '1d6', null)))).toEqual([false, false, false, false]);
@@ -789,8 +792,9 @@ describe('Monk weapons (SRD 5.2.1 Monk, Martial Arts: Simple Melee weapons and M
     expect(attackDamageExpression(monk(11), dart)).toBe('1d4+3');
     // A Critical Hit doubles the Martial Arts die.
     expect(attackDamageExpression(monk(5), spear, true)).toBe('2d8+3');
-    // With a Shield: the weapon's own die, and Strength for the Spear.
+    // With a Shield or in armor: the weapon's own die, and Strength for the Spear.
     expect(attackDamageExpression(monk(5, [shield]), spear)).toBe('1d6');
+    expect(attackDamageExpression(monk(5, [{ id: 'la', name: 'Leather Armor', quantity: 1, equipped: true, category: 'armor' }]), spear)).toBe('1d6');
     expect(attackDamageExpression(monk(5, [shield]), knife)).toBe('1d4+3');
   });
 

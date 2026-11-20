@@ -9,8 +9,8 @@ import { describe, expect, it, vi } from 'vitest';
 import builderRaw from '../../../public/srd/builder.json?raw';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import type { Rng } from '@/engine';
-import type { BuilderData, Character, CompendiumEntry, Feature } from '@/types';
-import { isMonkWeapon } from '@/engine/rules';
+import type { BuilderData, Character, CompendiumEntry, EquipmentOption, Feature } from '@/types';
+import { attackDamageExpression, isMonkWeapon } from '@/engine/rules';
 import { letDmBuildAll } from './autofill';
 import { weaponAttack } from './equipment';
 import { featureUseChanges, refreshFeatureUses } from './leveling';
@@ -163,6 +163,30 @@ describe('cantrip attacks', () => {
       const { weaponCategory: _category, weaponType: _type, ...older } = attack;
       expect(isMonkWeapon(older)).toBe(isMonkWeapon(attack));
     }
+  });
+
+  it("classifies a book's weapons by what its catalog knows, never a guessed type (SRD 5.2.1 Monk, Martial Arts)", () => {
+    const none = { weaponProficiencies: [], masteries: [] };
+    // Typed by the catalog: a book's own Light martial blade is a Monk weapon whatever its name (a Monk's uses DEX).
+    const knife: EquipmentOption = { id: 'lib:lamp:item:lampwick-knife', name: 'Lampwick Knife', category: 'weapon', weaponCategory: 'martial', weaponType: 'melee', damage: '1d4', damageType: 'slashing', properties: ['Light'] };
+    expect(weaponAttack(knife, { ...none, martialArts: true }).ability).toBe('finesse');
+    expect(weaponAttack(knife, none).ability).toBe('str');
+    // A book's Dart read without its table's group row: no guessed "melee", so the SRD name decides (not a Monk weapon).
+    const bookDart: EquipmentOption = { id: 'lib:lamp:item:dart', name: 'Dart', category: 'weapon', damage: '1d4', damageType: 'piercing', properties: ['Finesse', 'Thrown (Range 20/60)'] };
+    expect(weaponAttack(bookDart, none).weaponType).toBeUndefined();
+    expect(isMonkWeapon(weaponAttack(bookDart, none))).toBe(false);
+    expect(isMonkWeapon(weaponAttack({ ...bookDart, id: 'lib:lamp:item:spear', name: 'Spear', damage: '1d6', properties: ['Versatile (1d8)'] }, none))).toBe(true);
+    // A ranged weapon without Finesse or Ammunition (thrown only) uses Dexterity.
+    const disc: EquipmentOption = { id: 'lib:lamp:item:star-disc', name: 'Star Disc', category: 'weapon', weaponCategory: 'simple', weaponType: 'ranged', damage: '1d4', damageType: 'slashing', properties: ['Thrown (Range 30/90)'] };
+    expect(weaponAttack(disc, none)).toMatchObject({ ability: 'dex', weaponType: 'ranged' });
+  });
+
+  it("gives a level 5 Monk's starting Spear the Martial Arts d8 (the real engine)", () => {
+    const monk = build('Monk', 'Human');
+    const spear = monk.attacks.find((a) => a.name === 'Spear');
+    expect(spear).toMatchObject({ weaponCategory: 'simple', weaponType: 'melee' });
+    expect(attackDamageExpression(monk, spear!)).toMatch(/^1d6\b/);
+    expect(attackDamageExpression(atLevel(monk, 5), spear!)).toMatch(/^1d8\b/);
   });
 
   it('marks the Monk’s Unarmed Strike for Martial Arts', () => {
