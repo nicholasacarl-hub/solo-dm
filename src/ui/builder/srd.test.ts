@@ -10,7 +10,9 @@ import builderRaw from '../../../public/srd/builder.json?raw';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import type { Rng } from '@/engine';
 import type { BuilderData, Character, CompendiumEntry, Feature } from '@/types';
+import { isMonkWeapon } from '@/engine/rules';
 import { letDmBuildAll } from './autofill';
+import { weaponAttack } from './equipment';
 import { featureUseChanges, refreshFeatureUses } from './leveling';
 import { buildCharacter, classChoiceFeatures, emptyDraft, inferFeatureUses, spellAttack, spellInfo, validateStep, type BuilderContext, type BuilderDraft } from './logic';
 
@@ -147,6 +149,20 @@ describe('cantrip attacks', () => {
     const blast = spellAttack(spell('Eldritch Blast'));
     expect(blast).toMatchObject({ damage: '1d10', damageType: 'force', notes: 'Cantrip: 2 beams at level 5, 3 at 11, 4 at 17 (one attack roll per beam)' });
     expect(blast?.scaling).toBeUndefined();
+  });
+
+  it('records each SRD weapon attack’s category and type; the Monk weapons they make match the SRD names older attacks go by (SRD 5.2.1 Monk, Martial Arts)', () => {
+    const weapons = data.equipment.filter((o) => o.category === 'weapon' && o.damage && !o.source && !o.magic);
+    const attacks = weapons.map((o) => weaponAttack(o, { weaponProficiencies: [], masteries: [] }));
+    expect(attacks.find((a) => a.name === 'Dart')).toMatchObject({ weaponCategory: 'simple', weaponType: 'ranged' });
+    expect(attacks.find((a) => a.name === 'Shortsword')).toMatchObject({ weaponCategory: 'martial', weaponType: 'melee' });
+    expect(attacks.filter(isMonkWeapon).map((a) => a.name).sort()).toEqual(
+      ['Club', 'Dagger', 'Greatclub', 'Handaxe', 'Javelin', 'Light Hammer', 'Mace', 'Quarterstaff', 'Sickle', 'Spear', 'Scimitar', 'Shortsword'].sort(),
+    );
+    for (const attack of attacks) {
+      const { weaponCategory: _category, weaponType: _type, ...older } = attack;
+      expect(isMonkWeapon(older)).toBe(isMonkWeapon(attack));
+    }
   });
 
   it('marks the Monk’s Unarmed Strike for Martial Arts', () => {

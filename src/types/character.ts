@@ -319,6 +319,13 @@ export interface Attack {
   /** "5 ft." or "80/320 ft." */
   range?: string;
   properties?: string[];
+  /**
+   * Weapons: the catalog's category and type, which Martial Arts reads (SRD 5.2.1 Monk: Monk weapons are Simple Melee
+   * weapons and Martial Melee weapons with the Light property). An attack made before these were recorded goes by its
+   * SRD name (engine isMonkWeapon).
+   */
+  weaponCategory?: 'simple' | 'martial';
+  weaponType?: 'melee' | 'ranged';
   /** 2024 weapon mastery property, e.g. "Vex". */
   mastery?: string;
   /**

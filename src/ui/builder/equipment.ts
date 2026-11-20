@@ -10,6 +10,7 @@ import type {
   ItemCategory,
 } from '@/types';
 import { findEquipment as findCatalogMatch, inventoryFromOption, type CatalogMatch } from '@/data/options/resolve';
+import { isMonkWeapon } from '@/engine/rules';
 import { newId, nameKey } from '@/lib/id';
 
 export type { CatalogMatch };
@@ -136,14 +137,11 @@ export interface AttackContext {
   martialArts?: boolean;
 }
 
-function isMonkWeapon(option: EquipmentOption): boolean {
-  if (isRangedWeapon(option)) return false;
-  return weaponCategory(option) === 'simple' || hasProperty(option, 'light');
-}
-
-/** An Attack for a weapon from the catalog. */
+/** An Attack for a weapon from the catalog, with the weapon's category and type (Martial Arts reads them). */
 export function weaponAttack(option: EquipmentOption, ctx: AttackContext, name = option.name): Attack {
-  const finesse = hasProperty(option, 'finesse') || (ctx.martialArts === true && isMonkWeapon(option));
+  const kind = { weaponCategory: weaponCategory(option), weaponType: option.weaponType ?? (isRangedWeapon(option) ? 'ranged' : 'melee') } as const;
+  const monkWeapon = isMonkWeapon({ name: option.name, ability: 'str', properties: option.properties, ...kind });
+  const finesse = hasProperty(option, 'finesse') || (ctx.martialArts === true && monkWeapon);
   const masteryKeys = new Set(ctx.masteries.map((m) => singular(nameKey(m))));
   const mastered = masteryKeys.has(singular(nameKey(option.name)));
   return {
@@ -155,6 +153,7 @@ export function weaponAttack(option: EquipmentOption, ctx: AttackContext, name =
     damageType: (option.damageType ?? 'bludgeoning').toLowerCase(),
     range: weaponRange(option),
     properties: option.properties,
+    ...kind,
     mastery: mastered ? option.mastery : undefined,
     notes: versatileNote(option),
   };
