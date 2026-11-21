@@ -7,7 +7,7 @@
  * Owner: E4. Shared by the level-up dialog and, for spells and spellcasting, the DM's level_up tool.
  * Only "Level N+" prerequisites are checked; everything else is shown for the DM to rule on.
  */
-import { addFeature, addSpell, changeAbilityScore, characterLevel, fightingStyleKey, proficiencyBonus, syncArmorClass } from '@/engine';
+import { addFeature, addSpell, changeAbilityScore, characterLevel, isFightingStyle, proficiencyBonus, syncArmorClass } from '@/engine';
 import { nameKey } from '@/lib/id';
 import {
   ABILITY_NAMES,
@@ -287,14 +287,8 @@ export function featChoices(kind: FeatChoiceKind, feats: readonly FeatOption[], 
   }
   // A style is taken once (SRD 5.1 Fighting Style: "You can't take a Fighting Style option more than once, even if
   // you later get to choose again"; SRD 5.2.1's Fighting Style feats aren't Repeatable), the one the builder gave
-  // too: a feat, or a style the class prints (a class feature of its name).
-  return picks.map((p) => (p.taken || p.feat?.repeatable || !styleOnSheet(p.name, ctx.have) ? p : { ...p, taken: true }));
-}
-
-/** However the sheet names it: "Fighting Style (Defense)" as the engine's Defense counts it, "Defense (Fighter 1)". */
-function styleOnSheet(name: string, have: FeatChoiceContext['have']): boolean {
-  const key = fightingStyleKey(name);
-  return have.some((f) => (f.source === 'feat' || f.source === 'class') && [f.name, baseFeatureName(f.name)].some((n) => fightingStyleKey(n) === key));
+  // too: on the sheet however it's named, as the engine's Defense AC reads it (isFightingStyle).
+  return picks.map((p) => (p.taken || p.feat?.repeatable || !ctx.have.some((f) => isFightingStyle(f, p.name)) ? p : { ...p, taken: true }));
 }
 
 /** Whether the panel's +2 / +1 +1 options apply (Ability Score Improvement and Epic Boon levels). */

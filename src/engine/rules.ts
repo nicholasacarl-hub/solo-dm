@@ -12,6 +12,7 @@ import {
   type Attack,
   type Character,
   type EquipmentOption,
+  type Feature,
   type GameEvent,
   type InventoryItem,
   type PlayerRollRequest,
@@ -669,7 +670,7 @@ export function computeArmorClass(c: Character, catalog: readonly EquipmentOptio
       notes.push('no Shield training: the Shield gives no AC');
     }
   }
-  if (armors.length && c.features.some((f) => fightingStyleKey(f.name) === 'defense')) {
+  if (armors.length && c.features.some((f) => isFightingStyle(f, 'Defense'))) {
     ac += 1;
     parts.push('Defense 1');
   }
@@ -705,6 +706,30 @@ export function computeArmorClass(c: Character, catalog: readonly EquipmentOptio
   return { ac, formula };
 }
 
+/**
+ * Where a fighting style comes from: a class or subclass feature (a style the class prints, the Champion's second), a
+ * feat (SRD 5.2.1's Fighting Style feats) or the DM's own entry. A species trait, a background's feature, an item, a
+ * boon or a form that shares a style's name isn't one.
+ */
+const STYLE_SOURCES: ReadonlySet<Feature['source']> = new Set(['class', 'subclass', 'feat', 'homebrew', 'other']);
+const STYLE_PREFIX = /^(?:additional-)?fighting-style-(?:feat-)?/;
+const STYLE_SUFFIXES = ['', '-fighting-style', '-style', '-feat', '-fighting-style-feat', '-style-feat'];
+
+/**
+ * Whether a feature is the fighting style `style`, however the sheet names it: "Defense", "Fighting Style (Defense)",
+ * "Fighting Style: Defense", "Defense Fighting Style", "Additional Fighting Style (Defense)", "Fighting Style Feat:
+ * Defense", "Defense (Fighter 1)"; "Great Weapon Fighting Style" is Great Weapon Fighting. The Defense AC and the
+ * level-up panel's taken styles read it alike.
+ */
+export function isFightingStyle(f: Pick<Feature, 'name' | 'source'>, style: string): boolean {
+  if (!STYLE_SOURCES.has(f.source)) return false;
+  const key = nameKey(style);
+  return [f.name, f.name.replace(/\s*\([^()]*\)\s*$/, '')].some((name) => {
+    const rest = nameKey(name).replace(STYLE_PREFIX, '');
+    return rest.startsWith(key) && STYLE_SUFFIXES.includes(rest.slice(key.length));
+  });
+}
+
 /** Equipped armor whose stats aren't known, when no known armor is worn (computeArmorClass then keeps the sheet's AC). */
 function unknownWornArmor(c: Character, catalog: readonly EquipmentOption[]): InventoryItem | undefined {
   const { known, unknown } = wornArmor(c.inventory, catalog);
@@ -720,14 +745,6 @@ function unknownWornArmor(c: Character, catalog: readonly EquipmentOption[]): In
  * Armor, armor it can't identify), so it is kept and a warning gives the computed value instead.
  * Without a catalog the SRD armor table is used. No events when the computed AC doesn't change.
  */
-/**
- * The fighting style a feature names, as a name key, however it's written: "Defense", "Fighting Style (Defense)",
- * "Fighting Style: Defense", "Defense Fighting Style" and "Additional Fighting Style (Defense)" are all "defense".
- */
-export function fightingStyleKey(name: string): string {
-  return nameKey(name).replace(/^(?:additional-)?fighting-style-/, '').replace(/-fighting-style$/, '');
-}
-
 export function syncArmorClass(
   before: Character,
   after: Character,

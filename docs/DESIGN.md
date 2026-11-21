@@ -742,7 +742,8 @@ an imported class's or subclass's features with their text (catching up subclass
 prints below the class's subclass level) and offers a feat at Ability Score Improvement, Epic Boon and
 Fighting Style levels (the Champion's Additional Fighting Style too, where a style the sheet has, a feat or one the
 class prints, can't be taken again: by its name however it's written, "Fighting Style (Defense)" as much as
-"Defense", one rule with the engine's Defense AC, `fightingStyleKey`), with "Decide with my DM" preselected. Its
+"Defense", from a class, subclass, feat or the DM's entry but never a species trait, one rule with the engine's
+Defense AC, `isFightingStyle`), with "Decide with my DM" preselected. Its
 reminders name the Additional Fighting Style choice, and say a subclass feature is still to add unless the level-up
 added this level's (a feature caught up from an earlier level, by its book's level, doesn't count). Items copy numbers, never text: armor
 stats, bonuses and attunement travel on the inventory item, so AC works in the DM's tools and on

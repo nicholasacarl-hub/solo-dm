@@ -24,7 +24,7 @@ import type {
 } from '@/types';
 import { SKILL_ABILITY } from '@/types';
 // Pure name rules: the real ones (the module itself; '@/engine' is what tests mock).
-import { fightingStyleKey } from '@/engine/rules';
+import { isFightingStyle } from '@/engine/rules';
 
 type Rng = Engine.Rng;
 
@@ -216,7 +216,7 @@ export const fakeEngine = {
   },
   effectiveSpeed: (c: Character) => Math.max(0, c.speed - 5 * c.exhaustion),
   computeArmorClass,
-  fightingStyleKey,
+  isFightingStyle,
   // The stored AC stays as it is here; sheetChanges.test.ts checks equip, attune and remove against the real engine.
   syncArmorClass: (_before: Character, after: Character) => ({ character: after, events: [] as GameEvent[] }),
   saveSourcesChangeText: () => null,
