@@ -71,11 +71,9 @@ The first version of structured imports deliberately leaves these out:
   → d10), its unarmed strikes off the sheet use Strength, and Draconic Resilience adds no Hit Points (nothing in the
   app raises a Hit Point maximum by hand). Nor does a 2024 book's Sorcerer get them for levels gained while its
   record's Edition said Older. The engine would need each edition's numbers, and the sheet a way to adjust the maximum.
-- **Martial Arts' conditions on builder-made attacks**: the builder gives a Monk's Unarmed Strike and Monk weapons
-  Dexterity when it makes them (and the Unarmed Strike its d6), so in armor or with a Shield, where Martial Arts
-  stops, they keep those; a Monk weapon's Martial Arts die does stop there. The engine doesn't know what the Monk is
-  holding, so a Monk weapon gets the die even beside a non-Monk weapon ("wielding only Monk weapons"), and a weapon
-  that isn't on the sheet gets the dice and ability the DM gives it. The DM adjusts these.
+- **What a Monk is holding**: Martial Arts works only while the Monk is unarmed or wields only Monk weapons. The
+  engine doesn't know what is held, so a Monk weapon gets the die and Dexterity even beside a non-Monk weapon, and a
+  weapon that isn't on the sheet gets the dice and ability the DM gives it. The DM adjusts these.
 - **Telling a book read again from another book**: a hero's class, subclass, species or background whose book is
   switched off or gone is looked up again by its book's fingerprint, then its source and title, then any book's
   option of its name, so another book's option of that name stands in (a 2014 printing for a 2024 one of the same

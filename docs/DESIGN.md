@@ -713,7 +713,8 @@ so a hero who chose the SRD option keeps it, and the engine never takes an impor
 for an SRD class of the same name for its numbers (hit die, level-up reminders). A 2024 book's class does play
 by the SRD class's rules (`rulesClassFor`): the Martial Arts die and a Monk's Dexterity for unarmed strikes and Monk
 weapons (`isMonkWeapon`: Simple Melee, or Martial Melee with Light, by the weapon category and type an attack records from
-the catalog, else by its SRD name), Unarmored Defense, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
+the catalog, else by its SRD name; in armor or with a Shield the Dexterity and Unarmed Strike die the builder stored for
+Martial Arts go too, a 2014 book's Monk's included), Unarmored Defense, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
 the edition (`ImportedRef.format`), set when the class is taken and kept in step with the book's record on load
 and after review (`withClassEditions`, `src/data/options/editions.ts`): by the class's id, and otherwise only filled,
 never changed, from a copy of the same text (the book's fingerprint), so another book's class of the name never lends
