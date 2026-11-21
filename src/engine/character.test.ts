@@ -496,9 +496,9 @@ describe('features', () => {
     expect(addFeature(mira({ features: [subclassFeature] }), { name: 'Watchful Flame', source: 'feat', description: 'Invented feat.' }).character.features.map((f) => f.source)).toEqual(['subclass', 'feat']);
     // The boon the DM stored, rewritten as a feat: still the one feature.
     expect(addFeature(rewritten.character, { name: 'Boon of Fate', source: 'feat', description: 'As a feat.' }).character.features.map((f) => [f.id, f.source])).toEqual([['f-fate', 'feat']]);
-    // A rewrite keeps the uses spent, no more than its new maximum.
+    // A rewrite keeps the uses spent, no more than its new maximum (a number the DM ruled: progression.test.ts).
     const spentAll = mira({ features: [{ ...boon, uses: { max: 3, used: 3, recharge: 'long' as const } }] });
-    expect(addFeature(spentAll, { name: 'Boon of Fate', source: 'feat', description: '', uses: { max: 2, used: 0, recharge: 'long' } }).character.features[0].uses).toEqual({ max: 2, used: 2, recharge: 'long' });
+    expect(addFeature(spentAll, { name: 'Boon of Fate', source: 'feat', description: '', uses: { max: 2, used: 0, recharge: 'long' } }).character.features[0].uses).toEqual({ max: 2, used: 2, recharge: 'long', ruled: true });
     expect(addFeature(spentAll, { name: 'Boon of Fate', source: 'feat', description: 'No uses given.' }).character.features[0].uses).toEqual({ max: 3, used: 3, recharge: 'long' });
   });
 

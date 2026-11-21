@@ -133,9 +133,12 @@ function speciesTraitText(species: SpeciesOption, f: Feature, lineage: LineageOp
 
 const sameScale = (a: FeatureUses['scale'], b: FeatureUses['scale']) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-/** New max (used kept ≤ max) and scale; recharge stays as it was. Unchanged features keep their identity. */
+/**
+ * New max (used kept ≤ max) and scale; recharge stays as it was. Unchanged features keep their identity, and so do the
+ * DM's ruled uses (FeatureUses.ruled: a rewrite's own number, which the text and tables don't override).
+ */
 function withUses(f: Feature, fresh: FeatureUses | undefined): Feature {
-  if (!fresh) return f;
+  if (!fresh || f.uses?.ruled) return f;
   const old = f.uses;
   if (!old) return { ...f, uses: fresh };
   if (old.max === fresh.max && sameScale(old.scale, fresh.scale)) return f;

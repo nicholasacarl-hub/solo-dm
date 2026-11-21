@@ -199,6 +199,8 @@ export interface FeatureUses {
   shortRestRegain?: number;
   /** How `max` grows as the hero levels (recomputed on level-up). */
   scale?: FeatureScale;
+  /** `max` is the DM's ruling (a rewrite that changed the number, addFeature): level-ups leave it as it is. */
+  ruled?: boolean;
 }
 
 /**

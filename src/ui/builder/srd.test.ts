@@ -222,6 +222,18 @@ describe('refreshing uses after a level-up', () => {
     expect(named(refreshed, "Monk's Focus")?.uses).toMatchObject({ max: 5, used: 0, recharge: 'short' });
   });
 
+  it('leaves a number of uses the DM ruled (FeatureUses.ruled): a Second Wind and a Breath Weapon stay as ruled', () => {
+    const built = atLevel(build('Fighter', 'Dragonborn', { lineage: 'Red' }), 5);
+    const ruledUses = { max: 6, used: 1, recharge: 'short' as const, ruled: true };
+    const ruled = { ...built, features: built.features.map((f) => (f.name === 'Second Wind' || f.name === 'Breath Weapon' ? { ...f, uses: ruledUses } : f)) };
+    const refreshed = refreshFeatureUses(ruled, data);
+    for (const name of ['Second Wind', 'Breath Weapon']) expect(named(refreshed, name)?.uses, name).toEqual(ruledUses);
+    expect(featureUseChanges(ruled, refreshed).join(' ')).not.toMatch(/Second Wind|Breath Weapon/);
+    // Not ruled, the Fighter table and the Proficiency Bonus apply (SRD 5.2.1: Second Wind 3 at Fighter 5; Breath Weapon 3).
+    const plain = refreshFeatureUses({ ...ruled, features: ruled.features.map((f) => (f.uses?.ruled ? { ...f, uses: { max: 6, used: 1, recharge: 'short' as const } } : f)) }, data);
+    expect([named(plain, 'Second Wind')?.uses?.max, named(plain, 'Breath Weapon')?.uses?.max]).toEqual([3, 3]);
+  });
+
   it('grows species uses with the Proficiency Bonus and opens level 5 traits (Dragonborn)', () => {
     const c = atLevel(build('Fighter', 'Dragonborn', { lineage: 'Red' }), 5);
     const refreshed = refreshFeatureUses(c, data);

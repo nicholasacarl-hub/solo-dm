@@ -292,8 +292,12 @@ export function featChoices(kind: FeatChoiceKind, feats: readonly FeatOption[], 
   }
   // A style is taken once (SRD 5.1 Fighting Style: "You can't take a Fighting Style option more than once, even if
   // you later get to choose again"; SRD 5.2.1's Fighting Style feats aren't Repeatable), the one the builder gave
-  // too: on the sheet however it's named, as the engine's Defense AC reads it (isFightingStyle).
-  return picks.map((p) => (p.taken || p.feat?.repeatable || !ctx.have.some((f) => isFightingStyle(f, p.name)) ? p : { ...p, taken: true }));
+  // too: on the sheet however it's named, as the engine's Defense AC reads it (isFightingStyle) and only so, one rule:
+  // a boon's, item's or background's "Defense" neither raises the AC nor stops the feat that does.
+  return picks.map((p) => {
+    const taken = !p.feat?.repeatable && ctx.have.some((f) => isFightingStyle(f, p.name));
+    return taken === p.taken ? p : { ...p, taken };
+  });
 }
 
 /** Whether the panel's +2 / +1 +1 options apply (Ability Score Improvement and Epic Boon levels). */

@@ -169,7 +169,7 @@ interface Links {
   spellCopies: (CompendiumEntry | null)[];
   /** Per inventory_update entry: the ref of the book's item whose words its description repeats, or null. */
   updateCopies: (ImportedRef | null)[];
-  /** Per features_add entry: the ref of the one imported feat with that name, or null. */
+  /** Per features_add entry: the ref of the book's part or feat it names (featureRef), or null. */
   feats: (ImportedRef | null)[];
   /** The merged equipment catalog, for Armor Class ([] when it couldn't load: the SRD armor table). */
   catalog: readonly EquipmentOption[];
@@ -216,17 +216,17 @@ function linkedItem(item: NonNullable<ToolInput<'update_character'>['inventory_a
 }
 
 /**
- * The ref of the one imported feat named like a features_add entry (the DM's description stays on this device). A
- * species trait or class feature of that name is the feat only when its description repeats the feat's own words (a
- * run the SRD doesn't print, sharesBookWords: the book's feat a species or class grants, its name the SRD's or not);
- * the DM's words about a trait of the name stay its own (featOrTrait, as addFeature keeps them apart).
+ * The ref of the book's feat a DM's feature entry names (its description stays on this device): the one imported feat
+ * of that name. A species trait or class feature of the name is the feat only when its description repeats the feat's
+ * own words (a run the SRD doesn't print, sharesBookWords: the book's feat a species or class grants, its name the
+ * SRD's or not); the DM's words about a trait of the name stay its own (featOrTrait, as addFeature keeps them apart).
+ * Without the rules index any shared run counts, so the book's words never leave in an export.
  */
 function featRef(f: { name: string; description: string; source: Feature['source'] }, data: BuilderData | null, index: RulesIndex | null): ImportedRef | null {
   const key = nameKey(f.name);
-  const matches = (data?.feats ?? []).filter((o) => o.source && o.ref && nameKey(o.name) === key);
-  const feat = matches.length === 1 ? matches[0] : null;
-  if (!feat?.ref) return null;
-  return featOrTrait(f.source) !== 'trait' || sharesBookWords(f.description, feat.description, index) ? feat.ref : null;
+  const feats = (data?.feats ?? []).filter((o) => o.source && o.ref && nameKey(o.name) === key);
+  const fits = featOrTrait(f.source) === 'trait' ? feats.filter((o) => sharesBookWords(f.description, o.description, index)) : feats;
+  return fits.length === 1 ? (fits[0].ref ?? null) : null;
 }
 
 /**
@@ -391,14 +391,15 @@ function srdNameKeys(data: BuilderData | null): Set<string> {
 }
 
 /**
- * The ref of the one book part named like a DM's feature entry whose description repeats that part's words: an
- * imported class's or subclass's feature, a species' trait or lineage, a background's feature. The DM's words
- * about it then leave exports and restore refills the book's text, as for a feat (featRef). A name the SRD prints
- * too, or a description of the DM's own, stays the DM's (restore would put the book's text over its ruling).
+ * The refs of the book parts named like a DM's feature entry whose words its description repeats: an imported class's
+ * or subclass's feature, a species' trait or lineage, a background's feature, and (`feats`) a book's feat. One of them
+ * is the entry's ref (featureRef): the DM's words about it then leave exports and restore refills the book's text. A
+ * name the SRD prints too, or a description of the DM's own, stays the DM's (restore would put the book's text over its
+ * ruling).
  */
-function bookPartRef(name: string, description: string, data: BuilderData | null): ImportedRef | null {
+function bookPartRefs(name: string, description: string, data: BuilderData | null, feats: boolean): ImportedRef[] {
   const key = nameKey(name);
-  if (srdNameKeys(data).has(key)) return null;
+  if (srdNameKeys(data).has(key)) return [];
   const refs: ImportedRef[] = [];
   const take = (n: string, ref: ImportedRef | undefined, text: string) => {
     if (nameKey(n) === key && ref?.textCopied && sharesWords(description, text)) refs.push(ref);
@@ -409,8 +410,25 @@ function bookPartRef(name: string, description: string, data: BuilderData | null
   }
   for (const sp of data?.species ?? []) if (sp.source) for (const t of [...sp.traits, ...(sp.lineages ?? [])]) take(t.name, t.ref, t.description);
   for (const bg of data?.backgrounds ?? []) if (bg.source && bg.legacyFeature) take(bg.legacyFeature.name, bg.legacyFeature.ref, bg.legacyFeature.description);
-  for (const f of data?.feats ?? []) if (f.source) take(f.name, f.ref, f.description);
-  return refs.length === 1 ? refs[0] : null;
+  if (feats) for (const f of data?.feats ?? []) if (f.source) take(f.name, f.ref, f.description);
+  return refs;
+}
+
+/**
+ * The ref of the book text a DM's feature entry repeats (features_add; a level_up extra, a class feature), or null. A
+ * species trait or class feature is first the book part of its name whose words it repeats: a trait's own text that
+ * shares a sentence with a feat of its name stays the trait's. Else it is the book feat of its name whose own words it
+ * repeats (featRef). Any other entry is the one book feat of its name, else the part or feat whose words it repeats.
+ */
+function featureRef(f: { name: string; description: string; source: Feature['source'] }, data: BuilderData | null, index: RulesIndex | null): ImportedRef | null {
+  const trait = featOrTrait(f.source) === 'trait';
+  if (!trait) {
+    const feat = featRef(f, data, index);
+    if (feat) return feat;
+  }
+  const parts = bookPartRefs(f.name, f.description, data, !trait);
+  if (parts.length) return parts.length === 1 ? parts[0] : null;
+  return trait ? featRef(f, data, index) : null;
 }
 
 async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolContext): Promise<Links> {
@@ -421,7 +439,7 @@ async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolConte
   const described = updates.some((u) => u.description);
   if (!items.length && !spells.length && !feats.length && !described && !mayChangeArmorClass(input)) return NO_LINKS;
   const campaign = ctx.deps.store().campaign;
-  // A trait's or class feature's entry reads the SRD's words too (featRef).
+  // A trait's or class feature's entry reads the SRD's words too (featureRef).
   const traits = feats.some((f) => featOrTrait(f.source) === 'trait');
   const [data, index] = await Promise.all([loadBuilderOrNull(ctx), items.length || spells.length || described || traits ? loadIndexOrNull(ctx) : Promise.resolve(null)]);
   const catalog = data?.equipment ?? [];
@@ -443,7 +461,7 @@ async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolConte
       return bookCopy(spell.notes, index, SPELL_KINDS);
     }),
     updateCopies: updates.map((u) => itemCopyRef(u.description, index)),
-    feats: feats.map((f) => featRef(f, data, index) ?? bookPartRef(f.name, f.description, data)),
+    feats: feats.map((f) => featureRef(f, data, index)),
     catalog,
   };
 }
@@ -1033,7 +1051,8 @@ function planFromData(c: Character, data: BuilderData, input: ToolInput<'level_u
 /**
  * The DM's new_features as sheet features (as today), minus those the data adds with the book's text (`replaced`)
  * and those already on the sheet with a book's text (`kept`: a second, ref-less copy would carry the book's words
- * out in exports). A book part or feat whose words the DM repeats gets its ref (bookPartRef), so they leave exports too.
+ * out in exports). A book part or feat whose words the DM repeats gets its ref (featureRef, as a class feature), so they
+ * leave exports too.
  */
 function dmFeatures(
   input: ToolInput<'level_up'>,
@@ -1041,6 +1060,7 @@ function dmFeatures(
   plan: DataLevel | null,
   have: readonly Feature[],
   data: BuilderData | null,
+  index: RulesIndex | null,
 ): { features: Omit<Feature, 'id'>[]; replaced: string[]; replacedBySrd: string[]; kept: string[] } {
   // A copied feature on the sheet blocks a second copy only under a name the SRD doesn't print (an SRD class's own
   // "Spellcasting" is not the book's), and only with the data (a failure → today's behavior exactly).
@@ -1048,7 +1068,7 @@ function dmFeatures(
   const onSheet = new Set(data ? have.filter((f) => f.ref?.textCopied && !srd.has(nameKey(f.name))).map((f) => nameKey(f.name)) : []);
   const fromData = new Set((plan?.features ?? []).map((f) => nameKey(f.name)));
   const all = (input.new_features ?? []).map((f) => {
-    const ref = bookPartRef(f.name, f.description, data);
+    const ref = featureRef({ name: f.name, description: f.description, source: 'class' }, data, index);
     return {
       name: f.name,
       description: f.description,
@@ -1125,12 +1145,14 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
       return fail(`This is an XP campaign and the hero needs ${needed} more XP to reach level ${level + 1}. Award XP first, or keep playing.`);
     }
   }
-  // Merged builder data (a failure → today's behavior exactly), and the index for an imported subclass's spells.
+  // Merged builder data (a failure → today's behavior exactly), and the index for an imported subclass's spells and for
+  // the SRD's words in a new feature named like a book's feat (featureRef).
   const data = await loadBuilderOrNull(ctx);
   const plan = data ? planFromData(before, data, input) : null;
-  const index = plan?.sub?.source && plan.sub.alwaysPreparedSpells?.length ? await loadIndexOrNull(ctx) : null;
+  const bookFeat = (input.new_features ?? []).some((f) => data?.feats.some((o) => o.source && nameKey(o.name) === nameKey(f.name)));
+  const index = (plan?.sub?.source && plan.sub.alwaysPreparedSpells?.length) || bookFeat ? await loadIndexOrNull(ctx) : null;
   const findSpell = (name: string) => exactEntry(index, campaign, name, 'spell') ?? undefined;
-  const { features: extra, replaced, replacedBySrd, kept } = dmFeatures(input, level, plan, before.features, data);
+  const { features: extra, replaced, replacedBySrd, kept } = dmFeatures(input, level, plan, before.features, data, index);
   const spells = { added: [] as string[], missing: [] as string[] };
   const change = await mutateCharacter(ctx, (c) => {
     const r = levelUp(c, {

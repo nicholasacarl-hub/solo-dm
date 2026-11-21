@@ -6,7 +6,7 @@
  * prerequisites: only "Level N+" is checked).
  */
 import { describe, expect, it } from 'vitest';
-import { characterLevel, levelUp } from '@/engine';
+import { characterLevel, computeArmorClass, levelUp } from '@/engine';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
@@ -304,6 +304,14 @@ describe('the Feat choice panel', () => {
     expect(taken([{ name: 'Defense', source: 'species' }])).toEqual([]);
     const repeatable = EXPECTED_MERGED.feats.map((f) => (f.name === 'Defense' ? { ...f, repeatable: true } : f));
     expect(taken([{ name: 'Defense', source: 'feat' }], repeatable)).toEqual([]);
+    // One rule with the Defense AC (SRD 5.2.1 Defense: +1 AC in armor): whatever the entry's source, the style is taken
+    // exactly when the AC counts it, so a boon's, item's or background's "Defense" leaves the feat that raises it open.
+    const mail = sampleCharacter({ inventory: [{ id: 'mail', name: 'Chain Mail', quantity: 1, category: 'armor', equipped: true }] });
+    const sources: Feature['source'][] = ['class', 'subclass', 'species', 'background', 'feat', 'boon', 'transformation', 'item', 'homebrew', 'other'];
+    const ac = (features: Feature[]) => computeArmorClass({ ...mail, features }).ac;
+    const counted = sources.filter((source) => ac([{ id: 'd', name: 'Defense', source, description: '' }]) > ac([]));
+    expect(counted).toEqual(['class', 'subclass', 'feat', 'homebrew', 'other']);
+    for (const source of sources) expect(taken([{ name: 'Defense', source }]), source).toEqual(counted.includes(source) ? ['Defense'] : []);
   });
 
   it("offers a 2024 book's feat in place of the SRD feat of its name (the picked one stays); an older book's sits beside it", () => {

@@ -261,8 +261,10 @@ describe('computeArmorClass', () => {
     for (const name of styleNames) expect(named(name)).toBe(17);
     expect(named('Additional Fighting Style (Defense)', 'subclass')).toBe(17);
     for (const name of ['Unarmored Defense', 'Superior Defense', 'Fighting Style', 'Additional Fighting Style']) expect(named(name)).toBe(16);
-    // A species trait that shares the style's name isn't the style.
+    // A species trait that shares the style's name isn't the style, nor is a boon's, an item's or a background's.
     expect(named('Defense', 'species')).toBe(16);
+    for (const source of ['boon', 'item', 'background'] as const) expect(named('Defense', source), source).toBe(16);
+    for (const source of ['homebrew', 'other'] as const) expect(named('Defense', source), source).toBe(17);
     // A style whose own name ends in "Fighting".
     expect(isFightingStyle({ name: 'Great Weapon Fighting Style', source: 'class' }, 'Great Weapon Fighting')).toBe(true);
     expect(isFightingStyle({ name: 'Fighting Style: Two-Weapon Fighting Style', source: 'feat' }, 'Two-Weapon Fighting')).toBe(true);

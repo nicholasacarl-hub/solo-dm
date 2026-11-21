@@ -21,7 +21,7 @@ import { redactImportedDeep } from '@/storage/backup';
 import { redactCopiedImports } from '@/storage/redact';
 import { campaignGraph } from '@/storage/testData';
 import type { CampaignData } from '@/storage/types';
-import { deps, resetDmDeps } from '../deps';
+import { deps, resetDmDeps, setDmDeps } from '../deps';
 import { SAMPLE_RULES } from '../testing/fakeData';
 import { setupHarness, type HarnessOptions } from '../testing/harness';
 import type { ToolContext } from './context';
@@ -130,6 +130,18 @@ describe('level_up from the merged builder data', () => {
     ]);
     expect(out.content).toContain('Always-prepared Dusk Domain spells added: Faerie Fire, Sleep, Ashen Choir.');
     expect(out.content).toContain('Not in the rules you can consult: Darkness');
+  });
+
+  it('keeps a number of uses the DM ruled through a level-up, and lists no growth (FeatureUses.ruled; SRD 5.2.1 Fighter: Second Wind)', async () => {
+    const wind = { id: 'f-wind', name: 'Second Wind', source: 'class' as const, sourceName: 'Fighter 1', description: 'Second Wind text.', uses: { max: 2, used: 1, recharge: 'short' as const } };
+    const h = setup({ character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 2, hitDie: 10 }, { features: [wind] }) });
+    const ruling = { name: 'Second Wind', source: 'class', description: 'DM ruling: the blessing of the lantern gives you four uses.', uses_max: 4, recharge: 'short' };
+    expect((await h.run('update_character', { features_add: [ruling] })).content).toContain('Updated feature: Second Wind');
+    const out = await h.run('level_up', { class_name: 'Fighter' });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).not.toContain('Second Wind 4');
+    expect(out.content).not.toContain('grew with the level');
+    expect(h.sheet().features).toEqual([{ ...wind, description: ruling.description, uses: { max: 4, used: 1, recharge: 'short', ruled: true } }]);
   });
 
   it('names a tie between classes of the same name and uses the hero’s own', async () => {
@@ -649,9 +661,9 @@ describe("book text the DM names on the sheet keeps its book's ref (exports repl
     expect(builderData.feats.filter((f) => f.name === 'Grappler').map((f) => Boolean(f.source))).toEqual([false, true]);
     // The SRD's entry (in the rules index) prints the shared sentence.
     const rules = [...RULES, { ...entry('srd:feat:grappler', 'Grappler', 'feat'), text: `Grappler. ${shared}` }];
-    const withCall = (character: Character, input: unknown) => {
+    const withCall = (character: Character, input: unknown, tool = 'update_character') => {
       const g = campaignGraph('p');
-      const call: TranscriptMessage = { id: 'uc', sessionId: g.transcript[0].sessionId, seq: 99, param: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu-uc', name: 'update_character', input }] }, createdAt: 1 };
+      const call: TranscriptMessage = { id: 'uc', sessionId: g.transcript[0].sessionId, seq: 99, param: { role: 'assistant', content: [{ type: 'tool_use', id: 'tu-uc', name: tool, input }] }, createdAt: 1 };
       const data: CampaignData = { ...g, character: { ...character, id: g.character!.id, campaignId: g.campaign.id }, transcript: [...g.transcript, call] };
       return JSON.stringify(redactImportedDeep(redactCopiedImports(data).data));
     };
@@ -663,13 +675,67 @@ describe("book text the DM names on the sheet keeps its book's ref (exports repl
       // Out of the sheet and the DM's call alike.
       expect(withCall(h.sheet(), input), source).not.toContain('gloamwood hold');
     }
+    // A level_up extra is a class feature: the same check (a class granting the book's feat).
+    const level = { class_name: 'Fighter', new_features: [{ name: 'Grappler', description: words }] };
+    const leveled = setup({ builderData, rules, character: fighter() });
+    expect((await leveled.run('level_up', level)).isError).toBeUndefined();
+    expect(leveled.sheet().features.find((f) => f.name === 'Grappler')).toMatchObject({ source: 'class', ref: { kind: 'feat', entryName: 'Grappler', textCopied: true } });
+    expect(withCall(leveled.sheet(), level, 'level_up')).not.toContain('gloamwood hold');
     // Words the SRD prints too, or the DM's own: no ref, so exports keep them and restore never writes the feat over them.
     for (const description of [shared, 'DM ruling: the hold also works on a creature one size larger.']) {
       const h = setup({ builderData, rules, character: fighter() });
       expect((await h.run('update_character', { features_add: [{ name: 'Grappler', description, source: 'species' }] })).isError).toBeUndefined();
-      expect(h.sheet().features.find((f) => f.name === 'Grappler')?.ref, description).toBeUndefined();
+      expect((await h.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Grappler', description }] })).isError).toBeUndefined();
+      expect(h.sheet().features.filter((f) => f.name === 'Grappler').map((f) => [f.source, f.ref]), description).toEqual([['species', undefined], ['class', undefined]]);
       expect(exported(h.sheet())).toContain(description);
     }
+    // Without the rules index the SRD's words can't be told apart: any shared run counts, so the book's never leave.
+    const h = setup({ builderData, rules, character: fighter() });
+    setDmDeps({ rulesIndex: async () => Promise.reject(new Error('rules index unavailable (test)')) });
+    const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+    expect((await runTool('update_character', { features_add: [{ name: 'Grappler', description: shared, source: 'species' }] }, ctx)).isError).toBeUndefined();
+    expect(h.sheet().features.find((f) => f.name === 'Grappler')?.ref).toMatchObject({ kind: 'feat', entryName: 'Grappler', textCopied: true });
+  });
+
+  it("a trait the DM resends in its book's words keeps its own ref, though they share a sentence with a book feat of its name", async () => {
+    // An invented Mothkin trait named like the book's feat Lantern Bearer, reprinting the feat's Lantern Ward sentence.
+    const ward = 'While you hold a lit lantern, you and allies within 10 feet of you have Advantage on saving throws to avoid or end the Frightened condition.';
+    const text = `Invented trait wording: moth-folk who carry a lantern from birth are never truly lost in the dark. ${ward}`;
+    const ref = importedRef({ entryId: mothkin.id, kind: 'species', entryName: 'Mothkin', part: 'Lantern Bearer', textHash: 'h', textCopied: true });
+    const builderData: BuilderData = { ...EXPECTED_MERGED, species: EXPECTED_MERGED.species.map((s) => (s.id === mothkin.id ? { ...s, traits: [...s.traits, { name: 'Lantern Bearer', description: text, ref }] } : s)) };
+    const trait = { id: 't-lantern', name: 'Lantern Bearer', source: 'species' as const, sourceName: 'Mothkin', description: text, ref };
+    // The whole text, or the sentence both print: the trait's words first (restore refills the trait's text, not the feat's).
+    for (const description of [text, ward]) {
+      const h = setup({ builderData, character: { ...fighter(), features: [trait] } });
+      expect((await h.run('update_character', { features_add: [{ name: 'Lantern Bearer', description, source: 'species', uses_max: 2, recharge: 'long' }] })).isError).toBeUndefined();
+      expect(h.sheet().features, description).toEqual([{ ...trait, description, uses: { max: 2, used: 0, recharge: 'long', ruled: true } }]);
+    }
+    // Two books' species print the trait: which one is unclear, so the sheet's trait keeps its ref, never the feat's.
+    const twice: BuilderData = { ...builderData, species: [...builderData.species, { ...mothkin, id: 'lib:ashen:species:mothkin', traits: [{ name: 'Lantern Bearer', description: text, ref: { ...ref, entryId: 'lib:ashen:species:mothkin' } }] }] };
+    const h = setup({ builderData: twice, character: { ...fighter(), features: [trait] } });
+    expect((await h.run('update_character', { features_add: [{ name: 'Lantern Bearer', description: text, source: 'species' }] })).isError).toBeUndefined();
+    expect(h.sheet().features).toEqual([trait]);
+  });
+
+  it("a species trait or class feature under a book feat's name the SRD doesn't print stays the DM's in words the SRD prints, on features_add and level_up alike", async () => {
+    // The book's Lantern Bearer reprints a stock sentence an SRD entry prints too.
+    const stock = 'Increase your Wisdom or Charisma score by 1, to a maximum of 20.';
+    const ward = 'While you hold a lit lantern, you and allies within 10 feet of you have Advantage on saving throws to avoid or end the Frightened condition.';
+    const rules = [...RULES, { ...entry('srd:feat:stock-wording', 'Stock Wording', 'feat'), text: `Stock Wording. ${stock}` }];
+    const ruling = `DM ruling: the glow also wakes sleeping allies within 10 feet. ${stock}`;
+    for (const source of ['species', 'class', 'subclass'] as const) {
+      const h = setup({ rules, character: fighter() });
+      expect((await h.run('update_character', { features_add: [{ name: 'Lantern Bearer', description: ruling, source }] })).isError).toBeUndefined();
+      expect(h.sheet().features.find((f) => f.name === 'Lantern Bearer')?.ref, source).toBeUndefined();
+      expect(exported(h.sheet()), source).toContain('wakes sleeping allies');
+    }
+    const h = setup({ rules, character: fighter() });
+    expect((await h.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Lantern Bearer', description: ruling }] })).isError).toBeUndefined();
+    expect(h.sheet().features.find((f) => f.name === 'Lantern Bearer')?.ref).toBeUndefined();
+    // The feat's own words still link it.
+    const own = setup({ rules, character: fighter() });
+    expect((await own.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Lantern Bearer', description: `${ruling} ${ward}` }] })).isError).toBeUndefined();
+    expect(own.sheet().features.find((f) => f.name === 'Lantern Bearer')?.ref).toMatchObject({ kind: 'feat', entryName: 'Lantern Bearer', textCopied: true });
   });
 
   it("features_add and level_up extras that name one of the book's parts get its ref; a name the SRD prints too stays the DM's", async () => {

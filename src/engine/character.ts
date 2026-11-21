@@ -631,7 +631,9 @@ export function featOrTrait(source: FeatureSource): 'feat' | 'trait' | undefined
  * Add a feature, or update the existing feature with the same name, keeping its id, where it came from (its source
  * name: "Mothkin", "Ability Score Improvement (Fighter 4)", which the DM's "Granted in play" never replaces, so a name
  * a result gave, "Lantern Luck (Mothkin)", still finds it) and the uses it has spent (a features_restore or a rest gives
- * those back). A feat and a species trait or class feature never merge (featOrTrait):
+ * those back). Uses that keep the number keep how it grows (a Rage the DM rewrites still follows the Barbarian table);
+ * another number, or uses where it had none, is the DM's ruling (FeatureUses.ruled), which level-ups leave as it is.
+ * A feat and a species trait or class feature never merge (featOrTrait):
  * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
  * and the trait keeps its text. A feature on neither side (the DM's entry for an Epic Boon as a boon, or an Origin feat
  * as its background's) updates the one of its name on either.
@@ -647,7 +649,11 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
   if (index >= 0) {
     const existing = c.features[index];
     const updated: Feature = { ...existing, ...feature, id: existing.id, name, ...(existing.sourceName ? { sourceName: existing.sourceName } : {}) };
-    if (existing.uses && feature.uses) updated.uses = { ...feature.uses, used: Math.min(existing.uses.used, feature.uses.max) };
+    const old = existing.uses;
+    if (feature.uses) {
+      const growth = old?.max === feature.uses.max ? { ...(old.scale ? { scale: old.scale } : {}), ...(old.ruled ? { ruled: true } : {}) } : { ruled: true };
+      updated.uses = { ...feature.uses, used: Math.min(old?.used ?? feature.uses.used, feature.uses.max), ...growth };
+    }
     return { character: replaceFeature(c, updated), events: [gameEvent('feature-restored', `Updated feature: ${name}`)] };
   }
   const added: Feature = { ...feature, id: feature.id ?? newId(), name };
