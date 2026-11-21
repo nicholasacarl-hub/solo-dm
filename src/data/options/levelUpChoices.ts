@@ -7,7 +7,7 @@
  * Owner: E4. Shared by the level-up dialog and, for spells and spellcasting, the DM's level_up tool.
  * Only "Level N+" prerequisites are checked; everything else is shown for the DM to rule on.
  */
-import { addFeature, addSpell, changeAbilityScore, characterLevel, isFightingStyle, proficiencyBonus, syncArmorClass } from '@/engine';
+import { addFeature, addSpell, changeAbilityScore, characterLevel, featOrTrait, isFightingStyle, proficiencyBonus, syncArmorClass } from '@/engine';
 import { nameKey, newId } from '@/lib/id';
 import {
   ABILITY_NAMES,
@@ -228,10 +228,15 @@ export interface FeatChoiceContext {
 
 const ASI_FEAT = 'ability-score-improvement';
 
+/**
+ * A feat the sheet holds, unless Repeatable: as a feat, or as the DM's entry of its name on neither side of the feat
+ * line (a boon's, background's, item's, homebrew or other: the one feature addFeature keeps of them). A species trait
+ * or class feature of its name isn't the feat (featOrTrait), nor is a transformation's power, gone when it ends.
+ */
 function takenFeat(feat: FeatOption, have: FeatChoiceContext['have']): boolean {
   if (feat.repeatable) return false;
   const key = nameKey(feat.name);
-  return have.some((f) => f.source === 'feat' && nameKey(baseFeatureName(f.name)) === key);
+  return have.some((f) => featOrTrait(f.source) !== 'trait' && f.source !== 'transformation' && nameKey(baseFeatureName(f.name)) === key);
 }
 
 function featPick(feat: FeatOption, ctx: FeatChoiceContext): FeatPick {

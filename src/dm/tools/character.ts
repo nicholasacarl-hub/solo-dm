@@ -215,11 +215,18 @@ function linkedItem(item: NonNullable<ToolInput<'update_character'>['inventory_a
   return linked;
 }
 
-/** The ref of the one imported feat named like a features_add entry (the DM's description stays on this device). */
-function featRef(name: string, data: BuilderData | null): ImportedRef | null {
-  const key = nameKey(name);
-  const matches = (data?.feats ?? []).filter((f) => f.source && f.ref && nameKey(f.name) === key);
-  return matches.length === 1 ? (matches[0].ref ?? null) : null;
+/**
+ * The ref of the one imported feat named like a features_add entry (the DM's description stays on this device). A
+ * species trait or class feature of that name is the feat only when its description repeats the feat's own words (a
+ * run the SRD doesn't print, sharesBookWords: the book's feat a species or class grants, its name the SRD's or not);
+ * the DM's words about a trait of the name stay its own (featOrTrait, as addFeature keeps them apart).
+ */
+function featRef(f: { name: string; description: string; source: Feature['source'] }, data: BuilderData | null, index: RulesIndex | null): ImportedRef | null {
+  const key = nameKey(f.name);
+  const matches = (data?.feats ?? []).filter((o) => o.source && o.ref && nameKey(o.name) === key);
+  const feat = matches.length === 1 ? matches[0] : null;
+  if (!feat?.ref) return null;
+  return featOrTrait(f.source) !== 'trait' || sharesBookWords(f.description, feat.description, index) ? feat.ref : null;
 }
 
 /**
@@ -414,7 +421,9 @@ async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolConte
   const described = updates.some((u) => u.description);
   if (!items.length && !spells.length && !feats.length && !described && !mayChangeArmorClass(input)) return NO_LINKS;
   const campaign = ctx.deps.store().campaign;
-  const [data, index] = await Promise.all([loadBuilderOrNull(ctx), items.length || spells.length || described ? loadIndexOrNull(ctx) : Promise.resolve(null)]);
+  // A trait's or class feature's entry reads the SRD's words too (featRef).
+  const traits = feats.some((f) => featOrTrait(f.source) === 'trait');
+  const [data, index] = await Promise.all([loadBuilderOrNull(ctx), items.length || spells.length || described || traits ? loadIndexOrNull(ctx) : Promise.resolve(null)]);
   const catalog = data?.equipment ?? [];
   const linkedSpells = spells.map((spell) => exactEntry(index, campaign, spell.name, 'spell'));
   return {
@@ -434,8 +443,7 @@ async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolConte
       return bookCopy(spell.notes, index, SPELL_KINDS);
     }),
     updateCopies: updates.map((u) => itemCopyRef(u.description, index)),
-    // A species trait or class feature named like a book's feat is not that feat (featOrTrait, as addFeature keeps them apart).
-    feats: feats.map((f) => (featOrTrait(f.source) === 'trait' ? null : featRef(f.name, data)) ?? bookPartRef(f.name, f.description, data)),
+    feats: feats.map((f) => featRef(f, data, index) ?? bookPartRef(f.name, f.description, data)),
     catalog,
   };
 }

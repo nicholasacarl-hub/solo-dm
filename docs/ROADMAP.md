@@ -88,6 +88,10 @@ The first version of structured imports deliberately leaves these out:
 - **Echoes of a copied feature's name**: an export leaves out the text of any DM tool call naming a feature whose book
   text the sheet holds, so the DM's own words for a feat beside a copied trait of its name leave the transcript copy
   (the sheet copy keeps them).
+- **A book's words under a name the SRD prints**: a feature the DM adds (features_add, a level_up extra) under the
+  name of a book's species trait, class feature or background feature that the SRD prints too ("Darkvision", "Second
+  Wind") keeps its words in exports even when they are the book's. An entry named like a book's feat is checked
+  against that feat's words whatever its name (a run the SRD doesn't print); the same check would cover the others.
 - **What a Monk is holding**: Martial Arts works only while the Monk is unarmed or wields only Monk weapons. The
   engine doesn't know what is held, so a Monk weapon gets the die and Dexterity even beside a non-Monk weapon, and a
   weapon that isn't on the sheet gets the dice and ability the DM gives it. The DM adjusts these.

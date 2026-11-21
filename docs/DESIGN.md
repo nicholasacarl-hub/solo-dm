@@ -744,15 +744,19 @@ Fighting Style levels (the Champion's Additional Fighting Style too, where a sty
 class prints, can't be taken again: by its name however it's written, "Fighting Style (Defense)" as much as
 "Defense", from a class, subclass, feat or the DM's entry but never a species trait, one rule with the engine's
 Defense AC, `isFightingStyle`), with "Decide with my DM" preselected. A feat taken there is the feature the level-up
-added for it, completed by id: a species trait or class feature of its name, or an earlier taking of a Repeatable
-feat, stays beside it as it was. The engine's `addFeature` (the DM's features_add too) updates a feature of the same
-name, keeping the uses it has spent, but never merges a feat with a species trait or class feature (`featOrTrait`; a
-boon's, background's or homebrew entry updates either, so the DM's entry for an Epic Boon as a boon rewrites it), and a
-species trait or class feature the DM adds never takes a book feat's ref by its name. A use or restore by name goes to
-the same-named feature whose uses fit the amount; a source or source name in parentheses after the name picks one, as
-the sheet shows it ("Lantern Luck (Mothkin)", "Lantern Luck (feat)"), and a result that changed one of several with
-uses names it so and says how to name the others (`featureLabel`; the level-up summary tells two takings apart the
-same way). Its
+added for it, completed by id: a species trait or class feature of its name, a transformation's power (gone when the
+transformation ends), or an earlier taking of a Repeatable feat, stays beside it as it was, and a feat the sheet holds
+otherwise (a feat, or the DM's boon's, background's, item's, homebrew or other entry of its name) is taken unless
+Repeatable. The engine's `addFeature` (the DM's features_add too) updates a feature of the same name, keeping where it
+came from (its source name, which the DM's "Granted in play" never replaces) and the uses it has spent, but never
+merges a feat with a species trait or class feature (`featOrTrait`; a boon's, background's or homebrew entry updates
+either, so the DM's entry for an Epic Boon as a boon rewrites it), and a species trait or class feature the DM adds
+under a book feat's name takes that feat's ref only when its description repeats the feat's own words (a run the SRD
+doesn't print). A use or restore by name goes to the same-named feature whose uses fit the amount; a source or source
+name in parentheses after the name picks one, as the sheet shows it ("Lantern Luck (Mothkin)", "Lantern Luck (feat)"),
+and a result that changed one of several with uses (by the bare name, or by one in parentheses more than one fits)
+names it so and says how to name the others (`featureLabel`; the level-up summary tells two takings apart the same
+way). Its
 reminders name the Additional Fighting Style choice, and say a subclass feature is still to add unless the level-up
 added this level's (a feature caught up from an earlier level, by its book's level, doesn't count). Items copy numbers, never text: armor
 stats, bonuses and attunement travel on the inventory item, so AC works in the DM's tools and on
@@ -787,8 +791,9 @@ The sheet text wraps each copied description whole, as one passage (cut only pas
 with the note outside the wrapper), so the DM's frozen prompt can be redacted whole; a wrapper left open
 (its closing marker cut off) is redacted to the end of its text. A feature the DM adds under the name of
 one of the book's parts or feats (`features_add`, `level_up` extras) gets that part's ref when its
-description repeats the part's words (a 40-character run), unless the SRD prints the same name; the DM's
-own words under such a name stay its own, so exports keep them and restore never writes the book's text
+description repeats the part's words (a 40-character run), unless the SRD prints the same name (a species trait or
+class feature named like a book's feat checks that feat's words whatever its name, by a run the SRD doesn't print);
+the DM's own words under such a name stay its own, so exports keep them and restore never writes the book's text
 over them. A spell's notes (`spells_add`) or an item's description (`inventory_add`, `inventory_update`) that repeats
 a book's spell or item (either way round: a scroll quoting a spell, notes quoting an item), whatever name it is
 given, takes that entry's ref marked copied: two of those 40-character runs (the only one, in a text under 60

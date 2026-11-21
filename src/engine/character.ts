@@ -568,14 +568,16 @@ export function featureLabel(f: Feature, features: readonly Feature[]): string {
 
 /**
  * After a use or restore by a name other features with uses share, the label of the one changed and a sentence on how
- * to name the others (by featureLabel); the plain name and no sentence when the DM's name picked it or none differs.
+ * to name the others (by featureLabel); the plain name and no sentence when the DM's name matched no other with uses
+ * (`matched`: a name in parentheses that picks one) or no label differs. A name in parentheses that two share
+ * ("Wick Tender (feat)" for two takings) gets the label and the sentence, as the bare name does.
  */
-function namesakes(c: Character, name: string, feature: Feature, verb: string): { label: string; note: string } {
+function namesakes(c: Character, matched: readonly Feature[], feature: Feature, verb: string): { label: string; note: string } {
   const others = c.features
     .filter((f) => f.id !== feature.id && f.uses && nameKey(f.name) === nameKey(feature.name))
     .map((f) => featureLabel(f, c.features))
     .filter((label) => label !== feature.name);
-  if (!others.length || nameKey(name) !== nameKey(feature.name)) return { label: feature.name, note: '' };
+  if (!others.length || !matched.some((f) => f.id !== feature.id && f.uses)) return { label: feature.name, note: '' };
   const named = others.map((label) => `"${label}"`).join(' or ');
   const note = others.length === 1 ? ` Another ${feature.name} is on the sheet: to ${verb} it, name it ${named}.` : ` Other ${feature.name} features are on the sheet: to ${verb} one, name it ${named}.`;
   return { label: featureLabel(feature, c.features), note };
@@ -591,7 +593,7 @@ export function useFeature(c: Character, name: string, amount = 1): EngineResult
   const left = feature.uses.max - feature.uses.used;
   if (n > left) return unchanged(c, `Not enough uses of ${feature.name}: ${left} of ${feature.uses.max} left, ${n} needed.`);
   const uses = { ...feature.uses, used: feature.uses.used + n };
-  const { label, note } = namesakes(c, name, feature, 'use');
+  const { label, note } = namesakes(c, found.candidates, feature, 'use');
   return {
     character: replaceFeature(c, { ...feature, uses }),
     events: [gameEvent('feature-used', `Used ${label}${n > 1 ? ` ×${n}` : ''} (${uses.max - uses.used}/${uses.max} left; ${rechargeText(uses)})${note ? `.${note}` : ''}`)],
@@ -609,7 +611,7 @@ export function restoreFeature(c: Character, name: string, amount?: number): Eng
   const used = amount === undefined ? 0 : Math.max(0, feature.uses.used - want);
   const uses = { ...feature.uses, used };
   const regained = feature.uses.used - used;
-  const { label, note } = namesakes(c, name, feature, 'restore');
+  const { label, note } = namesakes(c, found.candidates, feature, 'restore');
   return {
     character: replaceFeature(c, { ...feature, uses }),
     events: [gameEvent('feature-restored', `${label}: regained ${regained} use${regained === 1 ? '' : 's'} (${uses.max - used}/${uses.max})${note ? `.${note}` : ''}`)],
@@ -626,8 +628,10 @@ export function featOrTrait(source: FeatureSource): 'feat' | 'trait' | undefined
 }
 
 /**
- * Add a feature, or update the existing feature with the same name, keeping its id and the uses it has spent (a
- * features_restore or a rest gives those back). A feat and a species trait or class feature never merge (featOrTrait):
+ * Add a feature, or update the existing feature with the same name, keeping its id, where it came from (its source
+ * name: "Mothkin", "Ability Score Improvement (Fighter 4)", which the DM's "Granted in play" never replaces, so a name
+ * a result gave, "Lantern Luck (Mothkin)", still finds it) and the uses it has spent (a features_restore or a rest gives
+ * those back). A feat and a species trait or class feature never merge (featOrTrait):
  * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
  * and the trait keeps its text. A feature on neither side (the DM's entry for an Epic Boon as a boon, or an Origin feat
  * as its background's) updates the one of its name on either.
@@ -642,7 +646,7 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
   });
   if (index >= 0) {
     const existing = c.features[index];
-    const updated: Feature = { ...existing, ...feature, id: existing.id, name };
+    const updated: Feature = { ...existing, ...feature, id: existing.id, name, ...(existing.sourceName ? { sourceName: existing.sourceName } : {}) };
     if (existing.uses && feature.uses) updated.uses = { ...feature.uses, used: Math.min(existing.uses.used, feature.uses.max) };
     return { character: replaceFeature(c, updated), events: [gameEvent('feature-restored', `Updated feature: ${name}`)] };
   }

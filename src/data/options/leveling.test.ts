@@ -206,6 +206,17 @@ describe('the Feat choice panel', () => {
     expect(vigil).toMatchObject({ minLevel: 8, meetsLevel: false, taken: false });
   });
 
+  it("marks a feat taken that the sheet holds as a feat or as the DM's entry of its name, not a trait's or a transformation's (SRD 5.2.1 Feats: once, unless Repeatable)", () => {
+    const taken = (source: Feature['source'], feats: readonly FeatOption[] = EXPECTED_MERGED.feats) =>
+      featChoices('asi', feats, { cls: FIGHTER, characterLevel: 4, have: [{ name: 'Grappler', source }] }).find((p) => p.name === 'Grappler')?.taken;
+    // A feat, or the one feature addFeature keeps of it and the DM's boon's, background's, item's, homebrew or other entry.
+    for (const source of ['feat', 'boon', 'background', 'item', 'homebrew', 'other'] as const) expect(taken(source), source).toBe(true);
+    // A species trait or class feature of its name stays beside the feat; a transformation's power goes when it ends.
+    for (const source of ['species', 'class', 'subclass', 'transformation'] as const) expect(taken(source), source).toBe(false);
+    const repeatable = EXPECTED_MERGED.feats.map((f) => (f.name === 'Grappler' ? { ...f, repeatable: true } : f));
+    expect(taken('boon', repeatable)).toBe(false);
+  });
+
   it('offers Epic Boons and General feats at Epic Boon, with the boons’ maximum of 30', () => {
     const picks = featChoices('epic-boon', EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel: 19, have: [] });
     expect(picks[0]).toMatchObject({ name: 'Boon of Combat Prowess', meetsLevel: true });

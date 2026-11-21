@@ -437,6 +437,48 @@ describe('features', () => {
     expect(useFeature(own, 'Darkvision (Transformation)').character.features[0].uses?.used).toBe(1);
   });
 
+  it('labels the one changed when a name in parentheses fits several with uses, as the bare name does', () => {
+    // A Repeatable feat taken twice (SRD 5.2.1 Feats: Repeatable), named by its source or its source name's first words.
+    const taking = (id: string, level: number) => ({ id, name: 'Wick Tender', source: 'feat' as const, sourceName: `Ability Score Improvement (Fighter ${level})`, description: '', uses: { max: 3, used: 0, recharge: 'long' as const } });
+    const c = mira({ features: [taking('first', 4), taking('second', 8)] });
+    const bySource = useFeature(c, 'Wick Tender (feat)');
+    const byWords = useFeature(c, 'Wick Tender (Ability Score Improvement)');
+    for (const spent of [bySource, byWords]) {
+      expect(spent.character.features.map((f) => f.uses?.used)).toEqual([1, 0]);
+      expect(spent.events[0].message).toBe(
+        'Used Wick Tender (Ability Score Improvement (Fighter 4)) (2/3 left; recharges on a Long Rest). Another Wick Tender is on the sheet: to use it, name it "Wick Tender (Ability Score Improvement (Fighter 8))".',
+      );
+    }
+    expect(restoreFeature(useFeature(c, 'Wick Tender (feat)').character, 'Wick Tender (feat)').events[0].message).toBe(
+      'Wick Tender (Ability Score Improvement (Fighter 4)): regained 1 use (3/3). Another Wick Tender is on the sheet: to restore it, name it "Wick Tender (Ability Score Improvement (Fighter 8))".',
+    );
+    // Two classes' features of one name (a multiclass hero's Channel Divinity), named by their source.
+    const channel = (id: string, sourceName: string) => ({ id, name: 'Channel Divinity', source: 'class' as const, sourceName, description: '', uses: { max: 2, used: 0, recharge: 'short' as const } });
+    expect(useFeature(mira({ features: [channel('cleric', 'Cleric 2'), channel('paladin', 'Paladin 3')] }), 'Channel Divinity (class)').events[0].message).toBe(
+      'Used Channel Divinity (Cleric 2) (1/2 left; recharges on a Short or Long Rest). Another Channel Divinity is on the sheet: to use it, name it "Channel Divinity (Paladin 3)".',
+    );
+    // Of those it fits only one has uses: the name picked it, whatever else of the name has uses (a trait's).
+    const trait = { id: 't-wick', name: 'Wick Tender', source: 'species' as const, sourceName: 'Mothkin', description: '', uses: { max: 1, used: 0, recharge: 'short' as const } };
+    const one = mira({ features: [{ ...taking('first', 4), uses: undefined }, taking('second', 8), trait] });
+    expect(useFeature(one, 'Wick Tender (feat)').events[0].message).toBe('Used Wick Tender (2/3 left; recharges on a Long Rest)');
+  });
+
+  it("keeps where a rewritten feature came from, so the name a result gave still finds it", () => {
+    const trait = { id: 't-luck', name: 'Lantern Luck', source: 'species' as const, sourceName: 'Mothkin', description: 'Invented trait.', uses: { max: 1, used: 0, recharge: 'short' as const } };
+    const feat = { id: 'f-luck', name: 'Lantern Luck', source: 'feat' as const, sourceName: 'Granted in play', description: 'Invented feat.', uses: { max: 3, used: 0, recharge: 'long' as const } };
+    // The DM's ruling on the trait (its tools name every entry "Granted in play").
+    const ruled = addFeature(mira({ features: [trait, feat] }), { name: 'Lantern Luck', source: 'species', sourceName: 'Granted in play', description: 'A ruling.' }).character;
+    expect(ruled.features.map((f) => [f.id, f.sourceName, f.description])).toEqual([
+      ['t-luck', 'Mothkin', 'A ruling.'],
+      ['f-luck', 'Granted in play', 'Invented feat.'],
+    ]);
+    expect(useFeature(ruled, 'Lantern Luck (Mothkin)').character.features.map((f) => f.uses?.used)).toEqual([1, 0]);
+    expect(useFeature(ruled, 'Lantern Luck (Granted in play)').character.features.map((f) => f.uses?.used)).toEqual([0, 1]);
+    // One with no source name takes the rewrite's.
+    const bare = { id: 'x', name: 'Lantern Luck', source: 'species' as const, description: '' };
+    expect(addFeature(mira({ features: [bare] }), { name: 'Lantern Luck', source: 'species', sourceName: 'Granted in play', description: 'A ruling.' }).character.features[0].sourceName).toBe('Granted in play');
+  });
+
   it("keeps a feat apart only from a species trait or class feature: a boon's or background's entry of its name rewrites it, keeping the uses spent", () => {
     // SRD 5.2.1 Epic Boon feats: the level-up stores one as a feat; the DM's entry for it as a boon is the same feature.
     const boon = { id: 'f-fate', name: 'Boon of Fate', source: 'feat' as const, sourceName: 'Epic Boon (Fighter 19)', description: 'Boon text.', uses: { max: 1, used: 1, recharge: 'short' as const } };
