@@ -208,6 +208,20 @@ describe('LevelUpDialog with imported options', () => {
     expect(grapplers[0]).toBeChecked();
   });
 
+  it("counts Tough's Hit Points at the level it's taken in the feat panel (twice the character level)", async () => {
+    const user = userEvent.setup();
+    const tough = { id: 'lib:gloam:feat:tough', name: 'Tough', category: 'general' as const, description: 'Invented: hardier than most.' };
+    mocks.data = { ...EXPECTED_MERGED, feats: [...EXPECTED_MERGED.feats, tough] };
+    resetFakeGame({ campaign: sampleCampaign(), character: fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }) });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('radio', { name: /^Tough/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    // d10 average 6 + CON 1, and Tough's 2 × level 4.
+    expect(sheet().hp.max).toBe(30 + 7 + 8);
+    expect(sheet().features.filter((f) => f.name === 'Tough')).toEqual([expect.objectContaining({ source: 'feat', sourceName: 'Ability Score Improvement (Fighter 4)', description: 'Invented: hardier than most.' })]);
+    expect(notices()[0]).toContain('+15 HP');
+  });
+
   it('applies +2 to one ability and names it on the sheet', async () => {
     const user = userEvent.setup();
     resetFakeGame({ campaign: sampleCampaign(), character: fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }) });

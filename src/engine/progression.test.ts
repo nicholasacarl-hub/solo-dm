@@ -455,6 +455,9 @@ describe('levelUp: Armor Class', () => {
     expect(startingFeatureHitPoints(named('Tough'), asClass('Fighter', 1))).toBe(2);
     expect(startingFeatureHitPoints(named('Draconic Resilience'), book2014)).toBe(1);
     expect(startingFeatureHitPoints(named('Tough', 'Draconic Resilience'), book2014)).toBe(3);
+    // A 2014 book's Sorcerer as the builder makes it, its ref recording the edition.
+    const ref: ImportedRef = { sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:sorcerer', kind: 'class', entryName: 'Sorcerer', textHash: '', textCopied: false, format: '2014' };
+    expect(startingFeatureHitPoints(named('Draconic Resilience'), { ...book2014, ref })).toBe(1);
     // Not counted here: a Draconic Resilience on another class, and a species' per-level bonus (the builder's own).
     expect(startingFeatureHitPoints(named('Draconic Resilience'), asClass('Fighter', 1))).toBe(0);
     expect(startingFeatureHitPoints(named('Dwarven Toughness', 'Alert'), asClass('Fighter', 1))).toBe(0);

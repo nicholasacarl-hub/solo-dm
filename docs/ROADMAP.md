@@ -71,10 +71,14 @@ The first version of structured imports deliberately leaves these out:
   2014 Monk's grows d4 → d6 → d8 → d10) and its unarmed strikes off the sheet use Strength. The engine would need each
   edition's numbers.
 - **Hit Points a character missed**: nothing in the app raises a Hit Point maximum by hand, so a character keeps the
-  Hit Points it has where the app once counted too few: Tough taken at 1st level (an origin feat) before the builder
-  counted it, and Draconic Resilience on a 2014 book's Sorcerer, or on a 2024 book's while its record's Edition said
-  Older, for levels gained before level-up counted it in either edition. A way to adjust the maximum (on the sheet and
-  for the DM) would mend these, and cover Aid and a Wraith's Life Drain too.
+  Hit Points it has where the app once counted too few: Tough taken at 1st level (an origin feat) or in the level-up
+  dialog's feat panel before the app counted it there, and Draconic Resilience on a 2014 book's Sorcerer, or on a 2024
+  book's while its record's Edition said Older, for levels gained before level-up counted it in either edition. A
+  book's Sorcerer leveled while its edition isn't recorded yet (a hero made before refs recorded it, its book away)
+  waits for the one-time top-up, which pays only a 2024 book's. A way to adjust the maximum (on the sheet and for the
+  DM) would mend these, and cover Aid and a Wraith's Life Drain too.
+- **Origin feats at Ability Score Improvement**: the level-up dialog offers General feats at an Ability Score
+  Improvement level; the 2024 feature allows any feat the hero qualifies for, Origin feats (Tough, Alert) included.
 - **What a Monk is holding**: Martial Arts works only while the Monk is unarmed or wields only Monk weapons. The
   engine doesn't know what is held, so a Monk weapon gets the die and Dexterity even beside a non-Monk weapon, and a
   weapon that isn't on the sheet gets the dice and ability the DM gives it. The DM adjusts these.

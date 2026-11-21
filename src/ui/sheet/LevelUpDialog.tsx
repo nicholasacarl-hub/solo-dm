@@ -519,7 +519,11 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
   const apply = async () => {
     if (!canApply) return;
     setBusy(true);
-    const opts = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll', character);
+    const base = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll', character);
+    // The feat picked here joins the level-up, which counts what it brings at this level (Tough: twice the level);
+    // applyFeatChoice then completes that same feature (its text, ref and uses).
+    const picked = featChoice.kind === 'feat' && featChoice.pick.feat ? [{ name: featChoice.pick.name, source: 'feat' as const, description: featChoice.pick.description }] : [];
+    const opts = picked.length ? { ...base, newFeatures: [...(base.newFeatures ?? []), ...picked] } : base;
     const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null } = { result: null, uses: [], choice: null };
     const saved = await edit((c) => {
       const r = levelUp(c, opts);

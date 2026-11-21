@@ -118,7 +118,11 @@ interface HpBonus {
  * Draconic Bloodline: 1 at 1st level, then 1 a level).
  */
 function isSorcererClass(cl: Pick<ClassLevel, 'classId' | 'name' | 'ref'>): boolean {
-  return rulesClassFor(cl)?.name === 'Sorcerer' || nameKey(cl.name) === 'sorcerer';
+  if (rulesClassFor(cl)?.name === 'Sorcerer') return true;
+  // A book's class whose edition isn't recorded yet (a hero made before refs recorded it): the one-time top-up pays
+  // its levels once it is (data/options/editions.ts), so paying them here too would pay them twice.
+  if (cl.ref && !cl.ref.format) return false;
+  return nameKey(cl.name) === 'sorcerer';
 }
 
 /**
