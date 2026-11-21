@@ -78,6 +78,13 @@ The first version of structured imports deliberately leaves these out:
 - **What a Monk is holding**: Martial Arts works only while the Monk is unarmed or wields only Monk weapons. The
   engine doesn't know what is held, so a Monk weapon gets the die and Dexterity even beside a non-Monk weapon, and a
   weapon that isn't on the sheet gets the dice and ability the DM gives it. The DM adjusts these.
+- **Older sheets' book weapons and Martial Arts**: a weapon attack made before attacks recorded their weapon's category
+  and type is recognized as a Monk weapon by its SRD name only, so a book's own blade on such a sheet gets no Martial
+  Arts die and keeps the Dexterity the builder gave it in armor or with a Shield.
+- **Magic armor added by name**: an SRD magic armor or shield whose name doesn't name its base item (Mithral Armor,
+  Elven Chain, Sentinel Shield, Animated Shield) is linked as a magic item, not armor: it doesn't change the AC (the
+  DM sets it) and doesn't stop Martial Arts or Unarmored Defense. The link would need the entry's armor category and
+  its base item's numbers, as a book's magic armor gets them.
 - **Telling a book read again from another book**: a hero's class, subclass, species or background whose book is
   switched off or gone is looked up again by its book's fingerprint, then its source and title, then any book's
   option of its name, so another book's option of that name stands in (a 2014 printing for a 2024 one of the same

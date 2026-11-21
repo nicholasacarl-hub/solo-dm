@@ -303,8 +303,14 @@ function dexterousMartialArts(c: Character, attack: Attack): boolean {
 function martialArtsFinesse(attack: Attack): boolean {
   if (attack.ability !== 'finesse') return false;
   if (nameKey(attack.name) === 'unarmed-strike') return true;
-  return isMonkWeapon(attack) && !(attack.properties ?? []).some((p) => /^finesse\b/i.test(p.trim()));
+  if (!isMonkWeapon(attack)) return false;
+  // A weapon whose properties weren't read (a book's table without them) is Finesse by its SRD name.
+  const properties = attack.properties ?? [];
+  return !(properties.length ? properties.some((p) => /^finesse\b/i.test(p.trim())) : SRD_FINESSE_WEAPONS.has(nameKey(attack.name)));
 }
+
+/** SRD 5.2.1 weapons with the Finesse property. */
+const SRD_FINESSE_WEAPONS = new Set(['Dagger', 'Dart', 'Rapier', 'Scimitar', 'Shortsword', 'Whip'].map(nameKey));
 
 /**
  * In armor or with a Shield, an Unarmed Strike whose die the builder gave it for Martial Arts (its `scaling`, or its
@@ -453,8 +459,9 @@ export function attackDamageExpression(c: Character, attack: Attack, critical = 
     terms.filter((t): t is DiceGroup => t.kind === 'dice'),
     terms.reduce((sum, t) => (t.kind === 'flat' ? sum + t.sign * t.value : sum), 0),
   );
-  const flat = base.flat + abilityBonus;
   const merged: DiceTerm[] = [...(critical ? criticalDiceTerms(base.dice) : base.dice)];
+  // Damage without dice never goes below 0 (an Unarmed Strike's 1 with STR 6).
+  const flat = merged.length === 0 ? Math.max(0, base.flat + abilityBonus) : base.flat + abilityBonus;
   if (flat !== 0 || merged.length === 0) merged.push({ kind: 'flat', sign: flat < 0 ? -1 : 1, value: Math.abs(flat) });
   return formatDice(merged);
 }
@@ -778,6 +785,9 @@ function improvisedAttack(c: Character, req: PlayerRollRequest): { modifier: num
   const spell = name && c.spellcasting ? matchByName(c.spellcasting.spells, name, (s) => s.name).match : undefined;
   if (spell) return { modifier: spellAttackBonus(c) ?? pb(c) + mod(c, bestMentalAbility(c)), label: `${spell.name} attack` };
   if (name && isUnarmedStrikeName(name)) {
+    // The sheet's Unarmed Strike when it has one, as for the damage (unarmedDamageExpression).
+    const sheet = findAttack(c, 'Unarmed Strike');
+    if (sheet) return { modifier: attackBonus(c, sheet), label: 'Unarmed Strike attack' };
     const ability = isMonk(c) && !wearsArmorOrShield(c) ? Math.max(mod(c, 'str'), mod(c, 'dex')) : mod(c, 'str');
     return { modifier: ability + pb(c), label: 'Unarmed Strike attack' };
   }
@@ -790,12 +800,11 @@ const UNARMED_STRIKE: Attack = { id: 'unarmed-strike', name: 'Unarmed Strike', a
 
 /**
  * Damage for an unarmed strike by any name ("Kick", "Punch"): the sheet's Unarmed Strike, else everyone's, with a Monk's
- * Martial Arts die and Dexterity while unarmored (SRD 5.2.1 Monk, Martial Arts); never below 0.
+ * Martial Arts die and Dexterity while unarmored (SRD 5.2.1 Monk, Martial Arts); never below 0 (attackDamageExpression).
  */
 export function unarmedDamageExpression(c: Character, critical = false): string {
   const sheet = findAttack(c, 'Unarmed Strike');
-  const expression = (sheet && attackDamageExpression(c, sheet, critical)) || attackDamageExpression(c, UNARMED_STRIKE, critical);
-  return /^-\d+$/.test(expression) ? '0' : expression;
+  return (sheet && attackDamageExpression(c, sheet, critical)) || attackDamageExpression(c, UNARMED_STRIKE, critical);
 }
 
 /**
