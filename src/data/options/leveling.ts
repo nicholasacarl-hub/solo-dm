@@ -9,7 +9,7 @@
  * ("Rage (Duration)" -> "Rage"), and the Thaumaturge/Magician skill bonus and species Resistances
  * it never recorded.
  */
-import { characterLevel, proficiencyBonus } from '@/engine';
+import { characterLevel, featureLabel, proficiencyBonus } from '@/engine';
 import { nameKey } from '@/lib/id';
 import type {
   AbilityScores,
@@ -215,13 +215,18 @@ export function refreshFeatureUses(c: Character, data: LevelingData | null | und
   };
 }
 
-/** Uses a level-up changed, for the DM notice and the summary: "Rage 2 → 3", "Draconic Flight 1". */
+/**
+ * Uses a level-up changed, for the DM notice and the summary: "Rage 2 → 3", "Draconic Flight 1". Two of one name that
+ * both changed (a Repeatable feat taken twice) are told apart as features_use names them (featureLabel).
+ */
 export function featureUseChanges(before: Character, after: Character): string[] {
   const old = new Map(before.features.map((f) => [f.id, f]));
-  return after.features.flatMap((f) => {
+  const changed = after.features.flatMap((f) => {
     const prev = old.get(f.id);
     if (!prev || !f.uses) return [];
-    if (!prev.uses) return [`${f.name} ${f.uses.max}`];
-    return prev.uses.max === f.uses.max ? [] : [`${f.name} ${prev.uses.max} → ${f.uses.max}`];
+    if (!prev.uses) return [{ f, change: `${f.uses.max}` }];
+    return prev.uses.max === f.uses.max ? [] : [{ f, change: `${prev.uses.max} → ${f.uses.max}` }];
   });
+  const twice = (f: Feature) => changed.filter((x) => nameKey(x.f.name) === nameKey(f.name)).length > 1;
+  return changed.map(({ f, change }) => `${twice(f) ? featureLabel(f, after.features) : f.name} ${change}`);
 }

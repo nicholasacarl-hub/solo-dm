@@ -247,8 +247,9 @@ function Summary({ result, uses, choice, onClose }: { result: LevelUpResult; use
       {uses.length > 0 && (
         <Section title="Feature uses">
           <ul className="list-disc pl-5 text-sm">
-            {uses.map((u) => (
-              <li key={u}>{u}</li>
+            {/* A static list: two lines can read alike (featureUseChanges tells most apart), so the index keys it. */}
+            {uses.map((u, i) => (
+              <li key={i}>{u}</li>
             ))}
           </ul>
         </Section>

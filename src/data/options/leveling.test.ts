@@ -11,7 +11,7 @@ import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
 import type { Character, ClassLevel, ClassOption, CompendiumEntry, FeatOption, Feature, OptionSource, SubclassOption } from '@/types';
-import { gainedFeatures } from './leveling';
+import { featureUseChanges, gainedFeatures } from './leveling';
 import {
   applyFeatChoice,
   caughtUpFeatures,
@@ -398,5 +398,25 @@ describe('the Feat choice panel', () => {
       max: 20,
     });
     expect(featIncrease({ description: 'You can stay awake through the night.' })).toBeUndefined();
+  });
+});
+
+describe('featureUseChanges: the uses a level-up changed', () => {
+  it('tells apart two of one name that both grew, as features_use names them (SRD 5.2.1 Feats: Repeatable)', () => {
+    const taking = (id: string, level: number, max: number): Feature => ({
+      id,
+      name: 'Wick Tender',
+      source: 'feat',
+      sourceName: `Ability Score Improvement (Fighter ${level})`,
+      description: 'Invented feat.',
+      uses: { max, used: 0, recharge: 'long' },
+    });
+    const rage: Feature = { id: 'rage', name: 'Rage', source: 'class', description: '', uses: { max: 2, used: 0, recharge: 'long' } };
+    const before = sampleCharacter({ features: [taking('a', 4, 3), taking('b', 8, 3), rage] });
+    const after = { ...before, features: [taking('a', 4, 4), taking('b', 8, 4), { ...rage, uses: { ...rage.uses!, max: 3 } }] };
+    expect(featureUseChanges(before, after)).toEqual(['Wick Tender (Ability Score Improvement (Fighter 4)) 3 → 4', 'Wick Tender (Ability Score Improvement (Fighter 8)) 3 → 4', 'Rage 2 → 3']);
+    // Only one of them grew: its name alone.
+    const one = { ...before, features: [taking('a', 4, 4), taking('b', 8, 3), rage] };
+    expect(featureUseChanges(before, one)).toEqual(['Wick Tender 3 → 4']);
   });
 });

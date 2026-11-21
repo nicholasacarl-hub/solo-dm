@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Character } from '@/types';
+import type { Character, Feature } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import {
   addCondition,
@@ -14,6 +14,7 @@ import {
   clearTempHp,
   concentrationSaveDC,
   createBlankCharacter,
+  featureLabel,
   findFeature,
   findItem,
   formatCurrency,
@@ -363,6 +364,7 @@ describe('features', () => {
       ['Lantern Luck', 'species', 'Invented trait: reroll a 1.'],
       ['Lantern Luck', 'feat', 'Invented feat: luck points.'],
     ]);
+    expect(withFeat.events[0].message).toBe('Gained feature: Lantern Luck (3 uses, recharges on a Long Rest), beside Lantern Luck (species)');
     // A feat of the name again updates the feat; a trait of it, the trait.
     const feat = addFeature(withFeat.character, { name: 'lantern luck', source: 'feat', description: 'Invented feat, rewritten.' }).character;
     expect(feat.features.map((f) => f.description)).toEqual(['Invented trait: reroll a 1.', 'Invented feat, rewritten.']);
@@ -374,14 +376,96 @@ describe('features', () => {
     // By name, a use goes to the one with uses left, a restore to the one with uses spent.
     const spent = useFeature(withFeat.character, 'Lantern Luck');
     expect(spent.character.features.map((f) => f.uses?.used)).toEqual([undefined, 1]);
+    // The trait has no uses to spend, so the result needs no word about it.
+    expect(spent.events[0].message).toBe('Used Lantern Luck (2/3 left; recharges on a Long Rest)');
     expect(restoreFeature(spent.character, 'Lantern Luck').character.features.map((f) => f.uses?.used)).toEqual([undefined, 0]);
   });
 
   it('spends and restores the right one of two same-named features with uses (a Repeatable feat taken twice)', () => {
     const taking = (id: string, used: number) => ({ id, name: 'Wick Tender', source: 'feat' as const, description: '', uses: { max: 1, used, recharge: 'long' as const } });
     const c = mira({ features: [taking('first', 1), taking('second', 0)] });
-    expect(useFeature(c, 'Wick Tender').character.features.map((f) => f.uses?.used)).toEqual([1, 1]);
+    const spent = useFeature(c, 'Wick Tender');
+    expect(spent.character.features.map((f) => f.uses?.used)).toEqual([1, 1]);
+    // Nothing tells two such takings apart, so the result names neither.
+    expect(spent.events[0].message).toBe('Used Wick Tender (0/1 left; recharges on a Long Rest)');
     expect(restoreFeature(c, 'Wick Tender').character.features.map((f) => f.uses?.used)).toEqual([0, 0]);
+  });
+
+  it('picks one of two same-named features with uses by the amount, or by the source or source name in parentheses after the name', () => {
+    const trait = { id: 't-luck', name: 'Lantern Luck', source: 'species' as const, sourceName: 'Mothkin', description: 'Invented trait.', uses: { max: 1, used: 0, recharge: 'short' as const } };
+    const feat = { id: 'f-luck', name: 'Lantern Luck', source: 'feat' as const, sourceName: 'Ability Score Improvement (Fighter 4)', description: 'Invented feat.', uses: { max: 3, used: 0, recharge: 'long' as const } };
+    const c = mira({ features: [trait, feat] });
+    const usedOf = (x: Character) => x.features.map((f) => f.uses?.used);
+    // By the name alone: the first whose uses cover the amount; the result says which, and how to name the other.
+    const one = useFeature(c, 'Lantern Luck');
+    expect(usedOf(one.character)).toEqual([1, 0]);
+    expect(one.events[0].message).toBe(
+      'Used Lantern Luck (Mothkin) (0/1 left; recharges on a Short or Long Rest). Another Lantern Luck is on the sheet: to use it, name it "Lantern Luck (Ability Score Improvement (Fighter 4))".',
+    );
+    expect(usedOf(useFeature(c, 'Lantern Luck', 2).character)).toEqual([0, 2]);
+    expect(usedOf(useFeature(one.character, 'Lantern Luck', 2).character)).toEqual([1, 2]);
+    // Named by its source, its source name or that name's first words: that one, with nothing more to say.
+    const byFeat = useFeature(c, 'Lantern Luck (feat)');
+    expect(usedOf(byFeat.character)).toEqual([0, 1]);
+    expect(byFeat.events[0].message).toBe('Used Lantern Luck (2/3 left; recharges on a Long Rest)');
+    expect(usedOf(useFeature(c, 'lantern luck (mothkin)').character)).toEqual([1, 0]);
+    expect(usedOf(useFeature(c, 'Lantern Luck (Ability Score Improvement (Fighter 4))').character)).toEqual([0, 1]);
+    expect(usedOf(useFeature(c, 'Lantern Luck (Ability Score Improvement)').character)).toEqual([0, 1]);
+    expect(useFeature(c, 'Lantern Luck (Abil)').events[0].message).toBe('No feature named "Lantern Luck (Abil)".');
+    expect(useFeature(c, 'Lantern Luck (Halfling)').events[0].message).toBe('No feature named "Lantern Luck (Halfling)".');
+    // A restore: the first with as many uses spent, else any spent; by a name in parentheses too.
+    const spent = mira({ features: [{ ...trait, uses: { ...trait.uses, used: 1 } }, { ...feat, uses: { ...feat.uses, used: 2 } }] });
+    expect(usedOf(restoreFeature(spent, 'Lantern Luck', 2).character)).toEqual([1, 0]);
+    const back = restoreFeature(spent, 'Lantern Luck', 1);
+    expect(usedOf(back.character)).toEqual([0, 2]);
+    expect(back.events[0].message).toBe(
+      'Lantern Luck (Mothkin): regained 1 use (1/1). Another Lantern Luck is on the sheet: to restore it, name it "Lantern Luck (Ability Score Improvement (Fighter 4))".',
+    );
+    expect(usedOf(restoreFeature(spent, 'Lantern Luck (feat)', 1).character)).toEqual([1, 1]);
+    expect(usedOf(restoreFeature(spent, 'Lantern Luck (feat)').character)).toEqual([1, 0]);
+    // Neither covers the amount: a use is refused for the one with uses left, a restore gives what one has spent.
+    const low = mira({ features: [{ ...trait, uses: { ...trait.uses, used: 1 } }, { ...feat, uses: { ...feat.uses, used: 2 } }] });
+    expect(useFeature(low, 'Lantern Luck', 2).events[0].message).toBe('Not enough uses of Lantern Luck: 1 of 3 left, 2 needed.');
+    const featSpent = mira({ features: [trait, { ...feat, uses: { ...feat.uses, used: 1 } }] });
+    expect(usedOf(restoreFeature(featSpent, 'Lantern Luck', 2).character)).toEqual([0, 0]);
+    // A source name given whole wins over one it starts.
+    const lineage = { ...trait, id: 't-lineage', sourceName: 'Mothkin Lineage', uses: { ...trait.uses } };
+    const both = mira({ features: [lineage, trait] });
+    expect(usedOf(useFeature(both, 'Lantern Luck (Mothkin)').character)).toEqual([0, 1]);
+    // A feature whose own name ends in parentheses is found by that name.
+    const own = mira({ features: [{ ...trait, id: 'x', name: 'Darkvision (Transformation)' }] });
+    expect(useFeature(own, 'Darkvision (Transformation)').character.features[0].uses?.used).toBe(1);
+  });
+
+  it("keeps a feat apart only from a species trait or class feature: a boon's or background's entry of its name rewrites it, keeping the uses spent", () => {
+    // SRD 5.2.1 Epic Boon feats: the level-up stores one as a feat; the DM's entry for it as a boon is the same feature.
+    const boon = { id: 'f-fate', name: 'Boon of Fate', source: 'feat' as const, sourceName: 'Epic Boon (Fighter 19)', description: 'Boon text.', uses: { max: 1, used: 1, recharge: 'short' as const } };
+    const rewritten = addFeature(mira({ features: [boon] }), { name: 'Boon of Fate', source: 'boon', description: 'By the DM.', uses: { max: 1, used: 0, recharge: 'short' } });
+    expect(rewritten.events[0].message).toBe('Updated feature: Boon of Fate');
+    expect(rewritten.character.features).toEqual([{ ...boon, source: 'boon', description: 'By the DM.' }]);
+    // An Origin feat rewritten as its background's.
+    const alert = { id: 'f-alert', name: 'Alert', source: 'feat' as const, sourceName: 'Sage (Origin feat)', description: 'Alert text.' };
+    expect(addFeature(mira({ features: [alert] }), { name: 'Alert', source: 'background', description: 'By the DM.' }).character.features.map((f) => [f.id, f.description])).toEqual([['f-alert', 'By the DM.']]);
+    // A feat beside a class feature of its name, and a species trait beside a feat: two features, either way round.
+    const classFeature = { id: 'c-flame', name: 'Watchful Flame', source: 'class' as const, sourceName: 'Fighter 4', description: 'Invented class feature.' };
+    expect(addFeature(mira({ features: [classFeature] }), { name: 'Watchful Flame', source: 'feat', description: 'Invented feat.' }).character.features.map((f) => f.source)).toEqual(['class', 'feat']);
+    expect(addFeature(mira({ features: [alert] }), { name: 'Alert', source: 'species', description: 'Invented trait.' }).character.features.map((f) => f.source)).toEqual(['feat', 'species']);
+    const subclassFeature = { ...classFeature, id: 's-flame', source: 'subclass' as const };
+    expect(addFeature(mira({ features: [subclassFeature] }), { name: 'Watchful Flame', source: 'feat', description: 'Invented feat.' }).character.features.map((f) => f.source)).toEqual(['subclass', 'feat']);
+    // The boon the DM stored, rewritten as a feat: still the one feature.
+    expect(addFeature(rewritten.character, { name: 'Boon of Fate', source: 'feat', description: 'As a feat.' }).character.features.map((f) => [f.id, f.source])).toEqual([['f-fate', 'feat']]);
+    // A rewrite keeps the uses spent, no more than its new maximum.
+    const spentAll = mira({ features: [{ ...boon, uses: { max: 3, used: 3, recharge: 'long' as const } }] });
+    expect(addFeature(spentAll, { name: 'Boon of Fate', source: 'feat', description: '', uses: { max: 2, used: 0, recharge: 'long' } }).character.features[0].uses).toEqual({ max: 2, used: 2, recharge: 'long' });
+    expect(addFeature(spentAll, { name: 'Boon of Fate', source: 'feat', description: 'No uses given.' }).character.features[0].uses).toEqual({ max: 3, used: 3, recharge: 'long' });
+  });
+
+  it('labels a feature by what tells it from others of its name (featureLabel)', () => {
+    const f = (id: string, source: Feature['source'], sourceName?: string): Feature => ({ id, name: 'Lantern Luck', source, description: '', ...(sourceName ? { sourceName } : {}) });
+    expect(featureLabel(f('a', 'feat', 'Granted in play'), [f('a', 'feat', 'Granted in play')])).toBe('Lantern Luck');
+    expect(featureLabel(f('a', 'species', 'Mothkin'), [f('a', 'species', 'Mothkin'), f('b', 'feat', 'Granted in play')])).toBe('Lantern Luck (Mothkin)');
+    expect(featureLabel(f('a', 'species', 'Granted in play'), [f('a', 'species', 'Granted in play'), f('b', 'feat', 'Granted in play')])).toBe('Lantern Luck (species)');
+    expect(featureLabel(f('a', 'feat'), [f('a', 'feat'), f('b', 'feat')])).toBe('Lantern Luck');
   });
 
   it('Heroic Inspiration: only one at a time', () => {

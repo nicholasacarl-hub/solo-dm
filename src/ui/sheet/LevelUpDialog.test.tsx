@@ -283,6 +283,34 @@ describe('LevelUpDialog with imported options', () => {
     expect(sheet().abilityScores.cha).toBe(9);
   });
 
+  it('tells apart two takings of a feat whose uses both grew, in the summary and the DM notice (SRD 5.2.1 Feats: Repeatable)', async () => {
+    const user = userEvent.setup();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const taking = (id: string, level: number) => ({
+      id,
+      name: 'Wick Tender',
+      source: 'feat' as const,
+      sourceName: `Ability Score Improvement (Fighter ${level})`,
+      description: 'Invented: you can use this benefit a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.',
+      uses: { max: 3, used: 0, recharge: 'long' as const },
+    });
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...fighter(8, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), features: [taking('a', 4), taking('b', 8)] } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    const lines = ['Wick Tender (Ability Score Improvement (Fighter 4)) 3 → 4', 'Wick Tender (Ability Score Improvement (Fighter 8)) 3 → 4'];
+    expect(screen.getAllByRole('listitem').map((li) => li.textContent)).toEqual(expect.arrayContaining(lines));
+    expect(notices()[0]).toContain(`feature uses now: ${lines.join(', ')}`);
+    // Two nothing tells apart (both the DM's): two like lines, each its own list item.
+    cleanup();
+    const alike = (id: string) => ({ ...taking(id, 4), sourceName: 'Granted in play' });
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...fighter(8, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), features: [alike('a'), alike('b')] } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(screen.getAllByRole('listitem').filter((li) => li.textContent === 'Wick Tender 3 → 4')).toHaveLength(2);
+    expect(errors.mock.calls.some((args) => args.some((a) => String(a).includes('same key')))).toBe(false);
+    errors.mockRestore();
+  });
+
   it("puts a feat named like a species trait beside it: the trait keeps its text, source and ref", async () => {
     const user = userEvent.setup();
     const trait = {

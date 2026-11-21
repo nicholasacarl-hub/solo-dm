@@ -361,6 +361,19 @@ describe('update_character links names to the rules index and builder data', () 
     expect(h.sheet().features.map((f) => f.uses?.used)).toEqual([undefined, 1]);
   });
 
+  it('features_use and features_restore reach either of two same-named features with uses: by the amount, or by the name the result gives', async () => {
+    const trait = { id: 't-luck', name: 'Lantern Luck', source: 'species' as const, sourceName: 'Mothkin', description: 'Invented trait.', uses: { max: 1, used: 0, recharge: 'short' as const } };
+    const h = setup({ character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 4, hitDie: 10 }, { features: [trait] }) });
+    const added = await h.run('update_character', { features_add: [{ name: 'Lantern Luck', description: 'Invented feat: 3 luck points.', source: 'feat', uses_max: 3, recharge: 'long' }] });
+    expect(added.content).toContain('Gained feature: Lantern Luck (3 uses, recharges on a Long Rest), beside Lantern Luck (Mothkin)');
+    const used = (await h.run('update_character', { features_use: [{ name: 'Lantern Luck' }] })).content;
+    expect(used).toContain('Used Lantern Luck (Mothkin) (0/1 left; recharges on a Short or Long Rest). Another Lantern Luck is on the sheet: to use it, name it "Lantern Luck (Granted in play)".');
+    await h.run('update_character', { features_use: [{ name: 'Lantern Luck', amount: 2 }, { name: 'Lantern Luck (Granted in play)' }] });
+    expect(h.sheet().features.map((f) => f.uses?.used)).toEqual([1, 3]);
+    await h.run('update_character', { features_restore: [{ name: 'Lantern Luck (feat)', amount: 2 }] });
+    expect(h.sheet().features.map((f) => f.uses?.used)).toEqual([1, 1]);
+  });
+
   it('links inventory_add items: a book’s magic armor by its numbers, an SRD item, and leaves others as given', async () => {
     const h = setup({ character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 3, hitDie: 10 }) });
     await h.run('update_character', {
@@ -590,6 +603,32 @@ describe("book text the DM names on the sheet keeps its book's ref (exports repl
     expect(c.features.find((f) => f.name === 'Dusk Sight')?.ref).toBeUndefined();
     expect(c.features.find((f) => f.name === 'Smoke Step')?.ref).toBeUndefined();
     expect(exported(c)).toContain(own);
+  });
+
+  it("a species trait or class feature the DM adds under a book feat's name never takes that feat's ref", async () => {
+    // An invented Mothkin trait named like the book's feat Lantern Bearer, with its own ref.
+    const trait = {
+      id: 't-lantern',
+      name: 'Lantern Bearer',
+      source: 'species' as const,
+      sourceName: 'Mothkin',
+      description: 'Invented: a moth-folk trait of the same name.',
+      ref: importedRef({ entryId: 'lib:gloam:species:mothkin', kind: 'species', entryName: 'Mothkin', part: 'Lantern Bearer', textHash: 'h', textCopied: true }),
+    };
+    const ruling = 'DM ruling: the glow also sheds dim light for 10 feet.';
+    const h = setup({ character: { ...fighter(), features: [trait] } });
+    expect((await h.run('update_character', { features_add: [{ name: 'Lantern Bearer', description: ruling, source: 'species' }] })).isError).toBeUndefined();
+    // The trait is rewritten and keeps its own ref (restore refills the trait's text, never the feat's).
+    expect(h.sheet().features).toEqual([{ ...trait, description: ruling, sourceName: 'Granted in play' }]);
+    // A class feature of the name with no ref of its own: the DM's words stay the DM's, in exports too.
+    const own = setup({ character: fighter() });
+    expect((await own.run('update_character', { features_add: [{ name: 'Lantern Bearer', description: ruling, source: 'class' }] })).isError).toBeUndefined();
+    expect(own.sheet().features.find((f) => f.name === 'Lantern Bearer')?.ref).toBeUndefined();
+    expect(exported(own.sheet())).toContain(ruling);
+    // An entry on neither side (a background's) named like the feat is the feat: it links it.
+    const background = setup({ character: fighter() });
+    expect((await background.run('update_character', { features_add: [{ name: 'Lantern Bearer', description: ruling, source: 'background' }] })).isError).toBeUndefined();
+    expect(background.sheet().features.find((f) => f.name === 'Lantern Bearer')?.ref).toMatchObject({ kind: 'feat', entryName: 'Lantern Bearer' });
   });
 
   it("features_add and level_up extras that name one of the book's parts get its ref; a name the SRD prints too stays the DM's", async () => {

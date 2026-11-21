@@ -732,7 +732,7 @@ class whose edition isn't recorded yet, whose levels the top-up pays once it is;
 1st-level Draconic Resilience in a new hero's Hit Points (`startingFeatureHitPoints`), and the level-up dialog gives the
 feat it picks to the level-up, so Tough counts at the level it's taken. The dialog shows and applies only a choice its
 panel still lists (a subclass change can take the panel away or change its list, and "Decide with my DM" stands
-instead), and a feat already on the sheet (a repeatable one taken again) is completed in place, not copied. An Edition
+instead). An Edition
 changed in review later adds and takes back nothing, so a round trip never pays twice. That and the text restore write
 nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
@@ -746,8 +746,13 @@ class prints, can't be taken again: by its name however it's written, "Fighting 
 Defense AC, `isFightingStyle`), with "Decide with my DM" preselected. A feat taken there is the feature the level-up
 added for it, completed by id: a species trait or class feature of its name, or an earlier taking of a Repeatable
 feat, stays beside it as it was. The engine's `addFeature` (the DM's features_add too) updates a feature of the same
-name but never merges a feat with one that isn't, and a use or restore by name goes to the same-named feature whose
-uses fit. Its
+name, keeping the uses it has spent, but never merges a feat with a species trait or class feature (`featOrTrait`; a
+boon's, background's or homebrew entry updates either, so the DM's entry for an Epic Boon as a boon rewrites it), and a
+species trait or class feature the DM adds never takes a book feat's ref by its name. A use or restore by name goes to
+the same-named feature whose uses fit the amount; a source or source name in parentheses after the name picks one, as
+the sheet shows it ("Lantern Luck (Mothkin)", "Lantern Luck (feat)"), and a result that changed one of several with
+uses names it so and says how to name the others (`featureLabel`; the level-up summary tells two takings apart the
+same way). Its
 reminders name the Additional Fighting Style choice, and say a subclass feature is still to add unless the level-up
 added this level's (a feature caught up from an earlier level, by its book's level, doesn't count). Items copy numbers, never text: armor
 stats, bonuses and attunement travel on the inventory item, so AC works in the DM's tools and on

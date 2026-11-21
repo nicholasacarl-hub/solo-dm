@@ -26,6 +26,7 @@ import {
   characterSheetText,
   characterStatusLine,
   conditionKey,
+  featOrTrait,
   saveSourcesChangeText,
   gainXp,
   levelUp,
@@ -433,7 +434,8 @@ async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolConte
       return bookCopy(spell.notes, index, SPELL_KINDS);
     }),
     updateCopies: updates.map((u) => itemCopyRef(u.description, index)),
-    feats: feats.map((f) => featRef(f.name, data) ?? bookPartRef(f.name, f.description, data)),
+    // A species trait or class feature named like a book's feat is not that feat (featOrTrait, as addFeature keeps them apart).
+    feats: feats.map((f) => (featOrTrait(f.source) === 'trait' ? null : featRef(f.name, data)) ?? bookPartRef(f.name, f.description, data)),
     catalog,
   };
 }
