@@ -68,8 +68,8 @@ The first version of structured imports deliberately leaves these out:
 - **Older-edition classes' own numbers**: a 2024 book's class plays by the SRD class's rules (its ref records its
   edition), but a 2014 book's class gets only the name-based ones (Improved Critical, Unarmored Defense from its
   feature, Aura of Protection, Draconic Resilience's Hit Points…): its Martial Arts die stays the one on the sheet (a
-  2014 Monk's grows d4 → d6 → d8 → d10) and its unarmed strikes off the sheet use Strength. The engine would need each
-  edition's numbers.
+  2014 Monk's grows d4 → d6 → d8 → d10), and an unarmed strike off the sheet (a Kick) follows the sheet's Unarmed
+  Strike, or uses Strength when the sheet has none. The engine would need each edition's numbers.
 - **Hit Points a character missed**: nothing in the app raises a Hit Point maximum by hand, so a character keeps the
   Hit Points it has where the app once counted too few: Tough taken at 1st level (an origin feat) or in the level-up
   dialog's feat panel before the app counted it there, and Draconic Resilience on a 2014 book's Sorcerer, or on a 2024

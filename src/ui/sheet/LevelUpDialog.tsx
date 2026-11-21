@@ -22,6 +22,7 @@ import {
   featChoiceNotice,
   featChoices,
   featChoiceTrigger,
+  offersScoreIncrease,
   subclassCastingOf,
   subclassRefOf,
   subclassSpellsToAdd,
@@ -505,6 +506,10 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
         ...(featChoice.kind === 'feat' ? { keepId: featChoice.pick.id } : {}),
       })
     : [];
+  // The panel's choice counts only while this level's panel offers it: a subclass change can take the panel away or
+  // change what it lists. The panel shows, and Level up applies, this one.
+  const offered = plan.trigger && (featChoice.kind === 'feat' ? picks.some((p) => p.id === featChoice.pick.id) : featChoice.kind === 'dm' || offersScoreIncrease(plan.trigger.kind));
+  const chosen: FeatChoice = offered ? featChoice : { kind: 'dm' };
   const xpNeeded = XP_THRESHOLDS[level];
   const shortOnXp = !milestone && character.xp < xpNeeded;
 
@@ -512,7 +517,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
     Boolean(className) &&
     (!multiclassing || prereqMet || allowAnyway) &&
     (!plan.needsSubclass || Boolean(plan.sub)) &&
-    (!plan.trigger || featChoiceReady(featChoice, featAllowed, character.abilityScores)) &&
+    (!plan.trigger || featChoiceReady(chosen, featAllowed, character.abilityScores)) &&
     !(hpMethod === 'roll' && physical && !faceValid) &&
     !busy;
 
@@ -520,13 +525,16 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
     if (!canApply) return;
     setBusy(true);
     const base = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll', character);
-    // The feat picked here joins the level-up, which counts what it brings at this level (Tough: twice the level);
-    // applyFeatChoice then completes that same feature (its text, ref and uses).
-    const picked = featChoice.kind === 'feat' && featChoice.pick.feat ? [{ name: featChoice.pick.name, source: 'feat' as const, description: featChoice.pick.description }] : [];
-    const opts = picked.length ? { ...base, newFeatures: [...(base.newFeatures ?? []), ...picked] } : base;
+    // A feat picked here joins the level-up, which counts what it brings at this level (Tough: twice the level), and
+    // applyFeatChoice completes that same feature. Not when the sheet has one of its name (a repeatable feat taken
+    // again, a trait it's named like): applyFeatChoice completes that one, and a copy would stay beside it.
+    const options = (c: Character): LevelUpOptions =>
+      chosen.kind === 'feat' && chosen.pick.feat && !c.features.some((f) => nameKey(f.name) === nameKey(chosen.pick.name))
+        ? { ...base, newFeatures: [...(base.newFeatures ?? []), { name: chosen.pick.name, source: 'feat', description: chosen.pick.description }] }
+        : base;
     const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null } = { result: null, uses: [], choice: null };
     const saved = await edit((c) => {
-      const r = levelUp(c, opts);
+      const r = levelUp(c, options(c));
       if (r.character === c) {
         return { character: c, notice: null, warning: r.events.find((e) => e.type === 'warning')?.message ?? 'Could not level up.' };
       }
@@ -536,25 +544,25 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
       const warnings: string[] = [];
       let increases: ScoreIncrease[] = [];
       if (plan.trigger) {
-        const applied = applyFeatChoice(next, plan.trigger, featChoice, { className, classLevel, addedIds, equipment: builder.data?.equipment });
+        const applied = applyFeatChoice(next, plan.trigger, chosen, { className, classLevel, addedIds, equipment: builder.data?.equipment });
         next = applied.character;
         increases = applied.increases;
         warnings.push(...applied.warnings);
       }
       // The older-edition notes of what this level brings (a 2014 subclass chosen now, a book's class or feat) join the sheet's (B6).
-      next = withAdaptationNotes(next, [option, plan.sub, featChoice.kind === 'feat' ? featChoice.pick.feat : undefined]);
+      next = withAdaptationNotes(next, [option, plan.sub, chosen.kind === 'feat' ? chosen.pick.feat : undefined]);
       // Existing features grow too: Rage, Second Wind, Lay on Hands, Breath Weapon, Draconic Flight at 5…
       const refreshed = refreshFeatureUses(next, builder.data);
       const uses = featureUseChanges(c, refreshed);
       // Named for what took effect (a score at 20 can't rise), and a choice that changed nothing keeps its reminder.
-      const chose = featChoiceNotice(featChoice, increases);
-      const reminders = plan.trigger ? dropChoiceReminder(r.reminders, plan.trigger.kind, featChoice, increases) : r.reminders;
-      const added = featChoice.kind === 'dm' ? plan.features.map((f) => f.name) : refreshed.features.filter((f) => !before.has(f.id)).map((f) => f.name);
+      const chose = featChoiceNotice(chosen, increases);
+      const reminders = plan.trigger ? dropChoiceReminder(r.reminders, plan.trigger.kind, chosen, increases) : r.reminders;
+      const added = chosen.kind === 'dm' ? plan.features.map((f) => f.name) : refreshed.features.filter((f) => !before.has(f.id)).map((f) => f.name);
       const spells = plan.spells.spells.map((s) => s.name);
       const hpGained = refreshed.hp.max - c.hp.max;
       outcome.result = { ...r, character: refreshed, hpGained, reminders };
       outcome.uses = uses;
-      outcome.choice = choiceSummary(featChoice, increases);
+      outcome.choice = choiceSummary(chosen, increases);
       return {
         character: refreshed,
         notice: levelUpNotice({
@@ -632,10 +640,10 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
           <FeatChoicePanel
             trigger={plan.trigger}
             picks={picks}
-            choice={featChoice}
+            choice={chosen}
             onChoice={(next) => {
               // "My DM allows it" belongs to one feat: picking another clears it.
-              if (next.kind !== 'feat' || featChoice.kind !== 'feat' || next.pick.id !== featChoice.pick.id) setFeatAllowed(false);
+              if (next.kind !== 'feat' || chosen.kind !== 'feat' || next.pick.id !== chosen.pick.id) setFeatAllowed(false);
               setFeatChoice(next);
             }}
             scores={character.abilityScores}

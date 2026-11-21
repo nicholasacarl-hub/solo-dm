@@ -730,8 +730,11 @@ maximum). The top-up covers only what the stand-in rules owed. Level-up counts D
 Sorcerer level in either edition (an older book's Draconic Bloodline gives the same one a level), except on a book's
 class whose edition isn't recorded yet, whose levels the top-up pays once it is; the builder counts Tough and a
 1st-level Draconic Resilience in a new hero's Hit Points (`startingFeatureHitPoints`), and the level-up dialog gives the
-feat it picks to the level-up, so Tough counts at the level it's taken. An Edition changed in review later adds and takes back nothing, so a round trip never pays twice. That and
-the text restore write nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
+feat it picks to the level-up, so Tough counts at the level it's taken. The dialog shows and applies only a choice its
+panel still lists (a subclass change can take the panel away or change its list, and "Decide with my DM" stands
+instead), and a feat already on the sheet (a repeatable one taken again) is completed in place, not copied. An Edition
+changed in review later adds and takes back nothing, so a round trip never pays twice. That and the text restore write
+nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
 adaptations, shown in review, on builder cards, in the DM's stats line and on the sheet. Level-up adds
