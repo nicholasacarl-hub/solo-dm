@@ -143,6 +143,23 @@ describe('levelUp', () => {
     expect(levelUp(champion, { className: 'Fighter', hpMethod: 'average', newFeatures: [style('class')] }).reminders).toEqual(expect.arrayContaining([choose, subclassFeature]));
   });
 
+  it("still names the subclass feature when a book's subclass chosen late brings only earlier levels' features", () => {
+    const fighter9 = mira({ spellcasting: undefined, classes: [asClass('Fighter', 9)], hitDice: [{ die: 10, total: 9, spent: 0 }] });
+    const part = (name: string, level: number) => ({
+      name,
+      source: 'subclass' as const,
+      description: 'Invented.',
+      ref: { sourceId: 'gloam', sourceTitle: 'Gloam', entryId: 'lib:gloam:subclass:lamp', kind: 'subclass' as const, entryName: 'Lamplighter', part: name, level, textHash: '', textCopied: true },
+    });
+    const up = (...features: ReturnType<typeof part>[]) =>
+      levelUp(fighter9, { className: 'Fighter', hpMethod: 'average', subclass: 'Lamplighter', newFeatures: features }).reminders;
+    const owed = 'Fighter 10: gain a feature from your subclass (Lamplighter).';
+    // Caught up from levels 3 and 7, nothing at 10 in the book's data: the level's feature is still to add.
+    expect(up(part('Wick Ward', 3), part('Ember Step', 7))).toContain(owed);
+    // With the book's level 10 feature among them: nothing owed.
+    expect(up(part('Wick Ward', 3), part('Ember Step', 7), part('Lamp Oath', 10))).not.toContain(owed);
+  });
+
   it('multiclassing adds a class, a new hit die type and checks prerequisites', () => {
     const r = levelUp(mira(), { className: 'Cleric', hpMethod: 'average' });
     expect(r.newLevel).toBe(4);

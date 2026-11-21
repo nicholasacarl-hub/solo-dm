@@ -669,7 +669,7 @@ export function computeArmorClass(c: Character, catalog: readonly EquipmentOptio
       notes.push('no Shield training: the Shield gives no AC');
     }
   }
-  if (armors.length && c.features.some((f) => /^(fighting-style-)?defense(-fighting-style)?$/.test(nameKey(f.name)))) {
+  if (armors.length && c.features.some((f) => fightingStyleKey(f.name) === 'defense')) {
     ac += 1;
     parts.push('Defense 1');
   }
@@ -720,6 +720,14 @@ function unknownWornArmor(c: Character, catalog: readonly EquipmentOption[]): In
  * Armor, armor it can't identify), so it is kept and a warning gives the computed value instead.
  * Without a catalog the SRD armor table is used. No events when the computed AC doesn't change.
  */
+/**
+ * The fighting style a feature names, as a name key, however it's written: "Defense", "Fighting Style (Defense)",
+ * "Fighting Style: Defense", "Defense Fighting Style" and "Additional Fighting Style (Defense)" are all "defense".
+ */
+export function fightingStyleKey(name: string): string {
+  return nameKey(name).replace(/^(?:additional-)?fighting-style-/, '').replace(/-fighting-style$/, '');
+}
+
 export function syncArmorClass(
   before: Character,
   after: Character,

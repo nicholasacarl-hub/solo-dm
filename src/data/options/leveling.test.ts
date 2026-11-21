@@ -261,6 +261,10 @@ describe('the Feat choice panel', () => {
     expect(taken([{ name: 'Archery', source: 'feat' }, { name: 'Blessed Warrior', source: 'class' }])).toEqual(['Archery', 'Blessed Warrior']);
     // An older book's printed Defense on the sheet: the Defense feat is that style.
     expect(taken([{ name: 'Defense', source: 'class' }])).toEqual(['Defense']);
+    // However the DM named it, as the engine's Defense AC reads it ("Fighting Style (Defense)"), or with its level.
+    for (const name of ['Fighting Style (Defense)', 'Fighting Style: Defense', 'Defense Fighting Style', 'Additional Fighting Style (Defense)', 'Defense (Fighter 1)']) {
+      expect(taken([{ name, source: 'class' }])).toEqual(['Defense']);
+    }
     // A species trait of a style's name isn't the style; a Repeatable style can be taken again.
     expect(taken([{ name: 'Defense', source: 'species' }])).toEqual([]);
     const repeatable = EXPECTED_MERGED.feats.map((f) => (f.name === 'Defense' ? { ...f, repeatable: true } : f));

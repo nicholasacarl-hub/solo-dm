@@ -223,8 +223,10 @@ function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: rea
   const reminders: string[] = [];
   const features = featuresAtLevel(info, level);
   if (features.some((f) => f.endsWith(' Subclass')) && !cl.subclass) reminders.push(`${info.name} ${level}: choose a ${info.name} subclass.`);
-  // Unless this level-up added the subclass's features (the level-up dialog does, and the DM's level_up a book's).
-  if (features.includes('Subclass feature') && !added.some((f) => f.source === 'subclass')) {
+  // Unless this level-up added the subclass's feature for this level (the level-up dialog does, and the DM's level_up a
+  // book's): one caught up from an earlier level (a subclass chosen late) is by its book's level; the SRD's, without a
+  // ref, come with the level's own.
+  if (features.includes('Subclass feature') && !added.some((f) => f.source === 'subclass' && (f.ref?.level ?? level) === level)) {
     reminders.push(`${info.name} ${level}: gain a feature from your subclass${cl.subclass ? ` (${cl.subclass})` : ''}.`);
   }
   if (asiLevels(info).includes(level)) {

@@ -12,6 +12,7 @@ import {
   attackScaling,
   characterLevel,
   computeArmorClass,
+  fightingStyleKey,
   deathSaveModifier,
   effectiveSpeed,
   eldritchBlastBeams,
@@ -254,6 +255,14 @@ describe('computeArmorClass', () => {
       features: [{ id: 'd', name: 'Defense', source: 'feat' as const, description: '+1 AC in armor' }],
     };
     expect(computeArmorClass(c, []).ac).toBe(17);
+    // However the style is named, the Champion's second one included (SRD 5.2.1 Champion, Additional Fighting Style).
+    for (const name of ['Fighting Style (Defense)', 'Fighting Style: Defense', 'Defense Fighting Style', 'Additional Fighting Style (Defense)']) {
+      expect(computeArmorClass({ ...c, features: [{ ...c.features[0], name }] }, []).ac).toBe(17);
+    }
+    for (const name of ['Unarmored Defense', 'Superior Defense', 'Fighting Style', 'Additional Fighting Style']) {
+      expect(computeArmorClass({ ...c, features: [{ ...c.features[0], name }] }, []).ac).toBe(16);
+    }
+    expect(fightingStyleKey('Fighting Style - Great Weapon Fighting')).toBe('great-weapon-fighting');
     const ring = wearing(mira(), { name: 'Ring of Protection', category: 'magic-item', attuned: true });
     expect(computeArmorClass(ring, []).ac).toBe(13);
   });
