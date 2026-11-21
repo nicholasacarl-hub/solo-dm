@@ -3,9 +3,9 @@
  * merged builder data (spec §5.4): the SRD plus the classes, subclasses and feats of the player's books.
  * Choose the class (or multiclass, with the 2024 13+ primary-ability prerequisite), the HP method, a
  * subclass at its level (chosen by id; a subclass chosen late catches up its earlier features), and —
- * at Ability Score Improvement, Epic Boon and Fighting Style levels — a choice whose default, "Decide
- * with my DM", keeps today's level-up. Applied through the engine's levelUp, then every feature's uses
- * are re-read at the new level (Rage, Lay on Hands, Breath Weapon…).
+ * at Ability Score Improvement, Epic Boon and (Additional) Fighting Style levels — a choice whose
+ * default, "Decide with my DM", keeps today's level-up. Applied through the engine's levelUp, then every
+ * feature's uses are re-read at the new level (Rage, Lay on Hands, Breath Weapon…).
  */
 import { useId, useState, type ReactNode } from 'react';
 import { ArrowBigUpDash, Check, TriangleAlert } from 'lucide-react';

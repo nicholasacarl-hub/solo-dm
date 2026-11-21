@@ -126,6 +126,23 @@ describe('levelUp', () => {
     );
   });
 
+  it("names the Champion's Additional Fighting Style choice, and the subclass feature only while it's missing (SRD 5.2.1 Champion, level 7)", () => {
+    const champion = mira({ spellcasting: undefined, classes: [asClass('Fighter', 6, { subclass: 'Champion' })], hitDice: [{ die: 10, total: 6, spent: 0 }] });
+    const style = (source: Feature['source']) => ({ name: 'Additional Fighting Style', source, description: 'You gain another Fighting Style feat of your choice.' });
+    const choose = 'Fighter 7: Additional Fighting Style — choose another Fighting Style.';
+    const subclassFeature = 'Fighter 7: gain a feature from your subclass (Champion).';
+    // The level-up dialog adds the subclass's features from the data: the choice is named, nothing is missing.
+    const fromData = levelUp(champion, { className: 'Fighter', hpMethod: 'average', newFeatures: [style('subclass')] }).reminders;
+    expect(fromData).toContain(choose);
+    expect(fromData).not.toContain(subclassFeature);
+    // Nothing added: the subclass feature is still to come.
+    const bare = levelUp(champion, { className: 'Fighter', hpMethod: 'average' }).reminders;
+    expect(bare).toContain(subclassFeature);
+    expect(bare).not.toContain(choose);
+    // The DM's level_up lists an SRD subclass's features itself (as class features): the choice is named too.
+    expect(levelUp(champion, { className: 'Fighter', hpMethod: 'average', newFeatures: [style('class')] }).reminders).toEqual(expect.arrayContaining([choose, subclassFeature]));
+  });
+
   it('multiclassing adds a class, a new hit die type and checks prerequisites', () => {
     const r = levelUp(mira(), { className: 'Cleric', hpMethod: 'average' });
     expect(r.newLevel).toBe(4);

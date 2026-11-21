@@ -79,9 +79,9 @@ The first version of structured imports deliberately leaves these out:
   DM) would mend these, and cover Aid and a Wraith's Life Drain too.
 - **Origin feats at Ability Score Improvement**: the level-up dialog offers General feats at an Ability Score
   Improvement level; the 2024 feature allows any feat the hero qualifies for, Origin feats (Tough, Alert) included.
-- **Additional Fighting Style**: only a feature named Fighting Style opens the level-up dialog's feat panel, so the
-  Champion's Additional Fighting Style (Fighter 7) arrives as text and the DM adds the second Fighting Style feat; and
-  the panel lists the styles the class prints, not a subclass's own (an older book's subclass that prints its options).
+- **A subclass's own fighting styles**: the level-up dialog's feat panel lists the Fighting Style feats and the styles
+  the class prints, not those a subclass prints itself (an older book's subclass whose Fighting Style lists its own
+  options); the player picks with the DM.
 - **Feats named like a trait**: the sheet keeps one feature per name, so a feat taken at level-up that shares its name
   with a species trait or class feature replaces it (the trait's text goes), and a repeatable feat taken again stays
   one feature whose uses start over.

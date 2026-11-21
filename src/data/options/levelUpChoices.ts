@@ -1,8 +1,8 @@
 /**
  * Level-up choices from the merged builder data (spec §5.4, D31), pure: a subclass's spellcasting
  * (third casters), the always-prepared spells of an imported subclass, catch-up of earlier subclass
- * features, and the one Feat choice panel — Ability Score Improvement, Epic Boon or Fighting Style —
- * whose default, "Decide with my DM", leaves the level-up exactly as it was before this panel existed.
+ * features, and the one Feat choice panel — Ability Score Improvement, Epic Boon or Fighting Style (the
+ * Champion's Additional Fighting Style too) — whose default, "Decide with my DM", leaves the level-up exactly as it was before this panel existed.
  *
  * Owner: E4. Shared by the level-up dialog and, for spells and spellcasting, the DM's level_up tool.
  * Only "Level N+" prerequisites are checked; everything else is shown for the DM to rule on.
@@ -159,9 +159,14 @@ const TRIGGERS: Readonly<Record<string, FeatChoiceKind>> = {
   'ability-score-improvement': 'asi',
   'epic-boon': 'epic-boon',
   'fighting-style': 'fighting-style',
+  // SRD 5.2.1 Champion, level 7: "You gain another Fighting Style feat of your choice."
+  'additional-fighting-style': 'fighting-style',
 };
 
-/** The feat choice a level offers, from the features it gains (Ability Score Improvement, Epic Boon or Fighting Style). */
+/**
+ * The feat choice a level offers, from the features it gains (Ability Score Improvement, Epic Boon, Fighting
+ * Style or Additional Fighting Style).
+ */
 export function featChoiceTrigger(gained: readonly Pick<Feature, 'name'>[]): FeatChoiceTrigger | null {
   for (const f of gained) {
     const kind = TRIGGERS[nameKey(baseFeatureName(f.name))];
@@ -267,9 +272,10 @@ function inlineStylePicks(cls: ClassOption | undefined): FeatPick[] {
 /**
  * What the panel offers (spec §5.4): General feats at Ability Score Improvement levels (the Ability
  * Score Improvement feat itself is the +2 / +1 +1 options); Epic Boons and General feats at Epic Boon;
- * Fighting Style feats plus the styles the class feature prints at Fighting Style (a feat wins over a
- * same-named printed style). Every book's feats count, in builder order (SRD first), except the SRD
- * feats a 2024 book's feat of the same name stands in for (options/replaced.ts).
+ * Fighting Style feats plus the styles the class feature prints at Fighting Style and Additional Fighting
+ * Style (a feat wins over a same-named printed style), a style already on the sheet taken. Every book's
+ * feats count, in builder order (SRD first), except the SRD feats a 2024 book's feat of the same name
+ * stands in for (options/replaced.ts).
  */
 export function featChoices(kind: FeatChoiceKind, feats: readonly FeatOption[], ctx: FeatChoiceContext): FeatPick[] {
   const categories: readonly FeatOption['category'][] = kind === 'asi' ? ['general'] : kind === 'epic-boon' ? ['epic-boon', 'general'] : ['fighting-style'];
@@ -279,7 +285,15 @@ export function featChoices(kind: FeatChoiceKind, feats: readonly FeatOption[], 
   for (const style of inlineStylePicks(ctx.cls)) {
     if (!picks.some((p) => nameKey(p.name) === nameKey(style.name))) picks.push(style);
   }
-  return picks;
+  // A style is taken once (SRD 5.1 Fighting Style: "You can't take a Fighting Style option more than once, even if
+  // you later get to choose again"; SRD 5.2.1's Fighting Style feats aren't Repeatable), the one the builder gave
+  // too: a feat, or a style the class prints (a class feature of its name).
+  return picks.map((p) => (p.taken || p.feat?.repeatable || !styleOnSheet(p.name, ctx.have) ? p : { ...p, taken: true }));
+}
+
+function styleOnSheet(name: string, have: FeatChoiceContext['have']): boolean {
+  const key = nameKey(name);
+  return have.some((f) => (f.source === 'feat' || f.source === 'class') && nameKey(baseFeatureName(f.name)) === key);
 }
 
 /** Whether the panel's +2 / +1 +1 options apply (Ability Score Improvement and Epic Boon levels). */

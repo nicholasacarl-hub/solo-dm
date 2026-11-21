@@ -252,6 +252,14 @@ describe('level_up from the merged builder data', () => {
     for (const name of level3) expect(h.sheet().features.map((f) => f.name)).toContain(name);
   });
 
+  it("tells the DM the player still chooses the Champion's Additional Fighting Style (SRD 5.2.1 Champion, level 7)", async () => {
+    const h = setup({ character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 6, hitDie: 10, subclass: 'Champion', subclassId: 'srd:subclass:champion' }) });
+    const out = await h.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Additional Fighting Style', description: 'You gain another Fighting Style feat of your choice.' }] });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain('Choices the player still needs to make:');
+    expect(out.content).toContain('- Fighter 7: Additional Fighting Style — choose another Fighting Style.');
+  });
+
   it("checks the hero's own book class's prerequisites even when the new class isn't in the data", async () => {
     const bookCleric: ClassOption = { ...CLERIC_OPTION, id: 'lib:gloam:class:cleric', subclasses: [], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:cleric', format: '2024', adaptations: [] } };
     const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, bookCleric] };

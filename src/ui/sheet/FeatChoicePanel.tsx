@@ -1,12 +1,13 @@
 /**
  * The level-up dialog's one Feat choice panel (spec §5.4, D31): shown when the new level gains Ability
- * Score Improvement, Epic Boon or Fighting Style. "Decide with my DM" is preselected, so a level-up
+ * Score Improvement, Epic Boon, Fighting Style or Additional Fighting Style. "Decide with my DM" is preselected, so a level-up
  * nobody touches here is exactly what it was before; the other choices are +2 to one ability, +1 to
  * two, or a feat from the SRD or the player's books. Only "Level N+" prerequisites are checked, and an
  * unmet one still lets the player go ahead with "My DM allows it".
  */
 import { useId, type ReactNode } from 'react';
 import { Check, TriangleAlert } from 'lucide-react';
+import { baseFeatureName } from '@/data/options/classFeatures';
 import { ASI_SCORE_MAX, featChoiceComplete, offersScoreIncrease, type FeatChoice, type FeatChoiceTrigger, type FeatPick } from '@/data/options/levelUpChoices';
 import { cn } from '@/lib/cn';
 import { ABILITIES, ABILITY_NAMES, type Ability, type AbilityScores } from '@/types';
@@ -14,14 +15,14 @@ import { Markdown } from '@/ui/components/Markdown';
 import { Badge, Select } from '@/ui/components/ui';
 import { BookBadge } from '@/ui/builder/BookBadges';
 
-const TITLES: Readonly<Record<FeatChoiceTrigger['kind'], string>> = {
+const TITLES: Readonly<Record<Exclude<FeatChoiceTrigger['kind'], 'fighting-style'>, string>> = {
   asi: 'Ability Score Improvement or feat',
   'epic-boon': 'Epic Boon or feat',
-  'fighting-style': 'Fighting Style',
 };
 
+/** A Fighting Style choice goes by its feature's name: Fighting Style, or the Champion's Additional Fighting Style. */
 export function featPanelTitle(trigger: FeatChoiceTrigger): string {
-  return TITLES[trigger.kind];
+  return trigger.kind === 'fighting-style' ? baseFeatureName(trigger.featureName) : TITLES[trigger.kind];
 }
 
 /**
