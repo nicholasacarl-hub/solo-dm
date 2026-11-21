@@ -12,6 +12,7 @@ import {
   type Attack,
   type Character,
   type EquipmentOption,
+  type Feature,
   type GameEvent,
   type InventoryItem,
   type PlayerRollRequest,
@@ -669,7 +670,7 @@ export function computeArmorClass(c: Character, catalog: readonly EquipmentOptio
       notes.push('no Shield training: the Shield gives no AC');
     }
   }
-  if (armors.length && c.features.some((f) => /^(fighting-style-)?defense(-fighting-style)?$/.test(nameKey(f.name)))) {
+  if (armors.length && c.features.some((f) => isFightingStyle(f, 'Defense'))) {
     ac += 1;
     parts.push('Defense 1');
   }
@@ -703,6 +704,30 @@ export function computeArmorClass(c: Character, catalog: readonly EquipmentOptio
   }
   const formula = parts.join(' + ') + (notes.length ? ` (${notes.join('; ')})` : '');
   return { ac, formula };
+}
+
+/**
+ * Where a fighting style comes from: a class or subclass feature (a style the class prints, the Champion's second), a
+ * feat (SRD 5.2.1's Fighting Style feats) or the DM's own entry. A species trait, a background's feature, an item, a
+ * boon or a form that shares a style's name isn't one.
+ */
+const STYLE_SOURCES: ReadonlySet<Feature['source']> = new Set(['class', 'subclass', 'feat', 'homebrew', 'other']);
+const STYLE_PREFIX = /^(?:additional-)?fighting-style-(?:feat-)?/;
+const STYLE_SUFFIXES = ['', '-fighting-style', '-style', '-feat', '-fighting-style-feat', '-style-feat'];
+
+/**
+ * Whether a feature is the fighting style `style`, however the sheet names it: "Defense", "Fighting Style (Defense)",
+ * "Fighting Style: Defense", "Defense Fighting Style", "Additional Fighting Style (Defense)", "Fighting Style Feat:
+ * Defense", "Defense (Fighter 1)"; "Great Weapon Fighting Style" is Great Weapon Fighting. The Defense AC and the
+ * level-up panel's taken styles read it alike.
+ */
+export function isFightingStyle(f: Pick<Feature, 'name' | 'source'>, style: string): boolean {
+  if (!STYLE_SOURCES.has(f.source)) return false;
+  const key = nameKey(style);
+  return [f.name, f.name.replace(/\s*\([^()]*\)\s*$/, '')].some((name) => {
+    const rest = nameKey(name).replace(STYLE_PREFIX, '');
+    return rest.startsWith(key) && STYLE_SUFFIXES.includes(rest.slice(key.length));
+  });
 }
 
 /** Equipped armor whose stats aren't known, when no known armor is worn (computeArmorClass then keeps the sheet's AC). */

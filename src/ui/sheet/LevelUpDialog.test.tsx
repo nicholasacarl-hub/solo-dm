@@ -222,6 +222,40 @@ describe('LevelUpDialog with imported options', () => {
     expect(notices()[0]).toContain('+15 HP');
   });
 
+  describe("the Champion's Additional Fighting Style (SRD 5.2.1 Champion, level 7)", () => {
+    const champion = (extra: Partial<Character> = {}) => ({ ...fighter(6, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), ...extra });
+
+    it('offers a Fighting Style, the one the hero has already taken greyed out, and adds it beside the feature', async () => {
+      const user = userEvent.setup();
+      const defense = { id: 'f-defense', name: 'Defense', source: 'feat' as const, sourceName: 'Fighting Style (Fighter 1)', description: '' };
+      resetFakeGame({ campaign: sampleCampaign(), character: champion({ features: [defense] }) });
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      expect(screen.getByRole('heading', { name: 'Additional Fighting Style' })).toBeInTheDocument();
+      expect(screen.getByRole('radio', { name: /^Defense/ })).toBeDisabled();
+      await user.click(screen.getByRole('radio', { name: /^Archery/ }));
+      await user.click(screen.getByRole('button', { name: 'Level up' }));
+      expect(sheet().features.map((f) => [f.name, f.source, f.sourceName])).toEqual([
+        ['Defense', 'feat', 'Fighting Style (Fighter 1)'],
+        ['Additional Fighting Style', 'subclass', 'Champion 7'],
+        ['Archery', 'feat', 'Additional Fighting Style (Fighter 7)'],
+      ]);
+      expect(notices()[0]).toContain('feat: Archery');
+      // Nothing left to choose or add: the style is chosen and the subclass's feature is on the sheet.
+      expect(notices()[0]).not.toMatch(/choose another Fighting Style|gain a feature from your subclass/);
+    });
+
+    it('leaves the choice to the DM by default, and the notice names it', async () => {
+      const user = userEvent.setup();
+      resetFakeGame({ campaign: sampleCampaign(), character: champion() });
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      expect(screen.getByRole('radio', { name: 'Decide with my DM' })).toBeChecked();
+      await user.click(screen.getByRole('button', { name: 'Level up' }));
+      expect(sheet().features.map((f) => f.name)).toEqual(['Additional Fighting Style']);
+      expect(notices()[0]).toContain('still to choose: Fighter 7: Additional Fighting Style — choose another Fighting Style.');
+      expect(notices()[0]).not.toContain('gain a feature from your subclass');
+    });
+  });
+
   it('a repeatable feat taken again stays one feature: the one on the sheet, with its ref', async () => {
     const user = userEvent.setup();
     const lantern = EXPECTED_MERGED.feats.find((f) => f.name === 'Lantern Bearer')!;

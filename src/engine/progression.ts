@@ -218,12 +218,15 @@ const CHOICE_HINTS: ReadonlyArray<[RegExp, (cls: string, level: number) => strin
   [/^Weapon Mastery$/, (cls, l) => `${cls} ${l}: choose weapons for Weapon Mastery.`],
 ];
 
-function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: readonly { name: string }[]): string[] {
+function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: readonly { name: string }[], added: readonly Feature[]): string[] {
   const level = cl.level;
   const reminders: string[] = [];
   const features = featuresAtLevel(info, level);
   if (features.some((f) => f.endsWith(' Subclass')) && !cl.subclass) reminders.push(`${info.name} ${level}: choose a ${info.name} subclass.`);
-  if (features.includes('Subclass feature')) {
+  // Unless this level-up added the subclass's feature for this level (the level-up dialog does, and the DM's level_up a
+  // book's): one caught up from an earlier level (a subclass chosen late) is by its book's level; the SRD's, without a
+  // ref, come with the level's own.
+  if (features.includes('Subclass feature') && !added.some((f) => f.source === 'subclass' && (f.ref?.level ?? level) === level)) {
     reminders.push(`${info.name} ${level}: gain a feature from your subclass${cl.subclass ? ` (${cl.subclass})` : ''}.`);
   }
   if (asiLevels(info).includes(level)) {
@@ -464,8 +467,13 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
 
   const reminders: string[] = [];
   if (!existing && oldTotal > 0) reminders.push(...multiclassPrerequisites(c, info, gained.name, opts.multiclassPrimaries));
-  if (info) reminders.push(...srdLevelReminders(info, gained, [...c.features, ...added]));
+  if (info) reminders.push(...srdLevelReminders(info, gained, [...c.features, ...added], added));
   else reminders.push(`Check the ${gained.name} class table for level ${gained.level} features and choices.`);
+  // A subclass feature no class table lists (SRD 5.2.1 Champion, level 7: "You gain another Fighting Style feat of your
+  // choice"; an older book's Champion chooses from the class's printed styles), however it was added.
+  if (added.some((f) => nameKey(f.name) === 'additional-fighting-style')) {
+    reminders.push(`${gained.name} ${gained.level}: Additional Fighting Style — choose another Fighting Style.`);
+  }
   reminders.push(...slotReminders(c, next));
   if (newPb > oldPb && oldTotal > 0) reminders.push(`Proficiency Bonus is now ${formatModifier(newPb)}.`);
   if (alertDelta) reminders.push(`Alert: initiative bonus from your Proficiency Bonus is now ${formatModifier(newPb)}.`);

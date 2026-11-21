@@ -126,6 +126,40 @@ describe('levelUp', () => {
     );
   });
 
+  it("names the Champion's Additional Fighting Style choice, and the subclass feature only while it's missing (SRD 5.2.1 Champion, level 7)", () => {
+    const champion = mira({ spellcasting: undefined, classes: [asClass('Fighter', 6, { subclass: 'Champion' })], hitDice: [{ die: 10, total: 6, spent: 0 }] });
+    const style = (source: Feature['source']) => ({ name: 'Additional Fighting Style', source, description: 'You gain another Fighting Style feat of your choice.' });
+    const choose = 'Fighter 7: Additional Fighting Style — choose another Fighting Style.';
+    const subclassFeature = 'Fighter 7: gain a feature from your subclass (Champion).';
+    // The level-up dialog adds the subclass's features from the data: the choice is named, nothing is missing.
+    const fromData = levelUp(champion, { className: 'Fighter', hpMethod: 'average', newFeatures: [style('subclass')] }).reminders;
+    expect(fromData).toContain(choose);
+    expect(fromData).not.toContain(subclassFeature);
+    // Nothing added: the subclass feature is still to come.
+    const bare = levelUp(champion, { className: 'Fighter', hpMethod: 'average' }).reminders;
+    expect(bare).toContain(subclassFeature);
+    expect(bare).not.toContain(choose);
+    // The DM's level_up lists an SRD subclass's features itself (as class features): the choice is named too.
+    expect(levelUp(champion, { className: 'Fighter', hpMethod: 'average', newFeatures: [style('class')] }).reminders).toEqual(expect.arrayContaining([choose, subclassFeature]));
+  });
+
+  it("still names the subclass feature when a book's subclass chosen late brings only earlier levels' features", () => {
+    const fighter9 = mira({ spellcasting: undefined, classes: [asClass('Fighter', 9)], hitDice: [{ die: 10, total: 9, spent: 0 }] });
+    const part = (name: string, level: number) => ({
+      name,
+      source: 'subclass' as const,
+      description: 'Invented.',
+      ref: { sourceId: 'gloam', sourceTitle: 'Gloam', entryId: 'lib:gloam:subclass:lamp', kind: 'subclass' as const, entryName: 'Lamplighter', part: name, level, textHash: '', textCopied: true },
+    });
+    const up = (...features: ReturnType<typeof part>[]) =>
+      levelUp(fighter9, { className: 'Fighter', hpMethod: 'average', subclass: 'Lamplighter', newFeatures: features }).reminders;
+    const owed = 'Fighter 10: gain a feature from your subclass (Lamplighter).';
+    // Caught up from levels 3 and 7, nothing at 10 in the book's data: the level's feature is still to add.
+    expect(up(part('Wick Ward', 3), part('Ember Step', 7))).toContain(owed);
+    // With the book's level 10 feature among them: nothing owed.
+    expect(up(part('Wick Ward', 3), part('Ember Step', 7), part('Lamp Oath', 10))).not.toContain(owed);
+  });
+
   it('multiclassing adds a class, a new hit die type and checks prerequisites', () => {
     const r = levelUp(mira(), { className: 'Cleric', hpMethod: 'average' });
     expect(r.newLevel).toBe(4);

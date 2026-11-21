@@ -10,7 +10,7 @@ import { characterLevel, levelUp } from '@/engine';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
-import type { Character, ClassLevel, ClassOption, CompendiumEntry, FeatOption, OptionSource, SubclassOption } from '@/types';
+import type { Character, ClassLevel, ClassOption, CompendiumEntry, FeatOption, Feature, OptionSource, SubclassOption } from '@/types';
 import { gainedFeatures } from './leveling';
 import {
   applyFeatChoice,
@@ -223,6 +223,54 @@ describe('the Feat choice panel', () => {
     expect(picks.find((p) => p.name === 'Defense')?.taken).toBe(true);
     expect(picks.at(-1)).toMatchObject({ id: 'inline:blessed-warrior', sourceLabel: 'SRD 5.2.1' });
     expect(picks.at(-1)?.description).toMatch(/^You learn two Cleric cantrips/);
+  });
+
+  it("is offered at the Champion's Additional Fighting Style and adds the style beside it (SRD 5.2.1 Champion, level 7)", () => {
+    const champion = subOf(FIGHTER, 'Champion');
+    const defense = { id: 'f-defense', name: 'Defense', source: 'feat' as const, sourceName: 'Fighting Style (Fighter 1)', description: '' };
+    const c = hero({ classId: FIGHTER.id, name: 'Fighter', level: 6, hitDie: 10, subclass: 'Champion', subclassId: champion.id }, { features: [defense] });
+    const gained = gainedFeatures(FIGHTER, 7, champion, ctxOf(c), { have: c.features });
+    const trigger = featChoiceTrigger(gained) as FeatChoiceTrigger;
+    expect(trigger).toEqual({ kind: 'fighting-style', featureName: 'Additional Fighting Style' });
+    const picks = featChoices(trigger.kind, EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel: 7, have: c.features });
+    expect(picks.find((p) => p.name === 'Defense')?.taken).toBe(true);
+    const archery = picks.find((p) => p.name === 'Archery')!;
+    const leveled = levelUp(c, { className: 'Fighter', classId: FIGHTER.id, hpMethod: 'average', newFeatures: gained });
+    const before = new Set(c.features.map((f) => f.id));
+    const addedIds = new Set(leveled.character.features.filter((f) => !before.has(f.id)).map((f) => f.id));
+    const choice: FeatChoice = { kind: 'feat', pick: archery };
+    const { character } = applyFeatChoice(leveled.character, trigger, choice, { className: 'Fighter', classLevel: 7, addedIds });
+    expect(character.features.map((f) => [f.name, f.source, f.sourceName])).toEqual([
+      ['Defense', 'feat', 'Fighting Style (Fighter 1)'],
+      ['Additional Fighting Style', 'subclass', 'Champion 7'],
+      ['Archery', 'feat', 'Additional Fighting Style (Fighter 7)'],
+    ]);
+    // The engine's reminder of the choice goes once it's made.
+    const reminder = 'Fighter 7: Additional Fighting Style — choose another Fighting Style.';
+    expect(leveled.reminders).toContain(reminder);
+    expect(dropChoiceReminder(leveled.reminders, trigger.kind, choice)).not.toContain(reminder);
+  });
+
+  it("marks a style already on the sheet taken, a feat or a style the class prints (SRD 5.1 Fighting Style: an option can't be taken twice)", () => {
+    const paladin = classOf('srd:class:paladin');
+    const taken = (have: { name: string; source: Feature['source'] }[], feats: readonly FeatOption[] = EXPECTED_MERGED.feats) =>
+      featChoices('fighting-style', feats, { cls: paladin, characterLevel: 7, have })
+        .filter((p) => p.taken)
+        .map((p) => p.name);
+    // The builder's or an earlier level's: a feat, or a style the class prints (a class feature of its name).
+    expect(taken([{ name: 'Archery', source: 'feat' }, { name: 'Blessed Warrior', source: 'class' }])).toEqual(['Archery', 'Blessed Warrior']);
+    // An older book's printed Defense on the sheet: the Defense feat is that style.
+    expect(taken([{ name: 'Defense', source: 'class' }])).toEqual(['Defense']);
+    // However the DM named it and whichever feature it went under, as the engine's Defense AC reads it.
+    for (const name of ['Fighting Style (Defense)', 'Fighting Style: Defense', 'Defense Fighting Style', 'Additional Fighting Style (Defense)', 'Defense (Fighter 1)']) {
+      expect(taken([{ name, source: 'class' }])).toEqual(['Defense']);
+    }
+    expect(taken([{ name: 'Additional Fighting Style (Defense)', source: 'subclass' }])).toEqual(['Defense']);
+    expect(taken([{ name: 'Great Weapon Fighting Style', source: 'other' }])).toEqual(['Great Weapon Fighting']);
+    // A species trait of a style's name isn't the style; a Repeatable style can be taken again.
+    expect(taken([{ name: 'Defense', source: 'species' }])).toEqual([]);
+    const repeatable = EXPECTED_MERGED.feats.map((f) => (f.name === 'Defense' ? { ...f, repeatable: true } : f));
+    expect(taken([{ name: 'Defense', source: 'feat' }], repeatable)).toEqual([]);
   });
 
   it("offers a 2024 book's feat in place of the SRD feat of its name (the picked one stays); an older book's sits beside it", () => {

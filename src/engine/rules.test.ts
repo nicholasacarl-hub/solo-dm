@@ -12,6 +12,7 @@ import {
   attackScaling,
   characterLevel,
   computeArmorClass,
+  isFightingStyle,
   deathSaveModifier,
   effectiveSpeed,
   eldritchBlastBeams,
@@ -254,6 +255,21 @@ describe('computeArmorClass', () => {
       features: [{ id: 'd', name: 'Defense', source: 'feat' as const, description: '+1 AC in armor' }],
     };
     expect(computeArmorClass(c, []).ac).toBe(17);
+    // However the style is named, the Champion's second one included (SRD 5.2.1 Champion, Additional Fighting Style).
+    const named = (name: string, source: Feature['source'] = 'feat') => computeArmorClass({ ...c, features: [{ ...c.features[0], name, source }] }, []).ac;
+    const styleNames = ['Fighting Style (Defense)', 'Fighting Style: Defense', 'Defense Fighting Style', 'Additional Fighting Style (Defense)', 'Fighting Style Feat: Defense', 'Defense (Fighter 1)', 'Defense (Additional Fighting Style)'];
+    for (const name of styleNames) expect(named(name)).toBe(17);
+    expect(named('Additional Fighting Style (Defense)', 'subclass')).toBe(17);
+    for (const name of ['Unarmored Defense', 'Superior Defense', 'Fighting Style', 'Additional Fighting Style']) expect(named(name)).toBe(16);
+    // A species trait that shares the style's name isn't the style.
+    expect(named('Defense', 'species')).toBe(16);
+    // A style whose own name ends in "Fighting".
+    expect(isFightingStyle({ name: 'Great Weapon Fighting Style', source: 'class' }, 'Great Weapon Fighting')).toBe(true);
+    expect(isFightingStyle({ name: 'Fighting Style: Two-Weapon Fighting Style', source: 'feat' }, 'Two-Weapon Fighting')).toBe(true);
+    expect(isFightingStyle({ name: 'Great Weapon Fighting Style', source: 'class' }, 'Defense')).toBe(false);
+    // Another feature that only begins with a style's name (invented).
+    expect(named('Defense Drill')).toBe(16);
+    expect(isFightingStyle({ name: 'Archery Expert', source: 'feat' }, 'Archery')).toBe(false);
     const ring = wearing(mira(), { name: 'Ring of Protection', category: 'magic-item', attuned: true });
     expect(computeArmorClass(ring, []).ac).toBe(13);
   });
