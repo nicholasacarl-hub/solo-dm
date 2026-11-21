@@ -743,7 +743,11 @@ prints below the class's subclass level) and offers a feat at Ability Score Impr
 Fighting Style levels (the Champion's Additional Fighting Style too, where a style the sheet has, a feat or one the
 class prints, can't be taken again: by its name however it's written, "Fighting Style (Defense)" as much as
 "Defense", from a class, subclass, feat or the DM's entry but never a species trait, one rule with the engine's
-Defense AC, `isFightingStyle`), with "Decide with my DM" preselected. Its
+Defense AC, `isFightingStyle`), with "Decide with my DM" preselected. A feat taken there is the feature the level-up
+added for it, completed by id: a species trait or class feature of its name, or an earlier taking of a Repeatable
+feat, stays beside it as it was. The engine's `addFeature` (the DM's features_add too) updates a feature of the same
+name but never merges a feat with one that isn't, and a use or restore by name goes to the same-named feature whose
+uses fit. Its
 reminders name the Additional Fighting Style choice, and say a subclass feature is still to add unless the level-up
 added this level's (a feature caught up from an earlier level, by its book's level, doesn't count). Items copy numbers, never text: armor
 stats, bonuses and attunement travel on the inventory item, so AC works in the DM's tools and on

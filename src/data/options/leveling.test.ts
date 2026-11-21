@@ -251,6 +251,28 @@ describe('the Feat choice panel', () => {
     expect(dropChoiceReminder(leveled.reminders, trigger.kind, choice)).not.toContain(reminder);
   });
 
+  it('never merges a feat into another feature of its name: completes the one the level-up added, else adds one', () => {
+    const lantern = featChoices('asi', EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel: 4, have: [] }).find((p) => p.name === 'Lantern Bearer')!;
+    const trait = { id: 't-lantern', name: 'Lantern Bearer', source: 'species' as const, description: 'Invented: a moth-folk trait of the same name.' };
+    const c = { ...fighter4(), features: [trait] };
+    const choice: FeatChoice = { kind: 'feat', pick: lantern, ability: 'wis' };
+    const named = (x: Character) => x.features.filter((f) => f.name === 'Lantern Bearer');
+    // Not given to levelUp: a new feature beside the trait, or beside an earlier taking of the feat (a Repeatable one).
+    const plain = levelWith(c, FIGHTER, choice).character;
+    expect(named(plain)).toEqual([trait, expect.objectContaining({ source: 'feat', ref: expect.objectContaining({ entryName: 'Lantern Bearer' }) })]);
+    const earlier = { id: 'f-earlier', name: 'Lantern Bearer', source: 'feat' as const, sourceName: 'Ability Score Improvement (Fighter 4)', description: lantern.description, uses: { max: 2, used: 1, recharge: 'long' as const } };
+    const again = levelWith({ ...fighter4(), features: [earlier] }, FIGHTER, choice).character;
+    expect(named(again)).toEqual([earlier, expect.objectContaining({ source: 'feat', sourceName: 'Ability Score Improvement (Fighter 4)' })]);
+    expect(named(again)[1].id).not.toBe(earlier.id);
+    // Given to levelUp (the dialog): that feature is the one completed, its id kept.
+    const gained = gainedFeatures(FIGHTER, 4, undefined, ctxOf(c), { have: c.features });
+    const leveled = levelUp(c, { className: 'Fighter', classId: FIGHTER.id, hpMethod: 'average', newFeatures: [...gained, { name: lantern.name, source: 'feat', description: lantern.description }] }).character;
+    const addedIds = new Set(leveled.features.filter((f) => f.id !== trait.id).map((f) => f.id));
+    const bare = leveled.features.find((f) => f.source === 'feat' && f.name === 'Lantern Bearer')!;
+    const done = applyFeatChoice(leveled, featChoiceTrigger(gained) as FeatChoiceTrigger, choice, { className: 'Fighter', classLevel: 4, addedIds }).character;
+    expect(named(done)).toEqual([trait, expect.objectContaining({ id: bare.id, sourceName: 'Ability Score Improvement (Fighter 4)', ref: expect.objectContaining({ entryName: 'Lantern Bearer' }) })]);
+  });
+
   it("marks a style already on the sheet taken, a feat or a style the class prints (SRD 5.1 Fighting Style: an option can't be taken twice)", () => {
     const paladin = classOf('srd:class:paladin');
     const taken = (have: { name: string; source: Feature['source'] }[], feats: readonly FeatOption[] = EXPECTED_MERGED.feats) =>

@@ -32,7 +32,7 @@ import {
   spellcastingAbility,
   syncArmorClass,
 } from './rules';
-import { clamp, formatInt, gameEvent, lookupProblem, matchByName, toInt, touch, warning } from './util';
+import { clamp, formatInt, gameEvent, lookupProblem, matchByName, toInt, touch, warning, type NameMatch } from './util';
 
 export interface EngineResult {
   character: Character;
@@ -504,9 +504,20 @@ function replaceFeature(c: Character, feature: Feature): Character {
   return touch({ ...c, features: c.features.map((f) => (f.id === feature.id ? feature : f)) });
 }
 
+/**
+ * A feature by name, as matchByName finds it; with several of exactly that name (a feat beside the trait it's named
+ * like, a Repeatable feat taken twice) the first whose uses `fits`, else the first with uses, else the first.
+ */
+function featureByName(c: Character, name: string, fits: (uses: NonNullable<Feature['uses']>) => boolean): NameMatch<Feature> {
+  const found = matchByName(c.features, name, featureName);
+  if (!found.match || found.candidates.length < 2) return found;
+  const match = found.candidates.find((f) => f.uses && fits(f.uses)) ?? found.candidates.find((f) => f.uses) ?? found.match;
+  return { ...found, match };
+}
+
 /** Use `amount` (default 1) uses of a limited-use feature. Warns if not enough uses remain. */
 export function useFeature(c: Character, name: string, amount = 1): EngineResult {
-  const found = matchByName(c.features, name, featureName);
+  const found = featureByName(c, name, (u) => u.used < u.max);
   const feature = found.match;
   if (!feature) return unchanged(c, lookupProblem('feature', name, found, featureName));
   if (!feature.uses) return unchanged(c, `${feature.name} has no limited uses to spend.`);
@@ -522,7 +533,7 @@ export function useFeature(c: Character, name: string, amount = 1): EngineResult
 
 /** Restore all uses of a feature (or `amount` uses). */
 export function restoreFeature(c: Character, name: string, amount?: number): EngineResult {
-  const found = matchByName(c.features, name, featureName);
+  const found = featureByName(c, name, (u) => u.used > 0);
   const feature = found.match;
   if (!feature) return unchanged(c, lookupProblem('feature', name, found, featureName));
   if (!feature.uses) return unchanged(c, `${feature.name} has no limited uses to restore.`);
@@ -536,11 +547,16 @@ export function restoreFeature(c: Character, name: string, amount?: number): Eng
   };
 }
 
-/** Add a feature, or update the existing feature with the same name (keeping its id). */
+/**
+ * Add a feature, or update the existing feature with the same name (keeping its id). A feat and a feature that isn't
+ * one never merge: a feat that shares its name with a species trait or a class feature (an older book's trait and a
+ * book's feat of one name) joins the sheet beside it, and the trait keeps its text.
+ */
 export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: string }): EngineResult {
   const name = feature.name?.trim();
   if (!name) return unchanged(c, 'A feature needs a name.');
-  const index = c.features.findIndex((f) => nameKey(f.name) === nameKey(name));
+  const feat = feature.source === 'feat';
+  const index = c.features.findIndex((f) => nameKey(f.name) === nameKey(name) && (f.source === 'feat') === feat);
   if (index >= 0) {
     const updated: Feature = { ...c.features[index], ...feature, id: c.features[index].id, name };
     return { character: replaceFeature(c, updated), events: [gameEvent('feature-restored', `Updated feature: ${name}`)] };

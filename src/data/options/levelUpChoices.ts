@@ -8,7 +8,7 @@
  * Only "Level N+" prerequisites are checked; everything else is shown for the DM to rule on.
  */
 import { addFeature, addSpell, changeAbilityScore, characterLevel, isFightingStyle, proficiencyBonus, syncArmorClass } from '@/engine';
-import { nameKey } from '@/lib/id';
+import { nameKey, newId } from '@/lib/id';
 import {
   ABILITY_NAMES,
   type Ability,
@@ -457,7 +457,13 @@ export function applyFeatChoice(c: Character, trigger: FeatChoiceTrigger, choice
       ...(pick.ref ? { ref: pick.ref } : {}),
     };
     const kept = trigger.kind === 'fighting-style' || !placeholder ? c : { ...c, features: c.features.filter((f) => f.id !== placeholder.id) };
-    next = addFeature(kept, feature).character;
+    // The feature this level-up added for the pick (the dialog gives a feat to levelUp, which counts what it brings),
+    // completed in place; else a new one. Never another of its name: a trait the feat is named like, or an earlier
+    // taking of a Repeatable feat (its uses as they are), stays beside it.
+    const bare = kept.features.find((f) => ctx.addedIds.has(f.id) && f.source === feature.source && nameKey(f.name) === nameKey(feature.name));
+    next = bare
+      ? { ...kept, features: kept.features.map((f) => (f.id === bare.id ? { ...feature, id: bare.id } : f)) }
+      : { ...kept, features: [...kept.features, { ...feature, id: newId() }] };
     const increase = pick.increase;
     if (increase) {
       const ability = increase.abilities.length === 1 ? increase.abilities[0] : choice.ability;

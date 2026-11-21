@@ -82,9 +82,6 @@ The first version of structured imports deliberately leaves these out:
 - **A subclass's own fighting styles**: the level-up dialog's feat panel lists the Fighting Style feats and the styles
   the class prints, not those a subclass prints itself (an older book's subclass whose Fighting Style lists its own
   options); the player picks with the DM.
-- **Feats named like a trait**: the sheet keeps one feature per name, so a feat taken at level-up that shares its name
-  with a species trait or class feature replaces it (the trait's text goes), and a repeatable feat taken again stays
-  one feature whose uses start over.
 - **What a Monk is holding**: Martial Arts works only while the Monk is unarmed or wields only Monk weapons. The
   engine doesn't know what is held, so a Monk weapon gets the die and Dexterity even beside a non-Monk weapon, and a
   weapon that isn't on the sheet gets the dice and ability the DM gives it. The DM adjusts these.

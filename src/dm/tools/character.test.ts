@@ -348,6 +348,19 @@ describe('level_up from the merged builder data', () => {
 });
 
 describe('update_character links names to the rules index and builder data', () => {
+  it("features_add puts a feat beside a species trait of its name, and features_use spends the feat's uses", async () => {
+    const trait = { id: 't-luck', name: 'Lantern Luck', source: 'species' as const, sourceName: 'Mothkin', description: 'Invented trait: reroll a 1.' };
+    const h = setup({ character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 4, hitDie: 10 }, { features: [trait] }) });
+    const added = await h.run('update_character', { features_add: [{ name: 'Lantern Luck', description: 'Invented feat: 3 luck points.', source: 'feat', uses_max: 3, recharge: 'long' }] });
+    expect(added.isError).toBeUndefined();
+    expect(h.sheet().features.map((f) => [f.name, f.source, f.description])).toEqual([
+      ['Lantern Luck', 'species', 'Invented trait: reroll a 1.'],
+      ['Lantern Luck', 'feat', 'Invented feat: 3 luck points.'],
+    ]);
+    await h.run('update_character', { features_use: [{ name: 'Lantern Luck' }] });
+    expect(h.sheet().features.map((f) => f.uses?.used)).toEqual([undefined, 1]);
+  });
+
   it('links inventory_add items: a book’s magic armor by its numbers, an SRD item, and leaves others as given', async () => {
     const h = setup({ character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 3, hitDie: 10 }) });
     await h.run('update_character', {

@@ -526,15 +526,15 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
     setBusy(true);
     const base = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll', character);
     // A feat picked here joins the level-up, which counts what it brings at this level (Tough: twice the level), and
-    // applyFeatChoice completes that same feature. Not when the sheet already has a feature of its name (a repeatable
-    // feat taken again): applyFeatChoice's addFeature updates that one, and the copy would stay beside it.
-    const options = (c: Character): LevelUpOptions =>
-      chosen.kind === 'feat' && chosen.pick.feat && !c.features.some((f) => nameKey(f.name) === nameKey(chosen.pick.name))
+    // applyFeatChoice completes that same feature by its id: a trait of its name, or an earlier taking of a Repeatable
+    // feat, stays beside it as it is.
+    const opts: LevelUpOptions =
+      chosen.kind === 'feat' && chosen.pick.feat
         ? { ...base, newFeatures: [...(base.newFeatures ?? []), { name: chosen.pick.name, source: 'feat', description: chosen.pick.description }] }
         : base;
     const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null } = { result: null, uses: [], choice: null };
     const saved = await edit((c) => {
-      const r = levelUp(c, options(c));
+      const r = levelUp(c, opts);
       if (r.character === c) {
         return { character: c, notice: null, warning: r.events.find((e) => e.type === 'warning')?.message ?? 'Could not level up.' };
       }

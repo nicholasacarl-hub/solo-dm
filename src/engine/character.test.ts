@@ -356,6 +356,34 @@ describe('features', () => {
     expect(removeFeature(updated.character, 'Boon of the Tides').character.features).toHaveLength(3);
   });
 
+  it("keeps a feat and a trait of one name apart, and spends or restores the one with the uses", () => {
+    const trait = { id: 't-luck', name: 'Lantern Luck', source: 'species' as const, description: 'Invented trait: reroll a 1.' };
+    const withFeat = addFeature(mira({ features: [trait] }), { name: 'Lantern Luck', source: 'feat', description: 'Invented feat: luck points.', uses: { max: 3, used: 0, recharge: 'long' } });
+    expect(withFeat.character.features.map((f) => [f.name, f.source, f.description])).toEqual([
+      ['Lantern Luck', 'species', 'Invented trait: reroll a 1.'],
+      ['Lantern Luck', 'feat', 'Invented feat: luck points.'],
+    ]);
+    // A feat of the name again updates the feat; a trait of it, the trait.
+    const feat = addFeature(withFeat.character, { name: 'lantern luck', source: 'feat', description: 'Invented feat, rewritten.' }).character;
+    expect(feat.features.map((f) => f.description)).toEqual(['Invented trait: reroll a 1.', 'Invented feat, rewritten.']);
+    const traitAgain = addFeature(withFeat.character, { name: 'Lantern Luck', source: 'species', description: 'Invented trait, rewritten.' }).character;
+    expect(traitAgain.features.map((f) => f.description)).toEqual(['Invented trait, rewritten.', 'Invented feat: luck points.']);
+    // Only feats are kept apart: a feature that isn't one, rewritten under another source, is still updated.
+    const otherwise = addFeature(withFeat.character, { name: 'Lantern Luck', source: 'other', description: 'Invented trait, by the DM.' }).character;
+    expect(otherwise.features.map((f) => [f.source, f.description])).toEqual([['other', 'Invented trait, by the DM.'], ['feat', 'Invented feat: luck points.']]);
+    // By name, a use goes to the one with uses left, a restore to the one with uses spent.
+    const spent = useFeature(withFeat.character, 'Lantern Luck');
+    expect(spent.character.features.map((f) => f.uses?.used)).toEqual([undefined, 1]);
+    expect(restoreFeature(spent.character, 'Lantern Luck').character.features.map((f) => f.uses?.used)).toEqual([undefined, 0]);
+  });
+
+  it('spends and restores the right one of two same-named features with uses (a Repeatable feat taken twice)', () => {
+    const taking = (id: string, used: number) => ({ id, name: 'Wick Tender', source: 'feat' as const, description: '', uses: { max: 1, used, recharge: 'long' as const } });
+    const c = mira({ features: [taking('first', 1), taking('second', 0)] });
+    expect(useFeature(c, 'Wick Tender').character.features.map((f) => f.uses?.used)).toEqual([1, 1]);
+    expect(restoreFeature(c, 'Wick Tender').character.features.map((f) => f.uses?.used)).toEqual([0, 0]);
+  });
+
   it('Heroic Inspiration: only one at a time', () => {
     expect(setHeroicInspiration(mira(), true).events[0].type).toBe('warning');
     const spent = setHeroicInspiration(mira(), false);
