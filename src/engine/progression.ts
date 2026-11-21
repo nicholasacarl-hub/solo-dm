@@ -113,9 +113,23 @@ interface HpBonus {
 }
 
 /**
+ * A Sorcerer for Draconic Resilience's Hit Points: the SRD's, a 2024 book's (rulesClassFor), or an older book's of the
+ * name. Both editions give one per Sorcerer level (SRD 5.2.1 Draconic Sorcery: 3 at Sorcerer 3, then 1 a level; SRD 5.1
+ * Draconic Bloodline: 1 at 1st level, then 1 a level).
+ */
+function isSorcererClass(cl: Pick<ClassLevel, 'classId' | 'name' | 'ref'>): boolean {
+  if (rulesClassFor(cl)?.name === 'Sorcerer') return true;
+  // A book's class whose edition isn't recorded yet (a hero made before refs recorded it): the one-time top-up pays
+  // its levels once it is (data/options/editions.ts), so paying them here too would pay them twice.
+  if (cl.ref && !cl.ref.format) return false;
+  return nameKey(cl.name) === 'sorcerer';
+}
+
+/**
  * Per-level Hit Point bonuses from well-known traits: Dwarven Toughness (+1 per level), Tough
  * (+2 per level; +2 × level when first taken) and Draconic Resilience (+1 per Sorcerer level;
- * +3 when gained at Sorcerer 3).
+ * the Sorcerer level when gained: 3 at Sorcerer 3, or 1 for an older book's at 1st level), in
+ * either edition.
  */
 function featureHpBonuses(before: readonly Feature[], added: readonly { name: string }[], gained: ClassLevel, newLevel: number): HpBonus[] {
   const bonuses: HpBonus[] = [];
@@ -124,17 +138,27 @@ function featureHpBonuses(before: readonly Feature[], added: readonly { name: st
   if (had('Dwarven Toughness')) bonuses.push({ amount: 1, note: 'Dwarven Toughness' });
   if (had('Tough')) bonuses.push({ amount: 2, note: 'Tough' });
   else if (gains('Tough')) bonuses.push({ amount: 2 * newLevel, note: 'Tough' });
-  const sorcerer = rulesClassFor(gained)?.name === 'Sorcerer';
+  const sorcerer = isSorcererClass(gained);
   if (sorcerer && had('Draconic Resilience')) bonuses.push({ amount: 1, note: 'Draconic Resilience' });
   else if (sorcerer && gains('Draconic Resilience')) bonuses.push({ amount: gained.level, note: 'Draconic Resilience' });
   return bonuses;
 }
 
 /**
+ * Hit Points a new hero's features add at 1st level, which levelUp adds level by level after (featureHpBonuses): Tough
+ * (twice the level) and Draconic Resilience on a Sorcerer (an older book's Draconic Bloodline has it at 1st level). A
+ * species' per-level bonus (Dwarven Toughness) is the builder's own.
+ */
+export function startingFeatureHitPoints(features: readonly { name: string }[], cl: ClassLevel): number {
+  return featureHpBonuses([], features, cl, 1).reduce((sum, b) => sum + b.amount, 0);
+}
+
+/**
  * The Hit Points Draconic Resilience gives at the hero's Sorcerer levels (SRD 5.2.1 Draconic Sorcery: "Your Hit Point
  * maximum increases by 3, and it increases by 1 whenever you gain another Sorcerer level"): one per Sorcerer level,
- * a 2024 book's Sorcerer included (rulesClassFor), when the hero has the feature; else 0. levelUp adds the same,
- * level by level (featureHpBonuses).
+ * a 2024 book's Sorcerer included (rulesClassFor), when the hero has the feature; else 0. For the one-time top-up of
+ * heroes made before refs recorded editions (data/options/editions.ts), so only the classes the stand-in rules owed:
+ * an older book's Sorcerer, which gains them at level-up now (featureHpBonuses), isn't caught up.
  */
 export function draconicResilienceHitPoints(c: Pick<Character, 'classes' | 'features'>): number {
   if (!hasFeatureNamed(c.features, 'Draconic Resilience')) return 0;

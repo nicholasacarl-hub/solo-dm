@@ -417,9 +417,9 @@ describe('damage dice that grow with level', () => {
     ]);
     expect(attackDamageExpression(monk(5), strike, true)).toBe('2d8+3');
     expect(rollRequestExpression(monk(11), request({ rollType: 'damage', attackName: 'Unarmed Strike' }))).toBe('1d10+3');
-    // Martial Arts works only without armor or a Shield.
+    // Martial Arts works only without armor or a Shield: the builder's strike rolls its normal 1 + STR (STR 10).
     const armored = monk(5, { inventory: [{ id: 'la', name: 'Leather Armor', quantity: 1, equipped: true, category: 'armor' }] });
-    expect(attackDamageExpression(armored, strike)).toBe('1d6+3');
+    expect(attackDamageExpression(armored, strike)).toBe('1');
     // Older sheets: the Unarmed Strike of a Monk is recognised by name.
     expect(attackDamageExpression(monk(5), { ...strike, scaling: undefined })).toBe('1d8+3');
     // A bigger weapon die is kept ("in place of the normal damage" only when that's better).
@@ -816,5 +816,69 @@ describe('Monk weapons (SRD 5.2.1 Monk, Martial Arts: Simple Melee weapons and M
     const book = (format: '2024' | '2014') => hero([{ ...monkClass(5), classId: 'lib:lamp:class:monk', ref: ref(format) }]);
     expect(attackDamageExpression(book('2024'), spear)).toBe('1d8+3');
     expect(attackDamageExpression(book('2014'), spear)).toBe('1d6');
+  });
+});
+
+describe("Martial Arts stops in armor or with a Shield, the builder's attacks too (SRD 5.2.1 Monk, Martial Arts)", () => {
+  // As the builder makes them for a class with Martial Arts: Dexterity for the Unarmed Strike and Monk weapons, the
+  // Unarmed Strike's die stored.
+  const strike: Attack = { id: 'us', name: 'Unarmed Strike', ability: 'finesse', proficient: true, damage: '1d6', damageType: 'bludgeoning', range: '5 ft.', scaling: 'martial-arts' };
+  const spear: Attack = { id: 'sp', name: 'Spear', ability: 'finesse', proficient: true, damage: '1d6', damageType: 'piercing', properties: ['Thrown (Range 20/60)', 'Versatile (1d8)'], weaponCategory: 'simple', weaponType: 'melee' };
+  const knife: Attack = { id: 'dg', name: 'Dagger', ability: 'finesse', proficient: true, damage: '1d4', damageType: 'piercing', properties: ['Finesse', 'Light', 'Thrown (Range 20/60)'], weaponCategory: 'simple', weaponType: 'melee' };
+  const shield: InventoryItem = { id: 'sh', name: 'Shield', quantity: 1, equipped: true, category: 'armor' };
+  const leather: InventoryItem = { id: 'la', name: 'Leather Armor', quantity: 1, equipped: true, category: 'armor' };
+  const monk5: Character['classes'][number] = { classId: 'srd:class:monk', name: 'Monk', level: 5, hitDie: 8, casterType: 'none' };
+  // STR 12 (+1), DEX 16 (+3); Proficiency Bonus 3 at level 5.
+  const hero = (classes: Character['classes'], inventory: InventoryItem[] = []) =>
+    mira({ abilityScores: { str: 12, dex: 16, con: 12, int: 8, wis: 16, cha: 10 }, classes, spellcasting: undefined, inventory, features: [], attacks: [strike, spear, knife] });
+  const numbers = (c: Character, a: Attack) => [attackBonus(c, a), attackDamageExpression(c, a)];
+
+  it('without armor or a Shield: the Martial Arts die for the Monk level, and Dexterity', () => {
+    const c = hero([monk5]);
+    expect([strike, spear, knife].map((a) => numbers(c, a))).toEqual([[6, '1d8+3'], [6, '1d8+3'], [6, '1d8+3']]);
+  });
+
+  it("in armor or with a Shield: the Unarmed Strike's normal 1 and a Monk weapon's own die, with Strength; a Finesse weapon keeps Dexterity", () => {
+    for (const worn of [shield, leather]) {
+      const c = hero([monk5], [worn]);
+      expect(numbers(c, strike)).toEqual([4, '2']);
+      expect(numbers(c, spear)).toEqual([4, '1d6+1']);
+      expect(numbers(c, knife)).toEqual([6, '1d4+3']);
+      // The strike off the sheet ("Kick") and an older sheet's strike (no `scaling`) follow the same rule.
+      expect(unarmedDamageExpression(c)).toBe('2');
+      expect(attackDamageExpression(c, { ...strike, scaling: undefined })).toBe('2');
+      // A die that isn't Martial Arts' (a feat's, on a Strength strike) stays.
+      expect(attackDamageExpression(c, { ...strike, ability: 'str', scaling: undefined, damage: '1d4' })).toBe('1d4+1');
+    }
+  });
+
+  it("prices the app's own Shield, a strike off a sheet without one, low Strength and a Dagger whose properties weren't read", () => {
+    const realShield: InventoryItem = { id: 'sh2', name: 'Shield', quantity: 1, equipped: true, category: 'shield', armor: { kind: 'shield', baseAc: 2, dexCap: 0 } };
+    expect(numbers(hero([monk5], [realShield]), strike)).toEqual([4, '2']);
+    // No Unarmed Strike on the sheet: everyone's, 1 + STR, and the attack with STR.
+    const bare = { ...hero([monk5], [realShield]), attacks: [] };
+    expect(rollRequestModifier(bare, request({ rollType: 'attack', attackName: 'Kick' })).modifier).toBe(4);
+    expect(unarmedDamageExpression(bare)).toBe('2');
+    // STR 6: 1 - 2, but damage never goes below 0.
+    const weak = { ...hero([monk5], [leather]), abilityScores: { ...hero([monk5]).abilityScores, str: 6 } };
+    expect(attackDamageExpression(weak, strike)).toBe('0');
+    // A book's Dagger read without its properties is still Finesse (by its SRD name): Dexterity in armor.
+    expect(numbers(hero([monk5], [leather]), { ...knife, properties: [] })).toEqual([6, '1d4+3']);
+    // ...where a Mace (no properties of its own) gave its Dexterity for Martial Arts.
+    expect(numbers(hero([monk5], [leather]), { ...spear, name: 'Mace', properties: [] })).toEqual([4, '1d6+1']);
+  });
+
+  it("a 2014 book's Monk too, which the engine doesn't count as a Monk: the stored die and Dexterity, gone in armor", () => {
+    const ref: ImportedRef = { sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:monk', kind: 'class', entryName: 'Monk', textHash: '', textCopied: false, format: '2014' };
+    const older = { ...monk5, classId: 'lib:lamp:class:monk', ref };
+    // The die its book's table gave the builder (d4 at Monk 1) stays as stored.
+    const bookStrike: Attack = { ...strike, damage: '1d4' };
+    expect(numbers(hero([older]), bookStrike)).toEqual([6, '1d4+3']);
+    expect(numbers(hero([older]), spear)).toEqual([6, '1d6+3']);
+    expect(numbers(hero([older], [leather]), bookStrike)).toEqual([4, '2']);
+    expect(numbers(hero([older], [leather]), spear)).toEqual([4, '1d6+1']);
+    // An off-sheet "Kick" rolls as the sheet's Unarmed Strike does, with or without armor.
+    const kick = (c: Character) => rollRequestModifier({ ...c, attacks: [bookStrike] }, request({ rollType: 'attack', attackName: 'Kick' })).modifier;
+    expect([kick(hero([older])), kick(hero([older], [leather]))]).toEqual([6, 4]);
   });
 });

@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, importedRef } from '@/test/structuredFixtures';
 import type { Character, ClassLevel, ClassOption, OptionSource, SourceFormat } from '@/types';
+import { levelUp } from '@/engine/progression';
 import { hitPointsOwedForEditions, withClassEditions } from './editions';
 
 const wick = EXPECTED_MERGED.classes.find((c) => c.id === 'lib:gloam:class:wickwright') as ClassOption;
@@ -73,6 +74,16 @@ describe('hitPointsOwedForEditions', () => {
     expect(hitPointsOwedForEditions(resilient(hero(sorcerer(undefined, 5))), resilient(hero(sorcerer('2024', 5))))).toBe(5);
     // A 2014 book's Sorcerer plays by its own rules: nothing.
     expect(hitPointsOwedForEditions(resilient(hero(sorcerer(undefined, 5))), resilient(hero(sorcerer('2014', 5))))).toBe(0);
+  });
+
+  it("pays a Sorcerer leveled before its edition was recorded once: level-up waits, and the top-up pays every level", () => {
+    const legacy = resilient(hero(sorcerer(undefined, 5)));
+    const leveled = levelUp(legacy, { className: 'Sorcerer', classId: 'lib:lamp:class:sorcerer', hpMethod: 'average' });
+    // The d6 average 4 + CON 1, and no Draconic Resilience yet.
+    expect(leveled.hpGained).toBe(5);
+    const recorded = { ...leveled.character, classes: leveled.character.classes.map((cl) => (cl.ref ? { ...cl, ref: { ...cl.ref, format: '2024' as const } } : cl)) };
+    // SRD 5.2.1 Draconic Sorcery at Sorcerer 6: one per Sorcerer level, paid once.
+    expect(hitPointsOwedForEditions(leveled.character, recorded)).toBe(6);
   });
 
   it('owes nothing without the feature or a change, and nothing for an Edition changed in review, either way or back again', () => {

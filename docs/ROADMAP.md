@@ -67,15 +67,34 @@ The first version of structured imports deliberately leaves these out:
   the text today).
 - **Older-edition classes' own numbers**: a 2024 book's class plays by the SRD class's rules (its ref records its
   edition), but a 2014 book's class gets only the name-based ones (Improved Critical, Unarmored Defense from its
-  feature, Aura of Protection…): its Martial Arts die stays the one on the sheet (a 2014 Monk's grows d4 → d6 → d8
-  → d10), its unarmed strikes off the sheet use Strength, and Draconic Resilience adds no Hit Points (nothing in the
-  app raises a Hit Point maximum by hand). Nor does a 2024 book's Sorcerer get them for levels gained while its
-  record's Edition said Older. The engine would need each edition's numbers, and the sheet a way to adjust the maximum.
-- **Martial Arts' conditions on builder-made attacks**: the builder gives a Monk's Unarmed Strike and Monk weapons
-  Dexterity when it makes them (and the Unarmed Strike its d6), so in armor or with a Shield, where Martial Arts
-  stops, they keep those; a Monk weapon's Martial Arts die does stop there. The engine doesn't know what the Monk is
-  holding, so a Monk weapon gets the die even beside a non-Monk weapon ("wielding only Monk weapons"), and a weapon
-  that isn't on the sheet gets the dice and ability the DM gives it. The DM adjusts these.
+  feature, Aura of Protection, Draconic Resilience's Hit Points…): its Martial Arts die stays the one on the sheet (a
+  2014 Monk's grows d4 → d6 → d8 → d10), and an unarmed strike off the sheet (a Kick) follows the sheet's Unarmed
+  Strike, or uses Strength when the sheet has none. The engine would need each edition's numbers.
+- **Hit Points a character missed**: nothing in the app raises a Hit Point maximum by hand, so a character keeps the
+  Hit Points it has where the app once counted too few: Tough taken at 1st level (an origin feat) or in the level-up
+  dialog's feat panel before the app counted it there, and Draconic Resilience on a 2014 book's Sorcerer, or on a 2024
+  book's while its record's Edition said Older, for levels gained before level-up counted it in either edition. A
+  book's Sorcerer leveled while its edition isn't recorded yet (a hero made before refs recorded it, its book away)
+  waits for the one-time top-up, which pays only a 2024 book's. A way to adjust the maximum (on the sheet and for the
+  DM) would mend these, and cover Aid and a Wraith's Life Drain too.
+- **Origin feats at Ability Score Improvement**: the level-up dialog offers General feats at an Ability Score
+  Improvement level; the 2024 feature allows any feat the hero qualifies for, Origin feats (Tough, Alert) included.
+- **Additional Fighting Style**: only a feature named Fighting Style opens the level-up dialog's feat panel, so the
+  Champion's Additional Fighting Style (Fighter 7) arrives as text and the DM adds the second Fighting Style feat; and
+  the panel lists the styles the class prints, not a subclass's own (an older book's subclass that prints its options).
+- **Feats named like a trait**: the sheet keeps one feature per name, so a feat taken at level-up that shares its name
+  with a species trait or class feature replaces it (the trait's text goes), and a repeatable feat taken again stays
+  one feature whose uses start over.
+- **What a Monk is holding**: Martial Arts works only while the Monk is unarmed or wields only Monk weapons. The
+  engine doesn't know what is held, so a Monk weapon gets the die and Dexterity even beside a non-Monk weapon, and a
+  weapon that isn't on the sheet gets the dice and ability the DM gives it. The DM adjusts these.
+- **Older sheets' book weapons and Martial Arts**: a weapon attack made before attacks recorded their weapon's category
+  and type is recognized as a Monk weapon by its SRD name only, so a book's own blade on such a sheet gets no Martial
+  Arts die and keeps the Dexterity the builder gave it in armor or with a Shield.
+- **Magic armor added by name**: an SRD magic armor or shield whose name doesn't name its base item (Mithral Armor,
+  Elven Chain, Sentinel Shield, Animated Shield) is linked as a magic item, not armor: it doesn't change the AC (the
+  DM sets it) and doesn't stop Martial Arts or Unarmored Defense. The link would need the entry's armor category and
+  its base item's numbers, as a book's magic armor gets them.
 - **Telling a book read again from another book**: a hero's class, subclass, species or background whose book is
   switched off or gone is looked up again by its book's fingerprint, then its source and title, then any book's
   option of its name, so another book's option of that name stands in (a 2014 printing for a 2024 one of the same

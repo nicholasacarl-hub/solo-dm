@@ -208,6 +208,84 @@ describe('LevelUpDialog with imported options', () => {
     expect(grapplers[0]).toBeChecked();
   });
 
+  it("counts Tough's Hit Points at the level it's taken in the feat panel (twice the character level)", async () => {
+    const user = userEvent.setup();
+    const tough = { id: 'lib:gloam:feat:tough', name: 'Tough', category: 'general' as const, description: 'Invented: hardier than most.' };
+    mocks.data = { ...EXPECTED_MERGED, feats: [...EXPECTED_MERGED.feats, tough] };
+    resetFakeGame({ campaign: sampleCampaign(), character: fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }) });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('radio', { name: /^Tough/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    // d10 average 6 + CON 1, and Tough's 2 × level 4.
+    expect(sheet().hp.max).toBe(30 + 7 + 8);
+    expect(sheet().features.filter((f) => f.name === 'Tough')).toEqual([expect.objectContaining({ source: 'feat', sourceName: 'Ability Score Improvement (Fighter 4)', description: 'Invented: hardier than most.' })]);
+    expect(notices()[0]).toContain('+15 HP');
+  });
+
+  it('a repeatable feat taken again stays one feature: the one on the sheet, with its ref', async () => {
+    const user = userEvent.setup();
+    const lantern = EXPECTED_MERGED.feats.find((f) => f.name === 'Lantern Bearer')!;
+    mocks.data = { ...EXPECTED_MERGED, feats: EXPECTED_MERGED.feats.map((f) => (f === lantern ? { ...f, repeatable: true } : f)) };
+    const had = { id: 'f-old', name: 'Lantern Bearer', source: 'feat' as const, sourceName: 'Ability Score Improvement (Fighter 4)', description: TEXT.lanternBearer.join('\n\n'), ref: lantern.ref };
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...fighter(7, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), features: [had] } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('radio', { name: 'Lantern Bearer' }));
+    await user.selectOptions(screen.getByLabelText('Ability Lantern Bearer raises'), 'cha');
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().features.filter((f) => f.name === 'Lantern Bearer')).toEqual([
+      expect.objectContaining({ id: 'f-old', sourceName: 'Ability Score Improvement (Fighter 8)', ref: expect.objectContaining({ entryName: 'Lantern Bearer' }) }),
+    ]);
+    expect(sheet().abilityScores.cha).toBe(9);
+  });
+
+  describe('a choice the panel no longer offers once the subclass changes', () => {
+    // Invented subclasses whose 3rd level opens the panel: a Fighting Style, and an Ability Score Improvement.
+    const duelist = { ...EMBER, id: 'lib:gloam:subclass:lamp-duelist', name: 'Lamp Duelist', features: [{ level: 3, name: 'Fighting Style', description: 'Invented: a Fighting Style feat.' }] };
+    const scholar = { ...EMBER, id: 'lib:gloam:subclass:lamp-scholar', name: 'Lamp Scholar', features: [{ level: 3, name: 'Ability Score Improvement', description: 'Invented: an early feat.' }] };
+    const subclass = (name: RegExp) => within(screen.getByRole('radiogroup', { name: 'Subclass' })).getByRole('radio', { name });
+    beforeEach(() => {
+      mocks.data = { ...EXPECTED_MERGED, classes: EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, subclasses: [...c.subclasses, duelist, scholar] } : c)) };
+      // Chain Mail on: Defense would raise the AC.
+      const mail = { id: 'mail', name: 'Chain Mail', category: 'armor' as const, quantity: 1, equipped: true };
+      resetFakeGame({ campaign: sampleCampaign(), character: { ...fighter(2), inventory: [mail], armorClass: 16, acFormula: 'Chain Mail 16' } });
+    });
+
+    it('drops a Fighting Style picked for a subclass whose level gives no feat choice', async () => {
+      const user = userEvent.setup();
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      await user.click(subclass(/Lamp Duelist/));
+      await user.click(screen.getByRole('radio', { name: /^Defense/ }));
+      await user.click(subclass(/Champion/));
+      expect(screen.queryByRole('radio', { name: /^Defense/ })).toBeNull();
+      await user.click(screen.getByRole('button', { name: 'Level up' }));
+      expect(sheet().classes[0]).toMatchObject({ level: 3, subclass: 'Champion' });
+      expect(sheet().features.map((f) => f.name)).not.toContain('Defense');
+      expect(sheet().armorClass).toBe(16);
+      expect(notices()[0]).not.toContain('Defense');
+    });
+
+    it("shows and applies “Decide with my DM” when the new panel doesn't list the choice", async () => {
+      const user = userEvent.setup();
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      // A Fighting Style feat, then a panel of General feats.
+      await user.click(subclass(/Lamp Duelist/));
+      await user.click(screen.getByRole('radio', { name: /^Defense/ }));
+      await user.click(subclass(/Lamp Scholar/));
+      expect(screen.getByRole('radio', { name: 'Decide with my DM' })).toBeChecked();
+      // +2 to one ability, then a panel without score increases.
+      await user.click(screen.getByRole('radio', { name: '+2 to one ability' }));
+      await user.selectOptions(screen.getByLabelText('Ability to raise by 2'), 'str');
+      await user.click(subclass(/Lamp Duelist/));
+      expect(screen.getByRole('radio', { name: 'Decide with my DM' })).toBeChecked();
+      expect(screen.getByRole('radio', { name: /^Defense/ })).not.toBeChecked();
+      await user.click(screen.getByRole('button', { name: 'Level up' }));
+      expect(sheet().abilityScores.str).toBe(16);
+      expect(sheet().features.map((f) => f.name)).not.toContain('Defense');
+      expect(sheet().armorClass).toBe(16);
+      expect(notices()[0]).not.toMatch(/feat: Defense|chose: \+2/);
+    });
+  });
+
   it('applies +2 to one ability and names it on the sheet', async () => {
     const user = userEvent.setup();
     resetFakeGame({ campaign: sampleCampaign(), character: fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }) });

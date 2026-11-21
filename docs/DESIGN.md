@@ -713,7 +713,8 @@ so a hero who chose the SRD option keeps it, and the engine never takes an impor
 for an SRD class of the same name for its numbers (hit die, level-up reminders). A 2024 book's class does play
 by the SRD class's rules (`rulesClassFor`): the Martial Arts die and a Monk's Dexterity for unarmed strikes and Monk
 weapons (`isMonkWeapon`: Simple Melee, or Martial Melee with Light, by the weapon category and type an attack records from
-the catalog, else by its SRD name), Unarmored Defense, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
+the catalog, else by its SRD name; in armor or with a Shield the Dexterity and Unarmed Strike die the builder stored for
+Martial Arts go too, a 2014 book's Monk's included), Unarmored Defense, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
 the edition (`ImportedRef.format`), set when the class is taken and kept in step with the book's record on load
 and after review (`withClassEditions`, `src/data/options/editions.ts`): by the class's id, and otherwise only filled,
 never changed, from a copy of the same text (the book's fingerprint), so another book's class of the name never lends
@@ -725,8 +726,15 @@ fails before the hero's row is stored, both come back out of memory (unless a la
 nothing saves one without the other, and the next load tries again; if the hero's row was stored and the campaign row
 then failed (they are two writes), memory keeps both and the notice is saved on its own at once, so a reload or leaving
 the table doesn't lose it (`refreshClassEditions`, `hitPointsOwedForEditions`; nothing else in the app raises the
-maximum). An Edition changed in review later adds and takes back nothing, so a round trip never pays twice. That and
-the text restore write nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
+maximum). The top-up covers only what the stand-in rules owed. Level-up counts Draconic Resilience's Hit Points by
+Sorcerer level in either edition (an older book's Draconic Bloodline gives the same one a level), except on a book's
+class whose edition isn't recorded yet, whose levels the top-up pays once it is; the builder counts Tough and a
+1st-level Draconic Resilience in a new hero's Hit Points (`startingFeatureHitPoints`), and the level-up dialog gives the
+feat it picks to the level-up, so Tough counts at the level it's taken. The dialog shows and applies only a choice its
+panel still lists (a subclass change can take the panel away or change its list, and "Decide with my DM" stands
+instead), and a feat already on the sheet (a repeatable one taken again) is completed in place, not copied. An Edition
+changed in review later adds and takes back nothing, so a round trip never pays twice. That and the text restore write
+nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
 adaptations, shown in review, on builder cards, in the DM's stats line and on the sheet. Level-up adds

@@ -21,6 +21,7 @@ import {
   spellSlotsForClasses,
   spellcastingAbility,
 } from '@/engine';
+import { startingFeatureHitPoints } from '@/engine/progression';
 import {
   ABILITIES,
   ABILITY_NAMES,
@@ -516,7 +517,9 @@ export function buildCharacter(draft: BuilderDraft, ctx: BuilderContext, opts: B
 
   const features = buildFeatures(draft, data, p, { level: 1, proficiencyBonus: pb, scores });
   const hpBonus = hpBonusPerLevel(species?.traits ?? []);
-  const maxHp = Math.max(1, (cls?.hitDie ?? 8) + abilityModifier(scores.con) + hpBonus);
+  // Tough and a 1st-level Draconic Resilience; levelUp adds them after.
+  const featureHp = classes[0] ? startingFeatureHitPoints(features, classes[0]) : 0;
+  const maxHp = Math.max(1, (cls?.hitDie ?? 8) + abilityModifier(scores.con) + hpBonus + featureHp);
   const lineageFx = lineage ? lineageEffects(lineage.description) : undefined;
   const feats = originFeats(draft, data);
   const resourceful = (species?.traits ?? []).some((t) => /gain Heroic Inspiration whenever you finish a Long Rest/i.test(t.description));

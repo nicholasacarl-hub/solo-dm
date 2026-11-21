@@ -371,6 +371,15 @@ describe('building a level 1 character', () => {
     expect(features['Keen Senses (Perception)']).toBeDefined();
   });
 
+  it("counts an origin feat's Tough at 1st level (a book's background can give it)", () => {
+    const tough = { id: 'lib:lamp:feat:tough', name: 'Tough', category: 'origin' as const, description: 'Invented: hardier than most.' };
+    const data2 = { ...data, feats: [...data.feats, tough], backgrounds: data.backgrounds.map((b) => (b.name === 'Soldier' ? { ...b, feat: 'Tough' } : b)) };
+    const c = buildCharacter(fighterDraft(), { ...ctx, data: data2 }, { campaignId: 'camp-1' });
+    expect(c.features.find((f) => f.name === 'Tough')).toMatchObject({ sourceName: 'Soldier (Origin feat)' });
+    // 10 (d10) + CON 15 (+2) + Dwarven Toughness 1 + Tough 2
+    expect(c.hp).toMatchObject({ max: 15, current: 15 });
+  });
+
   it('builds a Dwarf Soldier fighter in chain mail with Defense', () => {
     const c = buildCharacter(fighterDraft(), ctx, { campaignId: 'camp-1', id: 'char-keep' });
     expect(c.id).toBe('char-keep');
