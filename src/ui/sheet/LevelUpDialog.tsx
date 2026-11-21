@@ -526,8 +526,8 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
     setBusy(true);
     const base = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll', character);
     // A feat picked here joins the level-up, which counts what it brings at this level (Tough: twice the level), and
-    // applyFeatChoice completes that same feature. Not when the sheet has one of its name (a repeatable feat taken
-    // again, a trait it's named like): applyFeatChoice completes that one, and a copy would stay beside it.
+    // applyFeatChoice completes that same feature. Not when the sheet already has a feature of its name (a repeatable
+    // feat taken again): applyFeatChoice's addFeature updates that one, and the copy would stay beside it.
     const options = (c: Character): LevelUpOptions =>
       chosen.kind === 'feat' && chosen.pick.feat && !c.features.some((f) => nameKey(f.name) === nameKey(chosen.pick.name))
         ? { ...base, newFeatures: [...(base.newFeatures ?? []), { name: chosen.pick.name, source: 'feat', description: chosen.pick.description }] }

@@ -79,6 +79,12 @@ The first version of structured imports deliberately leaves these out:
   DM) would mend these, and cover Aid and a Wraith's Life Drain too.
 - **Origin feats at Ability Score Improvement**: the level-up dialog offers General feats at an Ability Score
   Improvement level; the 2024 feature allows any feat the hero qualifies for, Origin feats (Tough, Alert) included.
+- **Additional Fighting Style**: only a feature named Fighting Style opens the level-up dialog's feat panel, so the
+  Champion's Additional Fighting Style (Fighter 7) arrives as text and the DM adds the second Fighting Style feat; and
+  the panel lists the styles the class prints, not a subclass's own (an older book's subclass that prints its options).
+- **Feats named like a trait**: the sheet keeps one feature per name, so a feat taken at level-up that shares its name
+  with a species trait or class feature replaces it (the trait's text goes), and a repeatable feat taken again stays
+  one feature whose uses start over.
 - **What a Monk is holding**: Martial Arts works only while the Monk is unarmed or wields only Monk weapons. The
   engine doesn't know what is held, so a Monk weapon gets the die and Dexterity even beside a non-Monk weapon, and a
   weapon that isn't on the sheet gets the dice and ability the DM gives it. The DM adjusts these.
