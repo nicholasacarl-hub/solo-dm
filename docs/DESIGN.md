@@ -726,7 +726,9 @@ fails before the hero's row is stored, both come back out of memory (unless a la
 nothing saves one without the other, and the next load tries again; if the hero's row was stored and the campaign row
 then failed (they are two writes), memory keeps both and the notice is saved on its own at once, so a reload or leaving
 the table doesn't lose it (`refreshClassEditions`, `hitPointsOwedForEditions`; nothing else in the app raises the
-maximum). An Edition changed in review later adds and takes back nothing, so a round trip never pays twice. That and
+maximum). The top-up covers only what the stand-in rules owed. Level-up counts Draconic Resilience's Hit Points by
+Sorcerer level in either edition (an older book's Draconic Bloodline gives the same one a level), and the builder counts
+Tough and a 1st-level Draconic Resilience in a new hero's Hit Points (`startingFeatureHitPoints`). An Edition changed in review later adds and takes back nothing, so a round trip never pays twice. That and
 the text restore write nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written

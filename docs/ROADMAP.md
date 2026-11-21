@@ -67,10 +67,14 @@ The first version of structured imports deliberately leaves these out:
   the text today).
 - **Older-edition classes' own numbers**: a 2024 book's class plays by the SRD class's rules (its ref records its
   edition), but a 2014 book's class gets only the name-based ones (Improved Critical, Unarmored Defense from its
-  feature, Aura of Protection…): its Martial Arts die stays the one on the sheet (a 2014 Monk's grows d4 → d6 → d8
-  → d10), its unarmed strikes off the sheet use Strength, and Draconic Resilience adds no Hit Points (nothing in the
-  app raises a Hit Point maximum by hand). Nor does a 2024 book's Sorcerer get them for levels gained while its
-  record's Edition said Older. The engine would need each edition's numbers, and the sheet a way to adjust the maximum.
+  feature, Aura of Protection, Draconic Resilience's Hit Points…): its Martial Arts die stays the one on the sheet (a
+  2014 Monk's grows d4 → d6 → d8 → d10) and its unarmed strikes off the sheet use Strength. The engine would need each
+  edition's numbers.
+- **Hit Points a character missed**: nothing in the app raises a Hit Point maximum by hand, so a character keeps the
+  Hit Points it has where the app once counted too few: Tough taken at 1st level (an origin feat) before the builder
+  counted it, and Draconic Resilience on a 2014 book's Sorcerer, or on a 2024 book's while its record's Edition said
+  Older, for levels gained before level-up counted it in either edition. A way to adjust the maximum (on the sheet and
+  for the DM) would mend these, and cover Aid and a Wraith's Life Drain too.
 - **What a Monk is holding**: Martial Arts works only while the Monk is unarmed or wields only Monk weapons. The
   engine doesn't know what is held, so a Monk weapon gets the die and Dexterity even beside a non-Monk weapon, and a
   weapon that isn't on the sheet gets the dice and ability the DM gives it. The DM adjusts these.

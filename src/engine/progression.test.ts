@@ -4,13 +4,14 @@ import { sampleCharacter } from '@/test/fixtures';
 import { asiLevels, findSrdClass, SRD_CLASSES } from './classData';
 import type { Rng } from './dice';
 import {
-  XP_THRESHOLDS,
   applyLongRest,
   applyShortRest,
   draconicResilienceHitPoints,
   levelForXp,
   levelUp,
   spendHitDie,
+  startingFeatureHitPoints,
+  XP_THRESHOLDS,
   xpSummary,
   xpToNextLevel,
 } from './progression';
@@ -420,7 +421,7 @@ describe('levelUp: Armor Class', () => {
     expect(r.events.map((e) => e.message)).toContain('AC 12 → 14 (Draconic Resilience: 10 + DEX 2 + CHA 2)');
   });
 
-  it("a 2024 book's Sorcerer gains Draconic Resilience's Hit Points as the SRD's does; an older book's doesn't (SRD 5.2.1 Draconic Sorcery)", () => {
+  it("a book's Sorcerer gains Draconic Resilience's Hit Points as the SRD's does, in either edition (SRD 5.2.1 Draconic Sorcery; SRD 5.1 Draconic Bloodline)", () => {
     const ref = (format: SourceFormat): ImportedRef => ({ sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:sorcerer', kind: 'class', entryName: 'Sorcerer', textHash: '', textCopied: false, format });
     const sorcerer = (format: SourceFormat, level: number, features: Feature[] = []) =>
       mira({
@@ -440,7 +441,23 @@ describe('levelUp: Armor Class', () => {
     // "...and it increases by 1 whenever you gain another Sorcerer level."
     const resilient: Feature[] = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass', description: '' }];
     expect(levelUp(sorcerer('2024', 3, resilient), { className: 'Sorcerer', hpMethod: 'average' }).hpGained).toBe(4 + 2 + 1);
-    expect(levelUp(sorcerer('2014', 2), gain).hpGained).toBe(4 + 2);
+    // An older book's Sorcerer: the same one per Sorcerer level (its Draconic Bloodline's from 1st level).
+    expect(levelUp(sorcerer('2014', 2), gain).hpGained).toBe(4 + 2 + 3);
+    expect(levelUp(sorcerer('2014', 1, resilient), { className: 'Sorcerer', hpMethod: 'average' }).hpGained).toBe(4 + 2 + 1);
+    // Not a Sorcerer level: a Fighter level of the same hero adds nothing for it.
+    const multi = { ...sorcerer('2014', 3, resilient), classes: [...sorcerer('2014', 3).classes, asClass('Fighter', 1)] };
+    expect(levelUp(multi, { className: 'Fighter', hpMethod: 'average' }).hpGained).toBe(6 + 2);
+  });
+
+  it('startingFeatureHitPoints: what Tough and a 1st-level Draconic Resilience add to a new hero (levelUp adds them after)', () => {
+    const named = (...names: string[]) => names.map((name) => ({ name }));
+    const book2014: ClassLevel = { ...asClass('Sorcerer', 1), classId: 'lib:lamp:class:sorcerer' };
+    expect(startingFeatureHitPoints(named('Tough'), asClass('Fighter', 1))).toBe(2);
+    expect(startingFeatureHitPoints(named('Draconic Resilience'), book2014)).toBe(1);
+    expect(startingFeatureHitPoints(named('Tough', 'Draconic Resilience'), book2014)).toBe(3);
+    // Not counted here: a Draconic Resilience on another class, and a species' per-level bonus (the builder's own).
+    expect(startingFeatureHitPoints(named('Draconic Resilience'), asClass('Fighter', 1))).toBe(0);
+    expect(startingFeatureHitPoints(named('Dwarven Toughness', 'Alert'), asClass('Fighter', 1))).toBe(0);
   });
 
   it("draconicResilienceHitPoints: one per Sorcerer level with the feature, a 2024 book's Sorcerer included (SRD 5.2.1 Draconic Sorcery)", () => {
