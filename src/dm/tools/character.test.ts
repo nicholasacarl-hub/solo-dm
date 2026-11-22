@@ -139,9 +139,24 @@ describe('level_up from the merged builder data', () => {
     expect((await h.run('update_character', { features_add: [ruling] })).content).toContain('Updated feature: Second Wind');
     const out = await h.run('level_up', { class_name: 'Fighter' });
     expect(out.isError).toBeUndefined();
-    expect(out.content).not.toContain('Second Wind 4');
+    expect(out.content).not.toContain('Second Wind 4 →');
     expect(out.content).not.toContain('grew with the level');
+    // The result reminds the DM the number is its own.
+    expect(out.content).toContain('Kept your ruling: Second Wind 4 uses (a new uses_max in features_add changes it).');
     expect(h.sheet().features).toEqual([{ ...wind, description: ruling.description, uses: { max: 4, used: 1, recharge: 'short', ruled: true } }]);
+  });
+
+  it("reminds the DM of every number of uses it ruled at a level-up, namesakes told apart, and of none when it ruled none", async () => {
+    const h = setup({ character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 2, hitDie: 10 }) });
+    // Two of one name the DM added, then ruled on (another number each), and one the DM gave uses where it had none.
+    await h.run('update_character', { features_add: [{ name: 'Lantern Luck', description: 'Invented trait.', source: 'species', uses_max: 1, recharge: 'short' }] });
+    await h.run('update_character', { features_add: [{ name: 'Lantern Luck', description: 'Invented feat.', source: 'feat', uses_max: 3 }] });
+    const quiet = await h.run('level_up', { class_name: 'Fighter' });
+    expect(quiet.content).not.toContain('Kept your ruling');
+    await h.run('update_character', { features_add: [{ name: 'Lantern Luck', description: 'DM ruling: twice.', source: 'species', uses_max: 2, recharge: 'short' }] });
+    await h.run('update_character', { features_add: [{ name: 'Lantern Luck', description: 'DM ruling: once.', source: 'feat', uses_max: 1 }] });
+    const out = await h.run('level_up', { class_name: 'Fighter' });
+    expect(out.content).toContain('Kept your rulings: Lantern Luck (species) 2 uses and Lantern Luck (feat) 1 use (a new uses_max in features_add changes one).');
   });
 
   it('names a tie between classes of the same name and uses the hero’s own', async () => {
