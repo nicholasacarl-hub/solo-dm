@@ -710,11 +710,63 @@ describe("book text the DM names on the sheet keeps its book's ref (exports repl
       expect((await h.run('update_character', { features_add: [{ name: 'Lantern Bearer', description, source: 'species', uses_max: 2, recharge: 'long' }] })).isError).toBeUndefined();
       expect(h.sheet().features, description).toEqual([{ ...trait, description, uses: { max: 2, used: 0, recharge: 'long', ruled: true } }]);
     }
-    // Two books' species print the trait: which one is unclear, so the sheet's trait keeps its ref, never the feat's.
+    // Two books' species print the trait: the sheet's trait, resent in its words, keeps its ref, never the feat's.
     const twice: BuilderData = { ...builderData, species: [...builderData.species, { ...mothkin, id: 'lib:ashen:species:mothkin', traits: [{ name: 'Lantern Bearer', description: text, ref: { ...ref, entryId: 'lib:ashen:species:mothkin' } }] }] };
     const h = setup({ builderData: twice, character: { ...fighter(), features: [trait] } });
     expect((await h.run('update_character', { features_add: [{ name: 'Lantern Bearer', description: text, source: 'species' }] })).isError).toBeUndefined();
     expect(h.sheet().features).toEqual([trait]);
+    // A new entry in the feat's own words, both books' parts sharing one sentence of it: the feat's, so its words leave exports.
+    const feat = EXPECTED_MERGED.feats.find((f) => f.name === 'Lantern Bearer')!;
+    for (const source of ['species', 'class', 'subclass'] as const) {
+      const fresh = setup({ builderData: twice, character: fighter() });
+      expect((await fresh.run('update_character', { features_add: [{ name: 'Lantern Bearer', description: feat.description, source }] })).isError).toBeUndefined();
+      expect(fresh.sheet().features.find((f) => f.name === 'Lantern Bearer')?.ref, source).toMatchObject({ kind: 'feat', entryName: 'Lantern Bearer', textCopied: true });
+      expect(exported(fresh.sheet()), source).not.toContain('hold a lit lantern');
+    }
+    const leveled = setup({ builderData: twice, character: fighter() });
+    expect((await leveled.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Lantern Bearer', description: feat.description }] })).isError).toBeUndefined();
+    expect(leveled.sheet().features.find((f) => f.name === 'Lantern Bearer')?.ref).toMatchObject({ kind: 'feat', entryName: 'Lantern Bearer', textCopied: true });
+  });
+
+  it("a rewrite in the words of the feature it rewrites keeps that feature's own ref: a class's printed fighting style, a trait under an SRD name", async () => {
+    // An invented style the Wickwright prints inline, on the sheet with its part's ref, and a 2024 book's style feat of
+    // its name that shares one sentence with it.
+    const guard = 'While you hold your lantern aloft, the first attack against you each round has Disadvantage.';
+    const wickwright = EXPECTED_MERGED.classes.find((c) => c.name === 'Wickwright')!;
+    const style = {
+      id: 's-guard',
+      name: 'Lantern Guard',
+      source: 'class' as const,
+      sourceName: 'Fighting Style (Wickwright 1)',
+      description: `Invented style wording: a wickwright's lantern wards the hand that holds it. ${guard}`,
+      ref: importedRef({ entryId: wickwright.id, kind: 'class', entryName: 'Wickwright', part: 'Lantern Guard', textHash: 'h', textCopied: true }),
+    };
+    const hooked = EXPECTED_MERGED.feats.find((f) => f.name === 'Hooked Reach')!;
+    const styleFeat: FeatOption = { ...hooked, id: 'lib:ashen:feat:lantern-guard', name: 'Lantern Guard', description: `Invented feat wording: you raise your lantern like a shield. ${guard}`, ref: { ...hooked.ref!, entryId: 'lib:ashen:feat:lantern-guard', entryName: 'Lantern Guard' } };
+    const builderData: BuilderData = { ...EXPECTED_MERGED, feats: [...EXPECTED_MERGED.feats, styleFeat] };
+    for (const description of [style.description, `DM ruling: the ward also covers an ally within 5 feet. ${guard}`]) {
+      const h = setup({ builderData, character: { ...fighter(), features: [style] } });
+      expect((await h.run('update_character', { features_add: [{ name: 'Lantern Guard', description, source: 'class' }] })).isError).toBeUndefined();
+      expect(h.sheet().features, description).toEqual([{ ...style, description }]);
+    }
+    // In the feat's own words only, it is the feat's.
+    const h = setup({ builderData, character: { ...fighter(), features: [style] } });
+    expect((await h.run('update_character', { features_add: [{ name: 'Lantern Guard', description: 'Invented feat wording: you raise your lantern like a shield.', source: 'class' }] })).isError).toBeUndefined();
+    expect(h.sheet().features[0].ref).toMatchObject({ kind: 'feat', entryId: 'lib:ashen:feat:lantern-guard' });
+    // A Mothkin trait under the SRD's feat name Grappler, resent in its words that share a run with a book's Grappler.
+    const silk = 'Invented book wording: you learn the gloamwood hold, pinning a foe beneath a net of moth silk and lamplight.';
+    const grappler: FeatOption = { ...hooked, id: 'lib:gloam:feat:grappler', name: 'Grappler', category: 'general', description: `${silk} Invented: a second sentence of the feat.`, ref: { ...hooked.ref!, entryId: 'lib:gloam:feat:grappler', entryName: 'Grappler' } };
+    const trait = {
+      id: 't-grappler',
+      name: 'Grappler',
+      source: 'species' as const,
+      sourceName: 'Mothkin',
+      description: `Invented trait wording: moth-folk wrestle with silk. ${silk}`,
+      ref: importedRef({ entryId: mothkin.id, kind: 'species', entryName: 'Mothkin', part: 'Grappler', textHash: 'h', textCopied: true }),
+    };
+    const resent = setup({ builderData: { ...EXPECTED_MERGED, feats: [...EXPECTED_MERGED.feats, grappler] }, character: { ...fighter(), features: [trait] } });
+    expect((await resent.run('update_character', { features_add: [{ name: 'Grappler', description: trait.description, source: 'species' }] })).isError).toBeUndefined();
+    expect(resent.sheet().features).toEqual([trait]);
   });
 
   it("a species trait or class feature under a book feat's name the SRD doesn't print stays the DM's in words the SRD prints, on features_add and level_up alike", async () => {

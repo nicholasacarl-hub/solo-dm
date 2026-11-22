@@ -628,6 +628,19 @@ export function featOrTrait(source: FeatureSource): 'feat' | 'trait' | undefined
 }
 
 /**
+ * The feature addFeature rewrites for an entry of this name and source: the first of its name on the same side of the
+ * feat line, or on either for an entry on neither (featOrTrait). Undefined when it would add one.
+ */
+export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | 'source'>): Feature | undefined {
+  const key = nameKey(feature.name.trim());
+  const side = featOrTrait(feature.source);
+  return c.features.find((f) => {
+    const theirs = featOrTrait(f.source);
+    return nameKey(f.name) === key && (!side || !theirs || side === theirs);
+  });
+}
+
+/**
  * Add a feature, or update the existing feature with the same name, keeping its id, where it came from (its source
  * name: "Mothkin", "Ability Score Improvement (Fighter 4)", which the DM's "Granted in play" never replaces, so a name
  * a result gave, "Lantern Luck (Mothkin)", still finds it) and the uses it has spent (a features_restore or a rest gives
@@ -641,13 +654,8 @@ export function featOrTrait(source: FeatureSource): 'feat' | 'trait' | undefined
 export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: string }): EngineResult {
   const name = feature.name?.trim();
   if (!name) return unchanged(c, 'A feature needs a name.');
-  const side = featOrTrait(feature.source);
-  const index = c.features.findIndex((f) => {
-    const theirs = featOrTrait(f.source);
-    return nameKey(f.name) === nameKey(name) && (!side || !theirs || side === theirs);
-  });
-  if (index >= 0) {
-    const existing = c.features[index];
+  const existing = featureToRewrite(c, { name, source: feature.source });
+  if (existing) {
     const updated: Feature = { ...existing, ...feature, id: existing.id, name, ...(existing.sourceName ? { sourceName: existing.sourceName } : {}) };
     const old = existing.uses;
     if (feature.uses) {

@@ -27,6 +27,7 @@ import {
   characterStatusLine,
   conditionKey,
   featOrTrait,
+  featureToRewrite,
   saveSourcesChangeText,
   gainXp,
   levelUp,
@@ -416,9 +417,11 @@ function bookPartRefs(name: string, description: string, data: BuilderData | nul
 
 /**
  * The ref of the book text a DM's feature entry repeats (features_add; a level_up extra, a class feature), or null. A
- * species trait or class feature is first the book part of its name whose words it repeats: a trait's own text that
- * shares a sentence with a feat of its name stays the trait's. Else it is the book feat of its name whose own words it
- * repeats (featRef). Any other entry is the one book feat of its name, else the part or feat whose words it repeats.
+ * species trait or class feature is first the one book part of its name whose words it repeats: a trait's own text
+ * that shares a sentence with a feat of its name stays the trait's. Else (no such part, or two books' parts alike) it
+ * is the book feat of its name whose own words it repeats (featRef). Any other entry is the one book feat of its name,
+ * else the one part or feat whose words it repeats. (A rewrite in the words of the sheet's feature keeps that one's
+ * ref: featureSteps.)
  */
 function featureRef(f: { name: string; description: string; source: Feature['source'] }, data: BuilderData | null, index: RulesIndex | null): ImportedRef | null {
   const trait = featOrTrait(f.source) === 'trait';
@@ -427,7 +430,7 @@ function featureRef(f: { name: string; description: string; source: Feature['sou
     if (feat) return feat;
   }
   const parts = bookPartRefs(f.name, f.description, data, !trait);
-  if (parts.length) return parts.length === 1 ? parts[0] : null;
+  if (parts.length === 1) return parts[0];
   return trait ? featRef(f, data, index) : null;
 }
 
@@ -562,18 +565,22 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
   for (const f of input.features_use ?? []) steps.push((c) => useFeature(c, f.name, f.amount));
   for (const f of input.features_restore ?? []) steps.push((c) => restoreFeature(c, f.name, f.amount));
   (input.features_add ?? []).forEach((f, i) => {
-    // The DM's words about a book's feat: the ref lets exports leave them out and restore refill the book's text.
-    const ref = links.feats[i];
-    steps.push((c) =>
-      addFeature(c, {
+    steps.push((c) => {
+      // The DM's words about a book's feat or part: the ref lets exports leave them out and restore refill the book's
+      // text. A rewrite in the words of the feature it rewrites keeps that feature's own ref (a trait or a printed
+      // fighting style resent as the sheet holds it, or a ruling quoting it): restore refills its text, not another's.
+      const rewritten = featureToRewrite(c, f);
+      const own = rewritten?.ref?.textCopied && sharesWords(f.description, rewritten.description) ? rewritten.ref : null;
+      const ref = own ?? links.feats[i];
+      return addFeature(c, {
         name: f.name,
         description: f.description,
         source: f.source,
         sourceName: 'Granted in play',
         ...(f.uses_max ? { uses: { max: f.uses_max, used: 0, recharge: f.recharge ?? 'long' } } : {}),
         ...(ref ? { ref } : {}),
-      }),
-    );
+      });
+    });
   });
   return steps;
 }

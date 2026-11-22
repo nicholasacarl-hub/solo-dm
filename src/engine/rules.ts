@@ -718,12 +718,13 @@ const STYLE_SUFFIXES = ['', '-fighting-style', '-style', '-feat', '-fighting-sty
 /**
  * Whether a feature is the fighting style `style`, however the sheet names it: "Defense", "Fighting Style (Defense)",
  * "Fighting Style: Defense", "Defense Fighting Style", "Additional Fighting Style (Defense)", "Fighting Style Feat:
- * Defense", "Defense (Fighter 1)"; "Great Weapon Fighting Style" is Great Weapon Fighting. The Defense AC and the
- * level-up panel's taken styles read it alike.
+ * Defense", "Defense (Fighter 1)"; "Great Weapon Fighting Style" is Great Weapon Fighting. A style a book names so
+ * itself ("Fighting Style: Lantern Guard") is read the same way. The Defense AC and the level-up panel's taken styles
+ * read it alike.
  */
 export function isFightingStyle(f: Pick<Feature, 'name' | 'source'>, style: string): boolean {
   if (!STYLE_SOURCES.has(f.source)) return false;
-  const key = nameKey(style);
+  const key = nameKey(style).replace(STYLE_PREFIX, '');
   return [f.name, f.name.replace(/\s*\([^()]*\)\s*$/, '')].some((name) => {
     const rest = nameKey(name).replace(STYLE_PREFIX, '');
     return rest.startsWith(key) && STYLE_SUFFIXES.includes(rest.slice(key.length));

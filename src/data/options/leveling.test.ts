@@ -312,6 +312,12 @@ describe('the Feat choice panel', () => {
     const counted = sources.filter((source) => ac([{ id: 'd', name: 'Defense', source, description: '' }]) > ac([]));
     expect(counted).toEqual(['class', 'subclass', 'feat', 'homebrew', 'other']);
     for (const source of sources) expect(taken([{ name: 'Defense', source }]), source).toEqual(counted.includes(source) ? ['Defense'] : []);
+    // A style feat a book names "Fighting Style: …" itself is taken under that name too (invented).
+    const hooked = EXPECTED_MERGED.feats.find((f) => f.name === 'Hooked Reach')!;
+    for (const name of ['Fighting Style: Lantern Guard', 'Additional Fighting Style: Lantern Guard', 'Fighting Style Feat: Lantern Guard']) {
+      const feat: FeatOption = { ...hooked, id: `lib:gloam:feat:${nameKey(name)}`, name };
+      expect(taken([{ name, source: 'feat' }], [...EXPECTED_MERGED.feats, feat]), name).toEqual([name]);
+    }
   });
 
   it("offers a 2024 book's feat in place of the SRD feat of its name (the picked one stays); an older book's sits beside it", () => {

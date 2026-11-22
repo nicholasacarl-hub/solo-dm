@@ -742,7 +742,7 @@ an imported class's or subclass's features with their text (catching up subclass
 prints below the class's subclass level) and offers a feat at Ability Score Improvement, Epic Boon and
 Fighting Style levels (the Champion's Additional Fighting Style too, where a style the sheet has, a feat or one the
 class prints, can't be taken again: by its name however it's written, "Fighting Style (Defense)" as much as
-"Defense", from a class, subclass or feat or the DM's homebrew or other entry, never a species trait or a boon's,
+"Defense" (and a book's own "Fighting Style: …" name), from a class, subclass or feat or the DM's homebrew or other entry, never a species trait or a boon's,
 item's or background's, one rule with the engine's Defense AC, `isFightingStyle`), with "Decide with my DM" preselected. A feat taken there is the feature the level-up
 added for it, completed by id: a species trait or class feature of its name, a transformation's power (gone when the
 transformation ends), or an earlier taking of a Repeatable feat, stays beside it as it was, and another feat the sheet
@@ -753,8 +753,10 @@ uses it changes is the DM's ruling, `FeatureUses.ruled`, which level-ups leave a
 feature growing), but never merges a feat with a species trait or class feature (`featOrTrait`; a boon's, background's or homebrew entry updates
 either, so the DM's entry for an Epic Boon as a boon rewrites it), and a species trait or class feature the DM adds
 (a level_up extra is one) under a book feat's name takes that feat's ref only when its description repeats the feat's
-own words (a run the SRD doesn't print; without the rules index, any shared run) and no book part of its name: a
-trait's own text that shares a sentence with the feat stays the trait's. A use or restore by name goes to the same-named feature whose uses fit the amount; a source or source
+own words (a run the SRD doesn't print; without the rules index, any shared run) and not those of one book part of its
+name (two books printing the part leave it to the feat): a trait's own text that shares a sentence with the feat stays
+the trait's. A rewrite in the words of the feature it rewrites (a trait or a class's printed fighting style resent as
+the sheet holds it, or a ruling quoting it) keeps that feature's own ref. A use or restore by name goes to the same-named feature whose uses fit the amount; a source or source
 name in parentheses after the name picks one, as the sheet shows it ("Lantern Luck (Mothkin)", "Lantern Luck (feat)"),
 and a result that changed one of several with uses (by the bare name, or by one in parentheses more than one fits)
 names it so and says how to name the others (`featureLabel`; the level-up summary tells two takings apart the same
