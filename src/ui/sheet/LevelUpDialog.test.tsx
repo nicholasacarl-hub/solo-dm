@@ -263,6 +263,18 @@ describe('LevelUpDialog with imported options', () => {
       expect(notices()[0]).not.toMatch(/Ability Score Improvement — raise/);
     });
 
+    it("takes Alert beside a transformation's power of its name, which isn't the feat: the feat's bonus all the same", async () => {
+      const user = userEvent.setup();
+      const power = { id: 't-alert', name: 'Alert', source: 'transformation' as const, sourceName: 'Owl-Touched', description: 'Invented: a power of the change.' };
+      const start = builderFighter();
+      resetFakeGame({ campaign: sampleCampaign(), character: { ...start, features: [...start.features, power] } });
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      await user.click(screen.getByRole('radio', { name: 'Alert' }));
+      await user.click(screen.getByRole('button', { name: 'Level up' }));
+      expect(sheet().initiativeBonusExtra).toBe(2);
+      expect(sheet().features.filter((f) => f.name === 'Alert').map((f) => f.source)).toEqual(['transformation', 'feat']);
+    });
+
     it("takes Magic Initiate, and the player and the DM are reminded of the choices the sheet doesn't make", async () => {
       const user = userEvent.setup();
       resetFakeGame({ campaign: sampleCampaign(), character: builderFighter() });

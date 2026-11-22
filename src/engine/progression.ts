@@ -18,6 +18,7 @@ import {
   type RollResult,
 } from '@/types';
 import { newId, nameKey, slugify } from '@/lib/id';
+import { featOrTrait } from './character';
 import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, rulesClassFor, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
 import { abilityModifier, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
@@ -105,6 +106,15 @@ function findClassIndex(classes: readonly ClassLevel[], name: string, classId?: 
 function hasFeatureNamed(features: readonly { name: string }[], name: string): boolean {
   const key = nameKey(name);
   return features.some((f) => nameKey(f.name) === key);
+}
+
+/**
+ * The Alert feat, whose Initiative bonus the builder and levelUp keep: a feature named Alert on the feat's side of the
+ * feat line or on neither (featOrTrait), the one the level-up panel counts as the feat. A species trait, class or
+ * subclass feature or transformation power of the name isn't it, and never brought the bonus.
+ */
+function isAlertFeat(f: Pick<Feature, 'name' | 'source'>): boolean {
+  return nameKey(f.name) === 'alert' && featOrTrait(f.source) !== 'trait' && f.source !== 'transformation';
 }
 
 interface HpBonus {
@@ -453,9 +463,9 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
   const oldPb = proficiencyBonus(Math.max(1, oldTotal));
   const newPb = proficiencyBonus(newLevel);
   // Alert adds the Proficiency Bonus to Initiative (SRD 5.2.1 Alert: "Initiative Proficiency. When you roll Initiative,
-  // you can add your Proficiency Bonus to the roll"): it grows with the bonus, and a hero who gains it now (the level-up
-  // panel's feat, a level_up extra) adds the whole bonus.
-  const alertDelta = hasFeatureNamed(c.features, 'Alert') ? (oldTotal > 0 ? newPb - oldPb : 0) : hasFeatureNamed(added, 'Alert') ? newPb : 0;
+  // you can add your Proficiency Bonus to the roll"): it grows with the bonus, and a hero who gains the feat now (the
+  // level-up panel's pick) adds the whole bonus, a trait or power of its name beside it or not (isAlertFeat).
+  const alertDelta = c.features.some(isAlertFeat) ? (oldTotal > 0 ? newPb - oldPb : 0) : added.some(isAlertFeat) ? newPb : 0;
 
   let next: Character = {
     ...c,

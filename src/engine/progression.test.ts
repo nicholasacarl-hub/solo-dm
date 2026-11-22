@@ -198,9 +198,33 @@ describe('levelUp', () => {
       features: [...mira().features, { id: 'al', name: 'Alert', source: 'feat', description: '' }],
     });
     expect(levelUp(alert, { className: 'Wizard', hpMethod: 'average' }).character.initiativeBonusExtra).toBe(3);
-    // Given again (a level_up extra of its name): still only the step.
+    // Given again as a feat: still only the step (SRD 5.2.1 "The Bonus Doesn't Stack").
     const again = levelUp(alert, { className: 'Wizard', hpMethod: 'average', newFeatures: [{ name: 'Alert', source: 'feat', description: '' }] });
     expect(again.character.initiativeBonusExtra).toBe(3);
+  });
+
+  it("counts the Alert feat only: a species trait, class feature or transformation power of its name neither brings the bonus nor stops the feat's", () => {
+    const namesake = (source: Feature['source'], classes = [asClass('Wizard', 3)]) =>
+      mira({ classes, features: [...mira().features, { id: 'ns', name: 'Alert', source, description: 'Invented: not the feat.' }] });
+    const taking = [{ name: 'Alert', source: 'feat' as const, description: '' }];
+    for (const source of ['species', 'class', 'subclass', 'transformation'] as const) {
+      // Wizard 3 → 4 taking the feat beside it: the whole +2, and its reminder.
+      const r = levelUp(namesake(source), { className: 'Wizard', hpMethod: 'average', newFeatures: taking });
+      expect(r.character.initiativeBonusExtra, source).toBe(2);
+      expect(r.reminders, source).toContain('Alert: initiative bonus from your Proficiency Bonus is now +2.');
+      // Alone, across the bonus's rise at Wizard 5: nothing (it never brought the bonus).
+      const alone = levelUp(namesake(source, [asClass('Wizard', 4)]), { className: 'Wizard', hpMethod: 'average' });
+      expect(alone.character.initiativeBonusExtra ?? 0, source).toBe(0);
+      expect(alone.reminders.some((m) => m.startsWith('Alert:')), source).toBe(false);
+      // Gained as one (a level_up extra is a class feature): nothing.
+      expect(levelUp(mira(), { className: 'Wizard', hpMethod: 'average', newFeatures: [{ name: 'Alert', source, description: '' }] }).character.initiativeBonusExtra ?? 0, source).toBe(0);
+    }
+    // On neither side of the feat line (the DM's boon, background, item, homebrew or other entry): the feat, as the
+    // level-up panel counts it taken.
+    for (const source of ['boon', 'background', 'item', 'homebrew', 'other'] as const) {
+      const held = mira({ classes: [asClass('Wizard', 4)], initiativeBonusExtra: 2, features: [{ id: 'a', name: 'Alert', source, description: '' }] });
+      expect(levelUp(held, { className: 'Wizard', hpMethod: 'average' }).character.initiativeBonusExtra, source).toBe(3);
+    }
   });
 
   it('adds the whole Proficiency Bonus to Initiative for Alert taken at this level (SRD 5.2.1 Alert: Initiative Proficiency)', () => {
