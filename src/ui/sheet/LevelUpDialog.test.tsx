@@ -305,6 +305,22 @@ describe('LevelUpDialog with imported options', () => {
       description: coil,
       ref: { entryId: keeper.id, entryName: 'Hearth Keeper', part: 'Wick Lash' },
     });
+
+    // A Fighter 2 / Paladin 5 whose (invented) oath has a feature named Fighting Style too still gains the subclass's own.
+    cleanup();
+    const paladin: ClassLevel = { classId: 'srd:class:paladin', name: 'Paladin', level: 5, hitDie: 10, casterType: 'half', subclass: 'Oath of the Wick' };
+    const oath = { id: 'f-oath', name: 'Fighting Style', source: 'subclass' as const, sourceName: 'Oath of the Wick 3', description: 'Invented: the oath’s own style.' };
+    const two = fighter(2);
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...two, classes: [...two.classes, paladin], features: [oath] } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(subclasses().getByRole('radio', { name: /Lamp Sentinel/ }));
+    await user.click(screen.getByRole('radio', { name: /^Lantern Guard/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().features.filter((f) => f.source === 'subclass').map((f) => [f.name, f.sourceName])).toEqual([
+      ['Fighting Style', 'Oath of the Wick 3'],
+      ['Fighting Style', 'Lamp Sentinel 3'],
+      ['Lantern Guard', 'Fighting Style (Lamp Sentinel 3)'],
+    ]);
   });
 
   it('a Repeatable feat taken again is a second feature with its ref; the first stays as it was, its uses too', async () => {

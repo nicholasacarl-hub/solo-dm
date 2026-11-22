@@ -738,8 +738,8 @@ nothing when the campaign was replaced (a GitHub pull, a save import) while they
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
 adaptations, shown in review, on builder cards, in the DM's stats line and on the sheet. Level-up adds
-an imported class's or subclass's features with their text (a multiclass hero's other subclass's feature of the same
-name isn't one it already has; catching up subclass features a book
+an imported class's or subclass's features with their text (a feature of the same name from the subclass of the
+hero's other class isn't one it already has, while its own under an earlier name is; catching up subclass features a book
 prints below the class's subclass level) and offers a feat at Ability Score Improvement, Epic Boon and
 Fighting Style levels (the Champion's Additional Fighting Style too, where a style the sheet has, a feat or one the
 class prints, can't be taken again: by its name however it's written, "Fighting Style (Defense)" as much as

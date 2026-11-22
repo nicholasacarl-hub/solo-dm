@@ -358,16 +358,18 @@ describe('the Feat choice panel', () => {
     });
 
     it("arrives though a multiclass hero's other subclass has a feature of its name; this subclass's own, or the DM's, is skipped (SRD 5.2.1 Level Advancement)", () => {
+      // The hero's Paladin took the invented Oath of the Wick, whose own feature is named Fighting Style too.
       const other = { name: 'Fighting Style', source: 'subclass' as const, sourceName: 'Oath of the Wick 3' };
+      const otherSubclasses = ['Oath of the Wick'];
       const names = (have: { name: string; source: 'subclass'; sourceName: string }[]) =>
-        gainedFeatures(FIGHTER, 3, sentinel, ctxOf(fighter3), { have, subclassChosenNow: true }).filter((f) => f.source === 'subclass').map((f) => f.name);
+        gainedFeatures(FIGHTER, 3, sentinel, ctxOf(fighter3), { have, subclassChosenNow: true, otherSubclasses }).filter((f) => f.source === 'subclass').map((f) => f.name);
       expect(names([other])).toEqual(['Fighting Style']);
-      expect(featChoiceTrigger(gainedFeatures(FIGHTER, 3, sentinel, ctxOf(fighter3), { have: [other], subclassChosenNow: true }))?.source).toBe('subclass');
-      expect(names([{ ...other, sourceName: 'Lamp Sentinel 3' }])).toEqual([]);
-      expect(names([{ ...other, sourceName: 'Granted in play' }])).toEqual([]);
+      expect(featChoiceTrigger(gainedFeatures(FIGHTER, 3, sentinel, ctxOf(fighter3), { have: [other], subclassChosenNow: true, otherSubclasses }))?.source).toBe('subclass');
+      // This subclass's own, under its name or an earlier one (renamed in review since), and the DM's: already there.
+      for (const sourceName of ['Lamp Sentinel 3', 'Lamp Warden 3', 'Granted in play']) expect(names([{ ...other, sourceName }]), sourceName).toEqual([]);
       // The "caught up" note reads it alike (a subclass chosen late, at Fighter 4).
-      expect(caughtUpFeatures(sentinel, 4, [other]).map((d) => d.name)).toEqual(['Fighting Style']);
-      expect(caughtUpFeatures(sentinel, 4, [{ ...other, sourceName: 'Lamp Sentinel 3' }])).toEqual([]);
+      expect(caughtUpFeatures(sentinel, 4, [other], otherSubclasses).map((d) => d.name)).toEqual(['Fighting Style']);
+      expect(caughtUpFeatures(sentinel, 4, [{ ...other, sourceName: 'Lamp Warden 3' }], otherSubclasses)).toEqual([]);
     });
 
     it("is none for the class's Fighting Style, a subclass's that prints none, or another kind of choice", () => {

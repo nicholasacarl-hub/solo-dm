@@ -40,18 +40,25 @@ export interface GainedFeaturesOptions {
   have?: readonly Pick<Feature, 'name' | 'source' | 'sourceName'>[];
   /** The subclass is chosen at this level-up: every subclass feature up to classLevel the sheet lacks is added (catch-up). */
   subclassChosenNow?: boolean;
+  /** The subclasses of the hero's other classes: a feature of one of theirs isn't this subclass's (subclassFeatureOnSheet). */
+  otherSubclasses?: readonly string[];
 }
 
 /**
- * A feature of this subclass the sheet already has, so catch-up skips it: a subclass feature of its name from this
- * subclass ("Ember Warden 3"), or from no other one (the DM's "Granted in play"). A multiclass hero's other subclass's
- * feature of the name ("Fighting Style" from "Oath of the Wick 3") isn't this one's.
+ * A feature of this subclass the sheet already has, so catch-up skips it: a subclass feature of its name, unless its
+ * source name is a multiclass hero's other class's subclass (`others`: "Fighting Style" from "Oath of the Wick 3").
+ * This subclass's, under its name now or an earlier one (renamed in review), and the DM's "Granted in play" count.
  */
-export function subclassFeatureOnSheet(have: readonly Pick<Feature, 'name' | 'source' | 'sourceName'>[], sub: Pick<SubclassOption, 'name'>, def: Pick<ClassFeatureDef, 'name'>): boolean {
+export function subclassFeatureOnSheet(
+  have: readonly Pick<Feature, 'name' | 'source' | 'sourceName'>[],
+  sub: Pick<SubclassOption, 'name'>,
+  def: Pick<ClassFeatureDef, 'name'>,
+  others: readonly string[] = [],
+): boolean {
   return have.some((f) => {
     if (f.source !== 'subclass' || nameKey(baseFeatureName(f.name)) !== nameKey(def.name)) return false;
     const owner = /^(.*\S)\s+\d+$/.exec(f.sourceName?.trim() ?? '')?.[1];
-    return !owner || nameKey(owner) === nameKey(sub.name);
+    return !owner || nameKey(owner) === nameKey(sub.name) || !others.some((o) => nameKey(o) === nameKey(owner));
   });
 }
 
@@ -88,7 +95,7 @@ export function gainedFeatures(
   const subDefs = !sub
     ? []
     : opts.subclassChosenNow
-      ? sub.features.filter((d) => d.level <= classLevel && !subclassFeatureOnSheet(opts.have ?? [], sub, d))
+      ? sub.features.filter((d) => d.level <= classLevel && !subclassFeatureOnSheet(opts.have ?? [], sub, d, opts.otherSubclasses))
       : subclassFeaturesAtLevel(sub, classLevel);
   return [
     ...featuresAtLevel(cls, classLevel)

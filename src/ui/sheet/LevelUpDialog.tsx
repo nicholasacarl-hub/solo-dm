@@ -118,7 +118,9 @@ function planLevel(
   const needsSubclass = Boolean(option && classLevel >= option.subclassLevel && !existing?.subclass && choices.length);
   const sub = needsSubclass ? choices.find((s) => s.id === subclassId) : existing ? subclassOptionFor(existing, option, classes) : undefined;
   const ctx = { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 };
-  const features = option ? gainedFeatures(option, classLevel, sub, ctx, { have: c.features, subclassChosenNow: needsSubclass }) : [];
+  // A multiclass hero's other classes' subclasses: a feature of one of theirs isn't this subclass's.
+  const otherSubclasses = c.classes.filter((cl) => cl !== existing).flatMap((cl) => (cl.subclass ? [cl.subclass] : []));
+  const features = option ? gainedFeatures(option, classLevel, sub, ctx, { have: c.features, subclassChosenNow: needsSubclass, otherSubclasses }) : [];
   return {
     existing,
     option,
@@ -128,7 +130,7 @@ function planLevel(
     needsSubclass,
     sub,
     features,
-    caughtUp: needsSubclass ? caughtUpFeatures(sub, classLevel, c.features) : [],
+    caughtUp: needsSubclass ? caughtUpFeatures(sub, classLevel, c.features, otherSubclasses) : [],
     trigger: featChoiceTrigger(features),
     spells: subclassSpellsToAdd(sub, classLevel, c.spellcasting?.spells ?? [], findSpell),
   };

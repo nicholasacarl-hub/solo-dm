@@ -59,8 +59,13 @@ export function classRefOf(cls: ClassOption | undefined): ImportedRef | undefine
  * "Level Advancement": you gain every subclass feature of your class level or lower), for the
  * "caught up from level N" note.
  */
-export function caughtUpFeatures(sub: SubclassOption | undefined, classLevel: number, have: readonly Pick<Feature, 'name' | 'source' | 'sourceName'>[] = []): ClassFeatureDef[] {
-  return sub ? sub.features.filter((d) => d.level < classLevel && !subclassFeatureOnSheet(have, sub, d)) : [];
+export function caughtUpFeatures(
+  sub: SubclassOption | undefined,
+  classLevel: number,
+  have: readonly Pick<Feature, 'name' | 'source' | 'sourceName'>[] = [],
+  otherSubclasses: readonly string[] = [],
+): ClassFeatureDef[] {
+  return sub ? sub.features.filter((d) => d.level < classLevel && !subclassFeatureOnSheet(have, sub, d, otherSubclasses)) : [];
 }
 
 // ---------------------------------------------------------------------------
