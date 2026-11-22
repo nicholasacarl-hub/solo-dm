@@ -256,6 +256,33 @@ describe('LevelUpDialog with imported options', () => {
     });
   });
 
+  it("offers the styles a book subclass's own Fighting Style prints, and adds the one chosen as the subclass's with its ref", async () => {
+    const user = userEvent.setup();
+    // An invented book subclass of the SRD Fighter whose level-3 Fighting Style lists two styles of its own.
+    const guard = 'While you hold your lantern aloft, the first attack against you each round has Disadvantage.';
+    const lash = 'Your wick cracks like a whip, and a creature it hits drops one object it holds.';
+    const style = {
+      level: 3,
+      name: 'Fighting Style',
+      description: ['Choose one of the options below.', `***Lantern Guard.*** ${guard}`, `***Wick Lash.*** ${lash}`].join('\n\n'),
+      ref: { ...EMBER.features[0].ref!, entryId: 'lib:gloam:subclass:lamp-sentinel', entryName: 'Lamp Sentinel', part: 'Fighting Style' },
+    };
+    const sentinel = { ...EMBER, id: 'lib:gloam:subclass:lamp-sentinel', name: 'Lamp Sentinel', features: [style] };
+    mocks.data = { ...EXPECTED_MERGED, classes: EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, subclasses: [...c.subclasses, sentinel] } : c)) };
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Subclass' })).getByRole('radio', { name: /Lamp Sentinel/ }));
+    expect(screen.getByRole('radio', { name: /^Lantern Guard/ })).toBeEnabled();
+    await user.click(screen.getByRole('radio', { name: /^Wick Lash/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    const own = sheet().features.filter((f) => f.source === 'subclass');
+    expect(own.map((f) => [f.name, f.sourceName])).toEqual([
+      ['Fighting Style', 'Lamp Sentinel 3'],
+      ['Wick Lash', 'Fighting Style (Lamp Sentinel 3)'],
+    ]);
+    expect(own[1]).toMatchObject({ description: lash, ref: { kind: 'subclass', entryId: sentinel.id, part: 'Wick Lash', textCopied: true } });
+    expect(notices()[0]).toContain('Wick Lash');
+  });
+
   it('a Repeatable feat taken again is a second feature with its ref; the first stays as it was, its uses too', async () => {
     const user = userEvent.setup();
     const lantern = EXPECTED_MERGED.feats.find((f) => f.name === 'Lantern Bearer')!;

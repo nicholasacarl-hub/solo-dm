@@ -743,7 +743,10 @@ prints below the class's subclass level) and offers a feat at Ability Score Impr
 Fighting Style levels (the Champion's Additional Fighting Style too, where a style the sheet has, a feat or one the
 class prints, can't be taken again: by its name however it's written, "Fighting Style (Defense)" as much as
 "Defense" (and a book's own "Fighting Style: …" or "… Fighting Style" name, either way round), from a class, subclass or feat or the DM's homebrew or other entry, never a species trait or a boon's,
-item's or background's, one rule with the engine's Defense AC, `isFightingStyle`), with "Decide with my DM" preselected. A feat taken there is the feature the level-up
+item's or background's, one rule with the engine's Defense AC, `isFightingStyle`; a book subclass's own Fighting Style
+that prints its styles, an older book's, offers those in place of the class's, beside the Fighting Style feats, and adds
+the one chosen as the subclass's feature with that style's ref, `subclassFightingStyle`, its book noting so as a class's
+does, fighting-style-inline), with "Decide with my DM" preselected. A feat taken there is the feature the level-up
 added for it, completed by id: a species trait or class feature of its name, a transformation's power (gone when the
 transformation ends), or an earlier taking of a Repeatable feat, stays beside it as it was, and another feat the sheet
 holds (a feat, or the DM's boon's, background's, item's, homebrew or other entry of its name; a style as above) is

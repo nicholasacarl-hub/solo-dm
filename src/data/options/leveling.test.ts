@@ -10,7 +10,7 @@ import { characterLevel, computeArmorClass, levelUp } from '@/engine';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
-import type { Character, ClassLevel, ClassOption, CompendiumEntry, FeatOption, Feature, OptionSource, SubclassOption } from '@/types';
+import type { Character, ClassFeatureDef, ClassLevel, ClassOption, CompendiumEntry, FeatOption, Feature, OptionSource, SubclassOption } from '@/types';
 import { featureUseChanges, gainedFeatures, keptRulings } from './leveling';
 import {
   applyFeatChoice,
@@ -22,6 +22,7 @@ import {
   featChoiceTrigger,
   featIncrease,
   subclassCastingOf,
+  subclassFightingStyle,
   subclassRefOf,
   subclassSpellsToAdd,
   type FeatChoice,
@@ -242,7 +243,7 @@ describe('the Feat choice panel', () => {
     const c = hero({ classId: FIGHTER.id, name: 'Fighter', level: 6, hitDie: 10, subclass: 'Champion', subclassId: champion.id }, { features: [defense] });
     const gained = gainedFeatures(FIGHTER, 7, champion, ctxOf(c), { have: c.features });
     const trigger = featChoiceTrigger(gained) as FeatChoiceTrigger;
-    expect(trigger).toEqual({ kind: 'fighting-style', featureName: 'Additional Fighting Style' });
+    expect(trigger).toEqual({ kind: 'fighting-style', featureName: 'Additional Fighting Style', source: 'subclass' });
     const picks = featChoices(trigger.kind, EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel: 7, have: c.features });
     expect(picks.find((p) => p.name === 'Defense')?.taken).toBe(true);
     const archery = picks.find((p) => p.name === 'Archery')!;
@@ -323,6 +324,63 @@ describe('the Feat choice panel', () => {
     const suffixed: FeatOption = { ...hooked, id: 'lib:gloam:feat:defense-fighting-style', name: 'Defense Fighting Style' };
     expect(taken([{ name: 'Defense', source: 'feat' }], [...EXPECTED_MERGED.feats, suffixed])).toEqual(['Defense', 'Defense Fighting Style']);
     expect(taken([{ name: 'Defense Fighting Style', source: 'feat' }], [...EXPECTED_MERGED.feats, suffixed])).toEqual(['Defense', 'Defense Fighting Style']);
+  });
+
+  describe("a subclass's own Fighting Style that prints its styles (an older book's subclass)", () => {
+    // An invented book subclass of the SRD Fighter whose level-3 Fighting Style lists two styles of its own.
+    const guard = 'While you hold your lantern aloft, the first attack against you each round has Disadvantage.';
+    const lash = 'Your wick cracks like a whip, and a creature it hits drops one object it holds.';
+    const style: ClassFeatureDef = {
+      level: 3,
+      name: 'Fighting Style',
+      description: ['Choose one of the options below.', `***Lantern Guard.*** ${guard}`, `***Wick Lash.*** ${lash}`].join('\n\n'),
+      ref: { ...EMBER.features[0].ref!, entryId: 'lib:gloam:subclass:lamp-sentinel', entryName: 'Lamp Sentinel', part: 'Fighting Style' },
+    };
+    const sentinel: SubclassOption = { ...EMBER, id: 'lib:gloam:subclass:lamp-sentinel', name: 'Lamp Sentinel', features: [style] };
+    const fighter3 = hero({ classId: FIGHTER.id, name: 'Fighter', level: 2, hitDie: 10 });
+    const gained = gainedFeatures(FIGHTER, 3, sentinel, ctxOf(fighter3), { have: [], subclassChosenNow: true });
+
+    it('offers its styles, each with the subclass feature narrowed to it, beside the Fighting Style feats and in place of the class’s', () => {
+      const trigger = featChoiceTrigger(gained);
+      expect(trigger).toEqual({ kind: 'fighting-style', featureName: 'Fighting Style', source: 'subclass' });
+      const subclassStyle = subclassFightingStyle(trigger, sentinel);
+      expect(subclassStyle).toEqual({ sub: sentinel, def: style });
+      // A Paladin's class prints Blessed Warrior: the subclass's own list stands in for it.
+      const picks = featChoices('fighting-style', EXPECTED_MERGED.feats, { cls: classOf('srd:class:paladin'), characterLevel: 3, have: [], subclassStyle });
+      expect(picks.filter((p) => !p.feat).map((p) => [p.name, p.printedBy, p.sourceLabel])).toEqual([
+        ['Lantern Guard', 'subclass', GLOAMWOOD_TITLE],
+        ['Wick Lash', 'subclass', GLOAMWOOD_TITLE],
+      ]);
+      expect(picks.find((p) => p.name === 'Lantern Guard')).toMatchObject({ description: guard, ref: { kind: 'subclass', entryId: sentinel.id, part: 'Lantern Guard', textCopied: true } });
+      expect(picks.filter((p) => p.feat).map((p) => p.name)).toContain('Defense');
+      // Without it, the class's (as before).
+      expect(featChoices('fighting-style', EXPECTED_MERGED.feats, { cls: classOf('srd:class:paladin'), characterLevel: 3, have: [] }).filter((p) => !p.feat).map((p) => [p.name, p.printedBy])).toEqual([['Blessed Warrior', 'class']]);
+    });
+
+    it("is none for the class's Fighting Style, a subclass's that prints none, or another kind of choice", () => {
+      const champion = subOf(FIGHTER, 'Champion');
+      expect(subclassFightingStyle({ kind: 'fighting-style', featureName: 'Additional Fighting Style', source: 'subclass' }, champion)).toBeUndefined();
+      expect(subclassFightingStyle({ kind: 'fighting-style', featureName: 'Fighting Style', source: 'class' }, sentinel)).toBeUndefined();
+      expect(subclassFightingStyle({ kind: 'asi', featureName: 'Fighting Style', source: 'subclass' }, sentinel)).toBeUndefined();
+      expect(subclassFightingStyle({ kind: 'fighting-style', featureName: 'Fighting Style', source: 'subclass' }, undefined)).toBeUndefined();
+    });
+
+    it('adds the chosen style beside the Fighting Style as the subclass’s feature, named for it, and marks it taken later', () => {
+      const leveled = levelUp(fighter3, { className: 'Fighter', classId: FIGHTER.id, hpMethod: 'average', subclass: sentinel.name, subclassId: sentinel.id, newFeatures: gained }).character;
+      const addedIds = new Set(leveled.features.map((f) => f.id));
+      const trigger = featChoiceTrigger(gained) as FeatChoiceTrigger;
+      const subclassStyle = subclassFightingStyle(trigger, sentinel);
+      const pick = featChoices('fighting-style', EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel: 3, have: [], subclassStyle }).find((p) => p.name === 'Wick Lash')!;
+      const done = applyFeatChoice(leveled, trigger, { kind: 'feat', pick }, { className: 'Fighter', classLevel: 3, addedIds, subclassName: sentinel.name }).character;
+      const own = done.features.filter((f) => f.source === 'subclass');
+      expect(own.map((f) => [f.name, f.sourceName])).toEqual([
+        ['Fighting Style', 'Lamp Sentinel 3'],
+        ['Wick Lash', 'Fighting Style (Lamp Sentinel 3)'],
+      ]);
+      expect(own[1]).toMatchObject({ description: lash, ref: { kind: 'subclass', part: 'Wick Lash', textCopied: true } });
+      // As a class's printed style would be: on the sheet, it can't be taken again.
+      expect(featChoices('fighting-style', EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel: 7, have: done.features, subclassStyle }).find((p) => p.name === 'Wick Lash')?.taken).toBe(true);
+    });
   });
 
   it("offers a 2024 book's feat in place of the SRD feat of its name (the picked one stays); an older book's sits beside it", () => {

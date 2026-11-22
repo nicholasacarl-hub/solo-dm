@@ -22,6 +22,7 @@ import {
   type Feature,
   type ImportedRef,
   type KnownSpell,
+  type OptionSource,
   type SubclassOption,
 } from '@/types';
 import { abilityIncreaseOf, minLevelOf } from '../structured/normalize/feat';
@@ -153,6 +154,8 @@ export interface FeatChoiceTrigger {
   kind: FeatChoiceKind;
   /** The gained feature that offers the choice ("Ability Score Improvement"). */
   featureName: string;
+  /** Whose feature it is: a subclass's own Fighting Style may print its styles (subclassFightingStyle). */
+  source?: Feature['source'];
 }
 
 const TRIGGERS: Readonly<Record<string, FeatChoiceKind>> = {
@@ -167,12 +170,30 @@ const TRIGGERS: Readonly<Record<string, FeatChoiceKind>> = {
  * The feat choice a level offers, from the features it gains (Ability Score Improvement, Epic Boon, Fighting
  * Style or Additional Fighting Style).
  */
-export function featChoiceTrigger(gained: readonly Pick<Feature, 'name'>[]): FeatChoiceTrigger | null {
+export function featChoiceTrigger(gained: readonly (Pick<Feature, 'name'> & Partial<Pick<Feature, 'source'>>)[]): FeatChoiceTrigger | null {
   for (const f of gained) {
     const kind = TRIGGERS[nameKey(baseFeatureName(f.name))];
-    if (kind) return { kind, featureName: f.name };
+    if (kind) return { kind, featureName: f.name, ...(f.source ? { source: f.source } : {}) };
   }
   return null;
+}
+
+/** A subclass's own Fighting Style feature that prints its styles (an older book's subclass), offered in its panel. */
+export interface SubclassFightingStyle {
+  sub: SubclassOption;
+  def: ClassFeatureDef;
+}
+
+/**
+ * The subclass's own Fighting Style the level's feat choice comes from, when it prints its own styles (an older book's
+ * subclass whose Fighting Style lists its options): the panel offers those instead of the class's. Undefined for the
+ * class's Fighting Style, and for a subclass's that prints none (SRD 5.2.1 Champion's Additional Fighting Style: another
+ * of the class's).
+ */
+export function subclassFightingStyle(trigger: FeatChoiceTrigger | null, sub: SubclassOption | undefined): SubclassFightingStyle | undefined {
+  if (trigger?.kind !== 'fighting-style' || trigger.source !== 'subclass' || !sub) return undefined;
+  const def = sub.features.find((d) => nameKey(d.name) === nameKey(trigger.featureName));
+  return def && inlineFightingStyles(def).length ? { sub, def } : undefined;
 }
 
 /** "Increase your Wisdom or Charisma score by 1, to a maximum of 20": what a feat raises, and the cap. */
@@ -214,6 +235,8 @@ export interface FeatPick {
   taken: boolean;
   increase?: FeatIncrease;
   ref?: ImportedRef;
+  /** A style a Fighting Style feature prints (no feat): the class's or a subclass's, the source it joins the sheet as. */
+  printedBy?: 'class' | 'subclass';
 }
 
 export interface FeatChoiceContext {
@@ -224,6 +247,8 @@ export interface FeatChoiceContext {
   have: readonly Pick<Feature, 'name' | 'source'>[];
   /** The feat picked so far: it stays offered even when a 2024 book's feat of its name stands in for it. */
   keepId?: string;
+  /** The subclass's own Fighting Style this level gains, when it prints its styles: those, not the class's. */
+  subclassStyle?: SubclassFightingStyle;
 }
 
 const ASI_FEAT = 'ability-score-improvement';
@@ -257,18 +282,21 @@ function featPick(feat: FeatOption, ctx: FeatChoiceContext): FeatPick {
   };
 }
 
-/** Fighting styles the class feature prints itself, each with the feature's ref narrowed to it (its part, paragraph and hash). */
-function inlineStylePicks(cls: ClassOption | undefined): FeatPick[] {
-  const def = cls ? findFeatureDef(cls, 'Fighting Style', 20) : undefined;
+/**
+ * Fighting styles a Fighting Style feature prints itself (the class's, or a subclass's own), each with the feature's ref
+ * narrowed to it (its part, paragraph and hash).
+ */
+function inlineStylePicks(def: ClassFeatureDef | undefined, owner: { source?: OptionSource } | undefined, printedBy: 'class' | 'subclass'): FeatPick[] {
   return inlineFightingStyles(def).map((o) => {
     const ref = def ? inlineOptionRef(def, o) : undefined;
     return {
       id: inlineStyleId(o.name),
       name: o.name,
       description: o.description,
-      sourceLabel: cls ? optionSourceLabel(cls) : 'SRD 5.2.1',
+      sourceLabel: optionSourceLabel(owner ?? {}),
       meetsLevel: true,
       taken: false,
+      printedBy,
       ...(ref ? { ref } : {}),
     };
   });
@@ -287,7 +315,10 @@ export function featChoices(kind: FeatChoiceKind, feats: readonly FeatOption[], 
   const listed = categories.flatMap((category) => feats.filter((f) => f.category === category && nameKey(f.name) !== ASI_FEAT));
   const picks = withoutReplacedSrd(listed, [ctx.keepId]).map((f) => featPick(f, ctx));
   if (kind !== 'fighting-style') return picks;
-  for (const style of inlineStylePicks(ctx.cls)) {
+  // The styles the level's own Fighting Style prints: a subclass's (an older book's subclass with its own list), else the class's.
+  const sub = ctx.subclassStyle;
+  const printed = sub ? inlineStylePicks(sub.def, sub.sub, 'subclass') : inlineStylePicks(ctx.cls ? findFeatureDef(ctx.cls, 'Fighting Style', 20) : undefined, ctx.cls, 'class');
+  for (const style of printed) {
     if (!picks.some((p) => nameKey(p.name) === nameKey(style.name))) picks.push(style);
   }
   // A style is taken once (SRD 5.1 Fighting Style: "You can't take a Fighting Style option more than once, even if
@@ -391,6 +422,8 @@ export interface ApplyFeatChoiceContext {
   /** "Fighter", the class whose level offered the choice. */
   className: string;
   classLevel: number;
+  /** The hero's subclass: a style its own Fighting Style prints is named for it ("Fighting Style (Lamp Sentinel 3)"). */
+  subclassName?: string;
   /** Features the level-up just added (ids not on the sheet before it). */
   addedIds: ReadonlySet<string>;
   /** Builder equipment, so a DEX or CON change keeps AC right (engine syncArmorClass). */
@@ -452,14 +485,16 @@ export function applyFeatChoice(c: Character, trigger: FeatChoiceTrigger, choice
       : addFeature(next, { name, source: 'feat', sourceName: `${ctx.className} ${ctx.classLevel}`, description: '' }).character;
   } else {
     const { pick } = choice;
-    const sourceName = `${trigger.featureName} (${ctx.className} ${ctx.classLevel})`;
+    // A style a subclass prints joins the sheet as the subclass's feature, under its name; a class's as the class's.
+    const bySubclass = pick.printedBy === 'subclass';
+    const sourceName = `${trigger.featureName} (${bySubclass && ctx.subclassName ? ctx.subclassName : ctx.className} ${ctx.classLevel})`;
     const inline = !pick.feat;
     // A feat's uses follow the character level; a style the class prints, the class level.
     const level = characterLevel(c);
     const uses = inferFeatureUses(pick.name, pick.description, { level: inline ? ctx.classLevel : level, proficiencyBonus: proficiencyBonus(level), scores: c.abilityScores });
     const feature: Omit<Feature, 'id'> = {
       name: pick.name,
-      source: inline ? 'class' : 'feat',
+      source: inline ? (bySubclass ? 'subclass' : 'class') : 'feat',
       sourceName,
       description: pick.description,
       ...(uses ? { uses } : {}),

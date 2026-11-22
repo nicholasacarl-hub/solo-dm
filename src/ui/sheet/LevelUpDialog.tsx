@@ -24,6 +24,7 @@ import {
   featChoiceTrigger,
   offersScoreIncrease,
   subclassCastingOf,
+  subclassFightingStyle,
   subclassRefOf,
   subclassSpellsToAdd,
   type FeatChoice,
@@ -505,12 +506,15 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
     ? [option, ...character.classes.map((cl) => classOptionFor(cl, classes))].filter((c): c is ClassOption => Boolean(c))
     : [];
   const prereqMet = prereqClasses.every((c) => meetsPrimary(c, character.abilityScores));
+  // An older book's subclass whose own Fighting Style lists its styles: the panel offers those.
+  const subclassStyle = subclassFightingStyle(plan.trigger, plan.sub);
   const picks: FeatPick[] = plan.trigger
     ? featChoices(plan.trigger.kind, builder.data?.feats ?? [], {
         cls: option,
         characterLevel: level + 1,
         have: character.features,
         ...(featChoice.kind === 'feat' ? { keepId: featChoice.pick.id } : {}),
+        ...(subclassStyle ? { subclassStyle } : {}),
       })
     : [];
   // The panel's choice counts only while this level's panel offers it: a subclass change can take the panel away or
@@ -551,7 +555,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
       const warnings: string[] = [];
       let increases: ScoreIncrease[] = [];
       if (plan.trigger) {
-        const applied = applyFeatChoice(next, plan.trigger, chosen, { className, classLevel, addedIds, equipment: builder.data?.equipment });
+        const applied = applyFeatChoice(next, plan.trigger, chosen, { className, classLevel, addedIds, equipment: builder.data?.equipment, ...(plan.sub ? { subclassName: plan.sub.name } : {}) });
         next = applied.character;
         increases = applied.increases;
         warnings.push(...applied.warnings);

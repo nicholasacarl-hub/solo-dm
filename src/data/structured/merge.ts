@@ -38,6 +38,7 @@ import type {
   TraitData,
 } from '@/types';
 import { nameKey } from '@/lib/id';
+import { inlineFightingStyles } from '../options/classFeatures';
 import { replacesSrd } from '../options/replaced';
 import { findEquipment } from '../options/resolve';
 import { refFor, spanLocation } from '../options/refs';
@@ -331,17 +332,20 @@ const sorted = <T extends Sourced>(list: readonly T[]) => [...list].sort(byBookT
 /**
  * A subclass as attached to its parent (§5.1 rule 5): features printed below the parent's subclass level
  * arrive at that level (subclass-early-features), and an older-format subclass on an SRD class or a 2024
- * book's notes the possible overlap (subclass-overlap). `firstLevel` keeps the printed level; the option
- * itself is untouched.
+ * book's notes the possible overlap (subclass-overlap). A book's subclass whose own Fighting Style prints its
+ * styles notes that the level-up offers them alongside the Fighting Style feats, as a class's
+ * (fighting-style-inline). `firstLevel` keeps the printed level; the option itself is untouched.
  */
 function placedSubclass(sub: SubclassOption, parent: ClassOption): SubclassOption {
   const level = parent.subclassLevel;
   const early = sub.features.some((f) => f.level < level);
   const overlap = sub.source?.format === '2014' && (!parent.source || replacesSrd(parent));
-  if (!early && !overlap) return sub;
+  const styles = Boolean(sub.source) && sub.features.some((f) => inlineFightingStyles(f).length > 0);
+  if (!early && !overlap && !styles) return sub;
   const notes: Adaptation[] = [];
   if (early) notes.push(adaptation('subclass-early-features', { name: sub.name, className: parent.name, level }));
   if (overlap) notes.push(adaptation('subclass-overlap', { name: sub.name, className: parent.name }));
+  if (styles) notes.push(adaptation('fighting-style-inline', { name: sub.name }));
   const features = early
     ? sub.features.map((f) => (f.level >= level ? f : { ...f, level, ...(f.ref ? { ref: { ...f.ref, level } } : {}) }))
     : sub.features;
