@@ -16,6 +16,21 @@ const index = noticeIndex([
 const notice = (kind: StructuredKind, name: string, format: string, extra: Record<string, unknown> = {}) =>
   nameNotices({ kind, name, sourceId: 'gloam', data: { format, ...extra } }, index).find((w) => w.code === 'name-collision')?.message ?? '';
 
+describe('nameNotices: a name the engine treats specially', () => {
+  const engineNotices = (kind: StructuredKind, name: string, extra: Record<string, unknown> = {}) =>
+    nameNotices({ kind, name, sourceId: 'gloam', data: { format: '2024', ...extra } }, index).filter((w) => w.code === 'engine-name');
+
+  it("warns for a feat named Alert, not for a species trait or class feature of the name, which Alert's bonus never reaches", () => {
+    expect(engineNotices('feat', 'Alert').map((w) => w.message)).toEqual([
+      "The app gives anything named “Alert” the SRD Alert's automatic effect. Rename this one if it works differently.",
+    ]);
+    expect(engineNotices('species', 'Lantern Folk', { traits: [{ name: 'Alert', description: 'Invented.' }] })).toEqual([]);
+    expect(engineNotices('class', 'Lamp Keeper', { features: [{ name: 'Alert', level: 1, description: 'Invented.' }] })).toEqual([]);
+    // Another name the engine reads on any feature still warns on a part.
+    expect(engineNotices('species', 'Lantern Folk', { traits: [{ name: 'Tough', description: 'Invented.' }] })).toHaveLength(1);
+  });
+});
+
 describe('nameNotices: a record named like an SRD entry', () => {
   const RULE = "If its Edition is 2024, the lists a player chooses from show it in place of the SRD's.";
 

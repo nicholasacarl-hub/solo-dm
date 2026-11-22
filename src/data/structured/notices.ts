@@ -1,8 +1,8 @@
 /**
  * Name notices (spec §3.9.2), added by detectStructure and the runner, which can see the rules index:
  * `info` name-collision when the SRD or another book has the same kind and name, and `warn` engine-name
- * for the names the engine treats specially (the name checks in engine/rules.ts, engine/character.ts and
- * ui/builder/origin.ts). App-written messages; pure.
+ * for the names the engine treats specially (the name checks in engine/rules.ts, engine/character.ts,
+ * engine/progression.ts and ui/builder/origin.ts). App-written messages; pure.
  *
  * Owner: E2.
  */
@@ -16,6 +16,8 @@ export const ENGINE_NAMES = [
   'Unarmored Defense',
 ] as const;
 const ENGINE_KEYS = new Map(ENGINE_NAMES.map((n) => [nameKey(n), n]));
+/** Names whose effect only a feat of the name gets: Alert's Initiative bonus (engine/progression.ts isAlertFeat). */
+const FEAT_ONLY: ReadonlySet<string> = new Set(['Alert']);
 
 /** "a monster", "an item"…: a kind as a noun with its article. */
 export const KIND_NOUN: Readonly<Record<StructuredKind, string>> = {
@@ -72,7 +74,8 @@ export function nameNotices(
   }
   for (const name of [record.name, ...partNames(record.data)]) {
     const engine = ENGINE_KEYS.get(nameKey(name));
-    if (engine) {
+    // A species trait or class feature named Alert gets nothing from the engine: no reason to rename it.
+    if (engine && (!FEAT_ONLY.has(engine) || (record.kind === 'feat' && name === record.name))) {
       out.push(warning('engine-name', 'warn', `The app gives anything named ${quote(engine)} the SRD ${engine}'s automatic effect. Rename this one if it works differently.`, name === record.name ? 'name' : 'features'));
     }
   }

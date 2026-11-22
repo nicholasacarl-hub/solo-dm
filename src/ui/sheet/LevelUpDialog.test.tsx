@@ -533,7 +533,8 @@ describe('LevelUpDialog with imported options', () => {
     it("shows and applies “Decide with my DM” when the new panel doesn't list the choice", async () => {
       const user = userEvent.setup();
       render(<LevelUpDialog open onClose={() => undefined} />);
-      // A Fighting Style feat, then a panel of General feats.
+      // A Fighting Style feat, then an Ability Score Improvement panel: no Fighting Style feats for this hero, who has no
+      // Fighting Style feature.
       await user.click(subclass(/Lamp Duelist/));
       await user.click(screen.getByRole('radio', { name: /^Defense/ }));
       await user.click(subclass(/Lamp Scholar/));

@@ -752,9 +752,10 @@ every feat the hero qualifies for (SRD 5.2.1: "or another feat of your choice fo
 feats, Fighting Style feats with a Fighting Style feature (`hasFightingStyleFeature`: a class's, subclass's or the DM's
 own feature of the name, however it's written) and Epic Boons from level 19, under a heading per category; of a feat's
 prerequisites it checks "Level N+" and a Fighting Style feat's feature. Alert taken at a level-up adds the Proficiency
-Bonus to Initiative, as Tough adds its Hit Points: the feat, on the panel's side of the feat line (a species trait, class
-feature or transformation power named Alert brings no bonus and doesn't stop the feat's). Magic Initiate's and Skilled's
-own choices are reminders for the player and the DM. A feat taken there is the feature the level-up
+Bonus to Initiative, as Tough adds its Hit Points. Alert's bonus is the feat's, on the panel's side of the feat line: a
+species trait, class feature or transformation power named Alert brings none and doesn't stop the feat's (import review
+warns about a feat named Alert only), while the engine counts any feature named Tough as Tough, once. Magic Initiate's
+and Skilled's own choices are reminders for the player and the DM. A feat taken there is the feature the level-up
 added for it, completed by id: a species trait or class feature of its name, a transformation's power (gone when the
 transformation ends), or an earlier taking of a Repeatable feat, stays beside it as it was, and another feat the sheet
 holds (a feat, or the DM's boon's, background's, item's, homebrew or other entry of its name; a style as above) is
