@@ -12,7 +12,7 @@ import { ArrowBigUpDash, Check, TriangleAlert } from 'lucide-react';
 import { XP_THRESHOLDS, abilityModifier, characterLevel, levelUp, type LevelUpOptions, type LevelUpResult } from '@/engine';
 import { useBuilderData, useRulesIndex } from '@/data';
 import { withAdaptationNotes } from '@/data/options/adaptationNotes';
-import { featureUseChanges, gainedFeatures, refreshFeatureUses } from '@/data/options/leveling';
+import { featureUseChanges, gainedFeatures, keptRulings, refreshFeatureUses } from '@/data/options/leveling';
 import {
   addSubclassSpells,
   applyFeatChoice,
@@ -168,16 +168,22 @@ interface NoticeParts {
   /** "chose: +2 Strength", "always prepared: Faerie Fire, Sleep". */
   extras: string[];
   uses: string[];
+  /** The uses the DM ruled (keptRulings), or null. */
+  rulings: string | null;
   reminders: string[];
 }
 
-/** The DM notice (names only). With "Decide with my DM" and no subclass spells it is exactly what it always was. */
+/**
+ * The DM notice (names only). With "Decide with my DM", no subclass spells and no uses the DM ruled it is exactly what it
+ * always was; the uses it ruled, which the level-up left as they are, are named so the DM keeps them in mind.
+ */
 function levelUpNotice(n: NoticeParts): string {
   const parts = [`Player leveled up to ${n.className} ${n.classLevel} (character level ${n.newLevel}): +${n.hpGained} HP (max ${n.hpMax})`];
   if (n.subclass) parts.push(`subclass ${n.subclass}`);
   if (n.added.length) parts.push(`new features: ${n.added.join(', ')}`);
   parts.push(...n.extras);
   if (n.uses.length) parts.push(`feature uses now: ${n.uses.join(', ')}`);
+  if (n.rulings) parts.push(n.rulings);
   if (n.reminders.length) parts.push(`still to choose: ${n.reminders.join(' ')}`);
   return parts.join('; ');
 }
@@ -576,6 +582,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
           added,
           extras: [...(chose ? [chose] : []), ...(spells.length ? [`always prepared: ${spells.join(', ')}`] : [])],
           uses,
+          rulings: keptRulings(refreshed),
           reminders,
         }),
         warning: warnings.join(' ') || null,

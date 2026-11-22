@@ -11,7 +11,7 @@ import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
 import type { Character, ClassLevel, ClassOption, CompendiumEntry, FeatOption, Feature, OptionSource, SubclassOption } from '@/types';
-import { featureUseChanges, gainedFeatures } from './leveling';
+import { featureUseChanges, gainedFeatures, keptRulings } from './leveling';
 import {
   applyFeatChoice,
   caughtUpFeatures,
@@ -448,5 +448,24 @@ describe('featureUseChanges: the uses a level-up changed', () => {
     // Only one of them grew: its name alone.
     const one = { ...before, features: [taking('a', 4, 4), taking('b', 8, 3), rage] };
     expect(featureUseChanges(before, one)).toEqual(['Wick Tender 3 → 4']);
+  });
+});
+
+describe('keptRulings: the numbers of uses the DM ruled, which level-ups keep', () => {
+  it('names each ruled feature with its number, namesakes told apart as features_use takes them, and none when it ruled none', () => {
+    const luck = (id: string, source: Feature['source'], max: number, ruled?: boolean): Feature => ({
+      id,
+      name: 'Lantern Luck',
+      source,
+      sourceName: 'Granted in play',
+      description: 'Invented.',
+      uses: { max, used: 0, recharge: 'long', ...(ruled ? { ruled } : {}) },
+    });
+    const wind: Feature = { id: 'wind', name: 'Second Wind', source: 'class', sourceName: 'Fighter 1', description: '', uses: { max: 4, used: 1, recharge: 'short', ruled: true } };
+    expect(keptRulings(sampleCharacter({ features: [luck('a', 'species', 2), luck('b', 'feat', 1)] }))).toBeNull();
+    expect(keptRulings(sampleCharacter({ features: [wind, luck('a', 'species', 2)] }))).toBe('kept your ruling: Second Wind 4 uses (a new uses_max in features_add changes it)');
+    expect(keptRulings(sampleCharacter({ features: [luck('a', 'species', 2, true), luck('b', 'feat', 1, true)] }))).toBe(
+      'kept your rulings: Lantern Luck (species) 2 uses and Lantern Luck (feat) 1 use (a new uses_max in features_add changes one)',
+    );
   });
 });

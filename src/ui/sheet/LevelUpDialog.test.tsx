@@ -283,6 +283,19 @@ describe('LevelUpDialog with imported options', () => {
     expect(sheet().abilityScores.cha).toBe(9);
   });
 
+  it("names the uses the DM ruled in the DM notice, which the level-up kept (SRD 5.2.1 Fighter: Second Wind)", async () => {
+    const user = userEvent.setup();
+    // The DM's features_add gave Second Wind four uses (FeatureUses.ruled); the Fighter table would give 2 at Fighter 3.
+    const wind = { id: 'f-wind', name: 'Second Wind', source: 'class' as const, sourceName: 'Fighter 1', description: 'DM ruling: four uses.', uses: { max: 4, used: 1, recharge: 'short' as const, ruled: true } };
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...fighter(2), features: [wind] } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('radio', { name: /Champion/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().features.find((f) => f.id === 'f-wind')?.uses).toEqual(wind.uses);
+    expect(notices()[0]).toContain('; kept your ruling: Second Wind 4 uses (a new uses_max in features_add changes it)');
+    expect(notices()[0]).not.toContain('feature uses now: Second Wind');
+  });
+
   it('tells apart two takings of a feat whose uses both grew, in the summary and the DM notice (SRD 5.2.1 Feats: Repeatable)', async () => {
     const user = userEvent.setup();
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
