@@ -796,7 +796,7 @@ with the note outside the wrapper), so the DM's frozen prompt can be redacted wh
 (its closing marker cut off) is redacted to the end of its text. A feature the DM adds under the name of
 one of the book's parts or feats (`features_add`, `level_up` extras) gets the ref of the part or feat of its name
 whose text holds the most of its description's 40-character runs: an imported class's or subclass's feature or a
-style its Fighting Style prints, a species' trait or lineage, a background's feature (none under a name the SRD prints
+style its Fighting Style prints (restore finds those as parts of that class or subclass), a species' trait or lineage, a background's feature (none under a name the SRD prints
 too), or a book's feat, a part before a feat and the first book on a tie (two books printing the same part still
 leave exports). A species trait or class feature (a level_up extra too) counts a feat's runs only where the SRD
 doesn't print them (without the rules index, every run, so the book's words never leave); an entry off the trait side

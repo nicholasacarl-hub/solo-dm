@@ -131,8 +131,8 @@ function ownText(text: string, ref: ImportedRef, name: string): string | null {
 }
 
 /**
- * One piece of an option's text: a class or subclass feature (and each fighting style a class's Fighting
- * Style feature prints, at that feature's level, for a ref that names the style as its part), a trait, a
+ * One piece of an option's text: a class or subclass feature (and each fighting style a class's or subclass's
+ * Fighting Style feature prints, at that feature's level, for a ref that names the style as its part), a trait, a
  * lineage, a legacy feature, or a feat's whole text.
  */
 interface OptionPart { optionId: string; optionName: string; sourceId?: string; part?: string; level?: number; text: string }
@@ -151,7 +151,13 @@ function optionParts(builder: BuilderData, kind: ImportedRef['kind']): OptionPar
       }
       break;
     case 'subclass':
-      for (const cls of builder.classes) for (const sub of cls.subclasses) for (const f of sub.features) push(sub, f.name, f.description, f.level);
+      for (const cls of builder.classes) {
+        for (const sub of cls.subclasses) {
+          for (const f of sub.features) push(sub, f.name, f.description, f.level);
+          // A style a subclass's Fighting Style prints, as a class's (the DM's features_add of one links it so).
+          for (const f of sub.features) for (const style of inlineFightingStyles(f)) push(sub, style.name, style.description, f.level);
+        }
+      }
       break;
     case 'species':
       for (const sp of builder.species) {
