@@ -29,6 +29,7 @@ import { abilityIncreaseOf, minLevelOf } from '../structured/normalize/feat';
 import { abilityIncreaseSentence } from '../structured/parse/feat';
 import { baseFeatureName, findFeatureDef, inlineFightingStyles, inlineOptionRef, inlineStyleId } from './classFeatures';
 import { inferFeatureUses } from './featureUses';
+import { subclassFeatureOnSheet } from './leveling';
 import { optionRef } from './refs';
 import { withoutReplacedSrd } from './replaced';
 import { optionSourceLabel } from './resolve';
@@ -53,16 +54,13 @@ export function classRefOf(cls: ClassOption | undefined): ImportedRef | undefine
   return cls ? optionRef(cls, 'class') : undefined;
 }
 
-const onSheetAsSubclassFeature = (have: readonly Pick<Feature, 'name' | 'source'>[], def: ClassFeatureDef) =>
-  have.some((f) => f.source === 'subclass' && nameKey(baseFeatureName(f.name)) === nameKey(def.name));
-
 /**
  * Subclass features from levels below `classLevel` that a subclass chosen now brings with it (SRD 5.2.1
  * "Level Advancement": you gain every subclass feature of your class level or lower), for the
  * "caught up from level N" note.
  */
-export function caughtUpFeatures(sub: SubclassOption | undefined, classLevel: number, have: readonly Pick<Feature, 'name' | 'source'>[] = []): ClassFeatureDef[] {
-  return sub ? sub.features.filter((d) => d.level < classLevel && !onSheetAsSubclassFeature(have, d)) : [];
+export function caughtUpFeatures(sub: SubclassOption | undefined, classLevel: number, have: readonly Pick<Feature, 'name' | 'source' | 'sourceName'>[] = []): ClassFeatureDef[] {
+  return sub ? sub.features.filter((d) => d.level < classLevel && !subclassFeatureOnSheet(have, sub, d)) : [];
 }
 
 // ---------------------------------------------------------------------------

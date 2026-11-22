@@ -281,6 +281,30 @@ describe('LevelUpDialog with imported options', () => {
     ]);
     expect(own[1]).toMatchObject({ description: lash, ref: { kind: 'subclass', entryId: sentinel.id, part: 'Wick Lash', textCopied: true } });
     expect(notices()[0]).toContain('Wick Lash');
+
+    // Another subclass printing a style of that name: switching to it after the pick applies its words and ref, as shown.
+    cleanup();
+    resetFakeGame({ campaign: sampleCampaign(), character: fighter(2) });
+    const coil = 'Your wick coils around a foe, and it has Disadvantage on its next attack roll.';
+    const keeperStyle = {
+      ...style,
+      description: ['Choose one of the options below.', `***Wick Lash.*** ${coil}`, '***Ember Stance.*** Invented: another style.'].join('\n\n'),
+      ref: { ...style.ref, entryId: 'lib:gloam:subclass:hearth-keeper', entryName: 'Hearth Keeper' },
+    };
+    const keeper = { ...EMBER, id: 'lib:gloam:subclass:hearth-keeper', name: 'Hearth Keeper', features: [keeperStyle] };
+    mocks.data = { ...EXPECTED_MERGED, classes: EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, subclasses: [...c.subclasses, sentinel, keeper] } : c)) };
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    const subclasses = () => within(screen.getByRole('radiogroup', { name: 'Subclass' }));
+    await user.click(subclasses().getByRole('radio', { name: /Lamp Sentinel/ }));
+    await user.click(screen.getByRole('radio', { name: /^Wick Lash/ }));
+    await user.click(subclasses().getByRole('radio', { name: /Hearth Keeper/ }));
+    expect(screen.getByRole('radio', { name: /^Wick Lash/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().features.find((f) => f.name === 'Wick Lash')).toMatchObject({
+      sourceName: 'Fighting Style (Hearth Keeper 3)',
+      description: coil,
+      ref: { entryId: keeper.id, entryName: 'Hearth Keeper', part: 'Wick Lash' },
+    });
   });
 
   it('a Repeatable feat taken again is a second feature with its ref; the first stays as it was, its uses too', async () => {

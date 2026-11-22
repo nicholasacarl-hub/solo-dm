@@ -357,6 +357,19 @@ describe('the Feat choice panel', () => {
       expect(featChoices('fighting-style', EXPECTED_MERGED.feats, { cls: classOf('srd:class:paladin'), characterLevel: 3, have: [] }).filter((p) => !p.feat).map((p) => [p.name, p.printedBy])).toEqual([['Blessed Warrior', 'class']]);
     });
 
+    it("arrives though a multiclass hero's other subclass has a feature of its name; this subclass's own, or the DM's, is skipped (SRD 5.2.1 Level Advancement)", () => {
+      const other = { name: 'Fighting Style', source: 'subclass' as const, sourceName: 'Oath of the Wick 3' };
+      const names = (have: { name: string; source: 'subclass'; sourceName: string }[]) =>
+        gainedFeatures(FIGHTER, 3, sentinel, ctxOf(fighter3), { have, subclassChosenNow: true }).filter((f) => f.source === 'subclass').map((f) => f.name);
+      expect(names([other])).toEqual(['Fighting Style']);
+      expect(featChoiceTrigger(gainedFeatures(FIGHTER, 3, sentinel, ctxOf(fighter3), { have: [other], subclassChosenNow: true }))?.source).toBe('subclass');
+      expect(names([{ ...other, sourceName: 'Lamp Sentinel 3' }])).toEqual([]);
+      expect(names([{ ...other, sourceName: 'Granted in play' }])).toEqual([]);
+      // The "caught up" note reads it alike (a subclass chosen late, at Fighter 4).
+      expect(caughtUpFeatures(sentinel, 4, [other]).map((d) => d.name)).toEqual(['Fighting Style']);
+      expect(caughtUpFeatures(sentinel, 4, [{ ...other, sourceName: 'Lamp Sentinel 3' }])).toEqual([]);
+    });
+
     it("is none for the class's Fighting Style, a subclass's that prints none, or another kind of choice", () => {
       const champion = subOf(FIGHTER, 'Champion');
       expect(subclassFightingStyle({ kind: 'fighting-style', featureName: 'Additional Fighting Style', source: 'subclass' }, champion)).toBeUndefined();

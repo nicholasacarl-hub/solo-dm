@@ -518,9 +518,11 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
       })
     : [];
   // The panel's choice counts only while this level's panel offers it: a subclass change can take the panel away or
-  // change what it lists. The panel shows, and Level up applies, this one.
-  const offered = plan.trigger && (featChoice.kind === 'feat' ? picks.some((p) => p.id === featChoice.pick.id) : featChoice.kind === 'dm' || offersScoreIncrease(plan.trigger.kind));
-  const chosen: FeatChoice = offered ? featChoice : { kind: 'dm' };
+  // change what it lists. The panel shows, and Level up applies, this one: the listed pick of its id, so a style of one
+  // name that another subclass prints too ("inline:<name>") brings that subclass's text and ref, as the panel shows it.
+  const listed = featChoice.kind === 'feat' ? picks.find((p) => p.id === featChoice.pick.id) : undefined;
+  const offered = plan.trigger && (featChoice.kind === 'feat' ? Boolean(listed) : featChoice.kind === 'dm' || offersScoreIncrease(plan.trigger.kind));
+  const chosen: FeatChoice = !offered ? { kind: 'dm' } : featChoice.kind === 'feat' && listed ? { ...featChoice, pick: listed } : featChoice;
   const xpNeeded = XP_THRESHOLDS[level];
   const shortOnXp = !milestone && character.xp < xpNeeded;
 
