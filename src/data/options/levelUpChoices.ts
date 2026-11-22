@@ -7,8 +7,8 @@
  * Owner: E4. Shared by the level-up dialog and, for spells and spellcasting, the DM's level_up tool.
  * Only "Level N+" prerequisites are checked; everything else is shown for the DM to rule on.
  */
-import { addFeature, addSpell, changeAbilityScore, characterLevel, isFightingStyle, proficiencyBonus, syncArmorClass } from '@/engine';
-import { nameKey } from '@/lib/id';
+import { addFeature, addSpell, changeAbilityScore, characterLevel, featOrTrait, isFightingStyle, proficiencyBonus, syncArmorClass } from '@/engine';
+import { nameKey, newId } from '@/lib/id';
 import {
   ABILITY_NAMES,
   type Ability,
@@ -228,10 +228,15 @@ export interface FeatChoiceContext {
 
 const ASI_FEAT = 'ability-score-improvement';
 
+/**
+ * A feat the sheet holds, unless Repeatable: as a feat, or as the DM's entry of its name on neither side of the feat
+ * line (a boon's, background's, item's, homebrew or other: the one feature addFeature keeps of them). A species trait
+ * or class feature of its name isn't the feat (featOrTrait), nor is a transformation's power, gone when it ends.
+ */
 function takenFeat(feat: FeatOption, have: FeatChoiceContext['have']): boolean {
   if (feat.repeatable) return false;
   const key = nameKey(feat.name);
-  return have.some((f) => f.source === 'feat' && nameKey(baseFeatureName(f.name)) === key);
+  return have.some((f) => featOrTrait(f.source) !== 'trait' && f.source !== 'transformation' && nameKey(baseFeatureName(f.name)) === key);
 }
 
 function featPick(feat: FeatOption, ctx: FeatChoiceContext): FeatPick {
@@ -287,8 +292,12 @@ export function featChoices(kind: FeatChoiceKind, feats: readonly FeatOption[], 
   }
   // A style is taken once (SRD 5.1 Fighting Style: "You can't take a Fighting Style option more than once, even if
   // you later get to choose again"; SRD 5.2.1's Fighting Style feats aren't Repeatable), the one the builder gave
-  // too: on the sheet however it's named, as the engine's Defense AC reads it (isFightingStyle).
-  return picks.map((p) => (p.taken || p.feat?.repeatable || !ctx.have.some((f) => isFightingStyle(f, p.name)) ? p : { ...p, taken: true }));
+  // too: on the sheet however it's named, as the engine's Defense AC reads it (isFightingStyle) and only so, one rule:
+  // a boon's, item's or background's "Defense" neither raises the AC nor stops the feat that does.
+  return picks.map((p) => {
+    const taken = !p.feat?.repeatable && ctx.have.some((f) => isFightingStyle(f, p.name));
+    return taken === p.taken ? p : { ...p, taken };
+  });
 }
 
 /** Whether the panel's +2 / +1 +1 options apply (Ability Score Improvement and Epic Boon levels). */
@@ -457,7 +466,13 @@ export function applyFeatChoice(c: Character, trigger: FeatChoiceTrigger, choice
       ...(pick.ref ? { ref: pick.ref } : {}),
     };
     const kept = trigger.kind === 'fighting-style' || !placeholder ? c : { ...c, features: c.features.filter((f) => f.id !== placeholder.id) };
-    next = addFeature(kept, feature).character;
+    // The feature this level-up added for the pick (the dialog gives a feat to levelUp, which counts what it brings),
+    // completed in place; else a new one. Never another of its name: a trait the feat is named like, or an earlier
+    // taking of a Repeatable feat (its uses as they are), stays beside it.
+    const bare = kept.features.find((f) => ctx.addedIds.has(f.id) && f.source === feature.source && nameKey(f.name) === nameKey(feature.name));
+    next = bare
+      ? { ...kept, features: kept.features.map((f) => (f.id === bare.id ? { ...feature, id: bare.id } : f)) }
+      : { ...kept, features: [...kept.features, { ...feature, id: newId() }] };
     const increase = pick.increase;
     if (increase) {
       const ability = increase.abilities.length === 1 ? increase.abilities[0] : choice.ability;

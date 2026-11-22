@@ -14,6 +14,7 @@ import {
   type Currency,
   type EquipmentOption,
   type Feature,
+  type FeatureSource,
   type FeatureUses,
   type GameEvent,
   type InventoryItem,
@@ -32,7 +33,7 @@ import {
   spellcastingAbility,
   syncArmorClass,
 } from './rules';
-import { clamp, formatInt, gameEvent, lookupProblem, matchByName, toInt, touch, warning } from './util';
+import { clamp, formatInt, gameEvent, lookupProblem, matchByName, toInt, touch, warning, type NameMatch } from './util';
 
 export interface EngineResult {
   character: Character;
@@ -504,52 +505,175 @@ function replaceFeature(c: Character, feature: Feature): Character {
   return touch({ ...c, features: c.features.map((f) => (f.id === feature.id ? feature : f)) });
 }
 
+/** "Lantern Luck (Mothkin)": the name before its last parentheses and the words in them (nested ones kept), or null. */
+function splitQualifier(text: string): { base: string; words: string } | null {
+  const s = text.trim();
+  if (!s.endsWith(')')) return null;
+  let depth = 0;
+  for (let i = s.length - 1; i >= 0; i -= 1) {
+    if (s[i] === ')') depth += 1;
+    if (s[i] !== '(') continue;
+    depth -= 1;
+    if (depth > 0) continue;
+    const base = s.slice(0, i).trim();
+    const words = s.slice(i + 1, -1).trim();
+    return base && words ? { base, words } : null;
+  }
+  return null;
+}
+
+/**
+ * The features named `name` exactly; else, for "Lantern Luck (Mothkin)", those named "Lantern Luck" whose source
+ * ("feat", "species") or source name ("Mothkin"; "Ability Score Improvement" for "Ability Score Improvement (Fighter
+ * 8)") the parentheses give: how the DM picks one of several features of one name.
+ */
+function namedFeatures(c: Character, name: string): Feature[] {
+  const exact = c.features.filter((f) => nameKey(f.name) === nameKey(name));
+  const split = exact.length ? null : splitQualifier(name);
+  if (!split) return exact;
+  const words = nameKey(split.words);
+  const same = c.features.filter((f) => nameKey(f.name) === nameKey(split.base));
+  const exactly = same.filter((f) => nameKey(f.source) === words || nameKey(f.sourceName ?? '') === words);
+  return exactly.length ? exactly : same.filter((f) => nameKey(f.sourceName ?? '').startsWith(`${words}-`));
+}
+
+/**
+ * A feature by name (namedFeatures, else matchByName). Of several of that name (a feat beside the trait it's named
+ * like, a Repeatable feat taken twice): the first whose uses pass the first test in `fits`, else the next test, else
+ * the first with uses, else the first.
+ */
+function featureByName(c: Character, name: string, fits: ReadonlyArray<(uses: FeatureUses) => boolean>): NameMatch<Feature> {
+  const named = namedFeatures(c, name);
+  const found: NameMatch<Feature> = named.length ? { match: named[0], candidates: named } : matchByName(c.features, name, featureName);
+  if (!found.match || found.candidates.length < 2) return found;
+  for (const fit of fits) {
+    const match = found.candidates.find((f) => f.uses && fit(f.uses));
+    if (match) return { ...found, match };
+  }
+  return { ...found, match: found.candidates.find((f) => f.uses) ?? found.match };
+}
+
+/**
+ * A feature's name with what tells it from the others of its name in `features`, as features_use and features_restore
+ * take it: its source name when theirs differ ("Lantern Luck (Mothkin)"), else its source ("Lantern Luck (feat)"),
+ * else the name alone.
+ */
+export function featureLabel(f: Feature, features: readonly Feature[]): string {
+  const others = features.filter((o) => o.id !== f.id && nameKey(o.name) === nameKey(f.name));
+  if (!others.length) return f.name;
+  const sourceName = f.sourceName?.trim();
+  if (sourceName && others.every((o) => nameKey(o.sourceName ?? '') !== nameKey(sourceName))) return `${f.name} (${sourceName})`;
+  return others.every((o) => o.source !== f.source) ? `${f.name} (${f.source})` : f.name;
+}
+
+/**
+ * After a use or restore by a name other features with uses share, the label of the one changed and a sentence on how
+ * to name the others (by featureLabel); the plain name and no sentence when the DM's name matched no other with uses
+ * (`matched`: a name in parentheses that picks one) or no label differs. A name in parentheses that two share
+ * ("Wick Tender (feat)" for two takings) gets the label and the sentence, as the bare name does.
+ */
+function namesakes(c: Character, matched: readonly Feature[], feature: Feature, verb: string): { label: string; note: string } {
+  const others = c.features
+    .filter((f) => f.id !== feature.id && f.uses && nameKey(f.name) === nameKey(feature.name))
+    .map((f) => featureLabel(f, c.features))
+    .filter((label) => label !== feature.name);
+  if (!others.length || !matched.some((f) => f.id !== feature.id && f.uses)) return { label: feature.name, note: '' };
+  const named = others.map((label) => `"${label}"`).join(' or ');
+  const note = others.length === 1 ? ` Another ${feature.name} is on the sheet: to ${verb} it, name it ${named}.` : ` Other ${feature.name} features are on the sheet: to ${verb} one, name it ${named}.`;
+  return { label: featureLabel(feature, c.features), note };
+}
+
 /** Use `amount` (default 1) uses of a limited-use feature. Warns if not enough uses remain. */
 export function useFeature(c: Character, name: string, amount = 1): EngineResult {
-  const found = matchByName(c.features, name, featureName);
+  const n = Math.max(1, toInt(amount, 1));
+  const found = featureByName(c, name, [(u) => u.max - u.used >= n, (u) => u.used < u.max]);
   const feature = found.match;
   if (!feature) return unchanged(c, lookupProblem('feature', name, found, featureName));
   if (!feature.uses) return unchanged(c, `${feature.name} has no limited uses to spend.`);
-  const n = Math.max(1, toInt(amount, 1));
   const left = feature.uses.max - feature.uses.used;
   if (n > left) return unchanged(c, `Not enough uses of ${feature.name}: ${left} of ${feature.uses.max} left, ${n} needed.`);
   const uses = { ...feature.uses, used: feature.uses.used + n };
+  const { label, note } = namesakes(c, found.candidates, feature, 'use');
   return {
     character: replaceFeature(c, { ...feature, uses }),
-    events: [gameEvent('feature-used', `Used ${feature.name}${n > 1 ? ` ×${n}` : ''} (${uses.max - uses.used}/${uses.max} left; ${rechargeText(uses)})`)],
+    events: [gameEvent('feature-used', `Used ${label}${n > 1 ? ` ×${n}` : ''} (${uses.max - uses.used}/${uses.max} left; ${rechargeText(uses)})${note ? `.${note}` : ''}`)],
   };
 }
 
 /** Restore all uses of a feature (or `amount` uses). */
 export function restoreFeature(c: Character, name: string, amount?: number): EngineResult {
-  const found = matchByName(c.features, name, featureName);
+  const want = amount === undefined ? 1 : Math.max(1, toInt(amount, 1));
+  const found = featureByName(c, name, [(u) => u.used >= want, (u) => u.used > 0]);
   const feature = found.match;
   if (!feature) return unchanged(c, lookupProblem('feature', name, found, featureName));
   if (!feature.uses) return unchanged(c, `${feature.name} has no limited uses to restore.`);
   if (feature.uses.used === 0) return unchanged(c, `${feature.name} is already fully available (${feature.uses.max}/${feature.uses.max}).`);
-  const used = amount === undefined ? 0 : Math.max(0, feature.uses.used - Math.max(1, toInt(amount, 1)));
+  const used = amount === undefined ? 0 : Math.max(0, feature.uses.used - want);
   const uses = { ...feature.uses, used };
   const regained = feature.uses.used - used;
+  const { label, note } = namesakes(c, found.candidates, feature, 'restore');
   return {
     character: replaceFeature(c, { ...feature, uses }),
-    events: [gameEvent('feature-restored', `${feature.name}: regained ${regained} use${regained === 1 ? '' : 's'} (${uses.max - used}/${uses.max})`)],
+    events: [gameEvent('feature-restored', `${label}: regained ${regained} use${regained === 1 ? '' : 's'} (${uses.max - used}/${uses.max})${note ? `.${note}` : ''}`)],
   };
 }
 
-/** Add a feature, or update the existing feature with the same name (keeping its id). */
+/**
+ * The side of the feat line a feature's source puts it on: a feat, or a species trait or class or subclass feature.
+ * A background's feature, a boon, an item's, homebrew and the DM's other entries are on neither.
+ */
+export function featOrTrait(source: FeatureSource): 'feat' | 'trait' | undefined {
+  if (source === 'feat') return 'feat';
+  return source === 'species' || source === 'class' || source === 'subclass' ? 'trait' : undefined;
+}
+
+/**
+ * The feature addFeature rewrites for an entry of this name and source: the first of its name on the same side of the
+ * feat line, or on either for an entry on neither (featOrTrait). Undefined when it would add one.
+ */
+export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | 'source'>): Feature | undefined {
+  const key = nameKey(feature.name.trim());
+  const side = featOrTrait(feature.source);
+  return c.features.find((f) => {
+    const theirs = featOrTrait(f.source);
+    return nameKey(f.name) === key && (!side || !theirs || side === theirs);
+  });
+}
+
+/**
+ * Add a feature, or update the existing feature with the same name, keeping its id, where it came from (its source
+ * name: "Mothkin", "Ability Score Improvement (Fighter 4)", which the DM's "Granted in play" never replaces, so a name
+ * a result gave, "Lantern Luck (Mothkin)", still finds it) and the uses it has spent (a features_restore or a rest gives
+ * those back). Uses that keep the number keep how it grows (a Rage the DM rewrites still follows the Barbarian table);
+ * another number, or uses where it had none, is the DM's ruling (FeatureUses.ruled), which level-ups leave as it is.
+ * Beside a namesake, the result names the feature as a use or restore takes it now (featureLabel). A feat and a species
+ * trait or class feature never merge (featOrTrait):
+ * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
+ * and the trait keeps its text. A feature on neither side (the DM's entry for an Epic Boon as a boon, or an Origin feat
+ * as its background's) updates the one of its name on either.
+ */
 export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: string }): EngineResult {
   const name = feature.name?.trim();
   if (!name) return unchanged(c, 'A feature needs a name.');
-  const index = c.features.findIndex((f) => nameKey(f.name) === nameKey(name));
-  if (index >= 0) {
-    const updated: Feature = { ...c.features[index], ...feature, id: c.features[index].id, name };
-    return { character: replaceFeature(c, updated), events: [gameEvent('feature-restored', `Updated feature: ${name}`)] };
+  const existing = featureToRewrite(c, { name, source: feature.source });
+  if (existing) {
+    const updated: Feature = { ...existing, ...feature, id: existing.id, name, ...(existing.sourceName ? { sourceName: existing.sourceName } : {}) };
+    const old = existing.uses;
+    if (feature.uses) {
+      const growth = old?.max === feature.uses.max ? { ...(old.scale ? { scale: old.scale } : {}), ...(old.ruled ? { ruled: true } : {}) } : { ruled: true };
+      updated.uses = { ...feature.uses, used: Math.min(old?.used ?? feature.uses.used, feature.uses.max), ...growth };
+    }
+    const character = replaceFeature(c, updated);
+    // By the name a use or restore takes now, beside a namesake (a boon's entry over a trait changes its "(species)").
+    return { character, events: [gameEvent('feature-restored', `Updated feature: ${featureLabel(updated, character.features)}`)] };
   }
   const added: Feature = { ...feature, id: feature.id ?? newId(), name };
+  const features = [...c.features, added];
   const usesText = added.uses ? ` (${added.uses.max} use${added.uses.max === 1 ? '' : 's'}, ${rechargeText(added.uses)})` : '';
+  const beside = c.features.filter((f) => nameKey(f.name) === nameKey(name)).map((f) => featureLabel(f, features));
   return {
-    character: touch({ ...c, features: [...c.features, added] }),
-    events: [gameEvent('feature-restored', `Gained feature: ${name}${usesText}`)],
+    character: touch({ ...c, features }),
+    events: [gameEvent('feature-restored', `Gained feature: ${name}${usesText}${beside.length ? `, beside ${beside.join(' and ')}` : ''}`)],
   };
 }
 

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Character, ClassLevel, Feature, ImportedRef, SourceFormat } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import { asiLevels, findSrdClass, SRD_CLASSES } from './classData';
+import { addFeature } from './character';
 import type { Rng } from './dice';
 import {
   applyLongRest,
@@ -401,6 +402,35 @@ describe('levelUp: feature uses that grow with level', () => {
     // The SRD Fighter's older sheets still grow by its table (Second Wind 3 at Fighter 4).
     const srd = mira({ classes: [asClass('Fighter', 3)], spellcasting: undefined, features: [legacy('Second Wind', 'Fighter 1', 2)] });
     expect(usesOf(levelUp(srd, { className: 'Fighter', hpMethod: 'average' }).character, 'Second Wind')?.max).toBe(3);
+  });
+
+  it("a number of uses the DM's rewrite changes stays at level-ups (FeatureUses.ruled); the same number keeps growing (SRD 5.2.1 Fighter and Barbarian Features tables: Second Wind, Rages)", () => {
+    // The DM's features_add rewriting the SRD Fighter's Second Wind, an older sheet's (no scale: the table by its source name).
+    const fighter = (level: number) => mira({ classes: [asClass('Fighter', level)], spellcasting: undefined, features: [legacy('Second Wind', 'Fighter 1', 2, 1)] });
+    const rewrite = (c: Character, extra: Partial<Feature> = {}) =>
+      addFeature(c, { name: 'Second Wind', source: 'class', sourceName: 'Granted in play', description: 'DM ruling: four uses.', ...extra }).character;
+    const ruled = rewrite(fighter(2), { uses: { max: 4, used: 0, recharge: 'short' } });
+    expect(ruled.features[0]).toMatchObject({ sourceName: 'Fighter 1', uses: { max: 4, used: 1, recharge: 'short', ruled: true } });
+    const r = levelUp(ruled, { className: 'Fighter', hpMethod: 'average' });
+    expect(usesOf(r.character, 'Second Wind')).toEqual({ max: 4, used: 1, recharge: 'short', ruled: true });
+    expect(r.events.map((e) => e.message).join(' ')).not.toContain('Second Wind 4');
+    // A later rewrite without uses, or with the ruled number again, keeps the ruling.
+    expect(rewrite(ruled).features[0].uses).toEqual(ruled.features[0].uses);
+    expect(rewrite(ruled, { uses: { max: 4, used: 0, recharge: 'short' } }).features[0].uses).toEqual(ruled.features[0].uses);
+    // The number it had: the table still applies (Second Wind 3 at Fighter 4).
+    const restated = rewrite(fighter(3), { uses: { max: 2, used: 0, recharge: 'short' } });
+    expect(restated.features[0].uses).toEqual({ max: 2, used: 1, recharge: 'short' });
+    expect(usesOf(levelUp(restated, { className: 'Fighter', hpMethod: 'average' }).character, 'Second Wind')?.max).toBe(3);
+    // A scaled feature keeps its scale: Rage 3 at Barbarian 3.
+    const scale = { by: 'table' as const, className: 'Barbarian', values: [2, 2, 3, 3, 3, 4] };
+    const barbarian = mira({ classes: [asClass('Barbarian', 2)], spellcasting: undefined, features: [{ ...legacy('Rage', 'Barbarian 1', 2, 1), uses: { max: 2, used: 1, recharge: 'long', scale } }] });
+    const rage = addFeature(barbarian, { name: 'Rage', source: 'class', description: 'Rewritten.', uses: { max: 2, used: 0, recharge: 'long' } }).character;
+    expect(rage.features[0].uses).toEqual({ max: 2, used: 1, recharge: 'long', scale });
+    expect(usesOf(levelUp(rage, { className: 'Barbarian', hpMethod: 'average' }).character, 'Rage')).toEqual({ max: 3, used: 1, recharge: 'long', scale });
+    // Uses given where it had none are the DM's too.
+    const flame: Feature = { id: 'flame', name: 'Watchful Flame', source: 'class', sourceName: 'Fighter 2', description: '' };
+    const given = addFeature(mira({ classes: [asClass('Fighter', 2)], spellcasting: undefined, features: [flame] }), { ...flame, uses: { max: 2, used: 0, recharge: 'long' } });
+    expect(given.character.features[0].uses).toEqual({ max: 2, used: 0, recharge: 'long', ruled: true });
   });
 
   it("only the leveled class's level counts, and homebrew features are left alone", () => {

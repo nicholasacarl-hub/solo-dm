@@ -261,12 +261,29 @@ describe('computeArmorClass', () => {
     for (const name of styleNames) expect(named(name)).toBe(17);
     expect(named('Additional Fighting Style (Defense)', 'subclass')).toBe(17);
     for (const name of ['Unarmored Defense', 'Superior Defense', 'Fighting Style', 'Additional Fighting Style']) expect(named(name)).toBe(16);
-    // A species trait that shares the style's name isn't the style.
+    // A species trait that shares the style's name isn't the style, nor is a boon's, an item's or a background's.
     expect(named('Defense', 'species')).toBe(16);
+    for (const source of ['boon', 'item', 'background'] as const) expect(named('Defense', source), source).toBe(16);
+    for (const source of ['homebrew', 'other'] as const) expect(named('Defense', source), source).toBe(17);
     // A style whose own name ends in "Fighting".
     expect(isFightingStyle({ name: 'Great Weapon Fighting Style', source: 'class' }, 'Great Weapon Fighting')).toBe(true);
     expect(isFightingStyle({ name: 'Fighting Style: Two-Weapon Fighting Style', source: 'feat' }, 'Two-Weapon Fighting')).toBe(true);
     expect(isFightingStyle({ name: 'Great Weapon Fighting Style', source: 'class' }, 'Defense')).toBe(false);
+    // A style a book names so itself (invented), on the sheet under that name or another.
+    for (const name of ['Fighting Style: Lantern Guard', 'Lantern Guard', 'Fighting Style (Lantern Guard)', 'Additional Fighting Style (Lantern Guard)']) {
+      for (const style of ['Fighting Style: Lantern Guard', 'Additional Fighting Style: Lantern Guard', 'Fighting Style Feat: Lantern Guard', 'Lantern Guard']) {
+        expect(isFightingStyle({ name, source: 'feat' }, style), `${name} / ${style}`).toBe(true);
+      }
+    }
+    expect(isFightingStyle({ name: 'Fighting Style: Lantern Guard', source: 'feat' }, 'Fighting Style: Wick Lash')).toBe(false);
+    // A sheet name that wraps the book's own name; a book's name with a style suffix, either way round.
+    for (const name of ['Fighting Style (Fighting Style: Lantern Guard)', 'Additional Fighting Style (Fighting Style: Lantern Guard)', 'Fighting Style: Fighting Style: Lantern Guard']) {
+      expect(isFightingStyle({ name, source: 'other' }, 'Fighting Style: Lantern Guard'), name).toBe(true);
+    }
+    expect(isFightingStyle({ name: 'Defense', source: 'feat' }, 'Defense Fighting Style')).toBe(true);
+    expect(isFightingStyle({ name: 'Great Weapon Fighting', source: 'feat' }, 'Great Weapon Fighting Style')).toBe(true);
+    for (const style of ['Defense Drill', 'Superior Defense', 'Fighting Style']) expect(isFightingStyle({ name: 'Defense', source: 'feat' }, style), style).toBe(false);
+    expect(isFightingStyle({ name: 'Archery', source: 'feat' }, 'Archery Expert')).toBe(false);
     // Another feature that only begins with a style's name (invented).
     expect(named('Defense Drill')).toBe(16);
     expect(isFightingStyle({ name: 'Archery Expert', source: 'feat' }, 'Archery')).toBe(false);

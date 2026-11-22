@@ -11,8 +11,8 @@ import {
   gloamwoodSource,
   structuredRecord,
 } from '@/test/structuredFixtures';
-import type { BuilderData, Character, ClassData, ClassFeatureDef, CompendiumEntry, Feature, ImportedRef, LibrarySource, SpeciesTrait } from '@/types';
-import { inlineFightingStyles } from '../options/classFeatures';
+import type { BuilderData, Character, ClassData, ClassFeatureDef, CompendiumEntry, Feature, ImportedRef, LibrarySource, SpeciesTrait, SubclassData } from '@/types';
+import { inlineFightingStyles, inlineOptionRef } from '../options/classFeatures';
 import { importedOptions, mergeBuilderData } from './merge';
 import { featureNeedsRestore, restoreImportedText, type LibraryLookup } from './restore';
 
@@ -226,6 +226,64 @@ function pulledLampwarden(refFor?: (def: ClassFeatureDef & { ref: ImportedRef })
   };
 }
 const textOf = (c: Character, id: string) => c.features.find((f) => f.id === id)?.description;
+
+/** A device with a book's subclass of the SRD Fighter structured, its own Fighting Style printing the same styles. */
+function lampSentinel(sourceId: string, opts: { fingerprint?: string; title?: string } = {}) {
+  const title = opts.title ?? LAMP_TITLE;
+  const entries: CompendiumEntry[] = [
+    { id: `lib:${sourceId}:1`, sourceId, sourceName: title, kind: 'other', name: 'Lamp Sentinel', text: '# Lamp Sentinel\n\nSentinels keep watch wherever the lanterns burn.' },
+    {
+      id: `lib:${sourceId}:2`,
+      sourceId,
+      sourceName: title,
+      kind: 'rule',
+      name: 'Level 3: Fighting Style',
+      text: ['### Level 3: Fighting Style', 'Sentinels learn one way of fighting by lantern light. Choose one of the options below.', ...STYLES].join('\n\n'),
+    },
+  ];
+  const fingerprint = opts.fingerprint ?? bookFingerprint(entries.map((e) => e.text));
+  const source: LibrarySource = { id: sourceId, title, kind: 'import', format: 'markdown', enabled: true, entryCount: entries.length, createdAt: 1, updatedAt: 1, fingerprint };
+  const data: SubclassData = { format: '2024', parentClass: 'Fighter', summary: 'Keep the Lanterns Lit', features: [{ level: 3, name: 'Fighting Style', text: { entryIds: [`lib:${sourceId}:2`], from: 1, to: 2 + STYLES.length } }] };
+  const record = structuredRecord('subclass', 'Lamp Sentinel', { entryIds: entries.map((e) => e.id), span: 'section', status: 'accepted', data, parentClassId: 'srd:class:fighter' }, sourceId);
+  const merged = mergeBuilderData(GLOAMWOOD_SRD_SUBSET, importedOptions({ version: 1, sources: [source], entriesById: new Map(entries.map((e) => [e.id, e])), accepted: [record] }));
+  const def = merged.data.classes.flatMap((c) => c.subclasses).find((s) => s.name === 'Lamp Sentinel')?.features.find((f) => f.name === 'Fighting Style');
+  if (merged.problems.length || !def?.ref) throw new Error('lamp sentinel fixture: the subclass did not merge');
+  return { def: def as ClassFeatureDef & { ref: ImportedRef }, lookup: lookupOf(merged.data, [source], entries) };
+}
+
+describe("a fighting style a book's subclass prints restores like a class's (the ref features_add gives it)", () => {
+  // The DM recorded the subclass's Hooked Pull: the Fighting Style's ref narrowed to the style (inlineOptionRef).
+  const pulled = (): Character => {
+    const { def } = lampSentinel('ls');
+    const pull = inlineFightingStyles(def).find((s) => s.name === 'Hooked Pull');
+    const ref = pull && inlineOptionRef(def, pull);
+    if (!ref) throw new Error('lamp sentinel fixture: no Hooked Pull');
+    return { ...sampleCharacter(), features: [{ id: 'f-pull', name: 'Hooked Pull', source: 'class', sourceName: 'Granted in play', description: importedPlaceholder(LAMP_TITLE), ref: { ...ref, redacted: true } }] };
+  };
+
+  it('by option id (step 1), another reading of the book by title (step 3), or its words (step 4)', () => {
+    const byId = restoreImportedText(pulled(), lookupOf(lampSentinel('ls').lookup.builder));
+    expect([textOf(byId.character, 'f-pull'), byId.report]).toEqual([HOOKED_PULL, { restored: 1, differs: 0, missing: [] }]);
+    const other = lampSentinel('other', { fingerprint: 'another-printing' });
+    expect(textOf(restoreImportedText(pulled(), other.lookup).character, 'f-pull')).toBe(HOOKED_PULL);
+    const renamed = lampSentinel('renamed', { fingerprint: 'another-printing', title: 'Lamp Sentinel Notes (old copy)' });
+    expect(textOf(restoreImportedText(pulled(), renamed.lookup).character, 'f-pull')).toBe(HOOKED_PULL);
+  });
+
+  it("a feature named like a style its own Fighting Style prints gets the feature's text, a class's or a subclass's", () => {
+    const own = 'Invented: an option of its own, named like one of the styles it prints.';
+    const withFeature = (builder: BuilderData, def: ClassFeatureDef & { ref: ImportedRef }, kind: 'class' | 'subclass'): BuilderData => {
+      const feature: ClassFeatureDef = { level: def.level, name: 'Lantern Guard', description: own, ref: { ...def.ref, part: 'Lantern Guard' } };
+      const add = <T extends { id: string; features: ClassFeatureDef[] }>(o: T): T => (o.id === def.ref.entryId ? { ...o, features: [...o.features, feature] } : o);
+      return { ...builder, classes: builder.classes.map((c) => (kind === 'class' ? add(c) : { ...c, subclasses: c.subclasses.map(add) })) };
+    };
+    for (const [kind, device] of [['class', lampwarden('lw')], ['subclass', lampSentinel('ls')]] as const) {
+      const ref: ImportedRef = { ...device.def.ref, part: 'Lantern Guard', textHash: textFingerprint(own), textCopied: true, redacted: true };
+      const hero: Character = { ...sampleCharacter(), features: [{ id: 'f-guard', name: 'Lantern Guard', source: kind, description: importedPlaceholder(LAMP_TITLE), ref }] };
+      expect(textOf(restoreImportedText(hero, lookupOf(withFeature(device.lookup.builder, device.def, kind))).character, 'f-guard'), kind).toBe(own);
+    }
+  });
+});
 
 describe('P1: an inline fighting style restores only its own text, never the whole Fighting Style feature', () => {
   it('P1: by option id (step 1) the style gets its own words and the class feature its whole text', () => {

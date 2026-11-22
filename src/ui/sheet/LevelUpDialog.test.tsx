@@ -8,7 +8,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { levelUp } from '@/engine';
 import { useGame } from '@/state/gameStore';
 import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
-import { DUSK_DOMAIN_MERGE_ADAPTATIONS, EXPECTED_MERGED, GLOAMWOOD_TITLE, TEXT } from '@/test/structuredFixtures';
+import { DUSK_DOMAIN_MERGE_ADAPTATIONS, EXPECTED_MERGED, GLOAMWOOD_TITLE, TEXT, importedRef } from '@/test/structuredFixtures';
 import type { BuilderData, Character, ClassLevel, ClassOption, CompendiumEntry } from '@/types';
 import { installDialogPolyfill, resetFakeGame } from '@/ui/builder/testing/fakeGameStore';
 import { autoCleanup } from '@/ui/shell/testUtils';
@@ -256,18 +256,79 @@ describe('LevelUpDialog with imported options', () => {
     });
   });
 
-  it('a repeatable feat taken again stays one feature: the one on the sheet, with its ref', async () => {
+  it('a Repeatable feat taken again is a second feature with its ref; the first stays as it was, its uses too', async () => {
     const user = userEvent.setup();
     const lantern = EXPECTED_MERGED.feats.find((f) => f.name === 'Lantern Bearer')!;
     mocks.data = { ...EXPECTED_MERGED, feats: EXPECTED_MERGED.feats.map((f) => (f === lantern ? { ...f, repeatable: true } : f)) };
-    const had = { id: 'f-old', name: 'Lantern Bearer', source: 'feat' as const, sourceName: 'Ability Score Improvement (Fighter 4)', description: TEXT.lanternBearer.join('\n\n'), ref: lantern.ref };
+    const had = {
+      id: 'f-old',
+      name: 'Lantern Bearer',
+      source: 'feat' as const,
+      sourceName: 'Ability Score Improvement (Fighter 4)',
+      description: TEXT.lanternBearer.join('\n\n'),
+      uses: { max: 2, used: 1, recharge: 'long' as const },
+      ref: lantern.ref,
+    };
     resetFakeGame({ campaign: sampleCampaign(), character: { ...fighter(7, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), features: [had] } });
     render(<LevelUpDialog open onClose={() => undefined} />);
     await user.click(screen.getByRole('radio', { name: 'Lantern Bearer' }));
     await user.selectOptions(screen.getByLabelText('Ability Lantern Bearer raises'), 'cha');
     await user.click(screen.getByRole('button', { name: 'Level up' }));
+    const taken = sheet().features.filter((f) => f.name === 'Lantern Bearer');
+    expect(taken).toEqual([
+      had,
+      expect.objectContaining({ source: 'feat', sourceName: 'Ability Score Improvement (Fighter 8)', ref: expect.objectContaining({ entryName: 'Lantern Bearer' }) }),
+    ]);
+    expect(taken[1].id).not.toBe('f-old');
+    expect(sheet().abilityScores.cha).toBe(9);
+  });
+
+  it('tells apart two takings of a feat whose uses both grew, in the summary and the DM notice (SRD 5.2.1 Feats: Repeatable)', async () => {
+    const user = userEvent.setup();
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const taking = (id: string, level: number) => ({
+      id,
+      name: 'Wick Tender',
+      source: 'feat' as const,
+      sourceName: `Ability Score Improvement (Fighter ${level})`,
+      description: 'Invented: you can use this benefit a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.',
+      uses: { max: 3, used: 0, recharge: 'long' as const },
+    });
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...fighter(8, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), features: [taking('a', 4), taking('b', 8)] } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    const lines = ['Wick Tender (Ability Score Improvement (Fighter 4)) 3 → 4', 'Wick Tender (Ability Score Improvement (Fighter 8)) 3 → 4'];
+    expect(screen.getAllByRole('listitem').map((li) => li.textContent)).toEqual(expect.arrayContaining(lines));
+    expect(notices()[0]).toContain(`feature uses now: ${lines.join(', ')}`);
+    // Two nothing tells apart (both the DM's): two like lines, each its own list item.
+    cleanup();
+    const alike = (id: string) => ({ ...taking(id, 4), sourceName: 'Granted in play' });
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...fighter(8, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), features: [alike('a'), alike('b')] } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(screen.getAllByRole('listitem').filter((li) => li.textContent === 'Wick Tender 3 → 4')).toHaveLength(2);
+    expect(errors.mock.calls.some((args) => args.some((a) => String(a).includes('same key')))).toBe(false);
+    errors.mockRestore();
+  });
+
+  it("puts a feat named like a species trait beside it: the trait keeps its text, source and ref", async () => {
+    const user = userEvent.setup();
+    const trait = {
+      id: 't-lantern',
+      name: 'Lantern Bearer',
+      source: 'species' as const,
+      sourceName: 'Mothkin',
+      description: 'Invented: a moth-folk trait of the same name.',
+      ref: importedRef({ entryId: 'lib:gloam:species:mothkin', kind: 'species', entryName: 'Mothkin', part: 'Lantern Bearer', textHash: 'h', textCopied: true }),
+    };
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), features: [trait] } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('radio', { name: 'Lantern Bearer' }));
+    await user.selectOptions(screen.getByLabelText('Ability Lantern Bearer raises'), 'cha');
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
     expect(sheet().features.filter((f) => f.name === 'Lantern Bearer')).toEqual([
-      expect.objectContaining({ id: 'f-old', sourceName: 'Ability Score Improvement (Fighter 8)', ref: expect.objectContaining({ entryName: 'Lantern Bearer' }) }),
+      trait,
+      expect.objectContaining({ source: 'feat', sourceName: 'Ability Score Improvement (Fighter 4)', description: TEXT.lanternBearer.join('\n\n'), ref: expect.objectContaining({ kind: 'feat', entryName: 'Lantern Bearer' }) }),
     ]);
     expect(sheet().abilityScores.cha).toBe(9);
   });

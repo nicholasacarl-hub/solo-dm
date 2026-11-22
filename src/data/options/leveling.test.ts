@@ -6,12 +6,12 @@
  * prerequisites: only "Level N+" is checked).
  */
 import { describe, expect, it } from 'vitest';
-import { characterLevel, levelUp } from '@/engine';
+import { characterLevel, computeArmorClass, levelUp } from '@/engine';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
 import type { Character, ClassLevel, ClassOption, CompendiumEntry, FeatOption, Feature, OptionSource, SubclassOption } from '@/types';
-import { gainedFeatures } from './leveling';
+import { featureUseChanges, gainedFeatures } from './leveling';
 import {
   applyFeatChoice,
   caughtUpFeatures,
@@ -206,6 +206,17 @@ describe('the Feat choice panel', () => {
     expect(vigil).toMatchObject({ minLevel: 8, meetsLevel: false, taken: false });
   });
 
+  it("marks a feat taken that the sheet holds as a feat or as the DM's entry of its name, not a trait's or a transformation's (SRD 5.2.1 Feats: once, unless Repeatable)", () => {
+    const taken = (source: Feature['source'], feats: readonly FeatOption[] = EXPECTED_MERGED.feats) =>
+      featChoices('asi', feats, { cls: FIGHTER, characterLevel: 4, have: [{ name: 'Grappler', source }] }).find((p) => p.name === 'Grappler')?.taken;
+    // A feat, or the one feature addFeature keeps of it and the DM's boon's, background's, item's, homebrew or other entry.
+    for (const source of ['feat', 'boon', 'background', 'item', 'homebrew', 'other'] as const) expect(taken(source), source).toBe(true);
+    // A species trait or class feature of its name stays beside the feat; a transformation's power goes when it ends.
+    for (const source of ['species', 'class', 'subclass', 'transformation'] as const) expect(taken(source), source).toBe(false);
+    const repeatable = EXPECTED_MERGED.feats.map((f) => (f.name === 'Grappler' ? { ...f, repeatable: true } : f));
+    expect(taken('boon', repeatable)).toBe(false);
+  });
+
   it('offers Epic Boons and General feats at Epic Boon, with the boons’ maximum of 30', () => {
     const picks = featChoices('epic-boon', EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel: 19, have: [] });
     expect(picks[0]).toMatchObject({ name: 'Boon of Combat Prowess', meetsLevel: true });
@@ -251,6 +262,28 @@ describe('the Feat choice panel', () => {
     expect(dropChoiceReminder(leveled.reminders, trigger.kind, choice)).not.toContain(reminder);
   });
 
+  it('never merges a feat into another feature of its name: completes the one the level-up added, else adds one', () => {
+    const lantern = featChoices('asi', EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel: 4, have: [] }).find((p) => p.name === 'Lantern Bearer')!;
+    const trait = { id: 't-lantern', name: 'Lantern Bearer', source: 'species' as const, description: 'Invented: a moth-folk trait of the same name.' };
+    const c = { ...fighter4(), features: [trait] };
+    const choice: FeatChoice = { kind: 'feat', pick: lantern, ability: 'wis' };
+    const named = (x: Character) => x.features.filter((f) => f.name === 'Lantern Bearer');
+    // Not given to levelUp: a new feature beside the trait, or beside an earlier taking of the feat (a Repeatable one).
+    const plain = levelWith(c, FIGHTER, choice).character;
+    expect(named(plain)).toEqual([trait, expect.objectContaining({ source: 'feat', ref: expect.objectContaining({ entryName: 'Lantern Bearer' }) })]);
+    const earlier = { id: 'f-earlier', name: 'Lantern Bearer', source: 'feat' as const, sourceName: 'Ability Score Improvement (Fighter 4)', description: lantern.description, uses: { max: 2, used: 1, recharge: 'long' as const } };
+    const again = levelWith({ ...fighter4(), features: [earlier] }, FIGHTER, choice).character;
+    expect(named(again)).toEqual([earlier, expect.objectContaining({ source: 'feat', sourceName: 'Ability Score Improvement (Fighter 4)' })]);
+    expect(named(again)[1].id).not.toBe(earlier.id);
+    // Given to levelUp (the dialog): that feature is the one completed, its id kept.
+    const gained = gainedFeatures(FIGHTER, 4, undefined, ctxOf(c), { have: c.features });
+    const leveled = levelUp(c, { className: 'Fighter', classId: FIGHTER.id, hpMethod: 'average', newFeatures: [...gained, { name: lantern.name, source: 'feat', description: lantern.description }] }).character;
+    const addedIds = new Set(leveled.features.filter((f) => f.id !== trait.id).map((f) => f.id));
+    const bare = leveled.features.find((f) => f.source === 'feat' && f.name === 'Lantern Bearer')!;
+    const done = applyFeatChoice(leveled, featChoiceTrigger(gained) as FeatChoiceTrigger, choice, { className: 'Fighter', classLevel: 4, addedIds }).character;
+    expect(named(done)).toEqual([trait, expect.objectContaining({ id: bare.id, sourceName: 'Ability Score Improvement (Fighter 4)', ref: expect.objectContaining({ entryName: 'Lantern Bearer' }) })]);
+  });
+
   it("marks a style already on the sheet taken, a feat or a style the class prints (SRD 5.1 Fighting Style: an option can't be taken twice)", () => {
     const paladin = classOf('srd:class:paladin');
     const taken = (have: { name: string; source: Feature['source'] }[], feats: readonly FeatOption[] = EXPECTED_MERGED.feats) =>
@@ -271,6 +304,25 @@ describe('the Feat choice panel', () => {
     expect(taken([{ name: 'Defense', source: 'species' }])).toEqual([]);
     const repeatable = EXPECTED_MERGED.feats.map((f) => (f.name === 'Defense' ? { ...f, repeatable: true } : f));
     expect(taken([{ name: 'Defense', source: 'feat' }], repeatable)).toEqual([]);
+    // One rule with the Defense AC (SRD 5.2.1 Defense: +1 AC in armor): whatever the entry's source, the style is taken
+    // exactly when the AC counts it, so a boon's, item's or background's "Defense" leaves the feat that raises it open.
+    const mail = sampleCharacter({ inventory: [{ id: 'mail', name: 'Chain Mail', quantity: 1, category: 'armor', equipped: true }] });
+    const sources: Feature['source'][] = ['class', 'subclass', 'species', 'background', 'feat', 'boon', 'transformation', 'item', 'homebrew', 'other'];
+    const ac = (features: Feature[]) => computeArmorClass({ ...mail, features }).ac;
+    const counted = sources.filter((source) => ac([{ id: 'd', name: 'Defense', source, description: '' }]) > ac([]));
+    expect(counted).toEqual(['class', 'subclass', 'feat', 'homebrew', 'other']);
+    for (const source of sources) expect(taken([{ name: 'Defense', source }]), source).toEqual(counted.includes(source) ? ['Defense'] : []);
+    // A style feat a book names "Fighting Style: …" itself is taken under that name too (invented).
+    const hooked = EXPECTED_MERGED.feats.find((f) => f.name === 'Hooked Reach')!;
+    for (const name of ['Fighting Style: Lantern Guard', 'Additional Fighting Style: Lantern Guard', 'Fighting Style Feat: Lantern Guard']) {
+      const feat: FeatOption = { ...hooked, id: `lib:gloam:feat:${nameKey(name)}`, name };
+      expect(taken([{ name, source: 'feat' }], [...EXPECTED_MERGED.feats, feat]), name).toEqual([name]);
+      expect(taken([{ name: `Fighting Style (${name})`, source: 'other' }], [...EXPECTED_MERGED.feats, feat]), name).toEqual([name]);
+    }
+    // A book's style with a style suffix is the style the sheet has (as the Defense AC reads it), either way round.
+    const suffixed: FeatOption = { ...hooked, id: 'lib:gloam:feat:defense-fighting-style', name: 'Defense Fighting Style' };
+    expect(taken([{ name: 'Defense', source: 'feat' }], [...EXPECTED_MERGED.feats, suffixed])).toEqual(['Defense', 'Defense Fighting Style']);
+    expect(taken([{ name: 'Defense Fighting Style', source: 'feat' }], [...EXPECTED_MERGED.feats, suffixed])).toEqual(['Defense', 'Defense Fighting Style']);
   });
 
   it("offers a 2024 book's feat in place of the SRD feat of its name (the picked one stays); an older book's sits beside it", () => {
@@ -376,5 +428,25 @@ describe('the Feat choice panel', () => {
       max: 20,
     });
     expect(featIncrease({ description: 'You can stay awake through the night.' })).toBeUndefined();
+  });
+});
+
+describe('featureUseChanges: the uses a level-up changed', () => {
+  it('tells apart two of one name that both grew, as features_use names them (SRD 5.2.1 Feats: Repeatable)', () => {
+    const taking = (id: string, level: number, max: number): Feature => ({
+      id,
+      name: 'Wick Tender',
+      source: 'feat',
+      sourceName: `Ability Score Improvement (Fighter ${level})`,
+      description: 'Invented feat.',
+      uses: { max, used: 0, recharge: 'long' },
+    });
+    const rage: Feature = { id: 'rage', name: 'Rage', source: 'class', description: '', uses: { max: 2, used: 0, recharge: 'long' } };
+    const before = sampleCharacter({ features: [taking('a', 4, 3), taking('b', 8, 3), rage] });
+    const after = { ...before, features: [taking('a', 4, 4), taking('b', 8, 4), { ...rage, uses: { ...rage.uses!, max: 3 } }] };
+    expect(featureUseChanges(before, after)).toEqual(['Wick Tender (Ability Score Improvement (Fighter 4)) 3 → 4', 'Wick Tender (Ability Score Improvement (Fighter 8)) 3 → 4', 'Rage 2 → 3']);
+    // Only one of them grew: its name alone.
+    const one = { ...before, features: [taking('a', 4, 4), taking('b', 8, 3), rage] };
+    expect(featureUseChanges(before, one)).toEqual(['Wick Tender 3 → 4']);
   });
 });

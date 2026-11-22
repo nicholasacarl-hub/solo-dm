@@ -368,9 +368,11 @@ function baseName(name: string): string {
 /**
  * The feature's own scale, or for sheets saved before FeatureUses.scale, the SRD table for a well-known
  * class feature of an SRD class. A book's feature (it has a ref) or a feature of a book's class (its entry
- * has a library id) never gets the SRD's table: its uses came from its own text and table (B8).
+ * has a library id) never gets the SRD's table: its uses came from its own text and table (B8). Nor does a number the
+ * DM ruled (FeatureUses.ruled).
  */
 function featureScale(f: Feature, classes: readonly ClassLevel[]): FeatureScale | undefined {
+  if (f.uses?.ruled) return undefined;
   if (f.uses?.scale) return f.uses.scale;
   if (f.source !== 'class' || f.ref) return undefined;
   const key = nameKey(baseName(f.name));
