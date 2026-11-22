@@ -21,12 +21,15 @@ import {
   featChoices,
   featChoiceTrigger,
   featIncrease,
+  hasFightingStyleFeature,
   subclassCastingOf,
   subclassFightingStyle,
   subclassRefOf,
   subclassSpellsToAdd,
   type FeatChoice,
+  type FeatChoiceContext,
   type FeatChoiceTrigger,
+  type FeatPick,
 } from './levelUpChoices';
 
 const classOf = (id: string): ClassOption => {
@@ -197,7 +200,7 @@ describe('the Feat choice panel', () => {
   });
 
   it('offers General feats from every source at Ability Score Improvement, checking only "Level N+"', () => {
-    const picks = featChoices('asi', EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel: 4, have: [] });
+    const picks = featChoices('asi', EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel: 4, have: [] }).filter((p) => p.category === 'general');
     expect(picks.map((p) => p.name)).toEqual(['Grappler', 'Lantern Bearer', 'Watchlight Vigil']);
     const [grappler, lantern, vigil] = picks;
     expect(grappler).toMatchObject({ sourceLabel: 'SRD 5.2.1', prerequisite: 'Level 4+, Strength or Dexterity 13+', minLevel: 4, meetsLevel: true });
@@ -205,6 +208,88 @@ describe('the Feat choice panel', () => {
     expect(lantern).toMatchObject({ sourceLabel: GLOAMWOOD_TITLE, minLevel: 4, meetsLevel: true, increase: { abilities: ['wis', 'cha'], amount: 1, max: 20 } });
     // Level 8+ at level 4: flagged, still offered (the player can say their DM allows it).
     expect(vigil).toMatchObject({ minLevel: 8, meetsLevel: false, taken: false });
+  });
+
+  describe('every feat the hero qualifies for at Ability Score Improvement and Epic Boon (SRD 5.2.1 Fighter 4, 19: "or another feat of your choice for which you qualify")', () => {
+    const names = (picks: readonly FeatPick[]) => picks.map((p) => p.name);
+    const GENERAL = ['Grappler', 'Lantern Bearer', 'Watchlight Vigil'];
+    // SRD 5.2.1 Feats: Origin feats have no prerequisite.
+    const ORIGIN = ['Alert', 'Magic Initiate', 'Savage Attacker', 'Skilled', "Moth's Grace"];
+    const STYLES = ['Archery', 'Defense', 'Great Weapon Fighting', 'Two-Weapon Fighting', 'Hooked Reach'];
+    const BOONS = [
+      'Boon of Combat Prowess',
+      'Boon of Dimensional Travel',
+      'Boon of Fate',
+      'Boon of Irresistible Offense',
+      'Boon of Spell Recall',
+      'Boon of the Night Spirit',
+      'Boon of Truesight',
+    ];
+    const STYLE_FEATURE = { name: 'Fighting Style', source: 'class' as const };
+    const panel = (kind: 'asi' | 'epic-boon', characterLevel: number, have: FeatChoiceContext['have'] = []) =>
+      featChoices(kind, EXPECTED_MERGED.feats, { cls: FIGHTER, characterLevel, have });
+
+    it('offers Origin feats beside the General feats, each with its category', () => {
+      const picks = panel('asi', 4);
+      expect(names(picks)).toEqual([...GENERAL, ...ORIGIN]);
+      expect(picks.map((p) => p.category)).toEqual([...GENERAL.map(() => 'general'), ...ORIGIN.map(() => 'origin')]);
+      expect(picks.find((p) => p.name === 'Alert')).toMatchObject({ sourceLabel: 'SRD 5.2.1', meetsLevel: true, taken: false });
+      expect(picks.find((p) => p.name === 'Alert')).not.toHaveProperty('minLevel');
+    });
+
+    it('offers Fighting Style feats only with a Fighting Style feature (Prerequisite: Fighting Style Feature)', () => {
+      expect(names(panel('asi', 6, [STYLE_FEATURE]))).toEqual([...GENERAL, ...ORIGIN, ...STYLES]);
+      expect(names(panel('epic-boon', 19, [STYLE_FEATURE]))).toEqual([...BOONS, ...GENERAL, ...ORIGIN, ...STYLES]);
+      // A Wizard's Ability Score Improvement: none.
+      expect(names(panel('asi', 4, [{ name: 'Arcane Recovery', source: 'class' }]))).toEqual([...GENERAL, ...ORIGIN]);
+      // A style the class prints isn't a feat: never at an Ability Score Improvement.
+      const paladin = featChoices('asi', EXPECTED_MERGED.feats, { cls: classOf('srd:class:paladin'), characterLevel: 4, have: [STYLE_FEATURE] });
+      expect(paladin.every((p) => p.feat)).toBe(true);
+      expect(names(paladin)).not.toContain('Blessed Warrior');
+    });
+
+    it('offers Epic Boons at an Ability Score Improvement from level 19 (Prerequisite: Level 19+), and every category at Epic Boon', () => {
+      expect(names(panel('asi', 18))).toEqual([...GENERAL, ...ORIGIN]);
+      // A Rogue 4 with 15 Fighter levels: character level 19.
+      const at19 = panel('asi', 19);
+      expect(names(at19)).toEqual([...GENERAL, ...ORIGIN, ...BOONS]);
+      expect(at19.find((p) => p.name === 'Boon of Fate')).toMatchObject({ category: 'epic-boon', minLevel: 19, meetsLevel: true });
+      expect(names(panel('epic-boon', 19))).toEqual([...BOONS, ...GENERAL, ...ORIGIN]);
+    });
+
+    it("marks an Origin feat the sheet holds taken, unless Repeatable (Magic Initiate, Skilled); a style as the engine reads it", () => {
+      // The background's Alert and Magic Initiate, the species' Skilled (the builder adds them as feats).
+      const have: FeatChoiceContext['have'] = [
+        { name: 'Alert', source: 'feat' },
+        { name: 'Magic Initiate', source: 'feat' },
+        { name: 'Skilled', source: 'feat' },
+        STYLE_FEATURE,
+        // An older sheet's style under the feature's name: the Defense feat is that style; a boon's "Archery" isn't.
+        { name: 'Fighting Style (Defense)', source: 'class' },
+        { name: 'Archery', source: 'boon' },
+      ];
+      for (const kind of ['asi', 'epic-boon'] as const) {
+        expect(
+          panel(kind, 19, have)
+            .filter((p) => p.taken)
+            .map((p) => p.name),
+          kind,
+        ).toEqual(['Alert', 'Defense']);
+      }
+    });
+  });
+
+  it("reads a Fighting Style feature however the sheet names it, from a class, subclass or the DM's own entry (SRD 5.2.1 Feats: Fighting Style Feature)", () => {
+    const has = (name: string, source: Feature['source']) => hasFightingStyleFeature([{ name, source }]);
+    for (const name of ['Fighting Style', 'Fighting Style (Defense)', 'Fighting Style: Defense', 'Additional Fighting Style', 'Fighting Styles']) {
+      expect(has(name, 'class'), name).toBe(true);
+    }
+    for (const source of ['subclass', 'homebrew', 'other'] as const) expect(has('Fighting Style', source), source).toBe(true);
+    // A feat, species trait, transformation's power or a boon's, item's or background's feature of the name isn't one…
+    for (const source of ['feat', 'species', 'transformation', 'boon', 'item', 'background'] as const) expect(has('Fighting Style', source), source).toBe(false);
+    // …nor a style, or another feature with the words.
+    for (const name of ['Defense', 'Fighting Spirit', 'Martial Fighting Style']) expect(has(name, 'class'), name).toBe(false);
+    expect(hasFightingStyleFeature([])).toBe(false);
   });
 
   it("marks a feat taken that the sheet holds as a feat or as the DM's entry of its name, not a trait's or a transformation's (SRD 5.2.1 Feats: once, unless Repeatable)", () => {
@@ -233,7 +318,7 @@ describe('the Feat choice panel', () => {
     const picks = featChoices('fighting-style', EXPECTED_MERGED.feats, { cls: paladin, characterLevel: 2, have });
     expect(picks.map((p) => p.name)).toEqual(['Archery', 'Defense', 'Great Weapon Fighting', 'Two-Weapon Fighting', 'Hooked Reach', 'Blessed Warrior']);
     expect(picks.find((p) => p.name === 'Defense')?.taken).toBe(true);
-    expect(picks.at(-1)).toMatchObject({ id: 'inline:blessed-warrior', sourceLabel: 'SRD 5.2.1' });
+    expect(picks.at(-1)).toMatchObject({ id: 'inline:blessed-warrior', sourceLabel: 'SRD 5.2.1', category: 'fighting-style' });
     expect(picks.at(-1)?.description).toMatch(/^You learn two Cleric cantrips/);
   });
 

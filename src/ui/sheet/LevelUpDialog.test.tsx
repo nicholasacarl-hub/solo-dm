@@ -210,7 +210,8 @@ describe('LevelUpDialog with imported options', () => {
 
   it("counts Tough's Hit Points at the level it's taken in the feat panel (twice the character level)", async () => {
     const user = userEvent.setup();
-    const tough = { id: 'lib:gloam:feat:tough', name: 'Tough', category: 'general' as const, description: 'Invented: hardier than most.' };
+    // An Origin feat in a 2024 book, as in the SRD's category list: offered at an Ability Score Improvement too.
+    const tough = { id: 'lib:gloam:feat:tough', name: 'Tough', category: 'origin' as const, description: 'Invented: hardier than most.' };
     mocks.data = { ...EXPECTED_MERGED, feats: [...EXPECTED_MERGED.feats, tough] };
     resetFakeGame({ campaign: sampleCampaign(), character: fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }) });
     render(<LevelUpDialog open onClose={() => undefined} />);
@@ -220,6 +221,79 @@ describe('LevelUpDialog with imported options', () => {
     expect(sheet().hp.max).toBe(30 + 7 + 8);
     expect(sheet().features.filter((f) => f.name === 'Tough')).toEqual([expect.objectContaining({ source: 'feat', sourceName: 'Ability Score Improvement (Fighter 4)', description: 'Invented: hardier than most.' })]);
     expect(notices()[0]).toContain('+15 HP');
+  });
+
+  describe('every feat the hero qualifies for at an Ability Score Improvement (SRD 5.2.1 Fighter 4: "or another feat of your choice for which you qualify")', () => {
+    const builderFighter = (extra: Partial<Character> = {}) => ({
+      ...fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }),
+      // As the builder makes a Fighter: its Fighting Style feature and the style it chose.
+      features: [
+        { id: 'f-style', name: 'Fighting Style', source: 'class' as const, sourceName: 'Fighter 1', description: '' },
+        { id: 'f-defense', name: 'Defense', source: 'feat' as const, sourceName: 'Fighting Style (Fighter 1)', description: '' },
+      ],
+      initiativeBonusExtra: 0,
+      ...extra,
+    });
+    const radios = (group: HTMLElement) => within(group).getAllByRole('radio').map((r) => r.getAttribute('aria-label'));
+
+    it('lists them under a heading per category, a style the hero has greyed out and its prerequisite checked', () => {
+      resetFakeGame({ campaign: sampleCampaign(), character: builderFighter() });
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      expect(radios(screen.getByRole('group', { name: 'General feats' }))).toEqual(['Grappler', 'Lantern Bearer', 'Watchlight Vigil']);
+      expect(radios(screen.getByRole('group', { name: 'Origin feats' }))).toEqual(['Alert', 'Magic Initiate', 'Savage Attacker', 'Skilled', "Moth's Grace"]);
+      const styles = screen.getByRole('group', { name: 'Fighting Style feats' });
+      expect(radios(styles)).toEqual(['Archery', 'Defense', 'Great Weapon Fighting', 'Two-Weapon Fighting', 'Hooked Reach']);
+      expect(within(styles).getByRole('radio', { name: 'Defense' })).toBeDisabled();
+      // The panel checked "Fighting Style Feature": no "(your DM checks)" for it.
+      expect(within(styles).getAllByText('met')).toHaveLength(5);
+      expect(within(styles).queryByText(/your DM checks/)).toBeNull();
+      expect(screen.queryByRole('group', { name: 'Epic Boon feats' })).toBeNull();
+    });
+
+    it('takes Alert, which adds the Proficiency Bonus to Initiative (SRD 5.2.1 Alert: Initiative Proficiency)', async () => {
+      const user = userEvent.setup();
+      resetFakeGame({ campaign: sampleCampaign(), character: builderFighter() });
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      await user.click(screen.getByRole('radio', { name: 'Alert' }));
+      await user.click(screen.getByRole('button', { name: 'Level up' }));
+      expect(sheet().initiativeBonusExtra).toBe(2);
+      expect(sheet().features.filter((f) => f.name === 'Alert')).toEqual([expect.objectContaining({ source: 'feat', sourceName: 'Ability Score Improvement (Fighter 4)' })]);
+      expect(sheet().features.some((f) => f.name === 'Ability Score Improvement')).toBe(false);
+      expect(notices()[0]).toContain('feat: Alert');
+      expect(notices()[0]).not.toMatch(/Ability Score Improvement — raise/);
+    });
+
+    it("takes Magic Initiate, and the player and the DM are reminded of the choices the sheet doesn't make", async () => {
+      const user = userEvent.setup();
+      resetFakeGame({ campaign: sampleCampaign(), character: builderFighter() });
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      await user.click(screen.getByRole('radio', { name: 'Magic Initiate' }));
+      await user.click(screen.getByRole('button', { name: 'Level up' }));
+      const reminder = 'Magic Initiate: choose its spell list, two cantrips and a level 1 spell from it, and its spellcasting ability.';
+      expect(notices()[0]).toContain(`still to choose: ${reminder}`);
+      expect(await screen.findByText(reminder)).toBeInTheDocument();
+    });
+
+    it('lists the Epic Boons first at Epic Boon, then the other feats the hero qualifies for (SRD 5.2.1 Fighter 19)', () => {
+      resetFakeGame({ campaign: sampleCampaign(), character: builderFighter({ classes: [{ classId: FIGHTER.id, name: 'Fighter', level: 18, hitDie: 10, casterType: 'none', subclass: 'Champion', subclassId: 'srd:subclass:champion' }], hitDice: [{ die: 10, total: 18, spent: 0 }] }) });
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      const titles = screen.getAllByRole('group', { name: /feats$/ }).map((g) => document.getElementById(g.getAttribute('aria-labelledby') ?? '')?.textContent);
+      expect(titles).toEqual(['Epic Boon feats', 'General feats', 'Origin feats', 'Fighting Style feats']);
+      expect(radios(screen.getByRole('group', { name: 'Epic Boon feats' }))[0]).toBe('Boon of Combat Prowess');
+    });
+
+    it('offers no Fighting Style feats to a hero without the feature; a General feat that asks for one is for the DM to check', () => {
+      // An invented book's General feat with the Fighting Style feature among its prerequisites: offered, flagged.
+      const drill = { id: 'lib:gloam:feat:banner-drill', name: 'Banner Drill', category: 'general' as const, prerequisite: 'Level 4+, Fighting Style Feature', description: 'Invented.' };
+      mocks.data = { ...EXPECTED_MERGED, feats: [...EXPECTED_MERGED.feats, drill] };
+      resetFakeGame({ campaign: sampleCampaign(), character: builderFighter({ features: [] }) });
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      expect(screen.getByRole('group', { name: 'Origin feats' })).toBeInTheDocument();
+      expect(screen.queryByRole('group', { name: 'Fighting Style feats' })).toBeNull();
+      expect(screen.queryByRole('radio', { name: 'Archery' })).toBeNull();
+      const row = screen.getByRole('radio', { name: 'Banner Drill' }).closest('li') as HTMLElement;
+      expect(within(row).getByText('Fighting Style Feature (your DM checks)')).toBeInTheDocument();
+    });
   });
 
   describe("the Champion's Additional Fighting Style (SRD 5.2.1 Champion, level 7)", () => {
@@ -232,6 +306,9 @@ describe('LevelUpDialog with imported options', () => {
       render(<LevelUpDialog open onClose={() => undefined} />);
       expect(screen.getByRole('heading', { name: 'Additional Fighting Style' })).toBeInTheDocument();
       expect(screen.getByRole('radio', { name: /^Defense/ })).toBeDisabled();
+      // One category: no headings, and no Origin or General feats.
+      expect(screen.queryByRole('group', { name: /feats$/ })).toBeNull();
+      expect(screen.queryByRole('radio', { name: 'Alert' })).toBeNull();
       await user.click(screen.getByRole('radio', { name: /^Archery/ }));
       await user.click(screen.getByRole('button', { name: 'Level up' }));
       expect(sheet().features.map((f) => [f.name, f.source, f.sourceName])).toEqual([
@@ -272,6 +349,8 @@ describe('LevelUpDialog with imported options', () => {
     render(<LevelUpDialog open onClose={() => undefined} />);
     await user.click(within(screen.getByRole('radiogroup', { name: 'Subclass' })).getByRole('radio', { name: /Lamp Sentinel/ }));
     expect(screen.getByRole('radio', { name: /^Lantern Guard/ })).toBeEnabled();
+    // One category, the styles printed and the feats alike: no headings.
+    expect(screen.queryByRole('group', { name: /feats$/ })).toBeNull();
     await user.click(screen.getByRole('radio', { name: /^Wick Lash/ }));
     await user.click(screen.getByRole('button', { name: 'Level up' }));
     const own = sheet().features.filter((f) => f.source === 'subclass');

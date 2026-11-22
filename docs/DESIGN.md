@@ -747,7 +747,13 @@ class prints, can't be taken again: by its name however it's written, "Fighting 
 item's or background's, one rule with the engine's Defense AC, `isFightingStyle`; a book subclass's own Fighting Style
 that prints its styles, an older book's, offers those in place of the class's, beside the Fighting Style feats, and adds
 the one chosen as the subclass's feature with that style's ref, `subclassFightingStyle`, its book noting so as a class's
-does, fighting-style-inline), with "Decide with my DM" preselected. A feat taken there is the feature the level-up
+does, fighting-style-inline), with "Decide with my DM" preselected. At an Ability Score Improvement or Epic Boon it offers
+every feat the hero qualifies for (SRD 5.2.1: "or another feat of your choice for which you qualify"): General and Origin
+feats, Fighting Style feats with a Fighting Style feature (`hasFightingStyleFeature`: a class's, subclass's or the DM's
+own feature of the name, however it's written) and Epic Boons from level 19, under a heading per category; of a feat's
+prerequisites it checks "Level N+" and a Fighting Style feat's feature. Alert taken at a level-up adds the Proficiency
+Bonus to Initiative, as Tough adds its Hit Points, and Magic Initiate's and Skilled's own choices are reminders for the
+player and the DM. A feat taken there is the feature the level-up
 added for it, completed by id: a species trait or class feature of its name, a transformation's power (gone when the
 transformation ends), or an earlier taking of a Repeatable feat, stays beside it as it was, and another feat the sheet
 holds (a feat, or the DM's boon's, background's, item's, homebrew or other entry of its name; a style as above) is
