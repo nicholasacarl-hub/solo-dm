@@ -27,6 +27,7 @@ import {
   characterStatusLine,
   conditionKey,
   featOrTrait,
+  featureLabel,
   featureToRewrite,
   saveSourcesChangeText,
   gainXp,
@@ -56,7 +57,7 @@ import { gainedFeatures } from '@/data/options/leveling';
 import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
 import { subclassesOf } from '@/data/options/replaced';
 import { classByName, classOptionFor, multiclassPrimariesFor, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
-import { matchByName } from '@/engine/util';
+import { listJoin, matchByName } from '@/engine/util';
 import { nameKey } from '@/lib/id';
 import { textFingerprint } from '@/lib/importedContent';
 import {
@@ -1002,6 +1003,17 @@ export async function takeRestTool(input: ToolInput<'take_rest'>, ctx: ToolConte
 // level_up
 // ---------------------------------------------------------------------------
 
+/**
+ * A reminder of the numbers of uses the DM ruled (FeatureUses.ruled), which level-ups leave as they are: "Kept your
+ * ruling: Second Wind 4 uses", each told apart from a namesake as features_use takes it. Null when it ruled none.
+ */
+function keptRulings(after: Character): string | null {
+  const ruled = after.features.filter((f) => f.uses?.ruled);
+  if (!ruled.length) return null;
+  const list = listJoin(ruled.map((f) => `${featureLabel(f, after.features)} ${plural(f.uses?.max ?? 0, 'use')}`));
+  return `Kept your ruling${ruled.length === 1 ? '' : 's'}: ${list} (a new uses_max in features_add changes ${ruled.length === 1 ? 'it' : 'one'}).`;
+}
+
 /** Features whose maximum uses changed in a level-up ("Rage: 2 → 3 uses"). */
 function updatedUses(before: Character, after: Character): string[] {
   const lines: string[] = [];
@@ -1203,6 +1215,8 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...books, ...change.reminders].join('\n') || undefined });
   const lines = [summary, ...eventLines(change.events), ...books];
   if (uses.length) lines.push('Limited-use features that grew with the level (already on the sheet):', ...uses.map((u) => `- ${u}`));
+  const rulings = keptRulings(change.character);
+  if (rulings) lines.push(rulings);
   if (change.reminders.length) lines.push('Choices the player still needs to make:', ...change.reminders.map((r) => `- ${r}`));
   const saves = saveSourcesChangeText(before, change.character);
   if (saves) lines.push(`${saves}.`);
