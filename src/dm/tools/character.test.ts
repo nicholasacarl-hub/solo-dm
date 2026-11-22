@@ -159,6 +159,35 @@ describe('level_up from the merged builder data', () => {
     expect(out.content).toContain('Kept your rulings: Lantern Luck (species) 2 uses and Lantern Luck (feat) 1 use (a new uses_max in features_add changes one).');
   });
 
+  it('naming the hero’s own book subclass by the name it was given in review since adds none of its features again', async () => {
+    const h = setup({ character: hero({ classId: FIGHTER.id, name: 'Fighter', level: 2, hitDie: 10 }) });
+    expect((await h.run('level_up', { class_name: 'Fighter', subclass: 'Ember Warden' })).isError).toBeUndefined();
+    const before = h.sheet().features.map((f) => [f.name, f.sourceName]);
+    expect(before).toEqual(expect.arrayContaining([['Ember Ward', 'Ember Warden 3'], ['Kindled Strikes', 'Ember Warden 3']]));
+    // The player renamed it in review: the same option id, a new name.
+    const renamed = { ...EMBER, name: 'Ember Keeper' };
+    const data: BuilderData = { ...EXPECTED_MERGED, classes: EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, subclasses: c.subclasses.map((s) => (s.id === EMBER.id ? renamed : s)) } : c)) };
+    const again = setup({ builderData: data, character: h.sheet() });
+    expect((await again.run('level_up', { class_name: 'Fighter', subclass: 'Ember Keeper' })).isError).toBeUndefined();
+    expect(again.sheet().features.filter((f) => f.name === 'Ember Ward' || f.name === 'Kindled Strikes')).toHaveLength(2);
+    // Its id and ref stay, under the name it has now.
+    expect(again.sheet().classes[0]).toMatchObject({ level: 4, subclass: 'Ember Keeper', subclassId: EMBER.id, subclassRef: { entryId: EMBER.id } });
+  });
+
+  it("a multiclass hero's other subclass's feature of the same name doesn't keep the new subclass's own off the sheet", async () => {
+    // An invented book subclass of the SRD Fighter whose level-3 feature is named Fighting Style, and a Paladin's
+    // invented oath with a feature of that name already on the sheet.
+    const style = { level: 3, name: 'Fighting Style', description: 'Invented: the sentinel’s own style.', ref: { ...EMBER.features[0].ref!, entryId: 'lib:gloam:subclass:lamp-sentinel', entryName: 'Lamp Sentinel', part: 'Fighting Style' } };
+    const sentinel: SubclassOption = { ...EMBER, id: 'lib:gloam:subclass:lamp-sentinel', name: 'Lamp Sentinel', features: [style] };
+    const data: BuilderData = { ...EXPECTED_MERGED, classes: EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, subclasses: [...c.subclasses, sentinel] } : c)) };
+    const fighter2 = hero({ classId: FIGHTER.id, name: 'Fighter', level: 2, hitDie: 10 });
+    const paladin: ClassLevel = { classId: 'srd:class:paladin', name: 'Paladin', level: 5, hitDie: 10, casterType: 'half', subclass: 'Oath of the Wick' };
+    const oath = { id: 'f-oath', name: 'Fighting Style', source: 'subclass' as const, sourceName: 'Oath of the Wick 3', description: 'Invented: the oath’s own style.' };
+    const h = setup({ builderData: data, character: { ...fighter2, classes: [...fighter2.classes, paladin], features: [oath] } });
+    expect((await h.run('level_up', { class_name: 'Fighter', subclass: 'Lamp Sentinel' })).isError).toBeUndefined();
+    expect(h.sheet().features.filter((f) => f.name === 'Fighting Style').map((f) => f.sourceName)).toEqual(['Oath of the Wick 3', 'Lamp Sentinel 3']);
+  });
+
   it('names a tie between classes of the same name and uses the hero’s own', async () => {
     const importedFighter: ClassOption = { ...FIGHTER, id: 'lib:gloam:class:fighter', subclasses: [], source: { sourceId: 'gloam', title: GLOAMWOOD_TITLE, recordId: 'rec:gloam:class:fighter', format: '2024', adaptations: [] } };
     const data: BuilderData = { ...EXPECTED_MERGED, classes: [...EXPECTED_MERGED.classes, importedFighter] };

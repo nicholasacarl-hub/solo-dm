@@ -256,6 +256,73 @@ describe('LevelUpDialog with imported options', () => {
     });
   });
 
+  it("offers the styles a book subclass's own Fighting Style prints, and adds the one chosen as the subclass's with its ref", async () => {
+    const user = userEvent.setup();
+    // An invented book subclass of the SRD Fighter whose level-3 Fighting Style lists two styles of its own.
+    const guard = 'While you hold your lantern aloft, the first attack against you each round has Disadvantage.';
+    const lash = 'Your wick cracks like a whip, and a creature it hits drops one object it holds.';
+    const style = {
+      level: 3,
+      name: 'Fighting Style',
+      description: ['Choose one of the options below.', `***Lantern Guard.*** ${guard}`, `***Wick Lash.*** ${lash}`].join('\n\n'),
+      ref: { ...EMBER.features[0].ref!, entryId: 'lib:gloam:subclass:lamp-sentinel', entryName: 'Lamp Sentinel', part: 'Fighting Style' },
+    };
+    const sentinel = { ...EMBER, id: 'lib:gloam:subclass:lamp-sentinel', name: 'Lamp Sentinel', features: [style] };
+    mocks.data = { ...EXPECTED_MERGED, classes: EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, subclasses: [...c.subclasses, sentinel] } : c)) };
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Subclass' })).getByRole('radio', { name: /Lamp Sentinel/ }));
+    expect(screen.getByRole('radio', { name: /^Lantern Guard/ })).toBeEnabled();
+    await user.click(screen.getByRole('radio', { name: /^Wick Lash/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    const own = sheet().features.filter((f) => f.source === 'subclass');
+    expect(own.map((f) => [f.name, f.sourceName])).toEqual([
+      ['Fighting Style', 'Lamp Sentinel 3'],
+      ['Wick Lash', 'Fighting Style (Lamp Sentinel 3)'],
+    ]);
+    expect(own[1]).toMatchObject({ description: lash, ref: { kind: 'subclass', entryId: sentinel.id, part: 'Wick Lash', textCopied: true } });
+    expect(notices()[0]).toContain('Wick Lash');
+
+    // Another subclass printing a style of that name: switching to it after the pick applies its words and ref, as shown.
+    cleanup();
+    resetFakeGame({ campaign: sampleCampaign(), character: fighter(2) });
+    const coil = 'Your wick coils around a foe, and it has Disadvantage on its next attack roll.';
+    const keeperStyle = {
+      ...style,
+      description: ['Choose one of the options below.', `***Wick Lash.*** ${coil}`, '***Ember Stance.*** Invented: another style.'].join('\n\n'),
+      ref: { ...style.ref, entryId: 'lib:gloam:subclass:hearth-keeper', entryName: 'Hearth Keeper' },
+    };
+    const keeper = { ...EMBER, id: 'lib:gloam:subclass:hearth-keeper', name: 'Hearth Keeper', features: [keeperStyle] };
+    mocks.data = { ...EXPECTED_MERGED, classes: EXPECTED_MERGED.classes.map((c) => (c.id === FIGHTER.id ? { ...c, subclasses: [...c.subclasses, sentinel, keeper] } : c)) };
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    const subclasses = () => within(screen.getByRole('radiogroup', { name: 'Subclass' }));
+    await user.click(subclasses().getByRole('radio', { name: /Lamp Sentinel/ }));
+    await user.click(screen.getByRole('radio', { name: /^Wick Lash/ }));
+    await user.click(subclasses().getByRole('radio', { name: /Hearth Keeper/ }));
+    expect(screen.getByRole('radio', { name: /^Wick Lash/ })).toBeChecked();
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().features.find((f) => f.name === 'Wick Lash')).toMatchObject({
+      sourceName: 'Fighting Style (Hearth Keeper 3)',
+      description: coil,
+      ref: { entryId: keeper.id, entryName: 'Hearth Keeper', part: 'Wick Lash' },
+    });
+
+    // A Fighter 2 / Paladin 5 whose (invented) oath has a feature named Fighting Style too still gains the subclass's own.
+    cleanup();
+    const paladin: ClassLevel = { classId: 'srd:class:paladin', name: 'Paladin', level: 5, hitDie: 10, casterType: 'half', subclass: 'Oath of the Wick' };
+    const oath = { id: 'f-oath', name: 'Fighting Style', source: 'subclass' as const, sourceName: 'Oath of the Wick 3', description: 'Invented: the oath’s own style.' };
+    const two = fighter(2);
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...two, classes: [...two.classes, paladin], features: [oath] } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(subclasses().getByRole('radio', { name: /Lamp Sentinel/ }));
+    await user.click(screen.getByRole('radio', { name: /^Lantern Guard/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().features.filter((f) => f.source === 'subclass').map((f) => [f.name, f.sourceName])).toEqual([
+      ['Fighting Style', 'Oath of the Wick 3'],
+      ['Fighting Style', 'Lamp Sentinel 3'],
+      ['Lantern Guard', 'Fighting Style (Lamp Sentinel 3)'],
+    ]);
+  });
+
   it('a Repeatable feat taken again is a second feature with its ref; the first stays as it was, its uses too', async () => {
     const user = userEvent.setup();
     const lantern = EXPECTED_MERGED.feats.find((f) => f.name === 'Lantern Bearer')!;

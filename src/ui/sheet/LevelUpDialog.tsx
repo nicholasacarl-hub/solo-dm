@@ -24,6 +24,7 @@ import {
   featChoiceTrigger,
   offersScoreIncrease,
   subclassCastingOf,
+  subclassFightingStyle,
   subclassRefOf,
   subclassSpellsToAdd,
   type FeatChoice,
@@ -117,7 +118,9 @@ function planLevel(
   const needsSubclass = Boolean(option && classLevel >= option.subclassLevel && !existing?.subclass && choices.length);
   const sub = needsSubclass ? choices.find((s) => s.id === subclassId) : existing ? subclassOptionFor(existing, option, classes) : undefined;
   const ctx = { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 };
-  const features = option ? gainedFeatures(option, classLevel, sub, ctx, { have: c.features, subclassChosenNow: needsSubclass }) : [];
+  // A multiclass hero's other classes' subclasses: a feature of one of theirs isn't this subclass's.
+  const otherSubclasses = c.classes.filter((cl) => cl !== existing).flatMap((cl) => (cl.subclass ? [cl.subclass] : []));
+  const features = option ? gainedFeatures(option, classLevel, sub, ctx, { have: c.features, subclassChosenNow: needsSubclass, otherSubclasses }) : [];
   return {
     existing,
     option,
@@ -127,7 +130,7 @@ function planLevel(
     needsSubclass,
     sub,
     features,
-    caughtUp: needsSubclass ? caughtUpFeatures(sub, classLevel, c.features) : [],
+    caughtUp: needsSubclass ? caughtUpFeatures(sub, classLevel, c.features, otherSubclasses) : [],
     trigger: featChoiceTrigger(features),
     spells: subclassSpellsToAdd(sub, classLevel, c.spellcasting?.spells ?? [], findSpell),
   };
@@ -505,18 +508,23 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
     ? [option, ...character.classes.map((cl) => classOptionFor(cl, classes))].filter((c): c is ClassOption => Boolean(c))
     : [];
   const prereqMet = prereqClasses.every((c) => meetsPrimary(c, character.abilityScores));
+  // An older book's subclass whose own Fighting Style lists its styles: the panel offers those.
+  const subclassStyle = subclassFightingStyle(plan.trigger, plan.sub);
   const picks: FeatPick[] = plan.trigger
     ? featChoices(plan.trigger.kind, builder.data?.feats ?? [], {
         cls: option,
         characterLevel: level + 1,
         have: character.features,
         ...(featChoice.kind === 'feat' ? { keepId: featChoice.pick.id } : {}),
+        ...(subclassStyle ? { subclassStyle } : {}),
       })
     : [];
   // The panel's choice counts only while this level's panel offers it: a subclass change can take the panel away or
-  // change what it lists. The panel shows, and Level up applies, this one.
-  const offered = plan.trigger && (featChoice.kind === 'feat' ? picks.some((p) => p.id === featChoice.pick.id) : featChoice.kind === 'dm' || offersScoreIncrease(plan.trigger.kind));
-  const chosen: FeatChoice = offered ? featChoice : { kind: 'dm' };
+  // change what it lists. The panel shows, and Level up applies, this one: the listed pick of its id, so a style of one
+  // name that another subclass prints too ("inline:<name>") brings that subclass's text and ref, as the panel shows it.
+  const listed = featChoice.kind === 'feat' ? picks.find((p) => p.id === featChoice.pick.id) : undefined;
+  const offered = plan.trigger && (featChoice.kind === 'feat' ? Boolean(listed) : featChoice.kind === 'dm' || offersScoreIncrease(plan.trigger.kind));
+  const chosen: FeatChoice = !offered ? { kind: 'dm' } : featChoice.kind === 'feat' && listed ? { ...featChoice, pick: listed } : featChoice;
   const xpNeeded = XP_THRESHOLDS[level];
   const shortOnXp = !milestone && character.xp < xpNeeded;
 
@@ -551,7 +559,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
       const warnings: string[] = [];
       let increases: ScoreIncrease[] = [];
       if (plan.trigger) {
-        const applied = applyFeatChoice(next, plan.trigger, chosen, { className, classLevel, addedIds, equipment: builder.data?.equipment });
+        const applied = applyFeatChoice(next, plan.trigger, chosen, { className, classLevel, addedIds, equipment: builder.data?.equipment, ...(plan.sub ? { subclassName: plan.sub.name } : {}) });
         next = applied.character;
         increases = applied.increases;
         warnings.push(...applied.warnings);

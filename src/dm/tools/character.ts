@@ -1056,7 +1056,9 @@ function planFromData(c: Character, data: BuilderData, input: ToolInput<'level_u
   // "Champion" never turns into the SRD's. Only a new name is looked up among the class's subclasses.
   const subclassChosenNow = Boolean(input.subclass) && nameKey(existing?.subclass ?? '') !== nameKey(input.subclass ?? '');
   const sub = subclassChosenNow ? subclassByName(input.subclass ?? '', option) : existing ? subclassOptionFor(existing, option, data.classes) : undefined;
-  const all = gainedFeatures(option, classLevel, sub, { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 }, { have: c.features, subclassChosenNow });
+  // A multiclass hero's other classes' subclasses: a feature of one of theirs isn't this subclass's.
+  const otherSubclasses = c.classes.filter((cl) => cl !== existing).flatMap((cl) => (cl.subclass ? [cl.subclass] : []));
+  const all = gainedFeatures(option, classLevel, sub, { scores: c.abilityScores, characterLevel: characterLevel(c) + 1 }, { have: c.features, subclassChosenNow, otherSubclasses });
   // SRD classes and subclasses keep today's DM-supplied features: only a book's come from the data, and an SRD
   // subclass's under a book's class (a 2024 book's class also offers the SRD's subclasses, as the dialog adds them).
   const features = all.filter((f) => (f.source === 'subclass' ? Boolean(sub?.source) || Boolean(option.source) : Boolean(option.source)));

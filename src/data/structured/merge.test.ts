@@ -176,6 +176,20 @@ describe('mergeBuilderData(importedOptions(snapshot))', () => {
     expect(attached?.source?.adaptations.map((a) => a.code)).toEqual(['subclass-early-features', 'subclass-overlap']);
   });
 
+  it("notes a book subclass whose own Fighting Style prints its styles: the level-up offers them beside the feats (fighting-style-inline)", () => {
+    const options = importedOptions(gloamwoodSnapshot());
+    const style = {
+      level: 3,
+      name: 'Fighting Style',
+      description: ['Choose one of the options below.', '***Lantern Guard.*** Invented style.', '***Wick Lash.*** Another invented style.'].join('\n\n'),
+    };
+    const withStyles = { ...options, subclasses: options.subclasses.map((s) => (s.option.name === 'Ember Warden' ? { ...s, option: { ...s.option, features: [...s.option.features, style] } } : s)) };
+    const codes = (o: typeof options) =>
+      mergeBuilderData(GLOAMWOOD_SRD_SUBSET, o).data.classes.find((c) => c.id === 'srd:class:fighter')?.subclasses.find((s) => s.name === 'Ember Warden')?.source?.adaptations.map((a) => a.code);
+    expect(codes(withStyles)).toContain('fighting-style-inline');
+    expect(codes(options) ?? []).not.toContain('fighting-style-inline');
+  });
+
   it("gives Warden's Mail the Chain Mail's stats and its +1 as magic (applied once, by the engine)", () => {
     const { data } = merged();
     const chainMail = data.equipment.find((e) => e.id === 'srd:item:chain-mail');

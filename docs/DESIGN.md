@@ -732,18 +732,22 @@ class whose edition isn't recorded yet, whose levels the top-up pays once it is;
 1st-level Draconic Resilience in a new hero's Hit Points (`startingFeatureHitPoints`), and the level-up dialog gives the
 feat it picks to the level-up, so Tough counts at the level it's taken. The dialog shows and applies only a choice its
 panel still lists (a subclass change can take the panel away or change its list, and "Decide with my DM" stands
-instead). An Edition
+instead), as it lists it now: a style of one name another subclass prints too brings that subclass's text and ref. An Edition
 changed in review later adds and takes back nothing, so a round trip never pays twice. That and the text restore write
 nothing when the campaign was replaced (a GitHub pull, a save import) while they loaded.
 Reference views (Library, the Rules tab, the DM's rules tools) still list both. Review warns about feature names the engine treats
 specially (Alert, Tough, Defense…). Older-format (2014) options get one coherent set of app-written
 adaptations, shown in review, on builder cards, in the DM's stats line and on the sheet. Level-up adds
-an imported class's or subclass's features with their text (catching up subclass features a book
+an imported class's or subclass's features with their text (a feature of the same name from the subclass of the
+hero's other class isn't one it already has, while its own under an earlier name is; catching up subclass features a book
 prints below the class's subclass level) and offers a feat at Ability Score Improvement, Epic Boon and
 Fighting Style levels (the Champion's Additional Fighting Style too, where a style the sheet has, a feat or one the
 class prints, can't be taken again: by its name however it's written, "Fighting Style (Defense)" as much as
 "Defense" (and a book's own "Fighting Style: …" or "… Fighting Style" name, either way round), from a class, subclass or feat or the DM's homebrew or other entry, never a species trait or a boon's,
-item's or background's, one rule with the engine's Defense AC, `isFightingStyle`), with "Decide with my DM" preselected. A feat taken there is the feature the level-up
+item's or background's, one rule with the engine's Defense AC, `isFightingStyle`; a book subclass's own Fighting Style
+that prints its styles, an older book's, offers those in place of the class's, beside the Fighting Style feats, and adds
+the one chosen as the subclass's feature with that style's ref, `subclassFightingStyle`, its book noting so as a class's
+does, fighting-style-inline), with "Decide with my DM" preselected. A feat taken there is the feature the level-up
 added for it, completed by id: a species trait or class feature of its name, a transformation's power (gone when the
 transformation ends), or an earlier taking of a Repeatable feat, stays beside it as it was, and another feat the sheet
 holds (a feat, or the DM's boon's, background's, item's, homebrew or other entry of its name; a style as above) is

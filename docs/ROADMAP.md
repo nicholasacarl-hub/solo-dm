@@ -79,9 +79,6 @@ The first version of structured imports deliberately leaves these out:
   DM) would mend these, and cover Aid and a Wraith's Life Drain too.
 - **Origin feats at Ability Score Improvement**: the level-up dialog offers General feats at an Ability Score
   Improvement level; the 2024 feature allows any feat the hero qualifies for, Origin feats (Tough, Alert) included.
-- **A subclass's own fighting styles**: the level-up dialog's feat panel lists the Fighting Style feats and the styles
-  the class prints, not those a subclass prints itself (an older book's subclass whose Fighting Style lists its own
-  options); the player picks with the DM.
 - **A Repeatable feat the DM records again**: the DM's features_add rewrites a feature of the same name, so a second
   taking it records under the feat's own name stays one feature (its spent uses kept). The level-up panel adds a
   second taking, and the DM can give one its own name ("Magic Initiate (Wizard)").
