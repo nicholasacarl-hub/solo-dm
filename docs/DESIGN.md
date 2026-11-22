@@ -749,8 +749,9 @@ transformation ends), or an earlier taking of a Repeatable feat, stays beside it
 holds (a feat, or the DM's boon's, background's, item's, homebrew or other entry of its name; a style as above) is
 taken unless Repeatable. The engine's `addFeature` (the DM's features_add too) updates a feature of the same name, keeping where it
 came from (its source name, which the DM's "Granted in play" never replaces) and the uses it has spent (a number of
-uses it changes is the DM's ruling, `FeatureUses.ruled`, which level-ups leave as it is and the DM's level_up result
-names, "Kept your ruling: Second Wind 4 uses"; the same number keeps the feature growing), but never merges a feat with a species trait or class feature (`featOrTrait`; a boon's, background's or homebrew entry updates
+uses it changes is the DM's ruling, `FeatureUses.ruled`, which level-ups leave as it is and name to the DM, in the
+level_up result and the dialog's notice alike, "Kept your ruling: Second Wind 4 uses" (`keptRulings`); the same number
+keeps the feature growing), but never merges a feat with a species trait or class feature (`featOrTrait`; a boon's, background's or homebrew entry updates
 either, so the DM's entry for an Epic Boon as a boon rewrites it; its result names the feature as a use or restore
 takes it now), and a species trait or class feature the DM adds (a level_up extra is one) is a book feat of its name
 only by the feat's own words, and only when they outnumber a book part's of its name (see Provenance below): a trait's
