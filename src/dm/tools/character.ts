@@ -776,6 +776,8 @@ export function refreshArmorClass(before: Character, after: Character, catalog: 
   const now = computeArmorClass(after, catalog);
   if (now.ac === was.ac) return { character: after, events: [] };
   if (before.armorClass !== was.ac) {
+    // Set by hand to what the gear and features now give (the DM's own +1 before it recorded Defense): nothing to say.
+    if (now.ac === after.armorClass) return { character: after, events: [] };
     return {
       character: after,
       events: [

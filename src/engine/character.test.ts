@@ -543,6 +543,21 @@ describe("addFeature: what a feat joining the sheet brings (the DM's features_ad
     expect(addFeature(mira({ features: [{ id: 't', ...feat('Alert', 'species') }] }), feat('Alert')).character.initiativeBonusExtra).toBe(2);
   });
 
+  it("joins a transformation's power of its name, never rewrites it, and brings the bonus a trait rewritten into the feat gets", () => {
+    // The transformation's own: the DM's entry joins beside it (its end takes only the power), with the feat's bonus.
+    const power = { id: 'p', name: 'Alert', source: 'transformation' as const, sourceName: 'Wolf Blood', description: 'Invented: keen senses.' };
+    const beside = addFeature(mira({ features: [power] }), feat('Alert'));
+    expect(beside.character.features.map((f) => [f.id === 'p' ? 'power' : 'new', f.source])).toEqual([['power', 'transformation'], ['new', 'feat']]);
+    expect(beside.character.initiativeBonusExtra).toBe(2);
+    for (const source of ['boon', 'other'] as const) expect(addFeature(mira({ features: [power] }), feat('Alert', source)).character.features, source).toHaveLength(2);
+    // A boon's or other entry rewrites a class feature named Alert (featOrTrait): the sheet holds the Alert feat now.
+    const classAlert = { id: 'c', ...feat('Alert', 'class'), sourceName: 'Fighter 4' };
+    const rewritten = addFeature(mira({ features: [classAlert] }), feat('Alert', 'other'));
+    expect(rewritten.character.features).toEqual([expect.objectContaining({ id: 'c', source: 'other' })]);
+    expect(rewritten.character.initiativeBonusExtra).toBe(2);
+    expect(rewritten.events.map((e) => e.message)).toEqual(['Updated feature: Alert', 'Initiative +2 → +4 (Alert: Proficiency Bonus +2)']);
+  });
+
   it("adds Tough's twice-the-level Hit Points for the first feature named Tough, current HP with them (the engine's Tough rule)", () => {
     // Wizard 3, HP 12 of 17: +6.
     const r = addFeature(mira(), feat('Tough'));

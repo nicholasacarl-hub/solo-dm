@@ -81,6 +81,9 @@ The first version of structured imports deliberately leaves these out:
 - **Tough beside a namesake**: the engine counts any feature named Tough as Tough, once, so the Tough feat taken beside
   a species trait, class feature or transformation power of the name adds 2 Hit Points a level, not twice the level
   when it's taken (Alert's bonus goes by the feat itself).
+- **A feat's numbers taken back**: the app adds Alert's Initiative bonus and Tough's Hit Points when the sheet first
+  holds them and never takes them back, so a feat the DM rewrites under a trait's source keeps them, and the Alert feat
+  the DM records again after that brings its bonus a second time.
 - **A Repeatable feat the DM records again**: the DM's features_add rewrites a feature of the same name, so a second
   taking it records under the feat's own name stays one feature (its spent uses kept). The level-up panel adds a
   second taking, and the DM can give one its own name ("Magic Initiate (Wizard)").

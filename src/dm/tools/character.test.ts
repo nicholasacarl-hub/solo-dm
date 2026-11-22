@@ -540,12 +540,39 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
     expect(h.sheet()).toMatchObject({ initiativeBonusExtra: 2, hp: { max: 38 } });
   });
 
+  it("records the Alert feat beside a transformation's power of its name, so the feat outlives the transformation", async () => {
+    const h = setup({ character: fighter4(), campaignSettings: { transformations: 'offered' } });
+    const begin = {
+      action: 'begin',
+      name: 'Wolf Blood',
+      reason: 'Invented: a bite under the full moon.',
+      summary: 'Invented: the moon sharpens the senses and the temper.',
+      origin: 'accepted',
+      player_chose_it: true,
+      stage: 'Cub',
+      how_it_ends: 'Invented: a silver-bell cure.',
+      features_add: [{ name: 'Alert', description: 'Invented: keen senses at night.' }],
+    };
+    expect((await h.run('transform_character', begin)).isError).toBeUndefined();
+    await h.run('update_character', { features_add: [{ name: 'Alert', description: 'Initiative proficiency.', source: 'feat' }] });
+    expect(h.sheet().features.filter((f) => f.name.startsWith('Alert')).map((f) => f.source)).toEqual(['transformation', 'feat']);
+    expect(h.sheet().initiativeBonusExtra).toBe(2);
+    expect((await h.run('transform_character', { action: 'end', name: 'Wolf Blood', reason: 'Cured' })).isError).toBeUndefined();
+    expect(h.sheet().features.filter((f) => f.name === 'Alert').map((f) => f.source)).toEqual(['feat']);
+    expect(h.sheet().initiativeBonusExtra).toBe(2);
+  });
+
   it('keeps the AC in step with a Defense the DM records (SRD 5.2.1 Defense: +1 to Armor Class while wearing armor)', async () => {
     const mail = { id: 'cm', name: 'Chain Mail', quantity: 1, equipped: true, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'heavy' as const, baseAc: 16, dexCap: 0 } };
     const h = setup({ character: fighter4({ inventory: [mail], armorClass: 16, acFormula: 'Chain Mail 16' }) });
     const out = await h.run('update_character', { features_add: [{ name: 'Defense', description: 'A Fighting Style feat.', source: 'feat' }] });
     expect(h.sheet().armorClass).toBe(17);
     expect(out.content).toContain('AC 16 → 17');
+    // Set by hand to what Defense gives before the DM recorded it: no warning about the AC that now matches.
+    const handSet = setup({ character: fighter4({ inventory: [mail], armorClass: 17, acFormula: 'set by the DM: Defense' }) });
+    const quiet = await handSet.run('update_character', { features_add: [{ name: 'Defense', description: 'A Fighting Style feat.', source: 'feat' }] });
+    expect(handSet.sheet().armorClass).toBe(17);
+    expect(quiet.content).not.toContain('AC stays');
   });
 });
 
