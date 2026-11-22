@@ -51,6 +51,7 @@ import {
 import type { RulesIndex } from '@/data';
 import { withAdaptationNotes } from '@/data/options/adaptationNotes';
 import { entryRef, inventoryFromEntry } from '@/data/options/inventory';
+import { inlineFightingStyles, inlineOptionRef } from '@/data/options/classFeatures';
 import { gainedFeatures } from '@/data/options/leveling';
 import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
 import { subclassesOf } from '@/data/options/replaced';
@@ -66,11 +67,13 @@ import {
   type Campaign,
   type Character,
   type ClassLevel,
+  type ClassFeatureDef,
   type ClassOption,
   type CompendiumEntry,
   type ContentKind,
   type Currency,
   type EquipmentOption,
+  type FeatOption,
   type Feature,
   type GameEvent,
   type HitDie,
@@ -170,8 +173,8 @@ interface Links {
   spellCopies: (CompendiumEntry | null)[];
   /** Per inventory_update entry: the ref of the book's item whose words its description repeats, or null. */
   updateCopies: (ImportedRef | null)[];
-  /** Per features_add entry: the ref of the book's part or feat it names (featureRef), or null. */
-  feats: (ImportedRef | null)[];
+  /** Per features_add entry: the book part or feat it names whose text holds the most of its words (featureRef), or null. */
+  feats: (BookMatch | null)[];
   /** The merged equipment catalog, for Armor Class ([] when it couldn't load: the SRD armor table). */
   catalog: readonly EquipmentOption[];
 }
@@ -216,18 +219,10 @@ function linkedItem(item: NonNullable<ToolInput<'update_character'>['inventory_a
   return linked;
 }
 
-/**
- * The ref of the book's feat a DM's feature entry names (its description stays on this device): the one imported feat
- * of that name. A species trait or class feature of the name is the feat only when its description repeats the feat's
- * own words (a run the SRD doesn't print, sharesBookWords: the book's feat a species or class grants, its name the
- * SRD's or not); the DM's words about a trait of the name stay its own (featOrTrait, as addFeature keeps them apart).
- * Without the rules index any shared run counts, so the book's words never leave in an export.
- */
-function featRef(f: { name: string; description: string; source: Feature['source'] }, data: BuilderData | null, index: RulesIndex | null): ImportedRef | null {
-  const key = nameKey(f.name);
-  const feats = (data?.feats ?? []).filter((o) => o.source && o.ref && nameKey(o.name) === key);
-  const fits = featOrTrait(f.source) === 'trait' ? feats.filter((o) => sharesBookWords(f.description, o.description, index)) : feats;
-  return fits.length === 1 ? (fits[0].ref ?? null) : null;
+/** The one imported feat of a name (two books' feats of one name: none), which an entry off the trait side links by name. */
+function featNamed(name: string, data: BuilderData | null): FeatOption | null {
+  const feats = (data?.feats ?? []).filter((o) => o.source && o.ref && nameKey(o.name) === nameKey(name));
+  return feats.length === 1 ? feats[0] : null;
 }
 
 /**
@@ -245,14 +240,19 @@ const plainWords = (text: string) =>
     .replace(/\s+/g, ' ')
     .trim();
 
-/** The DM's description repeats the book part's words: a run of 40 characters of it is in the part's text. */
-function sharesWords(description: string, partText: string): boolean {
-  const dm = plainWords(description);
-  const book = plainWords(partText);
-  if (!dm || !book) return false;
-  if (dm.length <= 40) return book.includes(dm);
-  for (let i = 0; i + 40 <= dm.length; i += 20) if (book.includes(dm.slice(i, i + 40))) return true;
-  return false;
+/** The DM's text in the runs of 40 characters it is compared by, every 20 (all of it when 40 characters or fewer). */
+function runsOf(text: string): string[] {
+  const dm = plainWords(text);
+  if (dm.length <= 40) return dm ? [dm] : [];
+  const runs: string[] = [];
+  for (let i = 0; i + 40 <= dm.length; i += 20) runs.push(dm.slice(i, i + 40));
+  return runs;
+}
+
+/** How many of the DM's runs a book's text holds, leaving out those `srd` (the SRD's text) prints too. */
+function runsIn(runs: readonly string[], text: string, srd = ''): number {
+  const book = plainWords(text);
+  return book ? runs.filter((run) => book.includes(run) && !srd.includes(run)).length : 0;
 }
 
 /** The plain text of the imported entries of some kinds, joined, with where each starts. */
@@ -324,7 +324,7 @@ function ownRunAt(run: string, book: BookText, srd: string): number {
 
 /**
  * The imported entry of these kinds whose own words the DM's free text repeats (spec §7.1): two of the runs of 40
- * characters sharesWords reads (the only one, under 60 characters), each in that entry's words alone (ownRunAt). Null
+ * characters runsOf reads (the only one, under 60 characters), each in that entry's words alone (ownRunAt). Null
  * for the DM's own words, stock wording and SRD wording, and without an index.
  */
 function bookCopy(text: string | undefined, index: RulesIndex | null, kinds: readonly ContentKind[]): CompendiumEntry | null {
@@ -345,16 +345,9 @@ function bookCopy(text: string | undefined, index: RulesIndex | null, kinds: rea
   return found < needed ? null : entryAt(book, first);
 }
 
-/** The DM's notes repeat a linked book spell's own words: one 40-character run of them (as sharesWords) the SRD doesn't print. */
+/** The DM's notes repeat a linked book spell's own words: one 40-character run of them (runsOf) the SRD doesn't print. */
 function sharesBookWords(text: string, entryText: string, index: RulesIndex | null): boolean {
-  const dm = plainWords(text);
-  const book = plainWords(entryText);
-  if (!dm || !book) return false;
-  const srd = index ? textsOf(index).srd : '';
-  const own = (run: string) => book.includes(run) && !srd.includes(run);
-  if (dm.length <= 40) return own(dm);
-  for (let i = 0; i + 40 <= dm.length; i += 20) if (own(dm.slice(i, i + 40))) return true;
-  return false;
+  return runsIn(runsOf(text), entryText, index ? textsOf(index).srd : '') > 0;
 }
 
 /** What a scroll, a wand or a granted spell may quote: the books' spells and items, either way round. */
@@ -378,12 +371,13 @@ function givenItem(item: NonNullable<ToolInput<'update_character'>['inventory_ad
   return { name: item.name, quantity: item.quantity, ...defined({ description: item.description, category: item.category, magic: item.magic, weight: item.weight }) };
 }
 
-/** Name keys the SRD prints for a class or subclass feature, a species trait or lineage, a background feature or a feat. */
+/** Name keys the SRD prints for a class or subclass feature (or a style one prints), a species trait or lineage, a background feature or a feat. */
 function srdNameKeys(data: BuilderData | null): Set<string> {
   const keys = new Set<string>();
+  const add = (f: ClassFeatureDef) => [f, ...inlineFightingStyles(f)].forEach((part) => keys.add(nameKey(part.name)));
   for (const cls of data?.classes ?? []) {
-    if (!cls.source) for (const f of cls.features) keys.add(nameKey(f.name));
-    for (const sub of cls.subclasses) if (!sub.source) for (const f of sub.features) keys.add(nameKey(f.name));
+    if (!cls.source) cls.features.forEach(add);
+    for (const sub of cls.subclasses) if (!sub.source) sub.features.forEach(add);
   }
   for (const sp of data?.species ?? []) if (!sp.source) for (const t of [...sp.traits, ...(sp.lineages ?? [])]) keys.add(nameKey(t.name));
   for (const bg of data?.backgrounds ?? []) if (!bg.source && bg.legacyFeature) keys.add(nameKey(bg.legacyFeature.name));
@@ -391,47 +385,60 @@ function srdNameKeys(data: BuilderData | null): Set<string> {
   return keys;
 }
 
-/**
- * The refs of the book parts named like a DM's feature entry whose words its description repeats: an imported class's
- * or subclass's feature, a species' trait or lineage, a background's feature, and (`feats`) a book's feat. One of them
- * is the entry's ref (featureRef): the DM's words about it then leave exports and restore refills the book's text. A
- * name the SRD prints too, or a description of the DM's own, stays the DM's (restore would put the book's text over its
- * ruling).
- */
-function bookPartRefs(name: string, description: string, data: BuilderData | null, feats: boolean): ImportedRef[] {
-  const key = nameKey(name);
-  if (srdNameKeys(data).has(key)) return [];
-  const refs: ImportedRef[] = [];
-  const take = (n: string, ref: ImportedRef | undefined, text: string) => {
-    if (nameKey(n) === key && ref?.textCopied && sharesWords(description, text)) refs.push(ref);
-  };
-  for (const cls of data?.classes ?? []) {
-    if (cls.source) for (const f of cls.features) take(f.name, f.ref, f.description);
-    for (const sub of cls.subclasses) if (sub.source) for (const f of sub.features) take(f.name, f.ref, f.description);
-  }
-  for (const sp of data?.species ?? []) if (sp.source) for (const t of [...sp.traits, ...(sp.lineages ?? [])]) take(t.name, t.ref, t.description);
-  for (const bg of data?.backgrounds ?? []) if (bg.source && bg.legacyFeature) take(bg.legacyFeature.name, bg.legacyFeature.ref, bg.legacyFeature.description);
-  if (feats) for (const f of data?.feats ?? []) if (f.source) take(f.name, f.ref, f.description);
-  return refs;
+/** A book part or feat a DM's feature entry may repeat: its ref and text, and how many of the entry's runs that holds. */
+interface BookMatch {
+  ref: ImportedRef;
+  runs: number;
 }
 
 /**
- * The ref of the book text a DM's feature entry repeats (features_add; a level_up extra, a class feature), or null. A
- * species trait or class feature is first the one book part of its name whose words it repeats: a trait's own text
- * that shares a sentence with a feat of its name stays the trait's. Else (no such part, or two books' parts alike) it
- * is the book feat of its name whose own words it repeats (featRef). Any other entry is the one book feat of its name,
- * else the one part or feat whose words it repeats. (A rewrite in the words of the sheet's feature keeps that one's
- * ref: featureSteps.)
+ * The book's texts named like a DM's feature entry, parts first: an imported class's or subclass's feature and the
+ * styles a Fighting Style feature prints (inlineOptionRef), a species' trait or lineage, a background's feature (none
+ * under a name the SRD prints too), then the books' feats.
  */
-function featureRef(f: { name: string; description: string; source: Feature['source'] }, data: BuilderData | null, index: RulesIndex | null): ImportedRef | null {
-  const trait = featOrTrait(f.source) === 'trait';
-  if (!trait) {
-    const feat = featRef(f, data, index);
-    if (feat) return feat;
+function bookTextsNamed(name: string, data: BuilderData | null): { ref: ImportedRef; text: string; feat: boolean }[] {
+  const key = nameKey(name);
+  const found: { ref: ImportedRef; text: string; feat: boolean }[] = [];
+  const take = (n: string, ref: ImportedRef | undefined, text: string, feat = false) => {
+    if (nameKey(n) === key && ref?.textCopied) found.push({ ref, text, feat });
+  };
+  const classPart = (f: ClassFeatureDef) => {
+    take(f.name, f.ref, f.description);
+    for (const style of inlineFightingStyles(f)) take(style.name, inlineOptionRef(f, style), style.description);
+  };
+  if (!srdNameKeys(data).has(key)) {
+    for (const cls of data?.classes ?? []) {
+      if (cls.source) cls.features.forEach(classPart);
+      for (const sub of cls.subclasses) if (sub.source) sub.features.forEach(classPart);
+    }
+    for (const sp of data?.species ?? []) if (sp.source) for (const t of [...sp.traits, ...(sp.lineages ?? [])]) take(t.name, t.ref, t.description);
+    for (const bg of data?.backgrounds ?? []) if (bg.source && bg.legacyFeature) take(bg.legacyFeature.name, bg.legacyFeature.ref, bg.legacyFeature.description);
   }
-  const parts = bookPartRefs(f.name, f.description, data, !trait);
-  if (parts.length === 1) return parts[0];
-  return trait ? featRef(f, data, index) : null;
+  for (const f of data?.feats ?? []) if (f.source) take(f.name, f.ref, f.description, true);
+  return found;
+}
+
+/**
+ * The book text a DM's feature entry repeats (features_add; a level_up extra, a class feature), or null: its ref lets
+ * exports leave the DM's words out and restore refill the book's text. An entry off the trait side (a feat, a boon, a
+ * background's, homebrew) is the one book feat of its name, whatever its words. Otherwise it is the book part or feat of
+ * its name whose text holds the most of its 40-character runs, a part before a feat (and the first book) on a tie, so a
+ * trait's own text that shares a sentence with a feat stays the trait's and two books printing the part still leave
+ * exports. A species trait or class feature is a feat only by the feat's own words (runs the SRD doesn't print; without
+ * the rules index, any run). A name the SRD prints too is no book part's, and words of the DM's own are no book's.
+ */
+function featureRef(f: { name: string; description: string; source: Feature['source'] }, data: BuilderData | null, index: RulesIndex | null): BookMatch | null {
+  const runs = runsOf(f.description);
+  const trait = featOrTrait(f.source) === 'trait';
+  const named = trait ? null : featNamed(f.name, data);
+  if (named?.ref) return { ref: named.ref, runs: runsIn(runs, named.description) };
+  const srd = trait && index ? textsOf(index).srd : '';
+  let best: BookMatch | null = null;
+  for (const text of bookTextsNamed(f.name, data)) {
+    const held = runsIn(runs, text.text, text.feat ? srd : '');
+    if (held > (best?.runs ?? 0)) best = { ref: text.ref, runs: held };
+  }
+  return best;
 }
 
 async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolContext): Promise<Links> {
@@ -567,11 +574,13 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
   (input.features_add ?? []).forEach((f, i) => {
     steps.push((c) => {
       // The DM's words about a book's feat or part: the ref lets exports leave them out and restore refill the book's
-      // text. A rewrite in the words of the feature it rewrites keeps that feature's own ref (a trait or a printed
-      // fighting style resent as the sheet holds it, or a ruling quoting it): restore refills its text, not another's.
+      // text. A rewrite keeps the rewritten feature's own ref when its text holds at least as many of the DM's words as
+      // the book's best match (a trait or a printed style resent as the sheet holds it, or a ruling quoting it), so
+      // restore refills its text, not another's.
       const rewritten = featureToRewrite(c, f);
-      const own = rewritten?.ref?.textCopied && sharesWords(f.description, rewritten.description) ? rewritten.ref : null;
-      const ref = own ?? links.feats[i];
+      const match = links.feats[i];
+      const own = rewritten?.ref?.textCopied ? runsIn(runsOf(f.description), rewritten.description) : 0;
+      const ref = rewritten?.ref && own > 0 && own >= (match?.runs ?? 0) ? rewritten.ref : match?.ref;
       return addFeature(c, {
         name: f.name,
         description: f.description,
@@ -1075,7 +1084,7 @@ function dmFeatures(
   const onSheet = new Set(data ? have.filter((f) => f.ref?.textCopied && !srd.has(nameKey(f.name))).map((f) => nameKey(f.name)) : []);
   const fromData = new Set((plan?.features ?? []).map((f) => nameKey(f.name)));
   const all = (input.new_features ?? []).map((f) => {
-    const ref = featureRef({ name: f.name, description: f.description, source: 'class' }, data, index);
+    const ref = featureRef({ name: f.name, description: f.description, source: 'class' }, data, index)?.ref;
     return {
       name: f.name,
       description: f.description,

@@ -646,7 +646,8 @@ export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | '
  * a result gave, "Lantern Luck (Mothkin)", still finds it) and the uses it has spent (a features_restore or a rest gives
  * those back). Uses that keep the number keep how it grows (a Rage the DM rewrites still follows the Barbarian table);
  * another number, or uses where it had none, is the DM's ruling (FeatureUses.ruled), which level-ups leave as it is.
- * A feat and a species trait or class feature never merge (featOrTrait):
+ * Beside a namesake, the result names the feature as a use or restore takes it now (featureLabel). A feat and a species
+ * trait or class feature never merge (featOrTrait):
  * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
  * and the trait keeps its text. A feature on neither side (the DM's entry for an Epic Boon as a boon, or an Origin feat
  * as its background's) updates the one of its name on either.
@@ -662,7 +663,9 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
       const growth = old?.max === feature.uses.max ? { ...(old.scale ? { scale: old.scale } : {}), ...(old.ruled ? { ruled: true } : {}) } : { ruled: true };
       updated.uses = { ...feature.uses, used: Math.min(old?.used ?? feature.uses.used, feature.uses.max), ...growth };
     }
-    return { character: replaceFeature(c, updated), events: [gameEvent('feature-restored', `Updated feature: ${name}`)] };
+    const character = replaceFeature(c, updated);
+    // By the name a use or restore takes now, beside a namesake (a boon's entry over a trait changes its "(species)").
+    return { character, events: [gameEvent('feature-restored', `Updated feature: ${featureLabel(updated, character.features)}`)] };
   }
   const added: Feature = { ...feature, id: feature.id ?? newId(), name };
   const features = [...c.features, added];

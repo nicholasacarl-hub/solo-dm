@@ -742,7 +742,7 @@ an imported class's or subclass's features with their text (catching up subclass
 prints below the class's subclass level) and offers a feat at Ability Score Improvement, Epic Boon and
 Fighting Style levels (the Champion's Additional Fighting Style too, where a style the sheet has, a feat or one the
 class prints, can't be taken again: by its name however it's written, "Fighting Style (Defense)" as much as
-"Defense" (and a book's own "Fighting Style: …" name), from a class, subclass or feat or the DM's homebrew or other entry, never a species trait or a boon's,
+"Defense" (and a book's own "Fighting Style: …" or "… Fighting Style" name, either way round), from a class, subclass or feat or the DM's homebrew or other entry, never a species trait or a boon's,
 item's or background's, one rule with the engine's Defense AC, `isFightingStyle`), with "Decide with my DM" preselected. A feat taken there is the feature the level-up
 added for it, completed by id: a species trait or class feature of its name, a transformation's power (gone when the
 transformation ends), or an earlier taking of a Repeatable feat, stays beside it as it was, and another feat the sheet
@@ -751,12 +751,12 @@ taken unless Repeatable. The engine's `addFeature` (the DM's features_add too) u
 came from (its source name, which the DM's "Granted in play" never replaces) and the uses it has spent (a number of
 uses it changes is the DM's ruling, `FeatureUses.ruled`, which level-ups leave as it is; the same number keeps the
 feature growing), but never merges a feat with a species trait or class feature (`featOrTrait`; a boon's, background's or homebrew entry updates
-either, so the DM's entry for an Epic Boon as a boon rewrites it), and a species trait or class feature the DM adds
-(a level_up extra is one) under a book feat's name takes that feat's ref only when its description repeats the feat's
-own words (a run the SRD doesn't print; without the rules index, any shared run) and not those of one book part of its
-name (two books printing the part leave it to the feat): a trait's own text that shares a sentence with the feat stays
-the trait's. A rewrite in the words of the feature it rewrites (a trait or a class's printed fighting style resent as
-the sheet holds it, or a ruling quoting it) keeps that feature's own ref. A use or restore by name goes to the same-named feature whose uses fit the amount; a source or source
+either, so the DM's entry for an Epic Boon as a boon rewrites it; its result names the feature as a use or restore
+takes it now), and a species trait or class feature the DM adds (a level_up extra is one) is a book feat of its name
+only by the feat's own words, and only when they outnumber a book part's of its name (see Provenance below): a trait's
+own text that shares a sentence with the feat stays the trait's. A rewrite in the words of the feature it rewrites (a
+trait or a class's printed fighting style resent as the sheet holds it, or a ruling quoting it) keeps that feature's
+own ref. A use or restore by name goes to the same-named feature whose uses fit the amount; a source or source
 name in parentheses after the name picks one, as the sheet shows it ("Lantern Luck (Mothkin)", "Lantern Luck (feat)"),
 and a result that changed one of several with uses (by the bare name, or by one in parentheses more than one fits)
 names it so and says how to name the others (`featureLabel`; the level-up summary tells two takings apart the same
@@ -794,12 +794,15 @@ lineages, feats, a background's feature; the DM's words about an imported entry)
 The sheet text wraps each copied description whole, as one passage (cut only past `SHEET_TEXT_MAX`,
 with the note outside the wrapper), so the DM's frozen prompt can be redacted whole; a wrapper left open
 (its closing marker cut off) is redacted to the end of its text. A feature the DM adds under the name of
-one of the book's parts or feats (`features_add`, `level_up` extras) gets that part's ref when its
-description repeats the part's words (a 40-character run), unless the SRD prints the same name (a species trait or
-class feature named like a book's feat, a level_up extra too, that repeats no part of its name checks that feat's own
-words whatever its name, by a run the SRD doesn't print);
-the DM's own words under such a name stay its own, so exports keep them and restore never writes the book's text
-over them. A spell's notes (`spells_add`) or an item's description (`inventory_add`, `inventory_update`) that repeats
+one of the book's parts or feats (`features_add`, `level_up` extras) gets the ref of the part or feat of its name
+whose text holds the most of its description's 40-character runs: an imported class's or subclass's feature or a
+style its Fighting Style prints, a species' trait or lineage, a background's feature (none under a name the SRD prints
+too), or a book's feat, a part before a feat and the first book on a tie (two books printing the same part still
+leave exports). A species trait or class feature (a level_up extra too) counts a feat's runs only where the SRD
+doesn't print them (without the rules index, every run, so the book's words never leave); an entry off the trait side
+is the one book feat of its name whatever its words. A rewrite keeps the rewritten feature's own ref when its text
+holds at least as many of the runs. The DM's own words under such a name stay its own, so exports keep them and
+restore never writes the book's text over them. A spell's notes (`spells_add`) or an item's description (`inventory_add`, `inventory_update`) that repeats
 a book's spell or item (either way round: a scroll quoting a spell, notes quoting an item), whatever name it is
 given, takes that entry's ref marked copied: two of those 40-character runs (the only one, in a text under 60
 characters) found in one entry's own words — not in the SRD's text of any kind, whose words are anyone's to keep,

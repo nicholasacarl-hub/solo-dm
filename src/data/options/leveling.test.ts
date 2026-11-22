@@ -317,7 +317,12 @@ describe('the Feat choice panel', () => {
     for (const name of ['Fighting Style: Lantern Guard', 'Additional Fighting Style: Lantern Guard', 'Fighting Style Feat: Lantern Guard']) {
       const feat: FeatOption = { ...hooked, id: `lib:gloam:feat:${nameKey(name)}`, name };
       expect(taken([{ name, source: 'feat' }], [...EXPECTED_MERGED.feats, feat]), name).toEqual([name]);
+      expect(taken([{ name: `Fighting Style (${name})`, source: 'other' }], [...EXPECTED_MERGED.feats, feat]), name).toEqual([name]);
     }
+    // A book's style with a style suffix is the style the sheet has (as the Defense AC reads it), either way round.
+    const suffixed: FeatOption = { ...hooked, id: 'lib:gloam:feat:defense-fighting-style', name: 'Defense Fighting Style' };
+    expect(taken([{ name: 'Defense', source: 'feat' }], [...EXPECTED_MERGED.feats, suffixed])).toEqual(['Defense', 'Defense Fighting Style']);
+    expect(taken([{ name: 'Defense Fighting Style', source: 'feat' }], [...EXPECTED_MERGED.feats, suffixed])).toEqual(['Defense', 'Defense Fighting Style']);
   });
 
   it("offers a 2024 book's feat in place of the SRD feat of its name (the picked one stays); an older book's sits beside it", () => {

@@ -276,6 +276,14 @@ describe('computeArmorClass', () => {
       }
     }
     expect(isFightingStyle({ name: 'Fighting Style: Lantern Guard', source: 'feat' }, 'Fighting Style: Wick Lash')).toBe(false);
+    // A sheet name that wraps the book's own name; a book's name with a style suffix, either way round.
+    for (const name of ['Fighting Style (Fighting Style: Lantern Guard)', 'Additional Fighting Style (Fighting Style: Lantern Guard)', 'Fighting Style: Fighting Style: Lantern Guard']) {
+      expect(isFightingStyle({ name, source: 'other' }, 'Fighting Style: Lantern Guard'), name).toBe(true);
+    }
+    expect(isFightingStyle({ name: 'Defense', source: 'feat' }, 'Defense Fighting Style')).toBe(true);
+    expect(isFightingStyle({ name: 'Great Weapon Fighting', source: 'feat' }, 'Great Weapon Fighting Style')).toBe(true);
+    for (const style of ['Defense Drill', 'Superior Defense', 'Fighting Style']) expect(isFightingStyle({ name: 'Defense', source: 'feat' }, style), style).toBe(false);
+    expect(isFightingStyle({ name: 'Archery', source: 'feat' }, 'Archery Expert')).toBe(false);
     // Another feature that only begins with a style's name (invented).
     expect(named('Defense Drill')).toBe(16);
     expect(isFightingStyle({ name: 'Archery Expert', source: 'feat' }, 'Archery')).toBe(false);
