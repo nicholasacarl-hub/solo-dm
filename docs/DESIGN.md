@@ -769,8 +769,9 @@ takes it now). The sheet coming to hold the Alert feat or a feature named Tough 
 level-up counts it (`joiningNumbers`): Alert's Proficiency Bonus on Initiative (a boon's or other entry rewriting a
 trait named Alert makes it the feat) and Tough's twice-the-level Hit Points; a change that leaves it holding what it
 held brings nothing, and nothing takes them back. No entry rewrites a transformation's power of its name: it joins
-beside it, as the level-up panel's feat does, and outlives the transformation. update_character keeps the AC in step
-after features_add (Defense), quiet when an AC set by hand already matches. A species trait or class feature the DM adds (a level_up extra is one) is a book feat of its name
+beside it, as the level-up panel's feat does, and outlives the transformation (the result says so). update_character
+keeps the AC in step after features_add (Defense); an AC set by hand stays, with a note of what the gear and features
+give, even when they now give the same (it may have counted a spell). A species trait or class feature the DM adds (a level_up extra is one) is a book feat of its name
 only by the feat's own words, and only when they outnumber a book part's of its name (see Provenance below): a trait's
 own text that shares a sentence with the feat stays the trait's. A rewrite in the words of the feature it rewrites (a
 trait or a class's printed fighting style resent as the sheet holds it, or a ruling quoting it) keeps that feature's

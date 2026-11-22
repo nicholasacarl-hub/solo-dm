@@ -535,6 +535,10 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
     expect(h.sheet()).toMatchObject({ initiativeBonusExtra: 2, hp: { max: 38, current: 38 } });
     expect(out.content).toContain('Initiative +2 → +4 (Alert: Proficiency Bonus +2)');
     expect(out.content).toContain('HP maximum 30 → 38 (Tough: twice your level, 4)');
+    expect(out.content).not.toContain('joined the sheet beside');
+    // Beside a class feature of its name (not a transformation's power): no hint.
+    const beside = setup({ character: fighter4({ features: [{ id: 'c', name: 'Tough', source: 'class', sourceName: 'Fighter 1', description: 'Invented.' }] }) });
+    expect((await beside.run('update_character', { features_add: [{ name: 'Tough', description: 'The feat.', source: 'feat' }] })).content).not.toContain('joined the sheet beside');
     // The DM's words again: the same features, nothing more.
     await h.run('update_character', { features_add: [{ name: 'Tough', description: 'Hardier still.', source: 'feat' }, { name: 'Alert', description: 'Quick.', source: 'feat' }] });
     expect(h.sheet()).toMatchObject({ initiativeBonusExtra: 2, hp: { max: 38 } });
@@ -554,8 +558,10 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
       features_add: [{ name: 'Alert', description: 'Invented: keen senses at night.' }],
     };
     expect((await h.run('transform_character', begin)).isError).toBeUndefined();
-    await h.run('update_character', { features_add: [{ name: 'Alert', description: 'Initiative proficiency.', source: 'feat' }] });
+    const out = await h.run('update_character', { features_add: [{ name: 'Alert', description: 'Initiative proficiency.', source: 'feat' }] });
     expect(h.sheet().features.filter((f) => f.name.startsWith('Alert')).map((f) => f.source)).toEqual(['transformation', 'feat']);
+    // The DM learns the power is unchanged and the new one outlasts the transformation.
+    expect(out.content).toContain("Alert joined the sheet beside Wolf Blood's own Alert, and stays when Wolf Blood ends; to change Wolf Blood's, use transform_character advance.");
     expect(h.sheet().initiativeBonusExtra).toBe(2);
     expect((await h.run('transform_character', { action: 'end', name: 'Wolf Blood', reason: 'Cured' })).isError).toBeUndefined();
     expect(h.sheet().features.filter((f) => f.name === 'Alert').map((f) => f.source)).toEqual(['feat']);
@@ -568,11 +574,22 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
     const out = await h.run('update_character', { features_add: [{ name: 'Defense', description: 'A Fighting Style feat.', source: 'feat' }] });
     expect(h.sheet().armorClass).toBe(17);
     expect(out.content).toContain('AC 16 → 17');
-    // Set by hand to what Defense gives before the DM recorded it: no warning about the AC that now matches.
+    // Set by hand to what Defense gives before the DM recorded it: the AC stays, and the DM is asked whether it counted more.
     const handSet = setup({ character: fighter4({ inventory: [mail], armorClass: 17, acFormula: 'set by the DM: Defense' }) });
-    const quiet = await handSet.run('update_character', { features_add: [{ name: 'Defense', description: 'A Fighting Style feat.', source: 'feat' }] });
+    const matched = await handSet.run('update_character', { features_add: [{ name: 'Defense', description: 'A Fighting Style feat.', source: 'feat' }] });
     expect(handSet.sheet().armorClass).toBe(17);
-    expect(quiet.content).not.toContain('AC stays');
+    expect(matched.content).toContain(
+      'AC 17 stays as set by hand; armor and features now give 17 too (Chain Mail 16 + Defense 1). If the hand-set AC counted a spell or another effect, set armor_class to add it.',
+    );
+  });
+
+  it("tells the DM when new gear only matches a hand-set AC that counted a spell (SRD 5.2.1 Shield of Faith: +2 AC)", async () => {
+    const mail = { id: 'cm', name: 'Chain Mail', quantity: 1, equipped: true, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'heavy' as const, baseAc: 16, dexCap: 0 } };
+    const shield = { id: 'sh', name: 'Shield', quantity: 1, equipped: false, category: 'shield' as const, armor: { kind: 'shield' as const, baseAc: 2, dexCap: 0 } };
+    const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }) });
+    const out = await h.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }] });
+    expect(h.sheet().armorClass).toBe(18);
+    expect(out.content).toContain('AC 18 stays as set by hand; armor and features now give 18 too (Chain Mail 16 + Shield 2). If the hand-set AC counted a spell or another effect, set armor_class to add it.');
   });
 });
 
