@@ -198,6 +198,66 @@ describe('levelUp', () => {
       features: [...mira().features, { id: 'al', name: 'Alert', source: 'feat', description: '' }],
     });
     expect(levelUp(alert, { className: 'Wizard', hpMethod: 'average' }).character.initiativeBonusExtra).toBe(3);
+    // Given again as a feat: still only the step (SRD 5.2.1 "The Bonus Doesn't Stack").
+    const again = levelUp(alert, { className: 'Wizard', hpMethod: 'average', newFeatures: [{ name: 'Alert', source: 'feat', description: '' }] });
+    expect(again.character.initiativeBonusExtra).toBe(3);
+  });
+
+  it("counts the Alert feat only: a species trait, class feature or transformation power of its name neither brings the bonus nor stops the feat's", () => {
+    const namesake = (source: Feature['source'], classes = [asClass('Wizard', 3)]) =>
+      mira({ classes, features: [...mira().features, { id: 'ns', name: 'Alert', source, description: 'Invented: not the feat.' }] });
+    const taking = [{ name: 'Alert', source: 'feat' as const, description: '' }];
+    for (const source of ['species', 'class', 'subclass', 'transformation'] as const) {
+      // Wizard 3 → 4 taking the feat beside it: the whole +2, and its reminder.
+      const r = levelUp(namesake(source), { className: 'Wizard', hpMethod: 'average', newFeatures: taking });
+      expect(r.character.initiativeBonusExtra, source).toBe(2);
+      expect(r.reminders, source).toContain('Alert: initiative bonus from your Proficiency Bonus is now +2.');
+      // Alone, across the bonus's rise at Wizard 5: nothing (it never brought the bonus).
+      const alone = levelUp(namesake(source, [asClass('Wizard', 4)]), { className: 'Wizard', hpMethod: 'average' });
+      expect(alone.character.initiativeBonusExtra ?? 0, source).toBe(0);
+      expect(alone.reminders.some((m) => m.startsWith('Alert:')), source).toBe(false);
+      // Gained as one (a level_up extra is a class feature): nothing.
+      expect(levelUp(mira(), { className: 'Wizard', hpMethod: 'average', newFeatures: [{ name: 'Alert', source, description: '' }] }).character.initiativeBonusExtra ?? 0, source).toBe(0);
+    }
+    // On neither side of the feat line (the DM's boon, background, item, homebrew or other entry): the feat, as the
+    // level-up panel counts it taken.
+    for (const source of ['boon', 'background', 'item', 'homebrew', 'other'] as const) {
+      const held = mira({ classes: [asClass('Wizard', 4)], initiativeBonusExtra: 2, features: [{ id: 'a', name: 'Alert', source, description: '' }] });
+      expect(levelUp(held, { className: 'Wizard', hpMethod: 'average' }).character.initiativeBonusExtra, source).toBe(3);
+    }
+  });
+
+  it('adds the whole Proficiency Bonus to Initiative for Alert taken at this level (SRD 5.2.1 Alert: Initiative Proficiency)', () => {
+    const taking = [{ name: 'Alert', source: 'feat' as const, description: '' }];
+    // Wizard 3 → 4: +2, beside a bonus the sheet already has from elsewhere.
+    const r = levelUp(mira({ initiativeBonusExtra: 1 }), { className: 'Wizard', hpMethod: 'average', newFeatures: taking });
+    expect(r.character.initiativeBonusExtra).toBe(1 + 2);
+    expect(r.reminders).toContain('Alert: initiative bonus from your Proficiency Bonus is now +2.');
+    // Wizard 4 → 5, where the bonus becomes +3: all of it, not the step.
+    expect(levelUp(mira({ classes: [asClass('Wizard', 4)] }), { className: 'Wizard', hpMethod: 'average', newFeatures: taking }).character.initiativeBonusExtra).toBe(3);
+    // A new hero's first level.
+    const blank = mira({ classes: [], hitDice: [], hp: { max: 0, current: 0, temp: 0 }, spellcasting: undefined });
+    expect(levelUp(blank, { className: 'Fighter', hpMethod: 'average', newFeatures: taking }).character.initiativeBonusExtra).toBe(2);
+    // Another feature gained, no Alert: nothing.
+    const none = levelUp(mira(), { className: 'Wizard', hpMethod: 'average', newFeatures: [{ name: 'Alertness', source: 'feat', description: '' }] });
+    expect(none.character.initiativeBonusExtra ?? 0).toBe(0);
+    expect(none.reminders.some((m) => m.startsWith('Alert:'))).toBe(false);
+  });
+
+  it("reminds of the choices of Magic Initiate and Skilled taken at this level, which the sheet doesn't make (SRD 5.2.1 Feats)", () => {
+    const feat = (name: string) => ({ name, source: 'feat' as const, description: '' });
+    const r = levelUp(mira(), { className: 'Wizard', hpMethod: 'average', newFeatures: [feat('Magic Initiate'), feat('Skilled')] });
+    expect(r.reminders).toEqual(
+      expect.arrayContaining([
+        'Magic Initiate: choose its spell list, two cantrips and a level 1 spell from it, and its spellcasting ability.',
+        'Skilled: choose three skills or tools to gain proficiency in.',
+      ]),
+    );
+    // One the sheet already has, and a level that adds neither, ask for nothing.
+    const had = mira({ features: [...mira().features, { id: 'mi', ...feat('Magic Initiate') }, { id: 'sk', ...feat('Skilled') }] });
+    expect(levelUp(had, { className: 'Wizard', hpMethod: 'average' }).reminders.filter((m) => /^(Magic Initiate|Skilled):/.test(m))).toEqual([]);
+    // A Repeatable feat taken again asks again.
+    expect(levelUp(had, { className: 'Wizard', hpMethod: 'average', newFeatures: [feat('Skilled')] }).reminders).toContain('Skilled: choose three skills or tools to gain proficiency in.');
   });
 
   it('refuses at level 20 and for unknown classes without a hit die', () => {

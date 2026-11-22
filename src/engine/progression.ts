@@ -18,6 +18,7 @@ import {
   type RollResult,
 } from '@/types';
 import { newId, nameKey, slugify } from '@/lib/id';
+import { featOrTrait } from './character';
 import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, rulesClassFor, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
 import { abilityModifier, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
@@ -105,6 +106,15 @@ function findClassIndex(classes: readonly ClassLevel[], name: string, classId?: 
 function hasFeatureNamed(features: readonly { name: string }[], name: string): boolean {
   const key = nameKey(name);
   return features.some((f) => nameKey(f.name) === key);
+}
+
+/**
+ * The Alert feat, whose Initiative bonus the builder and levelUp keep: a feature named Alert on the feat's side of the
+ * feat line or on neither (featOrTrait), the one the level-up panel counts as the feat. A species trait, class or
+ * subclass feature or transformation power of the name isn't it, and never brought the bonus.
+ */
+function isAlertFeat(f: Pick<Feature, 'name' | 'source'>): boolean {
+  return nameKey(f.name) === 'alert' && featOrTrait(f.source) !== 'trait' && f.source !== 'transformation';
 }
 
 interface HpBonus {
@@ -216,6 +226,18 @@ const CHOICE_HINTS: ReadonlyArray<[RegExp, (cls: string, level: number) => strin
   [/^Mystic Arcanum \((level \d) spell\)$/, (cls, l) => `${cls} ${l}: choose a ${cls} spell for your Mystic Arcanum.`],
   [/^Divine Order$|^Primal Order$/, (cls, l) => `${cls} ${l}: choose your ${cls === 'Cleric' ? 'Divine' : 'Primal'} Order.`],
   [/^Weapon Mastery$/, (cls, l) => `${cls} ${l}: choose weapons for Weapon Mastery.`],
+];
+
+/**
+ * The choices of a feat a level-up adds (the level-up panel's pick, a level_up extra) that the sheet doesn't make, for
+ * the player to make with the DM: SRD 5.2.1 Magic Initiate ("two cantrips of your choice from the Cleric, Druid, or
+ * Wizard spell list", its spellcasting ability "(choose when you select this feat)", "a level 1 spell from the same
+ * list") and Skilled ("proficiency in any combination of three skills or tools of your choice"), an older book's of the
+ * name too.
+ */
+const FEAT_CHOICE_HINTS: readonly (readonly [name: string, hint: string])[] = [
+  ['Magic Initiate', 'Magic Initiate: choose its spell list, two cantrips and a level 1 spell from it, and its spellcasting ability.'],
+  ['Skilled', 'Skilled: choose three skills or tools to gain proficiency in.'],
 ];
 
 function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: readonly { name: string }[], added: readonly Feature[]): string[] {
@@ -440,7 +462,10 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
 
   const oldPb = proficiencyBonus(Math.max(1, oldTotal));
   const newPb = proficiencyBonus(newLevel);
-  const alertDelta = hasFeatureNamed(c.features, 'Alert') && oldTotal > 0 ? newPb - oldPb : 0;
+  // Alert adds the Proficiency Bonus to Initiative (SRD 5.2.1 Alert: "Initiative Proficiency. When you roll Initiative,
+  // you can add your Proficiency Bonus to the roll"): it grows with the bonus, and a hero who gains the feat now (the
+  // level-up panel's pick) adds the whole bonus, a trait or power of its name beside it or not (isAlertFeat).
+  const alertDelta = c.features.some(isAlertFeat) ? (oldTotal > 0 ? newPb - oldPb : 0) : added.some(isAlertFeat) ? newPb : 0;
 
   let next: Character = {
     ...c,
@@ -476,6 +501,7 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
   if (added.some((f) => nameKey(f.name) === 'additional-fighting-style')) {
     reminders.push(`${gained.name} ${gained.level}: Additional Fighting Style — choose another Fighting Style.`);
   }
+  for (const [name, hint] of FEAT_CHOICE_HINTS) if (hasFeatureNamed(added, name)) reminders.push(hint);
   reminders.push(...slotReminders(c, next));
   if (newPb > oldPb && oldTotal > 0) reminders.push(`Proficiency Bonus is now ${formatModifier(newPb)}.`);
   if (alertDelta) reminders.push(`Alert: initiative bonus from your Proficiency Bonus is now ${formatModifier(newPb)}.`);

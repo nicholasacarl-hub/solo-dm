@@ -5,7 +5,8 @@
  * Champion's Additional Fighting Style too) — whose default, "Decide with my DM", leaves the level-up exactly as it was before this panel existed.
  *
  * Owner: E4. Shared by the level-up dialog and, for spells and spellcasting, the DM's level_up tool.
- * Only "Level N+" prerequisites are checked; everything else is shown for the DM to rule on.
+ * Of a feat's prerequisites only "Level N+" is checked, and its category's (featChoices); everything else is shown
+ * for the DM to rule on.
  */
 import { addFeature, addSpell, changeAbilityScore, characterLevel, featOrTrait, isFightingStyle, proficiencyBonus, syncArmorClass } from '@/engine';
 import { nameKey, newId } from '@/lib/id';
@@ -18,6 +19,7 @@ import {
   type ClassOption,
   type CompendiumEntry,
   type EquipmentOption,
+  type FeatCategory,
   type FeatOption,
   type Feature,
   type ImportedRef,
@@ -238,6 +240,8 @@ export interface FeatPick {
   taken: boolean;
   increase?: FeatIncrease;
   ref?: ImportedRef;
+  /** The feat's category; a style a Fighting Style feature prints is a Fighting Style's. */
+  category: FeatCategory;
   /** A style a Fighting Style feature prints (no feat): the class's or a subclass's, the source it joins the sheet as. */
   printedBy?: 'class' | 'subclass';
 }
@@ -257,14 +261,37 @@ export interface FeatChoiceContext {
 const ASI_FEAT = 'ability-score-improvement';
 
 /**
+ * A style the sheet has, taken once (SRD 5.1 Fighting Style: "You can't take a Fighting Style option more than once,
+ * even if you later get to choose again"; SRD 5.2.1's Fighting Style feats aren't Repeatable), the one the builder gave
+ * too: on the sheet however it's named, as the engine's Defense AC reads it (isFightingStyle) and only so, one rule: a
+ * boon's, item's or background's "Defense" neither raises the AC nor stops the feat that does.
+ */
+const styleTaken = (style: string, have: FeatChoiceContext['have']): boolean => have.some((f) => isFightingStyle(f, style));
+
+/**
  * A feat the sheet holds, unless Repeatable: as a feat, or as the DM's entry of its name on neither side of the feat
  * line (a boon's, background's, item's, homebrew or other: the one feature addFeature keeps of them). A species trait
- * or class feature of its name isn't the feat (featOrTrait), nor is a transformation's power, gone when it ends.
+ * or class feature of its name isn't the feat (featOrTrait), nor is a transformation's power, gone when it ends. A
+ * Fighting Style feat is its style (styleTaken), at whichever panel offers it.
  */
 function takenFeat(feat: FeatOption, have: FeatChoiceContext['have']): boolean {
   if (feat.repeatable) return false;
+  if (feat.category === 'fighting-style') return styleTaken(feat.name, have);
   const key = nameKey(feat.name);
   return have.some((f) => featOrTrait(f.source) !== 'trait' && f.source !== 'transformation' && nameKey(baseFeatureName(f.name)) === key);
+}
+
+/** Where a Fighting Style feature comes from: a class or subclass, or the DM's homebrew or other entry. */
+const STYLE_FEATURE_SOURCES: ReadonlySet<Feature['source']> = new Set(['class', 'subclass', 'homebrew', 'other']);
+
+/**
+ * Whether the hero has a Fighting Style feature, the Fighting Style feats' prerequisite (SRD 5.2.1 Feats: "Fighting
+ * Style Feat (Prerequisite: Fighting Style Feature)"): a feature that gives a style (Fighting Style, the Champion's
+ * Additional Fighting Style), however the sheet names it ("Fighting Style (Defense)", "Fighting Style: Defense", a
+ * book's "Fighting Styles"). A feat, a species trait or a boon's, item's or background's feature of the name isn't one.
+ */
+export function hasFightingStyleFeature(have: FeatChoiceContext['have']): boolean {
+  return have.some((f) => STYLE_FEATURE_SOURCES.has(f.source) && /^(?:additional-)?fighting-style/.test(nameKey(f.name)));
 }
 
 function featPick(feat: FeatOption, ctx: FeatChoiceContext): FeatPick {
@@ -282,14 +309,20 @@ function featPick(feat: FeatOption, ctx: FeatChoiceContext): FeatPick {
     taken: takenFeat(feat, ctx.have),
     ...(increase ? { increase } : {}),
     ...(feat.ref ? { ref: feat.ref } : {}),
+    category: feat.category,
   };
 }
 
 /**
  * Fighting styles a Fighting Style feature prints itself (the class's, or a subclass's own), each with the feature's ref
- * narrowed to it (its part, paragraph and hash).
+ * narrowed to it (its part, paragraph and hash), one on the sheet taken (styleTaken).
  */
-function inlineStylePicks(def: ClassFeatureDef | undefined, owner: { source?: OptionSource } | undefined, printedBy: 'class' | 'subclass'): FeatPick[] {
+function inlineStylePicks(
+  def: ClassFeatureDef | undefined,
+  owner: { source?: OptionSource } | undefined,
+  printedBy: 'class' | 'subclass',
+  have: FeatChoiceContext['have'],
+): FeatPick[] {
   return inlineFightingStyles(def).map((o) => {
     const ref = def ? inlineOptionRef(def, o) : undefined;
     return {
@@ -298,7 +331,8 @@ function inlineStylePicks(def: ClassFeatureDef | undefined, owner: { source?: Op
       description: o.description,
       sourceLabel: optionSourceLabel(owner ?? {}),
       meetsLevel: true,
-      taken: false,
+      taken: styleTaken(o.name, have),
+      category: 'fighting-style',
       printedBy,
       ...(ref ? { ref } : {}),
     };
@@ -306,32 +340,41 @@ function inlineStylePicks(def: ClassFeatureDef | undefined, owner: { source?: Op
 }
 
 /**
- * What the panel offers (spec §5.4): General feats at Ability Score Improvement levels (the Ability
- * Score Improvement feat itself is the +2 / +1 +1 options); Epic Boons and General feats at Epic Boon;
- * Fighting Style feats plus the styles the class feature prints at Fighting Style and Additional Fighting
- * Style (a feat wins over a same-named printed style), a style already on the sheet taken. Every book's
- * feats count, in builder order (SRD first), except the SRD feats a 2024 book's feat of the same name
- * stands in for (options/replaced.ts).
+ * The feat categories a level's choice offers, in the panel's order. Ability Score Improvement and Epic Boon each give
+ * their own feat "or another feat of your choice for which you qualify" (SRD 5.2.1, every class's): Origin feats, which
+ * need nothing, and General feats ("Level 4+", checked per feat: an unmet one is offered for the DM to allow); Fighting
+ * Style feats with a Fighting Style feature (hasFightingStyleFeature); Epic Boons from level 19 ("Level 19+"), only
+ * then. A Fighting Style or Additional Fighting Style gives a Fighting Style feat.
+ */
+function choiceCategories(kind: FeatChoiceKind, ctx: FeatChoiceContext): FeatCategory[] {
+  if (kind === 'fighting-style') return ['fighting-style'];
+  const styles: FeatCategory[] = hasFightingStyleFeature(ctx.have) ? ['fighting-style'] : [];
+  if (kind === 'epic-boon') return ['epic-boon', 'general', 'origin', ...styles];
+  return ['general', 'origin', ...styles, ...(ctx.characterLevel >= 19 ? (['epic-boon'] as const) : [])];
+}
+
+/**
+ * What the panel offers (spec §5.4), by category (choiceCategories): at Ability Score Improvement levels General and
+ * Origin feats, Fighting Style feats with a Fighting Style feature and Epic Boons from level 19 (the Ability Score
+ * Improvement feat itself is the +2 / +1 +1 options); at Epic Boon the boons first, then the same; at Fighting Style
+ * and Additional Fighting Style the Fighting Style feats plus the styles the class feature prints (a feat wins over a
+ * same-named printed style). A feat or style already on the sheet is taken (takenFeat). Every book's feats count, in
+ * builder order (SRD first) within each category, except the SRD feats a 2024 book's feat of the same name stands in
+ * for (options/replaced.ts).
  */
 export function featChoices(kind: FeatChoiceKind, feats: readonly FeatOption[], ctx: FeatChoiceContext): FeatPick[] {
-  const categories: readonly FeatOption['category'][] = kind === 'asi' ? ['general'] : kind === 'epic-boon' ? ['epic-boon', 'general'] : ['fighting-style'];
-  const listed = categories.flatMap((category) => feats.filter((f) => f.category === category && nameKey(f.name) !== ASI_FEAT));
+  const listed = choiceCategories(kind, ctx).flatMap((category) => feats.filter((f) => f.category === category && nameKey(f.name) !== ASI_FEAT));
   const picks = withoutReplacedSrd(listed, [ctx.keepId]).map((f) => featPick(f, ctx));
   if (kind !== 'fighting-style') return picks;
   // The styles the level's own Fighting Style prints: a subclass's (an older book's subclass with its own list), else the class's.
   const sub = ctx.subclassStyle;
-  const printed = sub ? inlineStylePicks(sub.def, sub.sub, 'subclass') : inlineStylePicks(ctx.cls ? findFeatureDef(ctx.cls, 'Fighting Style', 20) : undefined, ctx.cls, 'class');
+  const printed = sub
+    ? inlineStylePicks(sub.def, sub.sub, 'subclass', ctx.have)
+    : inlineStylePicks(ctx.cls ? findFeatureDef(ctx.cls, 'Fighting Style', 20) : undefined, ctx.cls, 'class', ctx.have);
   for (const style of printed) {
     if (!picks.some((p) => nameKey(p.name) === nameKey(style.name))) picks.push(style);
   }
-  // A style is taken once (SRD 5.1 Fighting Style: "You can't take a Fighting Style option more than once, even if
-  // you later get to choose again"; SRD 5.2.1's Fighting Style feats aren't Repeatable), the one the builder gave
-  // too: on the sheet however it's named, as the engine's Defense AC reads it (isFightingStyle) and only so, one rule:
-  // a boon's, item's or background's "Defense" neither raises the AC nor stops the feat that does.
-  return picks.map((p) => {
-    const taken = !p.feat?.repeatable && ctx.have.some((f) => isFightingStyle(f, p.name));
-    return taken === p.taken ? p : { ...p, taken };
-  });
+  return picks;
 }
 
 /** Whether the panel's +2 / +1 +1 options apply (Ability Score Improvement and Epic Boon levels). */

@@ -77,8 +77,12 @@ The first version of structured imports deliberately leaves these out:
   book's Sorcerer leveled while its edition isn't recorded yet (a hero made before refs recorded it, its book away)
   waits for the one-time top-up, which pays only a 2024 book's. A way to adjust the maximum (on the sheet and for the
   DM) would mend these, and cover Aid and a Wraith's Life Drain too.
-- **Origin feats at Ability Score Improvement**: the level-up dialog offers General feats at an Ability Score
-  Improvement level; the 2024 feature allows any feat the hero qualifies for, Origin feats (Tough, Alert) included.
+- **Tough beside a namesake**: the engine counts any feature named Tough as Tough, once, so the Tough feat taken beside
+  a species trait, class feature or transformation power of the name adds 2 Hit Points a level, not twice the level
+  when it's taken (Alert's bonus goes by the feat itself).
+- **A feat's numbers when the DM records it**: the DM's features_add adds a feat's text and uses, not its numbers,
+  so an Alert or Tough the DM records (a choice left to the DM at a level-up, a reward) adds no Initiative bonus or Hit
+  Points, and nothing in the app adjusts either by hand. The level-up panel's pick counts both.
 - **A Repeatable feat the DM records again**: the DM's features_add rewrites a feature of the same name, so a second
   taking it records under the feat's own name stays one feature (its spent uses kept). The level-up panel adds a
   second taking, and the DM can give one its own name ("Magic Initiate (Wizard)").

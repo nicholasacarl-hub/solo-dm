@@ -2,15 +2,16 @@
  * The level-up dialog's one Feat choice panel (spec §5.4, D31): shown when the new level gains Ability
  * Score Improvement, Epic Boon, Fighting Style or Additional Fighting Style. "Decide with my DM" is preselected, so a level-up
  * nobody touches here is exactly what it was before; the other choices are +2 to one ability, +1 to
- * two, or a feat from the SRD or the player's books. Only "Level N+" prerequisites are checked, and an
- * unmet one still lets the player go ahead with "My DM allows it".
+ * two, or a feat from the SRD or the player's books, under a heading per category where there are several (Origin,
+ * General…). Of the prerequisites only "Level N+" is checked, an unmet one still letting the player go ahead with "My
+ * DM allows it", and a Fighting Style feat's "Fighting Style Feature" (the panel offers one only with the feature).
  */
 import { useId, type ReactNode } from 'react';
 import { Check, TriangleAlert } from 'lucide-react';
 import { baseFeatureName } from '@/data/options/classFeatures';
 import { ASI_SCORE_MAX, featChoiceComplete, offersScoreIncrease, type FeatChoice, type FeatChoiceTrigger, type FeatPick } from '@/data/options/levelUpChoices';
 import { cn } from '@/lib/cn';
-import { ABILITIES, ABILITY_NAMES, type Ability, type AbilityScores } from '@/types';
+import { ABILITIES, ABILITY_NAMES, type Ability, type AbilityScores, type FeatCategory } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
 import { Badge, Select } from '@/ui/components/ui';
 import { BookBadge } from '@/ui/builder/BookBadges';
@@ -85,25 +86,40 @@ function Row({ children, selected, disabled }: { children: ReactNode; selected: 
   );
 }
 
-/** "Level 4+ ✓", "Level 8+ ✗ needs level 8", and any other prerequisite text for the DM to check. */
+/** A prerequisite the panel checked and the hero meets: "Level 4+ ✓". */
+function Met({ children }: { children: ReactNode }) {
+  return (
+    <span className="inline-flex items-center gap-0.5 text-success">
+      {children} <Check className="size-3.5" aria-hidden />
+      <span className="sr-only">met</span>
+    </span>
+  );
+}
+
+const STYLE_FEATURE = /^Fighting Style Feature$/i;
+
+/**
+ * "Level 4+ ✓", "Level 8+ ✗ needs level 8", a Fighting Style feat's "Fighting Style Feature ✓" (offered only to a hero
+ * with one, or gaining one now), and any other prerequisite text for the DM to check.
+ */
 function Prerequisite({ pick }: { pick: FeatPick }) {
-  const other = (pick.prerequisite ?? '')
+  const parts = (pick.prerequisite ?? '')
     .split(/[,;]\s*/)
     .map((p) => p.trim())
-    .filter((p) => p && !/^Level \d+\+$/i.test(p));
+    .filter(Boolean);
+  const style = pick.category === 'fighting-style' ? parts.find((p) => STYLE_FEATURE.test(p)) : undefined;
+  const other = parts.filter((p) => p !== style && !/^Level \d+\+$/i.test(p));
   return (
     <span className="flex flex-wrap items-center gap-x-1.5 text-xs text-muted">
       {pick.minLevel !== undefined &&
         (pick.meetsLevel ? (
-          <span className="inline-flex items-center gap-0.5 text-success">
-            Level {pick.minLevel}+ <Check className="size-3.5" aria-hidden />
-            <span className="sr-only">met</span>
-          </span>
+          <Met>Level {pick.minLevel}+</Met>
         ) : (
           <span className="inline-flex items-center gap-0.5 text-danger">
             Level {pick.minLevel}+ <TriangleAlert className="size-3.5" aria-hidden /> needs level {pick.minLevel}
           </span>
         ))}
+      {style && <Met>{style}</Met>}
       {other.length > 0 && <span>{other.join(', ')} (your DM checks)</span>}
     </span>
   );
@@ -139,6 +155,21 @@ function ScoreRoom({ abilities, amount, scores }: { abilities: readonly Ability[
   return null;
 }
 
+/** The headings of a panel that offers feats of several categories (Ability Score Improvement, Epic Boon). */
+const CATEGORY_TITLES: Readonly<Record<FeatCategory, string>> = {
+  general: 'General feats',
+  origin: 'Origin feats',
+  'fighting-style': 'Fighting Style feats',
+  'epic-boon': 'Epic Boon feats',
+};
+
+/** The picks by category, in the panel's order (featChoices lists each category's together). */
+function byCategory(picks: readonly FeatPick[]): [FeatCategory, FeatPick[]][] {
+  const groups = new Map<FeatCategory, FeatPick[]>();
+  for (const pick of picks) groups.set(pick.category, [...(groups.get(pick.category) ?? []), pick]);
+  return [...groups];
+}
+
 export interface FeatChoicePanelProps {
   trigger: FeatChoiceTrigger;
   picks: readonly FeatPick[];
@@ -157,9 +188,47 @@ export function FeatChoicePanel({ trigger, picks, choice, onChoice, scores, dmAl
   const plusOne: [Ability, Ability] = choice.kind === 'plus-one-one' ? choice.abilities : [roomFirst(scores)[0], roomFirst(scores)[1]];
   const atMost = (a: Ability) => scores[a] >= ASI_SCORE_MAX;
   const selectedPick = choice.kind === 'feat' ? choice.pick : null;
+  // A heading per category where the panel offers several (Origin feats beside General feats at an Ability Score Improvement).
+  const groups = byCategory(picks);
+  const titled = groups.length > 1;
   const radio = (checked: boolean, onSelect: () => void, label: string, disabled = false) => (
     <input type="radio" name={name} checked={checked} onChange={onSelect} disabled={disabled} aria-label={label} className="size-4 shrink-0 accent-[var(--accent)]" />
   );
+  const pickRow = (pick: FeatPick) => {
+    const selected = selectedPick?.id === pick.id;
+    const increase = increaseLabel(pick);
+    const ability = selected && choice.kind === 'feat' ? choice.ability : undefined;
+    const many = (pick.increase?.abilities.length ?? 0) > 1;
+    return (
+      <Row key={pick.id} selected={selected} disabled={pick.taken}>
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+          <label className="flex items-center gap-2">
+            {radio(selected, () => onChoice({ kind: 'feat', pick, ...(many && pick.increase ? { ability: pick.increase.abilities[0] } : {}) }), pick.name, pick.taken)}
+            <span className="font-medium">{pick.name}</span>
+          </label>
+          <PickSource pick={pick} />
+          <Prerequisite pick={pick} />
+          {increase && <span className="text-xs text-muted">· {increase}</span>}
+          {many && selected && (
+            <AbilitySelect
+              label={`Ability ${pick.name} raises`}
+              value={ability}
+              scores={scores}
+              only={pick.increase?.abilities}
+              onChange={(a) => onChoice({ kind: 'feat', pick, ability: a })}
+            />
+          )}
+          {pick.taken && <span className="text-xs text-muted">Already on your sheet</span>}
+        </div>
+        {pick.description && (
+          <details className="text-xs text-muted">
+            <summary className="cursor-pointer text-faint hover:text-text">What it does</summary>
+            <Markdown className="mt-1 text-sm text-text">{pick.description}</Markdown>
+          </details>
+        )}
+      </Row>
+    );
+  };
   return (
     <fieldset className="flex flex-col gap-2">
       <legend className="sr-only">{featPanelTitle(trigger)}</legend>
@@ -199,42 +268,17 @@ export function FeatChoicePanel({ trigger, picks, choice, onChoice, scores, dmAl
             {choice.kind === 'plus-one-one' && plusOne[0] !== plusOne[1] && plusOne.some(atMost) && <ScoreRoom abilities={plusOne} amount={1} scores={scores} />}
           </Row>
         )}
-        {picks.map((pick) => {
-          const selected = selectedPick?.id === pick.id;
-          const increase = increaseLabel(pick);
-          const ability = selected && choice.kind === 'feat' ? choice.ability : undefined;
-          const many = (pick.increase?.abilities.length ?? 0) > 1;
-          return (
-            <Row key={pick.id} selected={selected} disabled={pick.taken}>
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-                <label className="flex items-center gap-2">
-                  {radio(selected, () => onChoice({ kind: 'feat', pick, ...(many && pick.increase ? { ability: pick.increase.abilities[0] } : {}) }), pick.name, pick.taken)}
-                  <span className="font-medium">{pick.name}</span>
-                </label>
-                <PickSource pick={pick} />
-                <Prerequisite pick={pick} />
-                {increase && <span className="text-xs text-muted">· {increase}</span>}
-                {many && selected && (
-                  <AbilitySelect
-                    label={`Ability ${pick.name} raises`}
-                    value={ability}
-                    scores={scores}
-                    only={pick.increase?.abilities}
-                    onChange={(a) => onChoice({ kind: 'feat', pick, ability: a })}
-                  />
-                )}
-                {pick.taken && <span className="text-xs text-muted">Already on your sheet</span>}
-              </div>
-              {pick.description && (
-                <details className="text-xs text-muted">
-                  <summary className="cursor-pointer text-faint hover:text-text">What it does</summary>
-                  <Markdown className="mt-1 text-sm text-text">{pick.description}</Markdown>
-                </details>
-              )}
-            </Row>
-          );
-        })}
+        {!titled && picks.map(pickRow)}
       </ul>
+      {titled &&
+        groups.map(([category, list]) => (
+          <div key={category} role="group" aria-labelledby={`${name}-${category}`} className="flex flex-col gap-1.5">
+            <p id={`${name}-${category}`} className="text-xs font-semibold text-muted">
+              {CATEGORY_TITLES[category]}
+            </p>
+            <ul className="flex flex-col gap-1.5">{list.map(pickRow)}</ul>
+          </div>
+        ))}
       {selectedPick && !selectedPick.meetsLevel && (
         <label className="flex items-center gap-2 text-sm">
           <input type="checkbox" checked={dmAllows} onChange={(e) => onDmAllows(e.target.checked)} className="size-4 accent-[var(--accent)]" />
