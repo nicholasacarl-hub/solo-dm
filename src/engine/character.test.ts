@@ -518,6 +518,60 @@ describe('features', () => {
   });
 });
 
+describe("addFeature: what a feat joining the sheet brings (the DM's features_add)", () => {
+  const feat = (name: string, source: Feature['source'] = 'feat'): Omit<Feature, 'id'> => ({ name, source, description: 'By the DM.' });
+
+  it('adds the Proficiency Bonus to Initiative for the first Alert feat (SRD 5.2.1 Alert: Initiative Proficiency)', () => {
+    // Wizard 3, DEX 14: Initiative +2 → +4.
+    const r = addFeature(mira(), feat('Alert'));
+    expect(r.character.initiativeBonusExtra).toBe(2);
+    expect(r.events.map((e) => e.message)).toEqual(['Gained feature: Alert', 'Initiative +2 → +4 (Alert: Proficiency Bonus +2)']);
+    // At Wizard 9 the bonus is +4, beside one the sheet has from elsewhere.
+    const ninth = mira({ classes: [{ ...mira().classes[0], level: 9 }], initiativeBonusExtra: 1 });
+    expect(addFeature(ninth, feat('Alert')).character.initiativeBonusExtra).toBe(1 + 4);
+    // The DM's entry on neither side of the feat line is the feat too (a boon, a background's, an item's, homebrew, other).
+    for (const source of ['boon', 'background', 'item', 'homebrew', 'other'] as const) {
+      expect(addFeature(mira(), feat('Alert', source)).character.initiativeBonusExtra, source).toBe(2);
+    }
+    // A species trait or class or subclass feature of the name isn't the feat (isAlertFeat): nothing, and no line.
+    for (const source of ['species', 'class', 'subclass'] as const) {
+      const other = addFeature(mira(), feat('Alert', source));
+      expect(other.character.initiativeBonusExtra ?? 0, source).toBe(0);
+      expect(other.events, source).toHaveLength(1);
+    }
+    // Beside a species trait of its name, the feat brings it all the same.
+    expect(addFeature(mira({ features: [{ id: 't', ...feat('Alert', 'species') }] }), feat('Alert')).character.initiativeBonusExtra).toBe(2);
+  });
+
+  it("adds Tough's twice-the-level Hit Points for the first feature named Tough, current HP with them (the engine's Tough rule)", () => {
+    // Wizard 3, HP 12 of 17: +6.
+    const r = addFeature(mira(), feat('Tough'));
+    expect(r.character.hp).toEqual({ max: 23, current: 18, temp: 0 });
+    expect(r.events.map((e) => e.message)).toEqual(['Gained feature: Tough', 'HP maximum 17 → 23 (Tough: twice your level, 3)']);
+    // By name, whatever the source (levelUp counts it so).
+    expect(addFeature(mira(), feat('Tough', 'boon')).character.hp.max).toBe(23);
+    // A hero at 0 HP gains the maximum and stays at 0, as for a Constitution change.
+    expect(addFeature(dying(), feat('Tough')).character.hp).toMatchObject({ max: 23, current: 0 });
+  });
+
+  it('adds nothing when it updates a feature of the name, or joins one the engine already counts', () => {
+    const alert = { id: 'a', ...feat('Alert'), sourceName: 'Criminal (Origin feat)' };
+    const tough = { id: 't', ...feat('Tough'), sourceName: 'Ability Score Improvement (Wizard 4)' };
+    // The feat on the sheet, sent again (the DM recording a pick the level-up counted): an update.
+    expect(addFeature(mira({ features: [alert], initiativeBonusExtra: 2 }), feat('Alert')).character.initiativeBonusExtra).toBe(2);
+    expect(addFeature(mira({ features: [tough] }), feat('Tough')).character.hp.max).toBe(17);
+    expect(addFeature(mira({ features: [tough] }), feat('Tough', 'homebrew')).character.hp.max).toBe(17);
+    // Beside the feat, a class feature named Alert; beside a species trait named Tough, the feat (Tough counts once).
+    expect(addFeature(mira({ features: [alert], initiativeBonusExtra: 2 }), feat('Alert', 'class')).character.initiativeBonusExtra).toBe(2);
+    expect(addFeature(mira({ features: [{ ...tough, source: 'species' as const }] }), feat('Tough')).character.hp.max).toBe(17);
+    // Sent twice in one call: the second is an update.
+    expect(addFeature(addFeature(mira(), feat('Tough')).character, feat('Tough')).character.hp.max).toBe(23);
+    // Any other feature changes neither.
+    const other = addFeature(mira(), feat('Savage Attacker')).character;
+    expect([other.hp.max, other.initiativeBonusExtra ?? 0]).toEqual([17, 0]);
+  });
+});
+
 describe('changeAbilityScore (SRD 5.2.1 Ability Score Improvement; Hit Points: Constitution changes)', () => {
   it('raises a score up to the cap and a Constitution modifier change moves HP as though from level 1', () => {
     // Wizard 3: CON 13 (+1) → 15 (+2): +1 HP per level = +3.

@@ -29,7 +29,10 @@ import {
   characterLevel,
   deathSaveModifier,
   exhaustionLevel,
+  formatModifier,
   hasCondition,
+  initiativeModifier,
+  proficiencyBonus,
   spellcastingAbility,
   syncArmorClass,
 } from './rules';
@@ -628,6 +631,40 @@ export function featOrTrait(source: FeatureSource): 'feat' | 'trait' | undefined
 }
 
 /**
+ * The Alert feat, whose Initiative bonus the builder, levelUp and addFeature keep: a feature named Alert on the feat's
+ * side of the feat line or on neither (featOrTrait), the one the level-up panel counts as the feat. A species trait, class
+ * or subclass feature or transformation power of the name isn't it, and never brings the bonus.
+ */
+export function isAlertFeat(f: Pick<Feature, 'name' | 'source'>): boolean {
+  return nameKey(f.name) === 'alert' && featOrTrait(f.source) !== 'trait' && f.source !== 'transformation';
+}
+
+/**
+ * What a feature joining the sheet outside a level-up brings that the sheet stores (levelUp counts its own: the panel's
+ * pick, a level_up extra): Alert's Proficiency Bonus on Initiative for the first Alert feat (SRD 5.2.1 Alert: "When you
+ * roll Initiative, you can add your Proficiency Bonus to the roll"; isAlertFeat), and, for the first feature named Tough
+ * (the engine counts Tough by name), the twice-the-level Hit Points levelUp gives Tough when it's gained (progression.ts
+ * featureHpBonuses), current HP moving with the maximum as for Constitution (a hero at 0 HP stays at 0). Later levels
+ * add theirs at level-up.
+ */
+function joiningNumbers(c: Character, added: Feature): EngineResult {
+  let character = c;
+  const events: GameEvent[] = [];
+  const level = characterLevel(c);
+  if (isAlertFeat(added) && !c.features.some(isAlertFeat)) {
+    const pb = proficiencyBonus(Math.max(1, level));
+    character = { ...character, initiativeBonusExtra: toInt(c.initiativeBonusExtra) + pb };
+    events.push(gameEvent('combat', `Initiative ${formatModifier(initiativeModifier(c))} → ${formatModifier(initiativeModifier(character))} (Alert: Proficiency Bonus ${formatModifier(pb)})`));
+  }
+  if (nameKey(added.name) === 'tough' && level > 0 && !c.features.some((f) => nameKey(f.name) === 'tough')) {
+    const max = c.hp.max + 2 * level;
+    character = { ...character, hp: { ...character.hp, max, current: c.hp.current > 0 ? c.hp.current + 2 * level : 0 } };
+    events.push(gameEvent('hp-changed', `HP maximum ${c.hp.max} → ${max} (Tough: twice your level, ${level})`));
+  }
+  return { character, events };
+}
+
+/**
  * The feature addFeature rewrites for an entry of this name and source: the first of its name on the same side of the
  * feat line, or on either for an entry on neither (featOrTrait). Undefined when it would add one.
  */
@@ -650,7 +687,8 @@ export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | '
  * trait or class feature never merge (featOrTrait):
  * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
  * and the trait keeps its text. A feature on neither side (the DM's entry for an Epic Boon as a boon, or an Origin feat
- * as its background's) updates the one of its name on either.
+ * as its background's) updates the one of its name on either. A feature it adds brings its numbers (joiningNumbers:
+ * Alert's Initiative bonus, Tough's Hit Points); one it updates brings none, whatever the sheet holds already.
  */
 export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: string }): EngineResult {
   const name = feature.name?.trim();
@@ -671,9 +709,10 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
   const features = [...c.features, added];
   const usesText = added.uses ? ` (${added.uses.max} use${added.uses.max === 1 ? '' : 's'}, ${rechargeText(added.uses)})` : '';
   const beside = c.features.filter((f) => nameKey(f.name) === nameKey(name)).map((f) => featureLabel(f, features));
+  const numbers = joiningNumbers(c, added);
   return {
-    character: touch({ ...c, features }),
-    events: [gameEvent('feature-restored', `Gained feature: ${name}${usesText}${beside.length ? `, beside ${beside.join(' and ')}` : ''}`)],
+    character: touch({ ...numbers.character, features }),
+    events: [gameEvent('feature-restored', `Gained feature: ${name}${usesText}${beside.length ? `, beside ${beside.join(' and ')}` : ''}`), ...numbers.events],
   };
 }
 

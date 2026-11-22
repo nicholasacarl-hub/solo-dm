@@ -520,6 +520,35 @@ describe('update_character links names to the rules index and builder data', () 
   });
 });
 
+describe("a feat's numbers when the DM records it (features_add)", () => {
+  const fighter4 = (extra: Partial<Character> = {}) => hero({ classId: FIGHTER.id, name: 'Fighter', level: 4, hitDie: 10 }, extra);
+
+  it("gives Alert its Initiative bonus and Tough its Hit Points, and says so (SRD 5.2.1 Alert; the engine's Tough rule)", async () => {
+    const h = setup({ character: fighter4() });
+    const out = await h.run('update_character', {
+      features_add: [
+        { name: 'Alert', description: 'Initiative proficiency.', source: 'feat' },
+        { name: 'Tough', description: 'Hardier than most.', source: 'feat' },
+      ],
+    });
+    // Fighter 4, DEX 14, HP 30 of 30.
+    expect(h.sheet()).toMatchObject({ initiativeBonusExtra: 2, hp: { max: 38, current: 38 } });
+    expect(out.content).toContain('Initiative +2 → +4 (Alert: Proficiency Bonus +2)');
+    expect(out.content).toContain('HP maximum 30 → 38 (Tough: twice your level, 4)');
+    // The DM's words again: the same features, nothing more.
+    await h.run('update_character', { features_add: [{ name: 'Tough', description: 'Hardier still.', source: 'feat' }, { name: 'Alert', description: 'Quick.', source: 'feat' }] });
+    expect(h.sheet()).toMatchObject({ initiativeBonusExtra: 2, hp: { max: 38 } });
+  });
+
+  it('keeps the AC in step with a Defense the DM records (SRD 5.2.1 Defense: +1 to Armor Class while wearing armor)', async () => {
+    const mail = { id: 'cm', name: 'Chain Mail', quantity: 1, equipped: true, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'heavy' as const, baseAc: 16, dexCap: 0 } };
+    const h = setup({ character: fighter4({ inventory: [mail], armorClass: 16, acFormula: 'Chain Mail 16' }) });
+    const out = await h.run('update_character', { features_add: [{ name: 'Defense', description: 'A Fighting Style feat.', source: 'feat' }] });
+    expect(h.sheet().armorClass).toBe(17);
+    expect(out.content).toContain('AC 16 → 17');
+  });
+});
+
 describe('what the DM reads back about AC and saves after its own changes', () => {
   it("armor_class: an AC the gear doesn't give says the DM set it; one the gear gives gets the gear's formula back", async () => {
     const h = setup();

@@ -757,9 +757,12 @@ function proficiencySteps(input: ToolInput<'update_character'>): ((c: Character)
   return steps;
 }
 
-/** The change may affect Armor Class: an ability score, or what is equipped or attuned. */
+/** The change may affect Armor Class: an ability score, what is equipped or attuned, or a feature it reads (Defense). */
 function mayChangeArmorClass(input: ToolInput<'update_character'>): boolean {
-  return Boolean(input.ability_scores?.length) || (input.inventory_update ?? []).some((i) => i.equipped !== undefined || i.attuned !== undefined);
+  return (
+    Boolean(input.ability_scores?.length || input.features_add?.length) ||
+    (input.inventory_update ?? []).some((i) => i.equipped !== undefined || i.attuned !== undefined)
+  );
 }
 
 /**

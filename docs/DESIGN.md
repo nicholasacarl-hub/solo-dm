@@ -765,7 +765,10 @@ uses it changes is the DM's ruling, `FeatureUses.ruled`, which level-ups leave a
 level_up result and the dialog's notice alike, "Kept your ruling: Second Wind 4 uses" (`keptRulings`); the same number
 keeps the feature growing), but never merges a feat with a species trait or class feature (`featOrTrait`; a boon's, background's or homebrew entry updates
 either, so the DM's entry for an Epic Boon as a boon rewrites it; its result names the feature as a use or restore
-takes it now), and a species trait or class feature the DM adds (a level_up extra is one) is a book feat of its name
+takes it now). A feature it adds brings the numbers the sheet stores, as a level-up counts them (`joiningNumbers`):
+Alert's Proficiency Bonus on Initiative for the Alert feat, and Tough's twice-the-level Hit Points for the first
+feature named Tough; one it updates brings none, and update_character keeps the AC in step after features_add
+(Defense). A species trait or class feature the DM adds (a level_up extra is one) is a book feat of its name
 only by the feat's own words, and only when they outnumber a book part's of its name (see Provenance below): a trait's
 own text that shares a sentence with the feat stays the trait's. A rewrite in the words of the feature it rewrites (a
 trait or a class's printed fighting style resent as the sheet holds it, or a ruling quoting it) keeps that feature's

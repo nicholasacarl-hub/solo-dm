@@ -18,7 +18,7 @@ import {
   type RollResult,
 } from '@/types';
 import { newId, nameKey, slugify } from '@/lib/id';
-import { featOrTrait } from './character';
+import { isAlertFeat } from './character';
 import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, rulesClassFor, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
 import { abilityModifier, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
@@ -106,15 +106,6 @@ function findClassIndex(classes: readonly ClassLevel[], name: string, classId?: 
 function hasFeatureNamed(features: readonly { name: string }[], name: string): boolean {
   const key = nameKey(name);
   return features.some((f) => nameKey(f.name) === key);
-}
-
-/**
- * The Alert feat, whose Initiative bonus the builder and levelUp keep: a feature named Alert on the feat's side of the
- * feat line or on neither (featOrTrait), the one the level-up panel counts as the feat. A species trait, class or
- * subclass feature or transformation power of the name isn't it, and never brought the bonus.
- */
-function isAlertFeat(f: Pick<Feature, 'name' | 'source'>): boolean {
-  return nameKey(f.name) === 'alert' && featOrTrait(f.source) !== 'trait' && f.source !== 'transformation';
 }
 
 interface HpBonus {
