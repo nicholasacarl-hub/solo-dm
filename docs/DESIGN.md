@@ -280,7 +280,8 @@ to the maximum in force) compose with them, and ending one gives back exactly it
 `endHpMaxAdjustments` in the engine; the DM's `hp_max`, `hp_max_end` and `hp.drain`; the sheet's pencil and chips). One
 name is one entry, so `hp_max_end` and the status line know each by its name alone: an effect's change that goes the
 other way under an effect's name, or any change that ends differently from the entry under its name, is refused (a
-draining hit under such a name, or a blank one, is refused whole, so no damage lands without its drain), except a
+draining hit under such a name, or a blank one, is refused whole, so no damage lands without its drain; as `hp` applies
+before `hp_max_end`, its refusal asks for a name of its own, or the other's end in an earlier call), except a
 stronger casting of the same spell, which replaces its entry; a lasting change under a lasting entry's name adds up
 either way, and a total of 0 takes it back. Names are read the way the engine writes them (one line, at most 60
 characters), so one from a hand-edited file can still be ended. A name ends the entries named exactly; else a bare name

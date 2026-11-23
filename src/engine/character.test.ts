@@ -624,7 +624,7 @@ describe("addFeature: what a feat joining the sheet brings (the DM's features_ad
   });
 });
 
-describe('changeAbilityScore (SRD 5.2.1 Ability Score Improvement; Hit Points: Constitution changes)', () => {
+describe('changeAbilityScore (SRD 5.2.1 Ability Score Improvement; Gaining a Level for Constitution changes, srd:rule:level-advancement-gaining-a-level)', () => {
   it('raises a score up to the cap and a Constitution modifier change moves HP as though from level 1', () => {
     // Wizard 3: CON 13 (+1) → 15 (+2): +1 HP per level = +3.
     const r = changeAbilityScore(mira(), 'con', 2);
@@ -974,7 +974,7 @@ describe('Hit Point maximum adjustments (SRD 5.2.1)', () => {
       {
         type: 'warning',
         message:
-          "Life Drain −5 (until ended) goes by that name: give this change another name, or end that one first. This hit wasn't applied (neither its damage nor its drain).",
+          'Life Drain −5 (until ended) goes by that name: give the drain a name of its own (as in "Life Drain (Wight)"), or end that one in an earlier call (hp applies before hp_max_end). This hit wasn\'t applied (neither its damage nor its drain).',
       },
     ]);
     const full = hardy();
@@ -984,6 +984,10 @@ describe('Hit Point maximum adjustments (SRD 5.2.1)', () => {
       { type: 'warning', message: 'A drain needs a name (the effect, as in "Life Drain"). This hit wasn\'t applied (neither its damage nor its drain).' },
     ]);
     expect(drainProblem(cursed, 'Life Drain (Wraith)')).toBeNull();
+    // Nor under an effect's raise (srd:spell:aid). The hit applies before hp_max_end, so the end must come in an earlier call.
+    expect(drainProblem(aided, 'Aid')).toBe(
+      'Aid +5 (until a Long Rest) goes by that name: give the drain a name of its own (as in "Life Drain (Wight)"), or end that one in an earlier call (hp applies before hp_max_end).',
+    );
     // A lasting change under a lasting entry's name adds up either way; an effect's can't go the other way.
     const lowered = adjustHpMax(boon, { name: 'Boon', change: -2, ends: 'never' });
     expect(lowered.character.hpMaxAdjustments).toEqual([{ name: 'Boon', amount: 2, ends: 'never' }]);

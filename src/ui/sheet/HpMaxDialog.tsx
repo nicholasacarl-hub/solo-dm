@@ -33,15 +33,17 @@ export function HpMaxDialog({
 }) {
   const [direction, setDirection] = useState<'raise' | 'lower'>('raise');
   const [amount, setAmount] = useState('');
+  // A number field reports text it can't read ("5e", "--5") as no value; its validity says something is there.
+  const [unreadable, setUnreadable] = useState(false);
   const [name, setName] = useState('');
   const [ends, setEnds] = useState<HpMaxEnds | null>(null);
   const id = useId();
   const by = Number(amount);
-  const given = amount.trim() !== '';
-  const amountOk = given && Number.isInteger(by) && by >= 1 && by <= 999;
-  // An amount given that can't be used says why (Apply stays off, so the browser never shows its own message).
-  const amountProblem =
-    given && !amountOk ? (by < 0 ? 'Give the amount without a minus sign: Lower lowers the maximum.' : 'The amount is a whole number from 1 to 999.') : '';
+  const given = amount.trim() !== '' || unreadable;
+  const amountOk = amount.trim() !== '' && Number.isInteger(by) && by >= 1 && by <= 999;
+  // An amount given that can't be used says why (Apply stays off, so the browser never shows its own message). Every
+  // message but a refusal fits the two lines the preview has beside the buttons on a phone held sideways.
+  const amountProblem = given && !amountOk ? (by < 0 ? 'No minus sign: use Lower to lower it.' : 'Use a whole number from 1 to 999.') : '';
   const spec = amountOk && name.trim() && ends ? { name, change: direction === 'raise' ? by : -by, ends } : null;
   const dead = c.deathSaves.dead;
   const preview = spec && !dead ? hpMaxChange(c, spec) : null;
@@ -53,16 +55,17 @@ export function HpMaxDialog({
     : amountProblem
       ? amountProblem
       : !preview
-        ? 'Give an amount, a name and when it ends to see the change.'
+        ? 'Give an amount, a name and when it ends.'
         : !applies
           ? (preview.warning ?? '')
           : dies
-            ? 'Your hero dies: a Hit Point maximum of 0 is death.'
+            ? 'Your hero dies: a maximum of 0 is death.'
             : `Maximum ${c.hp.max} → ${preview.character.hp.max}${current}`;
 
   const close = () => {
     setDirection('raise');
     setAmount('');
+    setUnreadable(false);
     setName('');
     setEnds(null);
     onClose();
@@ -80,12 +83,16 @@ export function HpMaxDialog({
       onClose={close}
       size="sm"
       title="Hit point maximum"
-      description="For an effect such as Aid or Life Drain, or a lasting change your DM agreed to. Your DM is told."
+      description={
+        // On a phone held sideways the form needs the height: the description is only read out.
+        <span className="phone-landscape:sr-only">For an effect such as Aid or Life Drain, or a lasting change your DM agreed to. Your DM is told.</span>
+      }
       footer={
         // The preview sits by Apply, in view however far the form scrolls on a phone; held sideways, beside the buttons
-        // in two lines (scrolling past them), so the form keeps the height.
+        // in two lines (a long refusal scrolls past them), so the form keeps the height.
         <div className="flex w-full flex-col gap-2 phone-landscape:flex-row phone-landscape:items-center phone-landscape:gap-3">
           <p
+            id={`${id}-preview`}
             aria-live="polite"
             className={cn(
               'min-h-5 text-sm tabular-nums phone-landscape:max-h-10 phone-landscape:min-w-0 phone-landscape:flex-1 phone-landscape:overflow-y-auto',
@@ -99,7 +106,8 @@ export function HpMaxDialog({
               Cancel
             </Button>
             <Button type="submit" form={`${id}-form`} variant={dies ? 'danger' : 'primary'} disabled={!applies}>
-              {dies ? 'Apply — your hero dies' : 'Apply'}
+              {/* Held sideways, the preview beside it says the hero dies, and needs the width: the rest is only read out. */}
+              <span>Apply{dies && <> <span className="phone-landscape:sr-only">— your hero dies</span></>}</span>
             </Button>
           </div>
         </div>
@@ -128,7 +136,9 @@ export function HpMaxDialog({
               max={999}
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
+              onInput={(e) => setUnreadable(e.currentTarget.validity.badInput)}
               aria-invalid={amountProblem ? true : undefined}
+              aria-describedby={amountProblem ? `${id}-preview` : undefined}
             />
           </Field>
           <Field label="Name" htmlFor={`${id}-name`} hint={'The spell or effect, such as "Aid" or "Life Drain"; the same spell twice doesn\'t add up.'}>

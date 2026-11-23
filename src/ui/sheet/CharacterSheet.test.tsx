@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generatePortrait } from '@/images';
@@ -240,7 +240,7 @@ describe('CharacterSheet — Hit Point maximum', () => {
     await user.type(within(dialog).getByLabelText('By'), '20');
     await user.type(within(dialog).getByLabelText('Name'), 'Life Drain');
     await user.click(within(dialog).getByRole('radio', { name: /At the end of a Long Rest/ }));
-    expect(within(dialog).getByText('Your hero dies: a Hit Point maximum of 0 is death.')).toBeInTheDocument();
+    expect(within(dialog).getByText('Your hero dies: a maximum of 0 is death.')).toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Apply — your hero dies' })).toBeEnabled();
     // Cancel changes nothing.
     await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
@@ -264,8 +264,10 @@ describe('CharacterSheet — Hit Point maximum', () => {
     const user = userEvent.setup();
     render(<Harness />);
     const dialog = await openDialog(user);
-    const hint = within(dialog).getByText('Give an amount, a name and when it ends to see the change.');
+    const hint = within(dialog).getByText('Give an amount, a name and when it ends.');
     expect(dialog.querySelector('form')?.contains(hint)).toBe(false);
+    // Held sideways the description is only read out (sr-only), so it stays the dialog's description.
+    expect(dialog).toHaveAccessibleDescription('For an effect such as Aid or Life Drain, or a lasting change your DM agreed to. Your DM is told.');
     expect(hint.parentElement?.contains(within(dialog).getByRole('button', { name: 'Apply' }))).toBe(true);
   });
 
@@ -337,21 +339,52 @@ describe('CharacterSheet — Hit Point maximum', () => {
     await user.click(within(dialog).getByRole('radio', { name: /At the end of a Long Rest/ }));
     const by = within(dialog).getByLabelText('By');
     for (const [typed, said] of [
-      ['1000', 'The amount is a whole number from 1 to 999.'],
-      ['2.5', 'The amount is a whole number from 1 to 999.'],
-      ['0', 'The amount is a whole number from 1 to 999.'],
-      ['-5', 'Give the amount without a minus sign: Lower lowers the maximum.'],
+      ['1000', 'Use a whole number from 1 to 999.'],
+      ['2.5', 'Use a whole number from 1 to 999.'],
+      ['0', 'Use a whole number from 1 to 999.'],
+      ['-5', 'No minus sign: use Lower to lower it.'],
     ]) {
       await user.clear(by);
       await user.type(by, typed);
       expect(within(dialog).getByText(said), typed).toBeInTheDocument();
       expect(by).toHaveAttribute('aria-invalid', 'true');
+      // The reason is By's description, so it's heard again on coming back to the field.
+      expect(by).toHaveAccessibleDescription(said);
       expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
     }
     await user.clear(by);
     await user.type(by, '5');
     expect(by).not.toHaveAttribute('aria-invalid');
+    expect(by).not.toHaveAttribute('aria-describedby');
     expect(within(dialog).getByText('Maximum 17 → 22 · HP 12 → 17')).toBeInTheDocument();
+  });
+
+  it("says why when the field holds text it can't read as a number (\"5e\", \"--5\")", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText('Name'), 'Aid');
+    await user.click(within(dialog).getByRole('radio', { name: /At the end of a Long Rest/ }));
+    const by = within(dialog).getByLabelText('By');
+    // A browser's number field reports such text as no value, with validity.badInput set (jsdom never sets it).
+    const typed = (badInput: boolean) => {
+      Object.defineProperty(by, 'validity', { configurable: true, get: () => ({ badInput }) });
+      fireEvent.input(by, { target: { value: '' } });
+    };
+    typed(true);
+    expect(within(dialog).getByText('Use a whole number from 1 to 999.')).toBeInTheDocument();
+    expect(by).toHaveAttribute('aria-invalid', 'true');
+    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    // Cleared: no amount, no problem.
+    typed(false);
+    expect(within(dialog).getByText('Give an amount, a name and when it ends.')).toBeInTheDocument();
+    expect(by).not.toHaveAttribute('aria-invalid');
+    // Cancel forgets it: the dialog opens again with no problem.
+    typed(true);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    const again = await openDialog(user);
+    expect(within(again).getByText('Give an amount, a name and when it ends.')).toBeInTheDocument();
+    expect(within(again).getByLabelText('By')).not.toHaveAttribute('aria-invalid');
   });
 
   it('shows chips on a read-only sheet, with no pencil and no ×; a lasting chip never has one', () => {

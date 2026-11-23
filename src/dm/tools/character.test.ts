@@ -1281,7 +1281,9 @@ describe('Hit Point maximum adjustments (update_character hp_max, hp.drain, hp_m
     expect(feast.content).toContain(
       `Heroes' Feast +11 stays until you end it: update_character hp_max_end ["Heroes' Feast"] when its time runs out or its cause ends (the status line keeps it in view).`,
     );
-    await h.run('update_character', { hp: { ...wraith, amount: 12 } });
+    // The guidance comes once: a later call that leaves the entry as it is doesn't repeat it.
+    const hit = await h.run('update_character', { hp: { ...wraith, amount: 12 }, xp_gain: 50 });
+    expect(hit.content).not.toContain('stays until you end it');
     expect(h.sheet().hp).toEqual({ max: 34, current: 34, temp: 0 });
     const rest = await h.run('take_rest', { kind: 'long' });
     expect(h.sheet().hp).toEqual({ max: 41, current: 41, temp: 0 });
@@ -1370,6 +1372,9 @@ describe('Hit Point maximum adjustments (update_character hp_max, hp.drain, hp_m
     );
     const rest = await h.run('take_rest', { kind: 'long' });
     expect(rest.content).toContain('a Death Dog\'s poison) returns at the next Long Rest once the cause ends');
+    // A call that leaves the curse as it is doesn't repeat the guidance.
+    const xp = await h.run('update_character', { xp_gain: 50 });
+    expect(xp.content).not.toContain('stays until you end it');
     // Mummy: "decreases by 10 (3d6) every 24 hours that elapse": as it grows the call is given again, with the new amount.
     const grown = await h.run('update_character', { hp_max: { name: 'Mummy Rot', change: -7, ends: 'when-ended' } });
     expect(grown.content).toContain('hp_max {"name": "Mummy Rot", "change": -17, "ends": "long-rest"} in one call.');
@@ -1387,8 +1392,9 @@ describe('Hit Point maximum adjustments (update_character hp_max, hp.drain, hp_m
     const logged = toolLogs(h).length;
     const out = await h.run('update_character', { hp: wraith, xp_gain: 50 });
     // The refusal is the hit's alone: the rest of the call applies.
+    // hp applies before hp_max_end, so its advice is a name of its own, or the end in an earlier call.
     expect(out.content).toContain(
-      "Life Drain −5 (until ended) goes by that name: give this change another name, or end that one first. This hit wasn't applied (neither its damage nor its drain).",
+      'Life Drain −5 (until ended) goes by that name: give the drain a name of its own (as in "Life Drain (Wight)"), or end that one in an earlier call (hp applies before hp_max_end). This hit wasn\'t applied (neither its damage nor its drain).',
     );
     expect(out.content).toContain('+50 XP');
     expect(h.sheet().hp).toEqual({ max: 25, current: 25, temp: 0 });
@@ -1396,6 +1402,19 @@ describe('Hit Point maximum adjustments (update_character hp_max, hp.drain, hp_m
     const blank = await h.run('update_character', { hp: { ...wraith, drain: '   ' } });
     expect(blank.content).toContain('A drain needs a name (the effect, as in "Life Drain").');
     expect(h.sheet().hp).toEqual({ max: 25, current: 25, temp: 0 });
+    // Both ways out work. Ending the holder in the same call doesn't (the hit is refused before it ends); in an earlier
+    // call it does. A name of its own lands at once (srd:monster:wight: "Life Drain").
+    const batched = await h.run('update_character', { hp: wraith, hp_max_end: ['Life Drain'] });
+    expect(batched.content).toContain("This hit wasn't applied");
+    expect(h.sheet().hp).toEqual({ max: 30, current: 25, temp: 0 });
+    await h.run('update_character', { hp: wraith });
+    expect(h.sheet().hp).toEqual({ max: 9, current: 4, temp: 0 });
+    await h.run('update_character', { hp: { ...wraith, amount: 3, drain: 'Life Drain (Wight)' } });
+    expect(h.sheet().hp).toEqual({ max: 6, current: 1, temp: 0 });
+    expect(h.sheet().hpMaxAdjustments).toEqual([
+      { name: 'Life Drain', amount: -21, ends: 'long-rest' },
+      { name: 'Life Drain (Wight)', amount: -3, ends: 'long-rest' },
+    ]);
   });
 
   it('a draining hit that changes nothing (Immunity) logs as a plain hit does', async () => {

@@ -493,12 +493,27 @@ export function adjustHpMax(c: Character, spec: HpMaxChange): EngineResult {
  * change under a lasting entry's name adds up either way, and a total of 0 takes it back.
  */
 function hpMaxNameProblem(list: readonly HpMaxAdjustment[], name: string, change: number, ends: HpMaxEnds): string | null {
+  const held = hpMaxNameHolder(list, name, change, ends);
+  if (!held) return null;
+  const { entry, opposite } = held;
+  return opposite
+    ? `${entry.name} ${entry.amount > 0 ? 'raises' : 'lowers'} the Hit Point maximum: end it first, or give this change another name.`
+    : `${hpMaxAdjustmentLabel(entry)} goes by that name: give this change another name, or end that one first.`;
+}
+
+/** The entry under `name` that keeps it from taking this change (hpMaxNameProblem), and whether it goes the other way. */
+function hpMaxNameHolder(
+  list: readonly HpMaxAdjustment[],
+  name: string,
+  change: number,
+  ends: HpMaxEnds,
+): { entry: HpMaxAdjustment; opposite: boolean } | null {
   const named = list.filter((a) => nameKey(a.name) === nameKey(name));
   const opposite = ends !== 'never' && named.find((a) => a.ends !== 'never' && a.amount > 0 !== change > 0);
-  if (opposite) return `${opposite.name} ${opposite.amount > 0 ? 'raises' : 'lowers'} the Hit Point maximum: end it first, or give this change another name.`;
+  if (opposite) return { entry: opposite, opposite: true };
   const recast = (a: HpMaxAdjustment) => change > 0 && ends !== 'never' && a.amount > 0 && a.ends !== 'never';
   const other = named.find((a) => a.ends !== ends && !recast(a));
-  return other ? `${hpMaxAdjustmentLabel(other)} goes by that name: give this change another name, or end that one first.` : null;
+  return other ? { entry: other, opposite: false } : null;
 }
 
 function raiseHpMax(c: Character, list: readonly HpMaxAdjustment[], name: string, amount: number, ends: HpMaxEnds): EngineResult {
@@ -697,12 +712,17 @@ export function damageTaken(c: Character, amount: number, damageType?: string): 
 
 /**
  * Why a draining hit can't go under the name `drain`, or null: a blank name, or one another change already holds
- * (hpMaxNameProblem). applyDrainingDamage then refuses the hit whole, so its damage never lands without its drain.
+ * (hpMaxNameProblem). applyDrainingDamage then refuses the hit whole, so its damage never lands without its drain. The
+ * hit applies before hp_max_end, so the holder can only be ended in an earlier call; a name of its own comes first, as
+ * ending a reduction a curse or poison keeps (SRD 5.2.1 Death Dog, Mummy) would give back what it still holds down.
  */
 export function drainProblem(c: Pick<Character, 'hpMaxAdjustments'>, drain: string): string | null {
   const name = adjustmentName(drain);
   if (!name) return 'A drain needs a name (the effect, as in "Life Drain").';
-  return hpMaxNameProblem(hpMaxAdjustments(c), name, -1, 'long-rest');
+  const held = hpMaxNameHolder(hpMaxAdjustments(c), name, -1, 'long-rest');
+  return held
+    ? `${hpMaxAdjustmentLabel(held.entry)} goes by that name: give the drain a name of its own (as in "Life Drain (Wight)"), or end that one in an earlier call (hp applies before hp_max_end).`
+    : null;
 }
 
 /**
@@ -1100,10 +1120,11 @@ export const ABILITY_SCORE_LIMIT = 30;
  * Change one ability score by `change`, never above `max` (20 for Ability Score Improvements and
  * feats, SRD 5.2.1; up to 30 for Epic Boons and transformations) nor below 1. An increase never
  * lowers a score already above the cap (e.g. set by a magic item). A Constitution modifier change
- * also changes the HP maximum as though the new modifier had applied from level 1 (SRD 5.2.1 "Hit
- * Points") — current HP moves with it, and a hero at 0 HP stays at 0. An increase adds exactly
- * that; a loss never takes the hero's own maximum below 1, but one that drains hold near 0 can
- * reach 0 and kill, like Aid ending.
+ * also changes the HP maximum by the change for each level (SRD 5.2.1 Gaining a Level: "When your
+ * Constitution modifier increases by 1, your Hit Point maximum increases by 1 for each level you
+ * have attained"; a decrease mirrors it) — current HP moves with it, and a hero at 0 HP stays at 0.
+ * An increase adds exactly that; a loss never takes the hero's own maximum below 1, but one that
+ * drains hold near 0 can reach 0 and kill, like Aid ending.
  */
 export function changeAbilityScore(c: Character, ability: Ability, change: number, max = 20): EngineResult {
   const before = c.abilityScores[ability];
