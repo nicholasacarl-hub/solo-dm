@@ -712,7 +712,7 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
       updated.uses = { ...feature.uses, used: Math.min(old?.used ?? feature.uses.used, feature.uses.max), ...growth };
     }
     const character = replaceFeature(c, updated);
-    // A trait rewritten by a boon's or other entry of the name is the Alert feat now (isAlertFeat): it brings its bonus.
+    // A trait rewritten by a boon's or other entry of the name is the Alert or Tough feat now (isFeatNamed): it brings its numbers.
     const numbers = joiningNumbers(c, character);
     // By the name a use or restore takes now, beside a namesake (a boon's entry over a trait changes its "(species)").
     return { character: numbers.character, events: [gameEvent('feature-restored', `Updated feature: ${featureLabel(updated, character.features)}`), ...numbers.events] };
