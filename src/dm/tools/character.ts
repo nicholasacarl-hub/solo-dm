@@ -16,19 +16,26 @@ import {
   addFeature,
   addItem,
   addSpell,
+  adjustHpMax,
   applyDamage,
+  applyDrainingDamage,
   applyHealing,
   applyLongRest,
   applyShortRest,
   changeCurrency,
   changeExhaustion,
+  changeInitiativeBonus,
   characterLevel,
   characterSheetText,
   characterStatusLine,
   conditionKey,
+  endHpMaxAdjustments,
   featOrTrait,
   featureLabel,
   featureToRewrite,
+  formatModifier,
+  hpMaxAdjustments,
+  hpMaxEndsText,
   isAlertFeat,
   isToughFeat,
   saveSourcesChangeText,
@@ -155,14 +162,47 @@ function hpSection(hp: NonNullable<ToolInput<'update_character'>['hp']>, reason?
     summary: (before, after) => {
       if (hp.kind === 'temp') return `Temp HP ${before.hp.temp} → ${after.hp.temp}`;
       const label = hp.kind === 'damage' ? `${hp.amount}${hp.damage_type ? ` ${hp.damage_type}` : ''}` : `+${hp.amount}`;
-      return `HP ${before.hp.current} → ${after.hp.current} ${detail(label)}`;
+      const max = after.hp.max !== before.hp.max ? ` · HP max ${before.hp.max} → ${after.hp.max}` : '';
+      return `HP ${before.hp.current} → ${after.hp.current} ${detail(label)}${max}`;
     },
     apply: (c) => {
-      if (hp.kind === 'damage') return applyDamage(c, hp.amount, { critical: hp.critical, damageType: hp.damage_type });
+      if (hp.kind === 'damage') {
+        const opts = { critical: hp.critical, damageType: hp.damage_type };
+        return hp.drain ? applyDrainingDamage(c, hp.amount, { ...opts, drain: hp.drain }) : applyDamage(c, hp.amount, opts);
+      }
       if (hp.kind === 'healing') return applyHealing(c, hp.amount);
       return setTempHp(c, hp.amount);
     },
   };
+}
+
+/** hp_max_end: each name in turn (endHpMaxAdjustments). */
+function hpMaxEndSection(names: readonly string[], reason?: string): Section {
+  return {
+    icon: 'info',
+    summary: (before, after) => (after === before ? '' : `HP max ${before.hp.max} → ${after.hp.max} (ended: ${names.join(', ')}${reason ? ` · ${reason}` : ''})`),
+    apply: (c) => chain(c, names.map((name) => (x: Character) => endHpMaxAdjustments(x, name))),
+  };
+}
+
+function hpMaxSection(spec: NonNullable<ToolInput<'update_character'>['hp_max']>, reason?: string): Section {
+  return {
+    icon: spec.change > 0 ? 'heal' : 'hp',
+    summary: (before, after) =>
+      after === before ? '' : `HP max ${before.hp.max} → ${after.hp.max} (${spec.name} ${formatModifier(spec.change)} · ${hpMaxEndsText(spec.ends)}${reason ? ` · ${reason}` : ''})`,
+    apply: (c) => adjustHpMax(c, spec),
+  };
+}
+
+/** For the DM: an adjustment this call made that only the DM ends (no game clock ends Heroes' Feast). */
+function untilEndedLines(before: Character, after: Character): string[] {
+  const had = new Set(hpMaxAdjustments(before).map((a) => `${nameKey(a.name)}|${a.ends}`));
+  return hpMaxAdjustments(after)
+    .filter((a) => a.ends === 'when-ended' && !had.has(`${nameKey(a.name)}|${a.ends}`))
+    .map(
+      (a) =>
+        `${a.name} ${formatModifier(a.amount)} stays until you end it: update_character hp_max_end ["${a.name}"] when its time runs out or its cause ends (the status line keeps it in view).`,
+    );
 }
 
 // -- links to the rules index and builder data (structured imports) ----------
@@ -725,6 +765,10 @@ function statSteps(input: ToolInput<'update_character'>, catalog: readonly Equip
     const speed = input.speed;
     steps.push((c) => ({ character: { ...c, speed }, events: [statEvent(`Speed ${c.speed} ft. → ${speed} ft.`)] }));
   }
+  if (input.initiative_change !== undefined) {
+    const delta = input.initiative_change;
+    steps.push((c) => changeInitiativeBonus(c, delta));
+  }
   return steps;
 }
 
@@ -827,6 +871,8 @@ function buildSections(input: ToolInput<'update_character'>, links: Links = NO_L
     if (steps.length > 0) sections.push({ icon, apply: (c) => chain(c, steps) });
   };
   if (input.hp) sections.push(hpSection(input.hp, input.reason));
+  if (input.hp_max_end?.length) sections.push(hpMaxEndSection(input.hp_max_end, input.reason));
+  if (input.hp_max) sections.push(hpMaxSection(input.hp_max, input.reason));
   add('condition', conditionSteps(input));
   add('spell', spellSteps(input, links));
   add('info', featureSteps(input, links));
@@ -876,7 +922,8 @@ async function logSections(ctx: ToolContext, results: SectionResult[], reason?: 
 }
 
 export async function updateCharacterTool(input: ToolInput<'update_character'>, ctx: ToolContext): Promise<ToolOutcome> {
-  if (buildSections(input).length === 0) throw new ToolInputError('Nothing to change: include at least one section (hp, conditions_add, inventory_add, …).');
+  if (input.hp?.drain && input.hp.kind !== 'damage') throw new ToolInputError('hp.drain lowers the HP maximum by the damage taken, so it needs kind "damage".');
+  if (buildSections(input).length === 0) throw new ToolInputError('Nothing to change: include at least one section (hp, hp_max, conditions_add, inventory_add, …).');
   const links = await resolveLinks(input, ctx);
   const sections = buildSections(input, links);
   let results: SectionResult[] = [];
@@ -902,6 +949,10 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   const lines = results.flatMap((r) => eventLines(r.events)).filter(Boolean);
   // For the DM only (the player's log keeps the change itself).
   lines.push(...besideLines(before, change.character));
+  lines.push(...untilEndedLines(before, change.character));
+  if (input.initiative_change && ctx.deps.store().combat?.active) {
+    lines.push('The initiative already rolled for this fight stays; the new bonus counts from the next Initiative roll.');
+  }
   lines.push(...keptHomebrewLines(input.conditions_add, change.character.conditions));
   lines.push(...keptStableLines(input.conditions_add, change.character));
   const saves = saveSourcesChangeText(before, change.character);
@@ -1004,9 +1055,15 @@ async function shortRest(ctx: ToolContext, reason?: string): Promise<ToolOutcome
 
 async function longRest(ctx: ToolContext, reason?: string): Promise<ToolOutcome> {
   const change = await mutateCharacter(ctx, (c) => applyLongRest(c));
-  const summary = 'Long rest: HP, Hit Dice and spell slots restored';
+  const died = change.character.deathSaves.dead;
+  const summary = died ? 'Long rest: the hero died (an HP maximum reached 0)' : 'Long rest: HP, Hit Dice and spell slots restored';
   await logTool(ctx, 'take_rest', 'rest', summary, { detail: [reason, ...eventLines(change.events)].filter(Boolean).join('\n') });
-  return ok([summary, ...eventLines(change.events), `Status: ${characterStatusLine(change.character)}`].join('\n'));
+  // For the DM only: what the rest didn't end, and nothing else will.
+  const kept = died ? [] : hpMaxAdjustments(change.character).filter((a) => a.ends === 'when-ended');
+  const keptLine = kept.length
+    ? [`Still in effect after the rest: ${kept.map((a) => `${a.name} ${formatModifier(a.amount)} (until ended)`).join(', ')}. End each with update_character hp_max_end when its time runs out or its cause ends.`]
+    : [];
+  return ok([summary, ...eventLines(change.events), ...keptLine, `Status: ${characterStatusLine(change.character)}`].join('\n'));
 }
 
 /**

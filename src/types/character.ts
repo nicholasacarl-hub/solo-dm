@@ -137,6 +137,24 @@ export interface HitPoints {
   temp: number;
 }
 
+/** When a Hit Point maximum adjustment ends: when a Long Rest finishes, when the DM or player ends it, or never. */
+export const HP_MAX_ENDS = ['long-rest', 'when-ended', 'never'] as const;
+export type HpMaxEnds = (typeof HP_MAX_ENDS)[number];
+
+/**
+ * A change to the hero's Hit Point maximum beyond what the app counts (level-ups, Constitution, feats): Aid, a Wraith's
+ * Life Drain, a ruling, Hit Points the app counted too few. hp.max already includes `amount`, so ending it takes back
+ * exactly that, whatever levels came between. Written only by the engine (src/engine/character.ts).
+ */
+export interface HpMaxAdjustment {
+  /** Short name, one line, at most 60 characters: "Aid", "Life Drain", "Tough (missed at 1st level)". */
+  name: string;
+  /** Signed change it made to hp.max (after a maximum of 0, or Harm's floor of 1). Never 0. */
+  amount: number;
+  /** 'never': part of the hero (a boon, a ruling, missed Hit Points), kept so everyone sees why the maximum is what it is. */
+  ends: HpMaxEnds;
+}
+
 export interface HitDiceEntry {
   die: HitDie;
   total: number;
@@ -437,7 +455,10 @@ export interface Character {
   speed: number;
   otherSpeeds?: Partial<Record<OtherSpeed, number>>;
   size: CreatureSize;
-  /** Extra initiative bonus beyond DEX (e.g. Alert adds the proficiency bonus). */
+  /**
+   * Extra Initiative bonus beyond DEX: Alert's Proficiency Bonus (the builder, levelUp, joiningNumbers) plus any change
+   * the DM made (update_character initiative_change).
+   */
   initiativeBonusExtra?: number;
   /** Extra passive Perception bonus (e.g. Observant-style features). */
   passivePerceptionExtra?: number;
@@ -456,6 +477,8 @@ export interface Character {
   /** Lasting changes the story made to the hero (vampirism, lycanthropy, a celestial blessing...). */
   transformations?: Transformation[];
   hp: HitPoints;
+  /** Changes to the Hit Point maximum beyond what the app counts (absent when none). hp.max already includes them. */
+  hpMaxAdjustments?: HpMaxAdjustment[];
   hitDice: HitDiceEntry[];
   deathSaves: DeathSaves;
   /** Active conditions. Exhaustion is tracked in `exhaustion`, not here. */

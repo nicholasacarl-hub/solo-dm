@@ -2,7 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { sampleCharacter } from '@/test/fixtures';
 import { SHEET_TEXT_MAX } from '@/engine';
 import type { InventoryItem } from '@/types';
-import { dmSheetLengthHint, itemAttuneChange, itemEquipChange, notesChange, personalityChange, removeItemChange } from './sheetChanges';
+import {
+  deathSaveMarkChange,
+  dmSheetLengthHint,
+  endHpMaxChange,
+  hpMaxChange,
+  itemAttuneChange,
+  itemEquipChange,
+  notesChange,
+  personalityChange,
+  removeItemChange,
+} from './sheetChanges';
 
 // SRD 5.2.1 Magic Items: Ring of Protection — "+1 bonus to AC and saving throws" while attuned.
 describe('sheet gear changes keep AC in step', () => {
@@ -135,5 +145,40 @@ describe('notices quote whole characters, and notes edits read like personality 
     expect(dmSheetLengthHint('x'.repeat(SHEET_TEXT_MAX + 1))).toBe(
       "The DM's sheet carries the first 20,000 characters of this; past that it tells the DM the rest is left out.",
     );
+  });
+});
+
+// The player's Hit Point maximum changes (HpMaxDialog, the chips' ×), on the real engine: one notice line each for the DM.
+describe('Hit Point maximum changes from the sheet', () => {
+  it('tells the DM about a raise, a reduction and a lasting change in the engine\'s words (srd:spell:aid, srd:monster:wraith)', () => {
+    const aid = hpMaxChange(sampleCharacter(), { name: 'Aid', change: 5, ends: 'long-rest' });
+    expect(aid.character.hp).toEqual({ max: 22, current: 17, temp: 0 });
+    expect(aid.notice).toBe('Player changed their Hit Point maximum: HP maximum 17 → 22, HP 12 → 17 (Aid +5, until a Long Rest)');
+    const drain = hpMaxChange(sampleCharacter(), { name: 'Life Drain', change: -10, ends: 'long-rest' });
+    expect(drain.notice).toBe('Player changed their Hit Point maximum: HP maximum 17 → 7, HP 12 → 7 (Life Drain −10, until a Long Rest)');
+    const lasting = hpMaxChange(sampleCharacter(), { name: 'Tough (missed at 1st level)', change: 6, ends: 'never' });
+    expect(lasting.notice).toBe('Player changed their Hit Point maximum: HP maximum 17 → 23, HP 12 → 18 (Tough (missed at 1st level) +6, lasting)');
+  });
+
+  it('tells the DM about an end, and gives a refusal to the player alone', () => {
+    const aided = hpMaxChange(sampleCharacter(), { name: 'Aid', change: 5, ends: 'long-rest' }).character;
+    const ended = endHpMaxChange(aided, 'Aid', 'long-rest');
+    expect(ended.character.hp).toEqual({ max: 17, current: 17, temp: 0 });
+    expect(ended.notice).toBe('Player ended a Hit Point maximum adjustment: Aid +5 ends: HP maximum 22 → 17');
+    const again = hpMaxChange(aided, { name: 'Aid', change: 5, ends: 'long-rest' });
+    expect(again.character).toBe(aided);
+    expect(again.notice).toBeNull();
+    expect(again.warning).toContain("the same spell's effects don't combine");
+    expect(endHpMaxChange(aided, 'Aid', 'when-ended')).toMatchObject({ character: aided, notice: null });
+  });
+
+  it("won't clear a death mark while the maximum is 0 (srd:rule:...-instant-death: \"A creature dies if its Hit Point maximum reaches 0.\")", () => {
+    const dead = hpMaxChange(sampleCharacter(), { name: 'Life Drain', change: -20, ends: 'long-rest' }).character;
+    expect(dead.deathSaves.dead).toBe(true);
+    const refused = deathSaveMarkChange(dead, 'failures', 2);
+    expect(refused.character).toBe(dead);
+    expect(refused.warning).toBe("Your hero's Hit Point maximum is 0: end what lowered it first (its × on the Hit Points bar).");
+    const restored = endHpMaxChange(dead, 'Life Drain').character;
+    expect(deathSaveMarkChange(restored, 'failures', 2).character.deathSaves.dead).toBe(false);
   });
 });

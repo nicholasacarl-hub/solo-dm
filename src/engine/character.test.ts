@@ -6,9 +6,17 @@ import {
   addFeature,
   addItem,
   addSpell,
+  adjustHpMax,
   applyDamage,
+  applyDrainingDamage,
   applyHealing,
   changeAbilityScore,
+  changeInitiativeBonus,
+  damageTaken,
+  endHpMaxAdjustments,
+  endHpMaxAdjustmentsWhere,
+  hpMaxAdjustmentLabel,
+  hpMaxAdjustments,
   changeCurrency,
   changeExhaustion,
   clearTempHp,
@@ -33,6 +41,7 @@ import {
   updateItem,
   useFeature,
 } from './character';
+import { levelUp } from './progression';
 
 const mira = (overrides: Partial<Character> = {}) => sampleCharacter(overrides);
 /** Mira at 0 HP, unconscious and making death saves. */
@@ -844,5 +853,291 @@ describe('damage defenses (resistance, immunity, vulnerability) and condition im
     const r = addCondition(c, { id: 'poisoned' });
     expect(r.character.conditions).toHaveLength(0);
     expect(r.events[0].type).toBe('warning');
+  });
+});
+
+describe('Hit Point maximum adjustments (SRD 5.2.1)', () => {
+  const aid = { name: 'Aid', change: 5, ends: 'long-rest' } as const;
+  const drain = (change: number, name = 'Life Drain') => ({ name, change, ends: 'long-rest' }) as const;
+  /** Mira at 30/30 (or `current`), for a Wraith's 21-point Life Drain. */
+  const hardy = (current = 30, overrides: Partial<Character> = {}) => mira({ hp: { max: 30, current, temp: 0 }, ...overrides });
+  const message = (r: { events: { message: string }[] }) => r.events.map((e) => e.message).join(' | ');
+
+  it('Aid raises the maximum and current HP by 5 until a Long Rest; temporary HP stay (srd:spell:aid)', () => {
+    // "Each target's Hit Point maximum and current Hit Points increase by 5 for the duration." Temporary Hit Points:
+    // "Because Temporary Hit Points aren't Hit Points, a creature can be at full Hit Points and receive Temporary Hit Points."
+    const r = adjustHpMax(mira({ hp: { max: 17, current: 12, temp: 3 } }), aid);
+    expect(r.character.hp).toEqual({ max: 22, current: 17, temp: 3 });
+    expect(r.character.hpMaxAdjustments).toEqual([{ name: 'Aid', amount: 5, ends: 'long-rest' }]);
+    expect(r.events).toEqual([{ type: 'hp-changed', message: 'HP maximum 17 → 22, HP 12 → 17 (Aid +5, until a Long Rest)' }]);
+    expect(hpMaxAdjustmentLabel(r.character.hpMaxAdjustments![0])).toBe('Aid +5 (until a Long Rest)');
+  });
+
+  it('Aid wakes a dying hero: Unconscious ends, Prone stays, death saves reset (srd:rule:...-falling-unconscious, -death-saving-throws)', () => {
+    // Falling Unconscious: "until you regain any Hit Points"; Death Saving Throws: "The number of both is reset to zero
+    // when you regain any Hit Points".
+    const down = applyDamage(dying(), 1).character;
+    expect(down.deathSaves.failures).toBe(1);
+    const r = adjustHpMax(down, aid);
+    expect(r.character.hp).toEqual({ max: 22, current: 5, temp: 0 });
+    expect(ids(r.character)).toEqual(['prone']);
+    expect(r.character.deathSaves).toEqual({ successes: 0, failures: 0, stable: false, dead: false });
+    expect(r.events).toEqual([{ type: 'revived', message: 'HP maximum 17 → 22, HP 0 → 5 (Aid +5, until a Long Rest) — conscious again, but still Prone.' }]);
+  });
+
+  it('refuses the dead and a sheet without a maximum (srd:rule:dead: "A dead creature has no Hit Points")', () => {
+    const dead = mira({ hp: { max: 17, current: 0, temp: 0 }, deathSaves: { successes: 0, failures: 3, stable: false, dead: true } });
+    const r = adjustHpMax(dead, aid);
+    expect(r.character).toBe(dead);
+    expect(r.events[0].type).toBe('warning');
+    const blank = mira({ hp: { max: 0, current: 0, temp: 0 } });
+    expect(adjustHpMax(blank, aid).character).toBe(blank);
+    const hero = mira();
+    for (const bad of [{ ...aid, name: '  ' }, { ...aid, change: 0 }]) {
+      const refused = adjustHpMax(hero, bad);
+      expect(refused.character).toBe(hero);
+      expect(refused.events[0].type).toBe('warning');
+    }
+  });
+
+  it("the same spell doesn't combine; a stronger casting replaces it, and different spells add (srd:rule:casting-spells-effects-combining-spell-effects)", () => {
+    // "the effects of the same spell cast multiple times don't combine. Instead, the most potent effect … applies";
+    // "The effects of different spells add together".
+    const aided = adjustHpMax(mira(), aid).character;
+    const again = adjustHpMax(aided, aid);
+    expect(again.character).toBe(aided);
+    expect(again.events[0]).toMatchObject({ type: 'warning', message: expect.stringContaining("Aid +5 already applies: the same spell's effects don't combine") });
+    expect(adjustHpMax(aided, { ...aid, name: 'Aid (2nd level)' }).character).toBe(aided);
+    const upcast = adjustHpMax(aided, { name: 'Aid (3rd level)', change: 10, ends: 'long-rest' });
+    expect(upcast.character.hp).toEqual({ max: 27, current: 22, temp: 0 });
+    expect(upcast.character.hpMaxAdjustments).toEqual([{ name: 'Aid (3rd level)', amount: 10, ends: 'long-rest' }]);
+    expect(message(upcast)).toBe('HP maximum 22 → 27, HP 17 → 22 (Aid (3rd level) +10 replaces Aid +5, until a Long Rest)');
+    // srd:spell:heroes-feast: "Its Hit Point maximum also increases by 2d10, and it gains the same number of Hit Points."
+    const feast = adjustHpMax(upcast.character, { name: "Heroes' Feast", change: 12, ends: 'when-ended' });
+    expect(feast.character.hp).toEqual({ max: 39, current: 34, temp: 0 });
+    expect(hpMaxAdjustments(feast.character).map(hpMaxAdjustmentLabel)).toEqual(['Aid (3rd level) +10 (until a Long Rest)', "Heroes' Feast +12 (until ended)"]);
+  });
+
+  it("a Wraith's Life Drain lowers the maximum, and current HP only to fit; drains add up (srd:monster:wraith)", () => {
+    // "its Hit Point maximum decreases by an amount equal to the damage taken"; srd:rule:hit-points: "You can't have more
+    // Hit Points than your Hit Point maximum".
+    const full = adjustHpMax(hardy(), drain(-7));
+    expect(full.character.hp).toEqual({ max: 23, current: 23, temp: 0 });
+    expect(message(full)).toBe('HP maximum 30 → 23, HP 30 → 23 (Life Drain −7, until a Long Rest)');
+    const hurt = adjustHpMax(hardy(10), drain(-7));
+    expect(hurt.character.hp).toEqual({ max: 23, current: 10, temp: 0 });
+    expect(message(hurt)).toBe('HP maximum 30 → 23 (Life Drain −7, until a Long Rest)');
+    const twice = adjustHpMax(hurt.character, drain(-5));
+    expect(twice.character.hpMaxAdjustments).toEqual([{ name: 'Life Drain', amount: -12, ends: 'long-rest' }]);
+    expect(message(twice)).toBe('HP maximum 23 → 18 (Life Drain −5, −12 in all, until a Long Rest)');
+    // Another kind of end keeps its own entry.
+    const curse = adjustHpMax(twice.character, drain(-3, 'Life Drain')).character;
+    expect(adjustHpMax(curse, { name: 'Life Drain', change: -2, ends: 'when-ended' }).character.hpMaxAdjustments).toHaveLength(2);
+  });
+
+  it('a maximum of 0 kills (srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death)', () => {
+    // "A creature dies if its Hit Point maximum reaches 0."
+    const focused = mira({ hp: { max: 17, current: 12, temp: 4 }, spellcasting: { ...mira().spellcasting!, concentratingOn: 'Shield' } });
+    const r = adjustHpMax(focused, drain(-20));
+    expect(r.character.hp).toEqual({ max: 0, current: 0, temp: 0 });
+    expect(r.character.deathSaves.dead).toBe(true);
+    expect(r.character.spellcasting?.concentratingOn).toBeNull();
+    expect(r.character.hpMaxAdjustments).toEqual([{ name: 'Life Drain', amount: -17, ends: 'long-rest' }]);
+    expect(r.events[0]).toEqual({ type: 'died', message: 'HP maximum 17 → 0 (Life Drain −17, until a Long Rest): a creature dies if its Hit Point maximum reaches 0.' });
+    // A dying hero drained to 0 dies too.
+    expect(adjustHpMax(dying(), drain(-17)).character.deathSaves.dead).toBe(true);
+  });
+
+  it("Harm can't reduce a maximum below 1 (srd:spell:harm)", () => {
+    // "This spell can't reduce a target's Hit Point maximum below 1."
+    const r = adjustHpMax(hardy(), { name: 'Harm', change: -40, ends: 'long-rest' });
+    expect(r.character.hp).toEqual({ max: 1, current: 1, temp: 0 });
+    expect(r.character.deathSaves.dead).toBe(false);
+    expect(message(r)).toBe("HP maximum 30 → 1, HP 30 → 1 (Harm −29: it can't reduce a Hit Point maximum below 1, until a Long Rest)");
+    const again = adjustHpMax(r.character, { name: 'Harm', change: -5, ends: 'long-rest' });
+    expect(again.character).toBe(r.character);
+    expect(again.events[0].type).toBe('warning');
+  });
+
+  it('a lasting change moves current HP with the maximum, like Constitution (srd:rule:level-advancement-gaining-a-level)', () => {
+    // The Constitution precedent: a lasting change to the maximum moves current HP with it; a hero at 0 stays at 0.
+    const tough = { name: 'Tough (missed at 1st level)', change: 4, ends: 'never' } as const;
+    const r = adjustHpMax(mira(), tough);
+    expect(r.character.hp).toEqual({ max: 21, current: 16, temp: 0 });
+    expect(message(r)).toBe('HP maximum 17 → 21, HP 12 → 16 (Tough (missed at 1st level) +4, lasting)');
+    const down = adjustHpMax(dying(), tough);
+    expect(down.character.hp).toEqual({ max: 21, current: 0, temp: 0 });
+    expect(ids(down.character)).toContain('unconscious');
+    expect(message(down)).toBe('HP maximum 17 → 21 (Tough (missed at 1st level) +4, lasting); HP stays 0 until healed');
+    // The same name lowered by the same amount takes it back.
+    const back = adjustHpMax(r.character, { ...tough, change: -4 });
+    expect(back.character.hp).toEqual({ max: 17, current: 12, temp: 0 });
+    expect(back.character).not.toHaveProperty('hpMaxAdjustments');
+    expect(message(back)).toBe('HP maximum 21 → 17, HP 16 → 12 (Tough (missed at 1st level) −4, taken back, lasting)');
+    // Never below 1, never a death.
+    const plain = mira();
+    const floor = adjustHpMax(plain, { name: 'Curse ruling', change: -17, ends: 'never' });
+    expect(floor.character).toBe(plain);
+    expect(floor.events[0]).toMatchObject({ type: 'warning', message: "A lasting change can't take the Hit Point maximum below 1 (it is 17)." });
+    expect(adjustHpMax(mira(), { name: 'Curse ruling', change: -16, ends: 'never' }).character.hp).toEqual({ max: 1, current: 1, temp: 0 });
+  });
+
+  it("refuses an effect of the opposite sign under an effect's name", () => {
+    const aided = adjustHpMax(mira(), aid).character;
+    const r = adjustHpMax(aided, { name: 'aid', change: -3, ends: 'long-rest' });
+    expect(r.character).toBe(aided);
+    expect(r.events[0].message).toBe('Aid raises the Hit Point maximum: end it first, or give this change another name.');
+  });
+
+  it('ending gives back exactly what each changed (srd:spell:greater-restoration)', () => {
+    // Greater Restoration ends "Any reduction to the target's Hit Point maximum"; Aid ending lowers current HP only to fit.
+    const aided = adjustHpMax(mira(), aid).character; // 17/22
+    const healed = applyHealing(aided, 3).character; // 20/22
+    const ended = endHpMaxAdjustments(healed, 'Aid');
+    expect(ended.character.hp).toEqual({ max: 17, current: 17, temp: 0 });
+    expect(ended.character).not.toHaveProperty('hpMaxAdjustments');
+    expect(message(ended)).toBe('Aid +5 ends: HP maximum 22 → 17, HP 20 → 17');
+    const hurt = applyDamage(aided, 2).character; // 15/22
+    expect(endHpMaxAdjustments(hurt, 'Aid').character.hp).toEqual({ max: 17, current: 15, temp: 0 });
+    // A reduction ending raises only the maximum: "returns to normal" doesn't heal.
+    const drained = adjustHpMax(hardy(10), drain(-7)).character; // 10/23
+    const restored = endHpMaxAdjustments(drained, 'Life Drain');
+    expect(restored.character.hp).toEqual({ max: 30, current: 10, temp: 0 });
+    expect(message(restored)).toBe('Life Drain −7 ends: HP maximum 23 → 30');
+    // The spell's name ends a casting named with its level, and the other way round.
+    const upcast = adjustHpMax(mira(), { name: 'Aid (3rd level)', change: 10, ends: 'long-rest' }).character;
+    expect(endHpMaxAdjustments(upcast, 'aid').character.hp.max).toBe(17);
+    expect(endHpMaxAdjustments(aided, 'Aid (2nd level)').character.hp.max).toBe(17);
+  });
+
+  it("ends only the entry of a name with the given end (the sheet's ×), and every one of the name without it", () => {
+    const both = adjustHpMax(adjustHpMax(hardy(), drain(-5)).character, { name: 'Life Drain', change: -3, ends: 'when-ended' }).character; // 22/22
+    const curse = endHpMaxAdjustments(both, 'Life Drain', 'when-ended');
+    expect(curse.character.hpMaxAdjustments).toEqual([{ name: 'Life Drain', amount: -5, ends: 'long-rest' }]);
+    expect(curse.character.hp.max).toBe(25);
+    expect(endHpMaxAdjustments(both, 'Life Drain').character.hp.max).toBe(30);
+    expect(endHpMaxAdjustments(both, 'Life Drain', 'never').character).toBe(both);
+  });
+
+  it('ending an unknown name warns with what is in effect', () => {
+    const aided = adjustHpMax(adjustHpMax(hardy(), aid).character, drain(-10)).character;
+    const r = endHpMaxAdjustments(aided, 'Aidd');
+    expect(r.character).toBe(aided);
+    expect(r.events[0]).toEqual({
+      type: 'warning',
+      message: 'No Hit Point maximum adjustment named "Aidd" (in effect: Aid +5 (until a Long Rest), Life Drain −10 (until a Long Rest)).',
+    });
+    expect(endHpMaxAdjustments(mira(), 'Aid').events[0].message).toBe('No Hit Point maximum adjustment named "Aid".');
+  });
+
+  it('ending on the dead gives the maximum back; the hero stays dead', () => {
+    const dead = adjustHpMax(mira(), drain(-20)).character;
+    const r = endHpMaxAdjustments(dead, 'Life Drain');
+    expect(r.character.hp).toEqual({ max: 17, current: 0, temp: 0 });
+    expect(r.character.deathSaves.dead).toBe(true);
+    expect(r.character).not.toHaveProperty('hpMaxAdjustments');
+  });
+
+  it('Aid ending under a bigger curse kills, and the curse ending later gives back the hero\'s own maximum (srd:monster:mummy)', () => {
+    // A Mummy's curse: "its Hit Point maximum doesn't return to normal when finishing a Long Rest" (until ended).
+    const aided = adjustHpMax(mira(), aid).character; // 17/22
+    const cursed = adjustHpMax(aided, { name: 'Mummy Rot', change: -20, ends: 'when-ended' }).character; // 2/2
+    expect(cursed.hp).toEqual({ max: 2, current: 2, temp: 0 });
+    const r = endHpMaxAdjustments(cursed, 'Aid');
+    expect(r.character.hp).toEqual({ max: 0, current: 0, temp: 0 });
+    expect(r.character.deathSaves.dead).toBe(true);
+    expect(r.character.hpMaxAdjustments).toEqual([{ name: 'Mummy Rot', amount: -17, ends: 'when-ended' }]);
+    expect(r.events[0]).toEqual({ type: 'died', message: 'Aid +5 ends: HP maximum 2 → 0 — a creature dies if its Hit Point maximum reaches 0.' });
+    expect(endHpMaxAdjustments(r.character, 'Mummy Rot').character.hp).toEqual({ max: 17, current: 0, temp: 0 });
+  });
+
+  it('ends reductions before raises, so ending both never dips the maximum', () => {
+    const aided = adjustHpMax(mira(), aid).character; // 17/22
+    const drained = adjustHpMax(aided, drain(-20)).character; // 2/2, under a drain that ends at the same time as Aid
+    const r = endHpMaxAdjustmentsWhere(drained, (a) => a.ends === 'long-rest');
+    expect(r.character.deathSaves.dead).toBe(false);
+    expect(r.character.hp).toEqual({ max: 17, current: 2, temp: 0 });
+    expect(r.events.map((e) => e.message)).toEqual(['Life Drain −20 ends: HP maximum 2 → 22', 'Aid +5 ends: HP maximum 22 → 17']);
+  });
+
+  it('a lasting entry is taken back as bookkeeping, and never below a maximum of 1', () => {
+    const boon = adjustHpMax(mira(), { name: 'Blessing of the Grove', change: 6, ends: 'never' }).character; // 18/23
+    expect(message(endHpMaxAdjustments(boon, 'Blessing of the Grove'))).toBe('Blessing of the Grove +6 taken back: HP maximum 23 → 17, HP 18 → 12');
+    const drained = adjustHpMax(boon, drain(-20)).character; // 3/3
+    const kept = endHpMaxAdjustments(drained, 'Blessing of the Grove');
+    expect(kept.character.hpMaxAdjustments).toEqual(drained.hpMaxAdjustments);
+    expect(kept.events[0]).toEqual({ type: 'warning', message: 'Blessing of the Grove +6 stays: taking it back would leave a Hit Point maximum below 1.' });
+  });
+
+  it('damageTaken applies the Defenses in order (srd:rule:damage-and-healing-resistance-and-vulnerability)', () => {
+    // "Resistance is applied second; and Vulnerability is applied third."
+    expect(damageTaken(hardy(30, { damageResistances: ['Necrotic'] }), 21, 'necrotic')).toBe(10);
+    expect(damageTaken(hardy(30, { damageImmunities: ['necrotic'] }), 21, 'necrotic')).toBe(0);
+    expect(damageTaken(hardy(30, { damageVulnerabilities: ['necrotic'] }), 21, 'necrotic')).toBe(42);
+    expect(damageTaken(hardy(30, { damageResistances: ['necrotic'], damageVulnerabilities: ['necrotic'] }), 21, 'necrotic')).toBe(20);
+    expect(damageTaken(hardy(), 21)).toBe(21);
+    expect(damageTaken(adjustHpMax(mira(), drain(-20)).character, 21)).toBe(0);
+  });
+
+  it('a draining hit lowers the maximum by the damage taken, temporary HP included (srd:rule:damage-and-healing-temporary-hit-points)', () => {
+    // "If you have Temporary Hit Points and take damage, those points are lost first": the damage is still taken.
+    const r = applyDrainingDamage(hardy(30, { hp: { max: 30, current: 30, temp: 8 } }), 21, { damageType: 'necrotic', drain: 'Life Drain' });
+    expect(r.character.hp).toEqual({ max: 9, current: 9, temp: 0 });
+    expect(r.events.map((e) => e.message)).toEqual([
+      'HP 30 → 17 (21 necrotic; 8 absorbed by temporary HP)',
+      'HP maximum 30 → 9, HP 17 → 9 (Life Drain −21, until a Long Rest)',
+    ]);
+    const resisted = applyDrainingDamage(hardy(30, { damageResistances: ['necrotic'] }), 21, { damageType: 'necrotic', drain: 'Life Drain' });
+    expect(resisted.character.hp).toEqual({ max: 20, current: 20, temp: 0 });
+  });
+
+  it('judges massive damage on the maximum before the drain (srd:rule:...-instant-death, Massive Damage)', () => {
+    // "the character dies if the remainder equals or exceeds their Hit Point maximum": 15 left over is less than 30.
+    const r = applyDrainingDamage(hardy(10), 25, { damageType: 'necrotic', drain: 'Life Drain' });
+    expect(r.character.hp).toEqual({ max: 5, current: 0, temp: 0 });
+    expect(r.character.deathSaves.dead).toBe(false);
+    expect(ids(r.character)).toContain('unconscious');
+    // Immunity drains nothing; a hit that kills drains nothing.
+    const immune = hardy(30, { damageImmunities: ['necrotic'] });
+    expect(applyDrainingDamage(immune, 21, { damageType: 'necrotic', drain: 'Life Drain' }).character).toBe(immune);
+    const killed = applyDrainingDamage(hardy(5, { hp: { max: 10, current: 5, temp: 0 } }), 20, { drain: 'Life Drain' });
+    expect(killed.character.deathSaves.dead).toBe(true);
+    expect(killed.character).not.toHaveProperty('hpMaxAdjustments');
+    expect(killed.events.map((e) => e.type)).toEqual(['died']);
+  });
+
+  it('composes with level-ups: ending Aid keeps the new level\'s Hit Points (srd:rule:level-advancement-gaining-a-level)', () => {
+    // "add the total (minimum of 1) to your Hit Point maximum": a level adds to the maximum in force.
+    const aided = adjustHpMax(mira(), aid).character; // 17/22
+    const four = levelUp(aided, { className: 'Wizard', hpMethod: 'average' });
+    expect(four.character.hp.max).toBe(22 + four.hpGained);
+    expect(endHpMaxAdjustments(four.character, 'Aid').character.hp.max).toBe(17 + four.hpGained);
+  });
+
+  it('changeInitiativeBonus adds to the bonus beyond Dexterity; Alert keeps growing at level-ups (srd:feat:alert)', () => {
+    // "When you roll Initiative, you can add your Proficiency Bonus to the roll"; a level-up adds the bonus's growth.
+    const alert = mira({ classes: [{ ...mira().classes[0], level: 4 }], features: [{ id: 'al', name: 'Alert', source: 'feat', description: '' }] });
+    const r = changeInitiativeBonus(alert, 2);
+    expect(r.character.initiativeBonusExtra).toBe(2);
+    expect(r.events).toEqual([{ type: 'combat', message: 'Initiative +2 → +4' }]);
+    expect(changeInitiativeBonus(alert, 0).character).toBe(alert);
+    expect(levelUp(r.character, { className: 'Wizard', hpMethod: 'average' }).character.initiativeBonusExtra).toBe(3);
+    expect(changeInitiativeBonus(r.character, -5).events[0].message).toBe('Initiative +4 → −1');
+  });
+
+  it('reads stored entries leniently', () => {
+    const odd = mira({
+      hpMaxAdjustments: [
+        { name: 'Aid', amount: 5, ends: 'long-rest' },
+        { name: '', amount: 3, ends: 'never' },
+        { name: 'Zero', amount: 0, ends: 'never' },
+        { name: 'Future', amount: -2, ends: 'next-dawn' as never },
+      ],
+    });
+    expect(hpMaxAdjustments(odd)).toEqual([
+      { name: 'Aid', amount: 5, ends: 'long-rest' },
+      { name: 'Future', amount: -2, ends: 'when-ended' },
+    ]);
+    expect(hpMaxAdjustments(mira())).toEqual([]);
   });
 });

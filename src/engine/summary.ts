@@ -5,7 +5,7 @@
 import { ABILITIES, SKILLS, SKILL_NAMES, type Character, type Feature, type InventoryItem, type KnownSpell, type SpellSlotLevel } from '@/types';
 import { closeCutWrapper, copiedTextMissing, wrapImported } from '@/lib/importedContent';
 import { codePoints, safeEnd } from '@/lib/text';
-import { formatCurrency, totalGp } from './character';
+import { formatCurrency, hpMaxAdjustmentLabel, hpMaxAdjustments, totalGp } from './character';
 import { conditionDetails, conditionName } from './conditions';
 import { xpSummary } from './progression';
 import {
@@ -163,6 +163,9 @@ export function characterStatusLine(c: Character): string {
   const parts = [`${c.name.trim() || 'Unnamed hero'} (${classText(c)})`, hpText(c)];
   const vital = vitalText(c);
   if (vital) parts.push(vital);
+  // Effects that end (no game clock): this line is what reminds the DM to end Aid or Heroes' Feast. Lasting ones are in the sheet.
+  const effects = hpMaxAdjustments(c).filter((a) => a.ends !== 'never');
+  if (effects.length) parts.push(`HP max includes ${effects.map(hpMaxAdjustmentLabel).join(', ')}`);
   parts.push(`AC ${c.armorClass}`);
   const speed = speedDetails(c);
   if (speed.speed !== speed.base) parts.push(`Speed ${speed.speed} ft`);
@@ -203,8 +206,10 @@ function vitalsLines(c: Character): string[] {
   const others = Object.entries(c.otherSpeeds ?? {})
     .filter(([, v]) => (v ?? 0) > 0)
     .map(([k, v]) => `${k} ${v} ft`);
+  const adjustments = hpMaxAdjustments(c);
   const first = [
     `**${hpText(c)}**`,
+    ...(adjustments.length ? [`**HP max includes** ${adjustments.map(hpMaxAdjustmentLabel).join(', ')}`] : []),
     `**AC** ${c.armorClass}${c.acFormula ? ` (${c.acFormula})` : ''}`,
     `**Speed** ${speedText}${others.length ? `, ${others.join(', ')}` : ''}`,
     `**Initiative** ${formatModifier(initiativeModifier(c))}`,

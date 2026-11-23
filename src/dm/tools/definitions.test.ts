@@ -32,9 +32,12 @@ describe('the static tools array (append-only: it never changes during a session
     }
   });
 
-  it('keeps each map schema under 8,000 characters and every description substantial', () => {
+  it('keeps each schema under its cap and every description substantial', () => {
+    // 8,000 characters each; update_character alone may reach 8,500 since it gained hp_max, hp_max_end, hp.drain and
+    // initiative_change (their guidance lives in its description, not in the schema).
+    const caps: Record<string, number> = { update_character: 8_500 };
     for (const tool of DM_TOOLS) {
-      expect(JSON.stringify(tool.input_schema).length, tool.name).toBeLessThan(8000);
+      expect(JSON.stringify(tool.input_schema).length, tool.name).toBeLessThan(caps[tool.name] ?? 8_000);
       expect(tool.description?.length, tool.name).toBeGreaterThan(80);
     }
   });
@@ -48,6 +51,15 @@ describe('the static tools array (append-only: it never changes during a session
     expect([...SCHEMA_VOCABULARIES.directions]).toEqual([...COMPASS_DIRECTIONS]);
     expect([...SCHEMA_VOCABULARIES.doorStates]).toEqual(['open', 'closed', 'locked']);
     expect([...SCHEMA_VOCABULARIES.moveModes]).toEqual(['walk', 'fly']);
+  });
+});
+
+describe('the Hit Point maximum fields explain themselves to sessions whose frozen prompt never mentions them', () => {
+  it('update_character and take_rest say how the maximum changes and ends', () => {
+    for (const phrase of ['hp_max', 'hp.drain', 'hp_max_end', 'never temporary HP', 'initiative_change', 'never the total', 'a maximum of 0 kills']) {
+      expect(TOOL_DESCRIPTIONS.update_character).toContain(phrase);
+    }
+    expect(TOOL_DESCRIPTIONS.take_rest).toContain('a reduced HP maximum returns to normal');
   });
 });
 

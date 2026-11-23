@@ -4,23 +4,27 @@
  * at 0 HP — the death-save tracker.
  */
 import { useId, useState, type FormEvent } from 'react';
-import { Brain, Footprints, Heart, HeartPulse, Shield, Skull, Sparkles, Swords, X, Zap } from 'lucide-react';
+import { Brain, Footprints, Heart, HeartPulse, Pencil, Shield, Skull, Sparkles, Swords, X, Zap } from 'lucide-react';
 import {
   conditionName,
   effectiveSpeed,
   formatModifier,
+  hpMaxAdjustments,
+  hpMaxEndsText,
   initiativeModifier,
   passivePerception,
   proficiencyBonus,
   characterLevel,
 } from '@/engine';
 import { cn } from '@/lib/cn';
-import type { Character } from '@/types';
-import { Badge, Button } from '@/ui/components/ui';
+import type { Character, HpMaxAdjustment } from '@/types';
+import { Badge, Button, IconButton } from '@/ui/components/ui';
+import { HpMaxDialog } from './HpMaxDialog';
 import {
   concentrationChange,
   damageChange,
   deathSaveMarkChange,
+  endHpMaxChange,
   exhaustionChange,
   healChange,
   inspirationChange,
@@ -44,8 +48,49 @@ function hpTone(c: Character): string {
   return 'bg-success';
 }
 
+const ENDS_TITLE: Record<HpMaxAdjustment['ends'], string> = {
+  'long-rest': 'Ends at a Long Rest',
+  'when-ended': 'Ends when you or your DM end it',
+  never: 'Lasting: part of your hero',
+};
+
+/** What changes the maximum beyond the app's own count: raises, reductions and lasting changes, each in its tone. */
+function HpMaxChips({ character: c, editable, onEdit }: Omit<VitalsProps, 'onRoll'>) {
+  const adjustments = hpMaxAdjustments(c);
+  if (!adjustments.length) return null;
+  return (
+    <ul className="flex flex-wrap gap-1.5" aria-label="Hit point maximum adjustments">
+      {adjustments.map((a, i) => {
+        const effect = a.ends !== 'never';
+        const tone = !effect ? 'bg-surface-2 text-muted' : a.amount > 0 ? 'bg-arcane-soft text-arcane' : 'bg-danger-soft text-danger';
+        const label = `${a.name} ${formatModifier(a.amount)}`;
+        return (
+          <li key={`${i}-${a.name}`} className={cn('inline-flex items-center gap-1 rounded-full py-0.5 pl-2.5 text-xs font-medium', editable && effect ? 'pr-1' : 'pr-2.5', tone)}>
+            <span title={ENDS_TITLE[a.ends]}>
+              {label}
+              <span className="sr-only">, {hpMaxEndsText(a.ends)}</span>
+            </span>
+            {editable && effect && (
+              <button
+                type="button"
+                aria-label={`End ${a.name} (${formatModifier(a.amount)} hit point maximum)`}
+                title={`End ${a.name}`}
+                onClick={() => onEdit((cur) => endHpMaxChange(cur, a.name, a.ends))}
+                className={cn('grid size-5 place-items-center rounded-full', a.amount > 0 ? 'hover:bg-arcane/20' : 'hover:bg-danger/20')}
+              >
+                <X className="size-3" aria-hidden />
+              </button>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function HpBlock({ character: c, editable, onEdit }: Omit<VitalsProps, 'onRoll'>) {
   const [amount, setAmount] = useState('');
+  const [adjusting, setAdjusting] = useState(false);
   const inputId = useId();
   const value = Number(amount);
   const valid = amount.trim() !== '' && Number.isInteger(value) && value >= 0;
@@ -68,12 +113,19 @@ function HpBlock({ character: c, editable, onEdit }: Omit<VitalsProps, 'onRoll'>
             <span className="text-base font-normal text-muted"> / {c.hp.max}</span>
           </span>
           {c.hp.temp > 0 && <Badge tone="info">+{c.hp.temp} temp</Badge>}
+          {editable && (
+            <IconButton size="sm" label="Adjust hit point maximum" onClick={() => setAdjusting(true)} className="-my-2 self-center">
+              <Pencil className="size-3.5" aria-hidden />
+            </IconButton>
+          )}
         </span>
       </div>
       <div className="flex h-2.5 overflow-hidden rounded-full bg-surface-3" aria-hidden>
         <div className={cn('h-full transition-[width]', hpTone(c))} style={{ width: `${(c.hp.current / total) * 100}%` }} />
         {c.hp.temp > 0 && <div className="h-full bg-info" style={{ width: `${(c.hp.temp / total) * 100}%` }} />}
       </div>
+      <HpMaxChips character={c} editable={editable} onEdit={onEdit} />
+      {editable && <HpMaxDialog open={adjusting} character={c} onClose={() => setAdjusting(false)} onEdit={onEdit} />}
       {editable && (
         <form onSubmit={onSubmit} className="flex flex-wrap items-center gap-1.5">
           <label htmlFor={inputId} className="sr-only">
