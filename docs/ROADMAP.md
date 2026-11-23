@@ -79,10 +79,6 @@ The first version of structured imports deliberately leaves these out:
   waits for the one-time top-up, which pays only a 2024 book's. A way to adjust the maximum (on the sheet and for the
   DM) would mend these, and cover Aid and a Wraith's Life Drain too. An Alert the DM recorded before the app counted it
   keeps its Initiative short the same way: nothing sets the Initiative bonus by hand either.
-- **A feat's numbers taken back**: the app adds Alert's Initiative bonus and Tough's Hit Points when the sheet first
-  holds them and never takes them back, so a feat the DM rewrites under a trait's source keeps them (and stops growing),
-  and the Alert or Tough feat recorded again after that (the DM's features_add or the level-up panel's pick) brings its
-  numbers a second time.
 - **A Repeatable feat the DM records again**: the DM's features_add rewrites a feature of the same name, so a second
   taking it records under the feat's own name stays one feature (its spent uses kept). The level-up panel adds a
   second taking, and the DM can give one its own name ("Magic Initiate (Wizard)").

@@ -671,18 +671,25 @@ function joiningNumbers(before: Character, after: Character): EngineResult {
   return { character, events };
 }
 
+/** A feat whose numbers the sheet stores (joiningNumbers): the Alert or Tough feat. */
+const storesNumbers = (f: Pick<Feature, 'name' | 'source'>): boolean => isAlertFeat(f) || isToughFeat(f);
+
 /**
  * The feature addFeature rewrites for an entry of this name and source: the first of its name on the same side of the
  * feat line, or on either for an entry on neither (featOrTrait). Undefined when it would add one. A transformation's
  * power is the transformation's (transform_character changes it, and its end takes it): another entry of its name joins
- * beside it, as the level-up panel's feat does.
+ * beside it, as the level-up panel's feat does. A feat whose numbers the sheet stores (Alert, Tough) stays the feat: a
+ * species trait or class feature of its name joins beside it too, so its numbers are never left without it, nor paid
+ * again when the feat is recorded after.
  */
 export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | 'source'>): Feature | undefined {
   const key = nameKey(feature.name.trim());
   const side = featOrTrait(feature.source);
   return c.features.find((f) => {
     const theirs = featOrTrait(f.source);
-    return nameKey(f.name) === key && (f.source === 'transformation') === (feature.source === 'transformation') && (!side || !theirs || side === theirs);
+    if (nameKey(f.name) !== key || (f.source === 'transformation') !== (feature.source === 'transformation')) return false;
+    if (side === 'trait' && storesNumbers(f)) return false;
+    return !side || !theirs || side === theirs;
   });
 }
 

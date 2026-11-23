@@ -769,7 +769,10 @@ either, so the DM's entry for an Epic Boon as a boon rewrites it; its result nam
 takes it now). The sheet coming to hold the Alert or Tough feat gets what it stores for them, as a
 level-up counts it (`joiningNumbers`): Alert's Proficiency Bonus on Initiative and Tough's twice-the-level Hit Points
 (a boon's or other entry rewriting a trait of either name makes it the feat); a change that leaves it holding what it
-held brings nothing, and nothing takes them back. No entry rewrites a transformation's power of its name: it joins
+held brings nothing, and nothing takes them back, as nothing takes the feat away: a species trait or class feature of
+its name joins beside it rather than rewriting it (`featureToRewrite`), so its numbers stay with it and are never paid
+twice (a feat a rewrite moved to a trait's source before this keeps what it was paid). No entry rewrites a
+transformation's power of its name: it joins
 beside it, as the level-up panel's feat does, and outlives the transformation (the result says so). update_character
 keeps the AC in step after features_add (Defense); an AC set by hand stays, with a note of what the gear and features
 give, even when they now give the same (it may have counted a spell), and that armor with unknown stats gives nothing

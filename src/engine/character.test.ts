@@ -543,6 +543,30 @@ describe("addFeature: what a feat joining the sheet brings (the DM's features_ad
     expect(addFeature(mira({ features: [{ id: 't', ...feat('Alert', 'species') }] }), feat('Alert')).character.initiativeBonusExtra).toBe(2);
   });
 
+  it('keeps the Alert or Tough feat the feat: a species trait or class feature of its name joins beside it, so its numbers are neither left nor paid twice', () => {
+    const named = (c: Character, name: string) => c.features.filter((f) => f.name === name).map((f) => f.source);
+    const numbers = (c: Character) => [c.hp.max, c.initiativeBonusExtra ?? 0];
+    for (const name of ['Alert', 'Tough']) {
+      for (const neither of ['boon', 'background', 'other'] as const) {
+        // Recorded on neither side of the feat line: the feat, with its numbers.
+        const recorded = addFeature(mira(), feat(name, neither)).character;
+        expect(numbers(recorded), `${name} ${neither}`).not.toEqual(numbers(mira()));
+        for (const trait of ['species', 'class', 'subclass'] as const) {
+          const beside = addFeature(recorded, feat(name, trait)).character;
+          expect(named(beside, name), `${name} ${neither} ${trait}`).toEqual([neither, trait]);
+          expect(numbers(beside), `${name} ${neither} ${trait}`).toEqual(numbers(recorded));
+          // The feat recorded again: an update of the one the sheet holds, nothing paid a second time.
+          const again = addFeature(beside, feat(name)).character;
+          expect(named(again, name), `${name} ${neither} ${trait} again`).toEqual(['feat', trait]);
+          expect(numbers(again), `${name} ${neither} ${trait} again`).toEqual(numbers(recorded));
+        }
+      }
+    }
+    // A feature with no numbers still moves where the DM says: a boon's entry rewritten as a species trait.
+    const luck = addFeature(mira(), feat('Lantern Luck', 'boon')).character;
+    expect(named(addFeature(luck, feat('Lantern Luck', 'species')).character, 'Lantern Luck')).toEqual(['species']);
+  });
+
   it("joins a transformation's power of its name, never rewrites it, and brings the bonus a trait rewritten into the feat gets", () => {
     // The transformation's own: the DM's entry joins beside it (its end takes only the power), with the feat's bonus.
     const power = { id: 'p', name: 'Alert', source: 'transformation' as const, sourceName: 'Wolf Blood', description: 'Invented: keen senses.' };
