@@ -216,6 +216,17 @@ describe('levelUp', () => {
     expect(r.character.hp.max - fourth.hp.max - 5).toBe(2 * 5);
   });
 
+  it('keeps a recorded Alert or Tough growing after the DM records a trait of its name beside it (SRD 5.2.1 Alert)', () => {
+    const fourth = mira({ classes: [asClass('Wizard', 4)], features: [] });
+    let c = fourth;
+    for (const name of ['Alert', 'Tough']) c = addFeature(c, { name, source: 'background', description: '' }).character;
+    for (const name of ['Alert', 'Tough']) c = addFeature(c, { name, source: 'species', description: 'Invented: a trait of the name.' }).character;
+    // Still the feats: Wizard 5 raises the bonus to +3 and adds Tough's 2.
+    const r = levelUp(c, { className: 'Wizard', hpMethod: 'average' });
+    expect(r.character.initiativeBonusExtra).toBe(3);
+    expect(r.hpGained).toBe(5 + 2);
+  });
+
   it("counts the Tough feat only: a species trait, class feature or transformation power of its name neither brings Hit Points nor stops the feat's", () => {
     const namesake = (source: Feature['source'], classes = [asClass('Wizard', 3)]) =>
       mira({ classes, features: [...mira().features, { id: 'ns', name: 'Tough', source, description: 'Invented: not the feat.' }] });

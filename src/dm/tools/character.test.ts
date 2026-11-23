@@ -544,6 +544,27 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
     expect(h.sheet()).toMatchObject({ initiativeBonusExtra: 2, hp: { max: 38 } });
   });
 
+  it("keeps a Tough the DM recorded as a background's feat when it records a species trait of the name, then the feat again: paid once", async () => {
+    const h = setup({ character: fighter4() });
+    const tough = (source: string, description: string) => ({ features_add: [{ name: 'Tough', description, source }] });
+    await h.run('update_character', tough('background', 'The Soldier origin feat.'));
+    expect(h.sheet().hp.max).toBe(38);
+    const beside = await h.run('update_character', tough('species', 'Invented: a trait of the name.'));
+    expect(beside.content).toContain('Gained feature: Tough, beside Tough');
+    expect(beside.content).not.toContain('HP maximum');
+    // The DM learns which entry stays the feat, and how to change it.
+    expect(beside.content).toContain(
+      'Tough joined the sheet beside Tough (background), which stays the Tough feat with its Hit Points: a species trait or class feature doesn\'t replace it. To change that entry, record it with source "feat".',
+    );
+    await h.run('update_character', tough('feat', 'The feat, recorded again.'));
+    expect(h.sheet().hp.max).toBe(38);
+    expect(h.sheet().features.filter((f) => f.name === 'Tough').map((f) => f.source)).toEqual(['feat', 'species']);
+    // Recorded as a feat from the start, a trait of the name never replaced it: no line.
+    const asFeat = setup({ character: fighter4() });
+    await asFeat.run('update_character', { features_add: [{ name: 'Alert', description: 'The feat.', source: 'feat' }] });
+    expect((await asFeat.run('update_character', { features_add: [{ name: 'Alert', description: 'Invented: a trait.', source: 'class' }] })).content).not.toContain('stays the Alert feat');
+  });
+
   it("records the Alert feat beside a transformation's power of its name, so the feat outlives the transformation", async () => {
     const h = setup({ character: fighter4(), campaignSettings: { transformations: 'offered' } });
     const begin = {

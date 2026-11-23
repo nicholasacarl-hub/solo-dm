@@ -27,7 +27,10 @@ import {
   characterStatusLine,
   conditionKey,
   featOrTrait,
+  featureLabel,
   featureToRewrite,
+  isAlertFeat,
+  isToughFeat,
   saveSourcesChangeText,
   gainXp,
   levelUp,
@@ -596,18 +599,28 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
 }
 
 /**
- * A line for each feature the call added beside a transformation's own power of its name (featureToRewrite never
- * rewrites one; an entry that rewrote another feature added nothing): it stays when the transformation ends, and the
- * power is changed with transform_character.
+ * A line for each feature the call added beside one featureToRewrite keeps apart (an entry that rewrote another feature
+ * added nothing): a transformation's own power, which stays the transformation's and is changed with transform_character;
+ * or, for a species trait or class feature, the Alert or Tough feat recorded on neither side of the feat line, which
+ * stays the feat with its numbers (the trait's entry didn't replace it).
  */
-function besidePowerLines(before: Character, after: Character): string[] {
+function besideLines(before: Character, after: Character): string[] {
   const had = new Set(before.features.map((f) => f.id));
   return after.features.flatMap((f) => {
     if (had.has(f.id)) return [];
-    const power = before.features.find((p) => p.source === 'transformation' && nameKey(p.name) === nameKey(f.name));
-    if (!power) return [];
-    const owner = power.sourceName ?? 'the transformation';
-    return [`${f.name} joined the sheet beside ${owner}'s own ${power.name}, and stays when ${owner} ends; to change ${owner}'s, use transform_character advance.`];
+    const named = (o: Feature) => nameKey(o.name) === nameKey(f.name);
+    const power = before.features.find((p) => p.source === 'transformation' && named(p));
+    if (power) {
+      const owner = power.sourceName ?? 'the transformation';
+      return [`${f.name} joined the sheet beside ${owner}'s own ${power.name}, and stays when ${owner} ends; to change ${owner}'s, use transform_character advance.`];
+    }
+    // Only a species trait's or class feature's entry joins beside one: any other entry of its name rewrites it.
+    const feat = before.features.find((o) => named(o) && !featOrTrait(o.source) && (isAlertFeat(o) || isToughFeat(o)));
+    if (!feat) return [];
+    const numbers = isAlertFeat(feat) ? 'Initiative bonus' : 'Hit Points';
+    return [
+      `${f.name} joined the sheet beside ${featureLabel(feat, after.features)}, which stays the ${feat.name} feat with its ${numbers}: a species trait or class feature doesn't replace it. To change that entry, record it with source "feat".`,
+    ];
   });
 }
 
@@ -888,7 +901,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
 
   const lines = results.flatMap((r) => eventLines(r.events)).filter(Boolean);
   // For the DM only (the player's log keeps the change itself).
-  lines.push(...besidePowerLines(before, change.character));
+  lines.push(...besideLines(before, change.character));
   lines.push(...keptHomebrewLines(input.conditions_add, change.character.conditions));
   lines.push(...keptStableLines(input.conditions_add, change.character));
   const saves = saveSourcesChangeText(before, change.character);
