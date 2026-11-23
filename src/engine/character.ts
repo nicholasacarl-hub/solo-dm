@@ -631,24 +631,28 @@ export function featOrTrait(source: FeatureSource): 'feat' | 'trait' | undefined
 }
 
 /**
- * The Alert feat, whose Initiative bonus the builder, levelUp and addFeature keep: a feature named Alert on the feat's
- * side of the feat line or on neither (featOrTrait), the one the level-up panel counts as the feat. A species trait, class
- * or subclass feature or transformation power of the name isn't it, and never brings the bonus.
+ * The feat of this name on a sheet, whose numbers the builder, levelUp and addFeature keep: a feature of the name on the
+ * feat's side of the feat line or on neither (featOrTrait), the one the level-up panel counts as the feat. A species
+ * trait, class or subclass feature or transformation power of the name isn't it, and brings none of them.
  */
-export function isAlertFeat(f: Pick<Feature, 'name' | 'source'>): boolean {
-  return nameKey(f.name) === 'alert' && featOrTrait(f.source) !== 'trait' && f.source !== 'transformation';
+export function isFeatNamed(f: Pick<Feature, 'name' | 'source'>, feat: string): boolean {
+  return nameKey(f.name) === nameKey(feat) && featOrTrait(f.source) !== 'trait' && f.source !== 'transformation';
 }
 
-const isTough = (f: Pick<Feature, 'name'>): boolean => nameKey(f.name) === 'tough';
+/** The Alert feat (isFeatNamed), whose Initiative bonus the sheet stores. */
+export const isAlertFeat = (f: Pick<Feature, 'name' | 'source'>): boolean => isFeatNamed(f, 'Alert');
+
+/** The Tough feat (isFeatNamed), whose Hit Points the sheet stores. */
+export const isToughFeat = (f: Pick<Feature, 'name' | 'source'>): boolean => isFeatNamed(f, 'Tough');
 
 /**
  * What the sheet stores for a feat it comes to hold outside a level-up (addFeature: the DM's features_add; levelUp counts
  * its own, the panel's pick and a level_up extra), from the features before and after: Alert's Proficiency Bonus on
  * Initiative when it first holds the Alert feat, by an entry added or one rewritten into it (SRD 5.2.1 Alert: "When you
- * roll Initiative, you can add your Proficiency Bonus to the roll"; isAlertFeat), and, when it first holds a feature
- * named Tough (the engine counts Tough by name), the twice-the-level Hit Points levelUp gives Tough when it's gained
- * (progression.ts featureHpBonuses), current HP moving with the maximum as for Constitution (a hero at 0 HP stays at 0).
- * Later levels add theirs at level-up; nothing takes them back.
+ * roll Initiative, you can add your Proficiency Bonus to the roll"; isAlertFeat), and, when it first holds the Tough feat
+ * (isToughFeat), the twice-the-level Hit Points levelUp gives Tough when it's gained (progression.ts featureHpBonuses),
+ * current HP moving with the maximum as for Constitution (a hero at 0 HP stays at 0). Later levels add theirs at
+ * level-up; nothing takes them back.
  */
 function joiningNumbers(before: Character, after: Character): EngineResult {
   let character = after;
@@ -659,7 +663,7 @@ function joiningNumbers(before: Character, after: Character): EngineResult {
     character = { ...character, initiativeBonusExtra: toInt(before.initiativeBonusExtra) + pb };
     events.push(gameEvent('combat', `Initiative ${formatModifier(initiativeModifier(before))} → ${formatModifier(initiativeModifier(character))} (Alert: Proficiency Bonus ${formatModifier(pb)})`));
   }
-  if (!before.features.some(isTough) && after.features.some(isTough)) {
+  if (!before.features.some(isToughFeat) && after.features.some(isToughFeat)) {
     const max = before.hp.max + 2 * level;
     character = { ...character, hp: { ...character.hp, max, current: before.hp.current > 0 ? before.hp.current + 2 * level : 0 } };
     events.push(gameEvent('hp-changed', `HP maximum ${before.hp.max} → ${max} (Tough: twice your level, ${level})`));
@@ -692,9 +696,9 @@ export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | '
  * trait or class feature never merge (featOrTrait):
  * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
  * and the trait keeps its text. A feature on neither side (the DM's entry for an Epic Boon as a boon, or an Origin feat
- * as its background's) updates the one of its name on either. The sheet coming to hold the Alert feat or a feature named
- * Tough gets their numbers (joiningNumbers: Alert's Initiative bonus, Tough's Hit Points); a change that leaves it
- * holding what it held brings none.
+ * as its background's) updates the one of its name on either. The sheet coming to hold the Alert or Tough feat gets its
+ * numbers (joiningNumbers: Alert's Initiative bonus, Tough's Hit Points); a change that leaves it holding what it held
+ * brings none.
  */
 export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: string }): EngineResult {
   const name = feature.name?.trim();
@@ -708,7 +712,7 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
       updated.uses = { ...feature.uses, used: Math.min(old?.used ?? feature.uses.used, feature.uses.max), ...growth };
     }
     const character = replaceFeature(c, updated);
-    // A trait rewritten by a boon's or other entry of the name is the Alert feat now (isAlertFeat): it brings its bonus.
+    // A trait rewritten by a boon's or other entry of the name is the Alert or Tough feat now (isFeatNamed): it brings its numbers.
     const numbers = joiningNumbers(c, character);
     // By the name a use or restore takes now, beside a namesake (a boon's entry over a trait changes its "(species)").
     return { character: numbers.character, events: [gameEvent('feature-restored', `Updated feature: ${featureLabel(updated, character.features)}`), ...numbers.events] };

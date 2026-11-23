@@ -16,8 +16,15 @@ export const ENGINE_NAMES = [
   'Unarmored Defense',
 ] as const;
 const ENGINE_KEYS = new Map(ENGINE_NAMES.map((n) => [nameKey(n), n]));
-/** Names whose effect only a feat of the name gets: Alert's Initiative bonus (engine/character.ts isAlertFeat). */
-const FEAT_ONLY: ReadonlySet<string> = new Set(['Alert']);
+/**
+ * Names whose effect only a feat of the name gets (engine/character.ts isFeatNamed): Alert's Initiative bonus and Tough's
+ * Hit Points.
+ */
+const FEAT_ONLY: ReadonlySet<string> = new Set(['Alert', 'Tough']);
+
+/** What the engine gives a name: the SRD option's automatic effect, or for Tough (no SRD feat) the numbers it counts. */
+const engineEffect = (engine: string): string =>
+  engine === 'Tough' ? "the Tough feat's Hit Points (twice the level when it's taken, then 2 a level)" : `the SRD ${engine}'s automatic effect`;
 
 /** "a monster", "an item"…: a kind as a noun with its article. */
 export const KIND_NOUN: Readonly<Record<StructuredKind, string>> = {
@@ -74,9 +81,11 @@ export function nameNotices(
   }
   for (const name of [record.name, ...partNames(record.data)]) {
     const engine = ENGINE_KEYS.get(nameKey(name));
-    // A species trait or class feature named Alert gets nothing from the engine: no reason to rename it.
-    if (engine && (!FEAT_ONLY.has(engine) || (record.kind === 'feat' && name === record.name))) {
-      out.push(warning('engine-name', 'warn', `The app gives anything named ${quote(engine)} the SRD ${engine}'s automatic effect. Rename this one if it works differently.`, name === record.name ? 'name' : 'features'));
+    // A species trait or class feature named Alert or Tough gets nothing from the engine: no reason to rename it.
+    const featOnly = engine !== undefined && FEAT_ONLY.has(engine);
+    if (engine && (!featOnly || (record.kind === 'feat' && name === record.name))) {
+      const who = featOnly ? `a feat named ${quote(engine)}` : `anything named ${quote(engine)}`;
+      out.push(warning('engine-name', 'warn', `The app gives ${who} ${engineEffect(engine)}. Rename this one if it works differently.`, name === record.name ? 'name' : 'features'));
     }
   }
   return out;

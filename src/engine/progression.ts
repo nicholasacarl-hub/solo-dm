@@ -18,7 +18,7 @@ import {
   type RollResult,
 } from '@/types';
 import { newId, nameKey, slugify } from '@/lib/id';
-import { isAlertFeat } from './character';
+import { isAlertFeat, isToughFeat } from './character';
 import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, rulesClassFor, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
 import { abilityModifier, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
@@ -127,18 +127,24 @@ function isSorcererClass(cl: Pick<ClassLevel, 'classId' | 'name' | 'ref'>): bool
 }
 
 /**
- * Per-level Hit Point bonuses from well-known traits: Dwarven Toughness (+1 per level), Tough
- * (+2 per level; +2 × level when first taken) and Draconic Resilience (+1 per Sorcerer level;
- * the Sorcerer level when gained: 3 at Sorcerer 3, or 1 for an older book's at 1st level), in
- * either edition.
+ * Per-level Hit Point bonuses from well-known traits: Dwarven Toughness (+1 per level), the Tough
+ * feat (+2 per level; +2 × level when first taken; isToughFeat: a species trait, class feature or
+ * transformation power named Tough brings none and doesn't stop the feat's) and Draconic Resilience
+ * (+1 per Sorcerer level; the Sorcerer level when gained: 3 at Sorcerer 3, or 1 for an older book's
+ * at 1st level), in either edition.
  */
-function featureHpBonuses(before: readonly Feature[], added: readonly { name: string }[], gained: ClassLevel, newLevel: number): HpBonus[] {
+function featureHpBonuses(
+  before: readonly Pick<Feature, 'name' | 'source'>[],
+  added: readonly Pick<Feature, 'name' | 'source'>[],
+  gained: ClassLevel,
+  newLevel: number,
+): HpBonus[] {
   const bonuses: HpBonus[] = [];
   const had = (name: string) => hasFeatureNamed(before, name);
   const gains = (name: string) => !had(name) && hasFeatureNamed(added, name);
   if (had('Dwarven Toughness')) bonuses.push({ amount: 1, note: 'Dwarven Toughness' });
-  if (had('Tough')) bonuses.push({ amount: 2, note: 'Tough' });
-  else if (gains('Tough')) bonuses.push({ amount: 2 * newLevel, note: 'Tough' });
+  if (before.some(isToughFeat)) bonuses.push({ amount: 2, note: 'Tough' });
+  else if (added.some(isToughFeat)) bonuses.push({ amount: 2 * newLevel, note: 'Tough' });
   const sorcerer = isSorcererClass(gained);
   if (sorcerer && had('Draconic Resilience')) bonuses.push({ amount: 1, note: 'Draconic Resilience' });
   else if (sorcerer && gains('Draconic Resilience')) bonuses.push({ amount: gained.level, note: 'Draconic Resilience' });
@@ -146,11 +152,11 @@ function featureHpBonuses(before: readonly Feature[], added: readonly { name: st
 }
 
 /**
- * Hit Points a new hero's features add at 1st level, which levelUp adds level by level after (featureHpBonuses): Tough
- * (twice the level) and Draconic Resilience on a Sorcerer (an older book's Draconic Bloodline has it at 1st level). A
+ * Hit Points a new hero's features add at 1st level, which levelUp adds level by level after (featureHpBonuses): the Tough
+ * feat (twice the level) and Draconic Resilience on a Sorcerer (an older book's Draconic Bloodline has it at 1st level). A
  * species' per-level bonus (Dwarven Toughness) is the builder's own.
  */
-export function startingFeatureHitPoints(features: readonly { name: string }[], cl: ClassLevel): number {
+export function startingFeatureHitPoints(features: readonly Pick<Feature, 'name' | 'source'>[], cl: ClassLevel): number {
   return featureHpBonuses([], features, cl, 1).reduce((sum, b) => sum + b.amount, 0);
 }
 

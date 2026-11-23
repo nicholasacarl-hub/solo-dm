@@ -752,9 +752,10 @@ every feat the hero qualifies for (SRD 5.2.1: "or another feat of your choice fo
 feats, Fighting Style feats with a Fighting Style feature (`hasFightingStyleFeature`: a class's, subclass's or the DM's
 own feature of the name, however it's written) and Epic Boons from level 19, under a heading per category; of a feat's
 prerequisites it checks "Level N+" and a Fighting Style feat's feature. Alert taken at a level-up adds the Proficiency
-Bonus to Initiative, as Tough adds its Hit Points. Alert's bonus is the feat's, on the panel's side of the feat line: a
-species trait, class feature or transformation power named Alert brings none and doesn't stop the feat's (import review
-warns about a feat named Alert only), while the engine counts any feature named Tough as Tough, once. Magic Initiate's
+Bonus to Initiative, as Tough adds its Hit Points. Both are the feat's, on the panel's side of the feat line
+(`isFeatNamed`): a species trait, class feature or transformation power of its name brings none and doesn't stop the
+feat's (a book species' trait named Tough counted as the feat until it was the feat's alone: what it gave stays), and
+import review warns about a feat of either name only. Magic Initiate's
 and Skilled's own choices are reminders for the player and the DM. A feat taken there is the feature the level-up
 added for it, completed by id: a species trait or class feature of its name, a transformation's power (gone when the
 transformation ends), or an earlier taking of a Repeatable feat, stays beside it as it was, and another feat the sheet
@@ -765,9 +766,9 @@ uses it changes is the DM's ruling, `FeatureUses.ruled`, which level-ups leave a
 level_up result and the dialog's notice alike, "Kept your ruling: Second Wind 4 uses" (`keptRulings`); the same number
 keeps the feature growing), but never merges a feat with a species trait or class feature (`featOrTrait`; a boon's, background's or homebrew entry updates
 either, so the DM's entry for an Epic Boon as a boon rewrites it; its result names the feature as a use or restore
-takes it now). The sheet coming to hold the Alert feat or a feature named Tough gets what it stores for them, as a
-level-up counts it (`joiningNumbers`): Alert's Proficiency Bonus on Initiative (a boon's or other entry rewriting a
-trait named Alert makes it the feat) and Tough's twice-the-level Hit Points; a change that leaves it holding what it
+takes it now). The sheet coming to hold the Alert or Tough feat gets what it stores for them, as a
+level-up counts it (`joiningNumbers`): Alert's Proficiency Bonus on Initiative and Tough's twice-the-level Hit Points
+(a boon's or other entry rewriting a trait of either name makes it the feat); a change that leaves it holding what it
 held brings nothing, and nothing takes them back. No entry rewrites a transformation's power of its name: it joins
 beside it, as the level-up panel's feat does, and outlives the transformation (the result says so). update_character
 keeps the AC in step after features_add (Defense); an AC set by hand stays, with a note of what the gear and features

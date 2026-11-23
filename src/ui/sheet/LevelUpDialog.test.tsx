@@ -221,6 +221,15 @@ describe('LevelUpDialog with imported options', () => {
     expect(sheet().hp.max).toBe(30 + 7 + 8);
     expect(sheet().features.filter((f) => f.name === 'Tough')).toEqual([expect.objectContaining({ source: 'feat', sourceName: 'Ability Score Improvement (Fighter 4)', description: 'Invented: hardier than most.' })]);
     expect(notices()[0]).toContain('+15 HP');
+    // Beside a book species' trait named Tough, which isn't the feat: the same.
+    cleanup();
+    const trait = { id: 't-tough', name: 'Tough', source: 'species' as const, sourceName: 'Stonefolk', description: 'Invented: a trait of the name.' };
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), features: [trait] } });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('radio', { name: /^Tough/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().hp.max).toBe(30 + 7 + 8);
+    expect(sheet().features.filter((f) => f.name === 'Tough').map((f) => f.source)).toEqual(['species', 'feat']);
   });
 
   describe('every feat the hero qualifies for at an Ability Score Improvement (SRD 5.2.1 Fighter 4: "or another feat of your choice for which you qualify")', () => {

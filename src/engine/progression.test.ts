@@ -216,6 +216,25 @@ describe('levelUp', () => {
     expect(r.character.hp.max - fourth.hp.max - 5).toBe(2 * 5);
   });
 
+  it("counts the Tough feat only: a species trait, class feature or transformation power of its name neither brings Hit Points nor stops the feat's", () => {
+    const namesake = (source: Feature['source'], classes = [asClass('Wizard', 3)]) =>
+      mira({ classes, features: [...mira().features, { id: 'ns', name: 'Tough', source, description: 'Invented: not the feat.' }] });
+    const taking = [{ name: 'Tough', source: 'feat' as const, description: '' }];
+    for (const source of ['species', 'class', 'subclass', 'transformation'] as const) {
+      // Wizard 3 → 4 taking the feat beside it: twice the new level (d6 average 4 + CON 1, + 8).
+      expect(levelUp(namesake(source), { className: 'Wizard', hpMethod: 'average', newFeatures: taking }).hpGained, source).toBe(5 + 8);
+      // Alone, at a level-up: nothing.
+      expect(levelUp(namesake(source, [asClass('Wizard', 4)]), { className: 'Wizard', hpMethod: 'average' }).hpGained, source).toBe(5);
+      // Gained as one (a level_up extra is a class feature): nothing.
+      expect(levelUp(mira(), { className: 'Wizard', hpMethod: 'average', newFeatures: [{ name: 'Tough', source, description: '' }] }).hpGained, source).toBe(5);
+    }
+    // On neither side of the feat line (the DM's boon, background, item, homebrew or other entry): the feat.
+    for (const source of ['boon', 'background', 'item', 'homebrew', 'other'] as const) {
+      const held = mira({ classes: [asClass('Wizard', 4)], features: [{ id: 't', name: 'Tough', source, description: '' }] });
+      expect(levelUp(held, { className: 'Wizard', hpMethod: 'average' }).hpGained, source).toBe(5 + 2);
+    }
+  });
+
   it("counts the Alert feat only: a species trait, class feature or transformation power of its name neither brings the bonus nor stops the feat's", () => {
     const namesake = (source: Feature['source'], classes = [asClass('Wizard', 3)]) =>
       mira({ classes, features: [...mira().features, { id: 'ns', name: 'Alert', source, description: 'Invented: not the feat.' }] });
@@ -587,7 +606,7 @@ describe('levelUp: Armor Class', () => {
   });
 
   it('startingFeatureHitPoints: what Tough and a 1st-level Draconic Resilience add to a new hero (levelUp adds them after)', () => {
-    const named = (...names: string[]) => names.map((name) => ({ name }));
+    const named = (...names: string[]) => names.map((name) => ({ name, source: name === 'Draconic Resilience' ? ('subclass' as const) : ('feat' as const) }));
     const book2014: ClassLevel = { ...asClass('Sorcerer', 1), classId: 'lib:lamp:class:sorcerer' };
     expect(startingFeatureHitPoints(named('Tough'), asClass('Fighter', 1))).toBe(2);
     expect(startingFeatureHitPoints(named('Draconic Resilience'), book2014)).toBe(1);
@@ -598,6 +617,10 @@ describe('levelUp: Armor Class', () => {
     // Not counted here: a Draconic Resilience on another class, and a species' per-level bonus (the builder's own).
     expect(startingFeatureHitPoints(named('Draconic Resilience'), asClass('Fighter', 1))).toBe(0);
     expect(startingFeatureHitPoints(named('Dwarven Toughness', 'Alert'), asClass('Fighter', 1))).toBe(0);
+    // A book species' trait named Tough isn't the Tough feat: nothing, and the feat beside it brings its own.
+    const trait = { name: 'Tough', source: 'species' as const };
+    expect(startingFeatureHitPoints([trait], asClass('Fighter', 1))).toBe(0);
+    expect(startingFeatureHitPoints([trait, ...named('Tough')], asClass('Fighter', 1))).toBe(2);
   });
 
   it("draconicResilienceHitPoints: one per Sorcerer level with the feature, a 2024 book's Sorcerer included (SRD 5.2.1 Draconic Sorcery)", () => {
