@@ -13,6 +13,7 @@ import {
   changeAbilityScore,
   changeInitiativeBonus,
   damageTaken,
+  drainProblem,
   endHpMaxAdjustments,
   endHpMaxAdjustmentsWhere,
   hpMaxAdjustmentLabel,
@@ -951,22 +952,42 @@ describe('Hit Point maximum adjustments (SRD 5.2.1)', () => {
     // A name with its own qualifier is its own entry: named exactly, only it ends; by the base name, every one does.
     let bites = adjustHpMax(hardy(), { name: 'Bite (Vampire Spawn)', change: -4, ends: 'long-rest' }).character;
     bites = adjustHpMax(bites, { name: 'Bite (Otyugh)', change: -5, ends: 'when-ended' }).character; // 21/21
-    expect(hpMaxAdjustments(endHpMaxAdjustments(bites, 'Bite (Otyugh)').character)).toEqual([{ name: 'Bite (Vampire Spawn)', amount: -4, ends: 'long-rest' }]);
+    const otyugh = endHpMaxAdjustments(bites, 'Bite (Otyugh)').character;
+    expect(hpMaxAdjustments(otyugh)).toEqual([{ name: 'Bite (Vampire Spawn)', amount: -4, ends: 'long-rest' }]);
     expect(endHpMaxAdjustments(bites, 'Bite').character.hp.max).toBe(30);
+    // Another qualifier's entry isn't the one named: the Otyugh's gone, the Vampire Spawn's stays until the Long Rest.
+    const again = endHpMaxAdjustments(otyugh, 'Bite (Otyugh)');
+    expect(again.character).toBe(otyugh);
+    expect(again.events).toEqual([
+      { type: 'warning', message: 'No Hit Point maximum adjustment named "Bite (Otyugh)" (in effect: Bite (Vampire Spawn) −4 (until a Long Rest)).' },
+    ]);
     // A stronger casting of the same spell replaces its entry whatever its end (srd:rule:casting-spells-effects-combining-spell-effects).
     const aided = adjustHpMax(hardy(), aid).character;
     const feast = adjustHpMax(aided, { name: 'Aid', change: 10, ends: 'when-ended' });
     expect(feast.character.hpMaxAdjustments).toEqual([{ name: 'Aid', amount: 10, ends: 'when-ended' }]);
-    // A draining hit under a name its drain can't take is refused whole: no damage lands without its drain.
+    // A draining hit under a name its drain can't take, or a blank one, is refused whole: no damage lands without its
+    // drain (srd:monster:wraith: "its Hit Point maximum decreases by an amount equal to the damage taken").
     const cursed = adjustHpMax(hardy(), { name: 'Life Drain', change: -5, ends: 'when-ended' }).character; // 25/25
     const hit = applyDrainingDamage(cursed, 10, { damageType: 'necrotic', drain: 'Life Drain' });
     expect(hit.character).toBe(cursed);
     expect(hit.events).toEqual([
       {
         type: 'warning',
-        message: 'Life Drain −5 (until ended) goes by that name: give this change another name, or end that one first. Nothing was applied, the damage included.',
+        message:
+          "Life Drain −5 (until ended) goes by that name: give this change another name, or end that one first. This hit wasn't applied (neither its damage nor its drain).",
       },
     ]);
+    const full = hardy();
+    const blank = applyDrainingDamage(full, 10, { damageType: 'necrotic', drain: ' \n\t ' });
+    expect(blank.character).toBe(full);
+    expect(blank.events).toEqual([
+      { type: 'warning', message: 'A drain needs a name (the effect, as in "Life Drain"). This hit wasn\'t applied (neither its damage nor its drain).' },
+    ]);
+    expect(drainProblem(cursed, 'Life Drain (Wraith)')).toBeNull();
+    // A lasting change under a lasting entry's name adds up either way; an effect's can't go the other way.
+    const lowered = adjustHpMax(boon, { name: 'Boon', change: -2, ends: 'never' });
+    expect(lowered.character.hpMaxAdjustments).toEqual([{ name: 'Boon', amount: 2, ends: 'never' }]);
+    expect(message(lowered)).toBe('HP maximum 34 → 32, HP 34 → 32 (Boon −2, +2 in all, lasting)');
   });
 
   it('a maximum of 0 kills (srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death)', () => {
@@ -1104,11 +1125,35 @@ describe('Hit Point maximum adjustments (SRD 5.2.1)', () => {
     expect(endHpMaxAdjustmentsWhere(drained, (a) => a.ends === 'long-rest').character.hp).toEqual({ max: 17, current: 2, temp: 0 });
     // Aid that ran out first is ended alone, first: then it kills (srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death).
     expect(endHpMaxAdjustments(drained, 'Aid').character.deathSaves.dead).toBe(true);
-    // A name that finds nothing warns; the others still end.
+    // A name that finds nothing warns with what is left in effect after the others end.
     const some = endHpMaxAdjustments(drained, ['Life Drain', 'Bless']);
     expect(some.character.hp.max).toBe(22);
     expect(some.events.map((e) => e.type)).toEqual(['hp-changed', 'warning']);
-    expect(some.events[1].message).toMatch(/^No Hit Point maximum adjustment named "Bless" \(in effect: /);
+    expect(some.events[1].message).toBe('No Hit Point maximum adjustment named "Bless" (in effect: Aid +5 (until a Long Rest)).');
+    expect(endHpMaxAdjustments(drained, ['Aid', 'Life Drain', 'Bless']).events[2].message).toBe('No Hit Point maximum adjustment named "Bless".');
+  });
+
+  it('takes back a lasting reduction before Aid ends in one call, so ending both never kills (srd:rule:...-instant-death)', () => {
+    // "A creature dies if its Hit Point maximum reaches 0": together the maximum goes 4 → 5 and never reaches 0.
+    const aided = adjustHpMax(mira({ hp: { max: 30, current: 30, temp: 0 } }), aid).character; // 35/35
+    const cursed = adjustHpMax(aided, { name: 'Mummy Rot', change: -25, ends: 'when-ended' }).character; // 10/10
+    const ruled = adjustHpMax(cursed, { name: 'Lost an eye (ruling)', change: -6, ends: 'never' }).character; // 4/4
+    for (const names of [['Lost an eye (ruling)', 'Aid'], ['Aid', 'Lost an eye (ruling)']]) {
+      const r = endHpMaxAdjustments(ruled, names);
+      expect(r.character.deathSaves.dead, names.join()).toBe(false);
+      expect(r.character.hp).toEqual({ max: 5, current: 5, temp: 0 });
+      expect(r.character.hpMaxAdjustments).toEqual([{ name: 'Mummy Rot', amount: -25, ends: 'when-ended' }]);
+      expect(r.events.map((e) => e.message)).toEqual([
+        'Lost an eye (ruling) −6 taken back: HP maximum 4 → 10, HP 4 → 10',
+        'Aid +5 ends: HP maximum 10 → 5, HP 10 → 5',
+      ]);
+    }
+    // A lasting raise is still taken back last, after the effects' raises.
+    const boon = adjustHpMax(aided, { name: 'Boon', change: 3, ends: 'never' }).character; // 38/38
+    expect(endHpMaxAdjustments(boon, ['Boon', 'Aid']).events.map((e) => e.message)).toEqual([
+      'Aid +5 ends: HP maximum 38 → 33, HP 38 → 33',
+      'Boon +3 taken back: HP maximum 33 → 30, HP 33 → 30',
+    ]);
   });
 
   it("takes a shortfall off an effect's reduction before a lasting one, which outlasts it (srd:monster:mummy)", () => {
@@ -1236,6 +1281,19 @@ describe('Hit Point maximum adjustments (SRD 5.2.1)', () => {
     expect(endHpMaxAdjustments(weaker.character, 'Life Drain').character.hp.max).toBe(11);
     // Without effects the hero's own maximum never goes below 1, as before.
     expect(changeAbilityScore(mira({ hp: { max: 5, current: 5, temp: 0 } }), 'con', -4).character.hp.max).toBe(1);
+    // A lasting entry is part of the hero's own maximum: the floor of 1 holds it, and its record stays.
+    const ruled = adjustHpMax(mira({ hp: { max: 8, current: 8, temp: 0 } }), { name: 'Ruling', change: -3, ends: 'never' }).character; // 5/5
+    const ruledWeaker = changeAbilityScore(ruled, 'con', -4).character;
+    expect(ruledWeaker.hp).toEqual({ max: 1, current: 1, temp: 0 });
+    expect(ruledWeaker.deathSaves.dead).toBe(false);
+    expect(ruledWeaker.hpMaxAdjustments).toEqual([{ name: 'Ruling', amount: -3, ends: 'never' }]);
+    // An increase adds exactly its Hit Points, 13 → 15 being +1 per level: +3, even where a lasting cut made under Aid
+    // took the hero's own maximum below 1.
+    const aided = adjustHpMax(mira({ hp: { max: 17, current: 17, temp: 0 } }), aid).character; // 22/22
+    const cut = adjustHpMax(aided, { name: 'Ruling', change: -21, ends: 'never' }).character; // 1/1 (own 17 − 21)
+    const stronger = changeAbilityScore(cut, 'con', 2);
+    expect(stronger.character.hp).toEqual({ max: 4, current: 4, temp: 0 });
+    expect(stronger.events.map((e) => e.message)).toEqual(['Constitution 13 → 15', 'HP maximum 1 → 4 (Constitution modifier +1 per level)']);
   });
 
   it('a Constitution loss a drain holds within reach of 0 kills, like Aid ending (srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death)', () => {
@@ -1261,6 +1319,14 @@ describe('Hit Point maximum adjustments (SRD 5.2.1)', () => {
     expect(lower.events).toEqual([{ type: 'combat', message: 'Constitution 13 → 11' }]);
     expect(lower.character.hpMaxAdjustments).toEqual([{ name: 'Life Drain', amount: -14, ends: 'long-rest' }]);
     expect(changeAbilityScore(lower.character, 'con', 2).character.hp.max).toBe(3);
+    // A dead hero given a maximum back (the drain ended) who loses it again: logged, and the shortfall off the curse.
+    const cursed = adjustHpMax(mira({ hp: { max: 17, current: 17, temp: 0 } }), { name: 'Mummy Rot', change: -10, ends: 'when-ended' }).character; // 7/7
+    const drainedDead = endHpMaxAdjustments(adjustHpMax(cursed, drain(-7)).character, 'Life Drain').character; // dead, 0/7
+    expect(drainedDead.hp).toEqual({ max: 7, current: 0, temp: 0 });
+    const weakest = changeAbilityScore(drainedDead, 'con', -6); // 13 → 7: −3 per level, −9
+    expect(weakest.character.hp).toEqual({ max: 0, current: 0, temp: 0 });
+    expect(weakest.events.map((e) => e.message)).toEqual(['Constitution 13 → 7', 'HP maximum 7 → 0 (Constitution modifier -3 per level)']);
+    expect(weakest.character.hpMaxAdjustments).toEqual([{ name: 'Mummy Rot', amount: -8, ends: 'when-ended' }]);
     // A decrease never raises a maximum of 0, records or none.
     const gone = mira({ hp: { max: 0, current: 0, temp: 0 }, deathSaves: { successes: 0, failures: 3, stable: false, dead: true } });
     expect(changeAbilityScore(gone, 'con', -2).character.hp.max).toBe(0);

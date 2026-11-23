@@ -57,10 +57,19 @@ const ENDS_TITLE: Record<HpMaxAdjustment['ends'], string> = {
 /**
  * What changes the maximum beyond the app's own count: raises, reductions and lasting changes, each in its tone and
  * saying when it ends. An effect's × ends it; focus then goes to the × now in its place, else the one before, else the
- * pencil (`pencil`), never to the page.
+ * pencil (`pencil`), never to the page. Chips are keyed by what they are, so one ended elsewhere (the DM, a Long Rest)
+ * leaves focus on the others.
  */
 function HpMaxChips({ character: c, editable, onEdit, pencil }: Omit<VitalsProps, 'onRoll'> & { pencil: RefObject<HTMLButtonElement | null> }) {
   const adjustments = hpMaxAdjustments(c);
+  const seen = new Map<string, number>();
+  const keys = adjustments.map((a) => {
+    // One name is one entry; a hand-edited file can still hold two, so a repeat gets its count.
+    const key = `${a.ends}:${a.name}`;
+    const n = seen.get(key) ?? 0;
+    seen.set(key, n + 1);
+    return n ? `${key}#${n}` : key;
+  });
   const list = useRef<HTMLUListElement>(null);
   /** The place among the ×s of the one just pressed, until the chips next change. */
   const ended = useRef<number | null>(null);
@@ -79,7 +88,7 @@ function HpMaxChips({ character: c, editable, onEdit, pencil }: Omit<VitalsProps
         const tone = !effect ? 'bg-surface-2 text-muted' : a.amount > 0 ? 'bg-arcane-soft text-arcane' : 'bg-danger-soft text-danger';
         const label = `${a.name} ${formatModifier(a.amount)}`;
         return (
-          <li key={`${i}-${a.name}`} className={cn('inline-flex items-center gap-1 rounded-full py-0.5 pl-2.5 text-xs font-medium', editable && effect ? 'pr-1' : 'pr-2.5', tone)}>
+          <li key={keys[i]} className={cn('inline-flex items-center gap-1 rounded-full py-0.5 pl-2.5 text-xs font-medium', editable && effect ? 'pr-1' : 'pr-2.5', tone)}>
             <span title={ENDS_TITLE[a.ends]}>
               {label}
               <span className="font-normal">, {hpMaxEndsText(a.ends)}</span>
@@ -171,7 +180,7 @@ function HpBlock({ character: c, editable, onEdit }: Omit<VitalsProps, 'onRoll'>
             type="button"
             disabled={!valid}
             onClick={() => apply(healChange)}
-            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-success px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-success px-3 text-sm font-medium text-success-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <HeartPulse className="size-3.5 @max-sm:hidden" aria-hidden />
             Heal

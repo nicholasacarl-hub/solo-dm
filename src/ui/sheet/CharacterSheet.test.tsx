@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generatePortrait } from '@/images';
@@ -289,6 +289,69 @@ describe('CharacterSheet — Hit Point maximum', () => {
     await user.keyboard('{Enter}');
     expect(screen.getByLabelText('12 of 17 hit points')).toBeInTheDocument();
     expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Adjust hit point maximum' }));
+  });
+
+  it("after the last chip's × ends it, focus goes to the one before", async () => {
+    resetFakeGame({
+      campaign: sampleCampaign(),
+      character: sampleCharacter({
+        hp: { max: 19, current: 12, temp: 0 },
+        hpMaxAdjustments: [
+          { name: 'Aid', amount: 5, ends: 'long-rest' },
+          { name: 'Life Drain', amount: -3, ends: 'long-rest' },
+        ],
+      }),
+    });
+    const user = userEvent.setup();
+    render(<Harness />);
+    const chips = () => screen.getByRole('list', { name: 'Hit point maximum adjustments' });
+    await user.click(within(chips()).getByRole('button', { name: 'End Life Drain (−3 hit point maximum)' }));
+    expect(screen.getByLabelText('12 of 22 hit points')).toBeInTheDocument();
+    expect(document.activeElement).toBe(within(chips()).getByRole('button', { name: 'End Aid (+5 hit point maximum)' }));
+  });
+
+  it("keeps focus on a chip's × when the DM ends an earlier chip", () => {
+    const hero = sampleCharacter({
+      hp: { max: 17, current: 12, temp: 0 },
+      hpMaxAdjustments: [
+        { name: 'Aid', amount: 5, ends: 'long-rest' },
+        { name: 'Life Drain', amount: -3, ends: 'long-rest' },
+        { name: 'Mummy Rot', amount: -2, ends: 'when-ended' },
+      ],
+    });
+    resetFakeGame({ campaign: sampleCampaign(), character: hero });
+    render(<Harness />);
+    const mummy = screen.getByRole('button', { name: 'End Mummy Rot (−2 hit point maximum)' });
+    mummy.focus();
+    // The DM's hp_max_end ["Aid"]: the store's character changes from outside the sheet.
+    act(() => useGame.setState({ character: { ...hero, hp: { max: 12, current: 12, temp: 0 }, hpMaxAdjustments: hero.hpMaxAdjustments!.slice(1) } }));
+    expect(screen.getByLabelText('12 of 12 hit points')).toBeInTheDocument();
+    expect(document.activeElement).toBe(mummy);
+  });
+
+  it('says why an amount given is no use, and keeps Apply off', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText('Name'), 'Aid');
+    await user.click(within(dialog).getByRole('radio', { name: /At the end of a Long Rest/ }));
+    const by = within(dialog).getByLabelText('By');
+    for (const [typed, said] of [
+      ['1000', 'The amount is a whole number from 1 to 999.'],
+      ['2.5', 'The amount is a whole number from 1 to 999.'],
+      ['0', 'The amount is a whole number from 1 to 999.'],
+      ['-5', 'Give the amount without a minus sign: Lower lowers the maximum.'],
+    ]) {
+      await user.clear(by);
+      await user.type(by, typed);
+      expect(within(dialog).getByText(said), typed).toBeInTheDocument();
+      expect(by).toHaveAttribute('aria-invalid', 'true');
+      expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    }
+    await user.clear(by);
+    await user.type(by, '5');
+    expect(by).not.toHaveAttribute('aria-invalid');
+    expect(within(dialog).getByText('Maximum 17 → 22 · HP 12 → 17')).toBeInTheDocument();
   });
 
   it('shows chips on a read-only sheet, with no pencil and no ×; a lasting chip never has one', () => {

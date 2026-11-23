@@ -29,6 +29,7 @@ import {
   characterSheetText,
   characterStatusLine,
   conditionKey,
+  drainProblem,
   endHpMaxAdjustments,
   featOrTrait,
   featureLabel,
@@ -163,8 +164,9 @@ function hpSection(hp: NonNullable<ToolInput<'update_character'>['hp']>, reason?
     icon: hp.kind === 'damage' ? 'hp' : 'heal',
     summary: (before, after) => {
       if (hp.kind === 'temp') return `Temp HP ${before.hp.temp} → ${after.hp.temp}`;
-      // A drain under a name it can't take refuses the hit whole (applyDrainingDamage): nothing to log.
-      if (hp.drain && after === before) return '';
+      // A drain under a name it can't take refuses the hit whole (applyDrainingDamage): nothing to log. A hit that
+      // changes nothing otherwise (Immunity, the dead) logs as a plain hit does.
+      if (hp.drain && drainProblem(before, hp.drain)) return '';
       const label = hp.kind === 'damage' ? `${hp.amount}${hp.damage_type ? ` ${hp.damage_type}` : ''}` : `+${hp.amount}`;
       const max = after.hp.max !== before.hp.max ? ` · HP max ${before.hp.max} → ${after.hp.max}` : '';
       return `HP ${before.hp.current} → ${after.hp.current} ${detail(label)}${max}`;
@@ -216,14 +218,17 @@ function hpMaxSection(spec: NonNullable<ToolInput<'update_character'>['hp_max']>
 }
 
 /**
- * For the DM: an adjustment this call made that only the DM ends (no game clock ends Heroes' Feast). A reduction a curse
- * or poison only keeps from returning at a Long Rest (SRD 5.2.1 Mummy, Death Dog: "doesn't return to normal when
- * finishing a Long Rest") returns at the next one once the cause ends, so it switches to ending there.
+ * For the DM: an adjustment this call made or changed that only the DM ends (no game clock ends Heroes' Feast), with its
+ * amount now, so the switch call it gives stays right as a curse grows (SRD 5.2.1 Mummy: "decreases by 10 (3d6) every 24
+ * hours"). A reduction a curse or poison only keeps from returning at a Long Rest (Mummy, Death Dog: "doesn't return to
+ * normal when finishing a Long Rest") returns at the next one once the cause ends, so it switches to ending there. Nothing
+ * for a hero the call killed: the dead don't rest.
  */
 function untilEndedLines(before: Character, after: Character): string[] {
-  const had = new Set(hpMaxAdjustments(before).map(adjustmentKey));
+  if (after.deathSaves.dead) return [];
+  const had = new Set(hpMaxAdjustments(before).map((a) => `${adjustmentKey(a)}|${a.amount}`));
   return hpMaxAdjustments(after)
-    .filter((a) => a.ends === 'when-ended' && !had.has(adjustmentKey(a)))
+    .filter((a) => a.ends === 'when-ended' && !had.has(`${adjustmentKey(a)}|${a.amount}`))
     .map((a) => {
       const end = `update_character hp_max_end ["${a.name}"]`;
       if (a.amount > 0) return `${a.name} ${formatModifier(a.amount)} stays until you end it: ${end} when its time runs out or its cause ends (the status line keeps it in view).`;

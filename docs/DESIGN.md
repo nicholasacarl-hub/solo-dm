@@ -278,10 +278,14 @@ actually made (after a maximum of 0 or Harm's floor) and when it `ends` (`long-r
 records are deltas, never a saved old maximum, so level-ups, Constitution changes and the feats' numbers (which all add
 to the maximum in force) compose with them, and ending one gives back exactly its amount (`adjustHpMax`,
 `endHpMaxAdjustments` in the engine; the DM's `hp_max`, `hp_max_end` and `hp.drain`; the sheet's pencil and chips). One
-name is one entry, so `hp_max_end` and the status line know each by its name alone: a change under a name that goes the
-other way, or ends differently, is refused (a draining hit under such a name is refused whole, so no damage lands
-without its drain), except a stronger casting of the same spell, which replaces its entry. Names are read the way the
-engine writes them (one line, at most 60 characters), so one from a hand-edited file can still be ended. An effect that
+name is one entry, so `hp_max_end` and the status line know each by its name alone: an effect's change that goes the
+other way under an effect's name, or any change that ends differently from the entry under its name, is refused (a
+draining hit under such a name, or a blank one, is refused whole, so no damage lands without its drain), except a
+stronger casting of the same spell, which replaces its entry; a lasting change under a lasting entry's name adds up
+either way, and a total of 0 takes it back. Names are read the way the engine writes them (one line, at most 60
+characters), so one from a hand-edited file can still be ended. A name ends the entries named exactly; else a bare name
+ends the same spell's or effect's ("Aid" ends "Aid (3rd level)") and a qualified one the bare entry, never another
+qualifier's ("Bite (Otyugh)" leaves "Bite (Vampire Spawn)"). An effect that
 raises it (Aid, Heroes' Feast) adds as much to current HP and wakes a hero at 0 HP; the same spell again doesn't add,
 and only a stronger casting replaces it, by the difference (Combining Spell Effects: "Aid (3rd level)" is Aid).
 Reductions add up under one name and lower current HP only to fit; a maximum of 0 kills (Instant Death), Harm stops at
@@ -290,10 +294,10 @@ included, once the damage lands, so massive damage is judged on the maximum befo
 the maximum ("returns to normal" doesn't heal); ending a raise lowers current HP only to fit, and one that leaves a
 maximum of 0 kills, its shortfall coming off the newest effect reductions (a lasting one only for what is left: a
 ruling outlasts the curse that ran the maximum into 0) so the records still add up. `hp_max_end` ends all its names in
-one pass, reductions before raises, so the order of the names never matters; a raise that ran out first (Aid, before
-Greater Restoration) is ended alone, first. A Constitution change keeps the floor of 1 for the hero's own maximum, with
-the effects in force on top: one that a drain holds within reach of 0 kills, like Aid ending, its shortfall coming off
-the drain. A lasting change (a ruling, a boon, Hit Points the app counted too few) is bookkeeping like Constitution:
+one pass, every reduction before the raises (a lasting one taken back too), so the order of the names never matters; a
+raise that ran out first (Aid, before Greater Restoration) is ended alone, first. A Constitution increase adds exactly
+its Hit Points; a loss keeps the floor of 1 for the hero's own maximum (lasting entries part of it), with the effects in
+force on top: one that a drain holds within reach of 0 kills, like Aid ending, its shortfall coming off the drain. A lasting change (a ruling, a boon, Hit Points the app counted too few) is bookkeeping like Constitution:
 current HP moves with it, never below a maximum of 1, and its record stays so the DM and the player see why the maximum
 is what it is. A Long Rest ends the `long-rest` raises first, since Aid's 8 hours are over before the rest finishes
 (casting it would stop the rest), so a drained hero Aid kept alive dies and the drains stay with them; then the

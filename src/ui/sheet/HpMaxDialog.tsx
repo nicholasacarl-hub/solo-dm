@@ -37,7 +37,12 @@ export function HpMaxDialog({
   const [ends, setEnds] = useState<HpMaxEnds | null>(null);
   const id = useId();
   const by = Number(amount);
-  const spec = amount.trim() !== '' && Number.isInteger(by) && by >= 1 && by <= 999 && name.trim() && ends ? { name, change: direction === 'raise' ? by : -by, ends } : null;
+  const given = amount.trim() !== '';
+  const amountOk = given && Number.isInteger(by) && by >= 1 && by <= 999;
+  // An amount given that can't be used says why (Apply stays off, so the browser never shows its own message).
+  const amountProblem =
+    given && !amountOk ? (by < 0 ? 'Give the amount without a minus sign: Lower lowers the maximum.' : 'The amount is a whole number from 1 to 999.') : '';
+  const spec = amountOk && name.trim() && ends ? { name, change: direction === 'raise' ? by : -by, ends } : null;
   const dead = c.deathSaves.dead;
   const preview = spec && !dead ? hpMaxChange(c, spec) : null;
   const applies = !!preview?.notice;
@@ -45,13 +50,15 @@ export function HpMaxDialog({
   const current = preview && preview.character.hp.current !== c.hp.current ? ` · HP ${c.hp.current} → ${preview.character.hp.current}` : '';
   const previewText = dead
     ? ''
-    : !preview
-      ? 'Give an amount, a name and when it ends to see the change.'
-      : !applies
-        ? (preview.warning ?? '')
-        : dies
-          ? 'Your hero dies: a Hit Point maximum of 0 is death.'
-          : `Maximum ${c.hp.max} → ${preview.character.hp.max}${current}`;
+    : amountProblem
+      ? amountProblem
+      : !preview
+        ? 'Give an amount, a name and when it ends to see the change.'
+        : !applies
+          ? (preview.warning ?? '')
+          : dies
+            ? 'Your hero dies: a Hit Point maximum of 0 is death.'
+            : `Maximum ${c.hp.max} → ${preview.character.hp.max}${current}`;
 
   const close = () => {
     setDirection('raise');
@@ -75,12 +82,19 @@ export function HpMaxDialog({
       title="Hit point maximum"
       description="For an effect such as Aid or Life Drain, or a lasting change your DM agreed to. Your DM is told."
       footer={
-        // The preview sits by Apply, in view however far the form scrolls on a phone.
-        <div className="flex w-full flex-col gap-2">
-          <p aria-live="polite" className={cn('min-h-5 text-sm tabular-nums', dies || (preview && !applies) ? 'text-danger' : 'text-muted')}>
+        // The preview sits by Apply, in view however far the form scrolls on a phone; held sideways, beside the buttons
+        // in two lines (scrolling past them), so the form keeps the height.
+        <div className="flex w-full flex-col gap-2 phone-landscape:flex-row phone-landscape:items-center phone-landscape:gap-3">
+          <p
+            aria-live="polite"
+            className={cn(
+              'min-h-5 text-sm tabular-nums phone-landscape:max-h-10 phone-landscape:min-w-0 phone-landscape:flex-1 phone-landscape:overflow-y-auto',
+              dies || amountProblem || (preview && !applies) ? 'text-danger' : 'text-muted',
+            )}
+          >
             {previewText}
           </p>
-          <div className="flex justify-end gap-2">
+          <div className="flex shrink-0 justify-end gap-2">
             <Button variant="ghost" onClick={close}>
               Cancel
             </Button>
@@ -106,7 +120,16 @@ export function HpMaxDialog({
             />
           </fieldset>
           <Field label="By" htmlFor={`${id}-by`}>
-            <Input id={`${id}-by`} type="number" inputMode="numeric" min={1} max={999} value={amount} onChange={(e) => setAmount(e.target.value)} />
+            <Input
+              id={`${id}-by`}
+              type="number"
+              inputMode="numeric"
+              min={1}
+              max={999}
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              aria-invalid={amountProblem ? true : undefined}
+            />
           </Field>
           <Field label="Name" htmlFor={`${id}-name`} hint={'The spell or effect, such as "Aid" or "Life Drain"; the same spell twice doesn\'t add up.'}>
             <Input id={`${id}-name`} maxLength={60} value={name} onChange={(e) => setName(e.target.value)} aria-describedby={`${id}-name-hint`} />
