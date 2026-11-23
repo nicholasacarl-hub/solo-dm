@@ -1,7 +1,10 @@
+import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { HeroMoveRequest } from '@/engine/movement';
-import type { CombatState, GridPoint, InteractionResponse, LogEntry } from '@/types';
+import type { Character, CombatState, GridPoint, InteractionResponse, LogEntry } from '@/types';
 import { importedPlaceholder } from '@/lib/importedContent';
+import { endHpMaxChange, hpMaxChange, inspirationChange } from '@/ui/sheet/sheetChanges';
+import { useSheetEdit, type SheetChange } from '@/ui/sheet/useSheetActions';
 import { sampleCharacter, sampleMappedCombat, sampleSession, sampleSettings, sampleStopCombat, zeroUsage } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE } from '@/test/structuredFixtures';
 import * as storage from '@/storage';
@@ -226,6 +229,41 @@ describe('refreshClassEditions', () => {
     expect(game().character).toMatchObject({ xp: 110, hp: { max: 32 } });
     expect(await db.characters.get(graph.character?.id as string)).toMatchObject({ xp: 110, hp: { max: 32 } });
     expect((await db.campaigns.get('a-camp'))?.pendingDmNotices?.filter(topUp)).toHaveLength(1);
+  });
+
+  it("saves the failed top-up's notice once, even when the later write that stored it saved a notice after it", async () => {
+    const ref = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:class:sorcerer', kind: 'class' as const, entryName: 'Sorcerer', textHash: '', textCopied: false };
+    const classes = [{ classId: 'lib:gloam:class:sorcerer', name: 'Sorcerer', level: 5, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const, ref }];
+    const features = [{ id: 'dr', name: 'Draconic Resilience', source: 'subclass' as const, description: '' }];
+    await seedCampaign('a', { character: { classes, features, hp: { max: 27, current: 20, temp: 0 }, xp: 100 } });
+    const topUp = (n: string) => n.includes('Hit Point maximum rose by 5 to 32');
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    // The top-up's write waits, then fails; the sheet's next write and a notice (queued behind it) succeed.
+    const real = vi.mocked(storage.putCharacter).getMockImplementation();
+    let release = () => undefined as void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    let calls = 0;
+    vi.mocked(storage.putCharacter).mockImplementation(async (c) => {
+      if (c.hp.max === 32 && calls++ === 0) {
+        await held;
+        throw new Error('The disk is full.');
+      }
+      return real?.(c);
+    });
+    const adds = vi.spyOn(storage, 'addPendingDmNotice');
+    await game().loadCampaign('a-camp');
+    await vi.waitFor(() => expect(calls).toBe(1));
+    const later = game().updateCharacter((c) => ({ ...c, xp: c.xp + 10 }));
+    game().queueDmNotice('Player renamed a quest.');
+    release();
+    await later;
+    // The top-up then saves its notice on its own (the merge write), after the later write already stored it.
+    await vi.waitFor(() => expect(adds.mock.calls.some(([, notice]) => topUp(notice))).toBe(true));
+    await whenPersisted();
+    const notices = (await db.campaigns.get('a-camp'))?.pendingDmNotices ?? [];
+    expect(notices.filter(topUp)).toHaveLength(1);
+    expect(notices.at(-1)).toBe('Player renamed a quest.');
   });
 
   it("keeps both when the hero's row was stored and the campaign row failed, and saves the notice at once (a reload keeps it)", async () => {
@@ -974,7 +1012,7 @@ describe('interactions and DM notices', () => {
     expect(game().interaction).toBeNull();
   });
 
-  it('queues DM notices (no duplicates) and hands them over once', () => {
+  it('queues DM notices (no duplicates: a retry of the newest is queued once) and hands them over once', () => {
     game().queueDmNotice('Player edited HP.');
     game().queueDmNotice('Player edited HP.');
     game().queueDmNotice('  ');
@@ -982,6 +1020,13 @@ describe('interactions and DM notices', () => {
     expect(game().takeDmNotices()).toEqual(['Player edited HP.', 'Player renamed a quest.']);
     expect(game().takeDmNotices()).toEqual([]);
     expect(game().pendingDmNotices).toEqual([]);
+  });
+
+  it('queues a repeat that follows another notice: a change made, undone and made again is three notes', () => {
+    for (const notice of ['Player gained Heroic Inspiration', 'Player spent Heroic Inspiration', 'Player gained Heroic Inspiration']) {
+      game().queueDmNotice(notice);
+    }
+    expect(game().takeDmNotices()).toEqual(['Player gained Heroic Inspiration', 'Player spent Heroic Inspiration', 'Player gained Heroic Inspiration']);
   });
 
   it('setDmStatus merges', () => {
@@ -1068,6 +1113,92 @@ describe('DM notices are saved with the campaign', () => {
   it('stay in memory when nothing is loaded', () => {
     game().queueDmNotice('Loose note.');
     expect(game().pendingDmNotices).toEqual(['Loose note.']);
+  });
+
+  /** Edit the sheet as the player does: each change through the sheet's useSheetEdit (saved, then its notice queued). */
+  async function editSheet(...changes: ((c: Character) => SheetChange)[]): Promise<void> {
+    const { result, unmount } = renderHook(() => useSheetEdit());
+    for (const change of changes) {
+      await act(async () => {
+        await result.current(change);
+      });
+    }
+    unmount();
+  }
+
+  it('keep Heroic Inspiration gained, spent and gained again on the sheet: the DM hears all three, the last that it was gained', async () => {
+    await loadSeeded('a', { character: { heroicInspiration: false } });
+    await editSheet(...[true, false, true].map((value) => (c: Character) => inspirationChange(c, value)));
+    const said = ['Player gained Heroic Inspiration', 'Player spent Heroic Inspiration', 'Player gained Heroic Inspiration'];
+    expect(game().character?.heroicInspiration).toBe(true);
+    expect(game().pendingDmNotices).toEqual(said);
+    await whenPersisted('a-camp');
+    expect(await stored()).toEqual(said);
+    // A reload keeps all three for the DM's next turn, in order.
+    game().unloadCampaign();
+    await game().loadCampaign('a-camp');
+    expect(game().takeDmNotices()).toEqual(said);
+  });
+
+  it('keep a Hit Point maximum drain entered, ended with its × and entered again: the last note says it is in force', async () => {
+    await loadSeeded('a'); // 12 of 17 HP
+    const drain = { name: 'Life Drain', change: -5, ends: 'long-rest' } as const;
+    await editSheet(
+      (c) => hpMaxChange(c, drain),
+      (c) => endHpMaxChange(c, 'Life Drain', 'long-rest'), // its × on the Hit Points bar
+      (c) => hpMaxChange(c, drain),
+    );
+    const lowered = 'Player changed their Hit Point maximum: HP maximum 17 → 12 (Life Drain −5, until a Long Rest)';
+    const said = [lowered, 'Player ended a Hit Point maximum adjustment: Life Drain −5 ends: HP maximum 12 → 17', lowered];
+    expect(game().character?.hp).toMatchObject({ max: 12, current: 12 });
+    expect(game().character?.hpMaxAdjustments).toEqual([{ name: 'Life Drain', amount: -5, ends: 'long-rest' }]);
+    expect(game().pendingDmNotices).toEqual(said);
+    await whenPersisted('a-camp');
+    expect(await stored()).toEqual(said);
+    game().unloadCampaign();
+    await game().loadCampaign('a-camp');
+    expect(game().takeDmNotices()).toEqual(said);
+  });
+
+  const edited = 'The player edited the homebrew “Fireblade” in the Library.';
+  const retired = 'The player retired the homebrew “Tidecaller’s Boon” in the Library.';
+
+  it('keep a repeat queued elsewhere (the Library, another tab) when the store saves, and pick it up in order', async () => {
+    await loadSeeded('a');
+    await queueCampaignNotice('a-camp', edited);
+    // The Library in another tab: the Boon retired, then Fireblade edited again.
+    for (const notice of [retired, edited]) await storage.addPendingDmNotice('a-camp', notice);
+    expect(await stored()).toEqual([edited, retired, edited]);
+
+    await game().appendLog({ kind: 'player', text: 'I look around.' });
+    expect(await stored()).toEqual([edited, retired, edited]);
+    expect(game().takeDmNotices()).toEqual([edited, retired, edited]);
+    await game().appendTranscript([{ role: 'user', content: 'turn' }]);
+    expect(await stored()).toEqual([]);
+  });
+
+  it('pick up a repeat queued elsewhere when this tab saves a notice of its own', async () => {
+    await loadSeeded('a');
+    game().queueDmNotice('Mine.');
+    await whenPersisted('a-camp');
+    for (const notice of [edited, retired, edited]) await storage.addPendingDmNotice('a-camp', notice);
+    // This tab's next notice is added after them, and the ones queued elsewhere come into memory, the repeat too.
+    game().queueDmNotice('Mine, again.');
+    await whenPersisted('a-camp');
+    expect(await stored()).toEqual(['Mine.', edited, retired, edited, 'Mine, again.']);
+    expect(game().pendingDmNotices).toEqual(['Mine.', 'Mine, again.', edited, retired, edited]);
+  });
+
+  it("take another tab's copy as this tab's own when the same notice comes straight after it (a retry)", async () => {
+    await loadSeeded('a');
+    game().queueDmNotice('Mine.');
+    await whenPersisted('a-camp');
+    await storage.addPendingDmNotice('a-camp', retired);
+    game().queueDmNotice(retired);
+    await whenPersisted('a-camp');
+    // Stored once, and held once: the stored copy isn't picked up as a second one.
+    expect(await stored()).toEqual(['Mine.', retired]);
+    expect(game().pendingDmNotices).toEqual(['Mine.', retired]);
   });
 });
 
