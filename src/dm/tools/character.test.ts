@@ -520,6 +520,99 @@ describe('update_character links names to the rules index and builder data', () 
   });
 });
 
+describe("a feat's numbers when the DM records it (features_add)", () => {
+  const fighter4 = (extra: Partial<Character> = {}) => hero({ classId: FIGHTER.id, name: 'Fighter', level: 4, hitDie: 10 }, extra);
+
+  it("gives Alert its Initiative bonus and Tough its Hit Points, and says so (SRD 5.2.1 Alert; the engine's Tough rule)", async () => {
+    const h = setup({ character: fighter4() });
+    const out = await h.run('update_character', {
+      features_add: [
+        { name: 'Alert', description: 'Initiative proficiency.', source: 'feat' },
+        { name: 'Tough', description: 'Hardier than most.', source: 'feat' },
+      ],
+    });
+    // Fighter 4, DEX 14, HP 30 of 30.
+    expect(h.sheet()).toMatchObject({ initiativeBonusExtra: 2, hp: { max: 38, current: 38 } });
+    expect(out.content).toContain('Initiative +2 → +4 (Alert: Proficiency Bonus +2)');
+    expect(out.content).toContain('HP maximum 30 → 38 (Tough: twice your level, 4)');
+    expect(out.content).not.toContain('joined the sheet beside');
+    // Beside a class feature of its name (not a transformation's power): no hint.
+    const beside = setup({ character: fighter4({ features: [{ id: 'c', name: 'Tough', source: 'class', sourceName: 'Fighter 1', description: 'Invented.' }] }) });
+    expect((await beside.run('update_character', { features_add: [{ name: 'Tough', description: 'The feat.', source: 'feat' }] })).content).not.toContain('joined the sheet beside');
+    // The DM's words again: the same features, nothing more.
+    await h.run('update_character', { features_add: [{ name: 'Tough', description: 'Hardier still.', source: 'feat' }, { name: 'Alert', description: 'Quick.', source: 'feat' }] });
+    expect(h.sheet()).toMatchObject({ initiativeBonusExtra: 2, hp: { max: 38 } });
+  });
+
+  it("records the Alert feat beside a transformation's power of its name, so the feat outlives the transformation", async () => {
+    const h = setup({ character: fighter4(), campaignSettings: { transformations: 'offered' } });
+    const begin = {
+      action: 'begin',
+      name: 'Wolf Blood',
+      reason: 'Invented: a bite under the full moon.',
+      summary: 'Invented: the moon sharpens the senses and the temper.',
+      origin: 'accepted',
+      player_chose_it: true,
+      stage: 'Cub',
+      how_it_ends: 'Invented: a silver-bell cure.',
+      features_add: [{ name: 'Alert', description: 'Invented: keen senses at night.' }],
+    };
+    expect((await h.run('transform_character', begin)).isError).toBeUndefined();
+    const out = await h.run('update_character', { features_add: [{ name: 'Alert', description: 'Initiative proficiency.', source: 'feat' }] });
+    expect(h.sheet().features.filter((f) => f.name.startsWith('Alert')).map((f) => f.source)).toEqual(['transformation', 'feat']);
+    // The DM learns the power is unchanged and the new one outlasts the transformation; resent, it joins nothing.
+    expect(out.content).toContain("Alert joined the sheet beside Wolf Blood's own Alert, and stays when Wolf Blood ends; to change Wolf Blood's, use transform_character advance.");
+    const resent = await h.run('update_character', { features_add: [{ name: 'Alert', description: 'Initiative proficiency, amended.', source: 'feat' }] });
+    expect(resent.content).not.toContain('joined the sheet beside');
+    expect(h.sheet().features.filter((f) => f.name === 'Alert')).toHaveLength(2);
+    expect(h.sheet().initiativeBonusExtra).toBe(2);
+    expect((await h.run('transform_character', { action: 'end', name: 'Wolf Blood', reason: 'Cured' })).isError).toBeUndefined();
+    expect(h.sheet().features.filter((f) => f.name === 'Alert').map((f) => f.source)).toEqual(['feat']);
+    expect(h.sheet().initiativeBonusExtra).toBe(2);
+  });
+
+  it('keeps the AC in step with a Defense the DM records (SRD 5.2.1 Defense: +1 to Armor Class while wearing armor)', async () => {
+    const mail = { id: 'cm', name: 'Chain Mail', quantity: 1, equipped: true, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'heavy' as const, baseAc: 16, dexCap: 0 } };
+    const h = setup({ character: fighter4({ inventory: [mail], armorClass: 16, acFormula: 'Chain Mail 16' }) });
+    const out = await h.run('update_character', { features_add: [{ name: 'Defense', description: 'A Fighting Style feat.', source: 'feat' }] });
+    expect(h.sheet().armorClass).toBe(17);
+    expect(out.content).toContain('AC 16 → 17');
+    // Set by hand to what Defense gives before the DM recorded it: the AC stays, and the DM is asked whether it counted more.
+    const handSet = setup({ character: fighter4({ inventory: [mail], armorClass: 17, acFormula: 'set by the DM: Defense' }) });
+    const matched = await handSet.run('update_character', { features_add: [{ name: 'Defense', description: 'A Fighting Style feat.', source: 'feat' }] });
+    expect(handSet.sheet().armorClass).toBe(17);
+    expect(matched.content).toContain(
+      'AC 17 stays as set by hand; armor and features now give 17 too (Chain Mail 16 + Defense 1). If the hand-set AC counted a bonus that still applies (a spell such as Shield of Faith), set armor_class to include it.',
+    );
+  });
+
+  it("tells the DM when new gear only matches a hand-set AC that counted a spell (SRD 5.2.1 Shield of Faith: +2 AC)", async () => {
+    const mail = { id: 'cm', name: 'Chain Mail', quantity: 1, equipped: true, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'heavy' as const, baseAc: 16, dexCap: 0 } };
+    const shield = { id: 'sh', name: 'Shield', quantity: 1, equipped: false, category: 'shield' as const, armor: { kind: 'shield' as const, baseAc: 2, dexCap: 0 } };
+    const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }) });
+    const out = await h.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }] });
+    expect(h.sheet().armorClass).toBe(18);
+    expect(out.content).toContain(
+      'AC 18 stays as set by hand; armor and features now give 18 too (Chain Mail 16 + Shield 2). If the hand-set AC counted a bonus that still applies (a spell such as Shield of Faith), set armor_class to include it.',
+    );
+    // The DM's own armor_class in the same call is final, the same value restated too: nothing to ask.
+    const restated = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }) });
+    const final = await restated.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }], armor_class: 18, reason: 'Shield of Faith ends' });
+    expect(final.content).not.toContain('stays as set by hand');
+  });
+
+  it("says when armor whose stats aren't known is donned over a hand-set AC, rather than that it gives the AC", async () => {
+    // Mage Armor set by hand, then homebrew armor the app has no stats for.
+    const h = setup({ character: fighter4({ armorClass: 15, acFormula: 'set by the DM: Mage Armor' }) });
+    const out = await h.run('update_character', { inventory_add: [{ name: 'Dragonhide Coat', quantity: 1, category: 'armor' }] });
+    expect(out.isError).toBeUndefined();
+    const donned = await h.run('update_character', { inventory_update: [{ name: 'Dragonhide Coat', equipped: true }] });
+    expect(h.sheet().armorClass).toBe(15);
+    expect(donned.content).toContain("AC stays 15 (set by hand): Dragonhide Coat's armor stats are unknown, so set armor_class by hand.");
+    expect(donned.content).not.toContain('now give 15 too');
+  });
+});
+
 describe('what the DM reads back about AC and saves after its own changes', () => {
   it("armor_class: an AC the gear doesn't give says the DM set it; one the gear gives gets the gear's formula back", async () => {
     const h = setup();

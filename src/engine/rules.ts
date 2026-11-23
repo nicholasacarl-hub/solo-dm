@@ -734,7 +734,7 @@ function namesStyle(name: string, style: string): boolean {
 }
 
 /** Equipped armor whose stats aren't known, when no known armor is worn (computeArmorClass then keeps the sheet's AC). */
-function unknownWornArmor(c: Character, catalog: readonly EquipmentOption[]): InventoryItem | undefined {
+export function unknownWornArmor(c: Character, catalog: readonly EquipmentOption[]): InventoryItem | undefined {
   const { known, unknown } = wornArmor(c.inventory, catalog);
   if (known.some((w) => w.stats.kind === 'armor')) return undefined;
   return unknown.find((i) => i.category === 'armor');

@@ -203,6 +203,19 @@ describe('levelUp', () => {
     expect(again.character.initiativeBonusExtra).toBe(3);
   });
 
+  it('keeps an Alert or Tough the DM recorded growing at level-ups (SRD 5.2.1 Alert; the engine\'s Tough rule)', () => {
+    const fourth = mira({ classes: [asClass('Wizard', 4)], features: [] });
+    const recorded = addFeature(addFeature(fourth, { name: 'Alert', source: 'feat', description: '' }).character, { name: 'Tough', source: 'feat', description: '' }).character;
+    // Wizard 4: Initiative +2 and Hit Points +8 when recorded.
+    expect(recorded.initiativeBonusExtra).toBe(2);
+    expect(recorded.hp.max).toBe(fourth.hp.max + 8);
+    // Wizard 5: the bonus rises to +3, and Tough adds 2 (d6 average 4 + CON 1, + 2): twice the level in all.
+    const r = levelUp(recorded, { className: 'Wizard', hpMethod: 'average' });
+    expect(r.character.initiativeBonusExtra).toBe(3);
+    expect(r.hpGained).toBe(5 + 2);
+    expect(r.character.hp.max - fourth.hp.max - 5).toBe(2 * 5);
+  });
+
   it("counts the Alert feat only: a species trait, class feature or transformation power of its name neither brings the bonus nor stops the feat's", () => {
     const namesake = (source: Feature['source'], classes = [asClass('Wizard', 3)]) =>
       mira({ classes, features: [...mira().features, { id: 'ns', name: 'Alert', source, description: 'Invented: not the feat.' }] });

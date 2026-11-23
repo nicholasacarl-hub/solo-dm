@@ -16,7 +16,7 @@ export const ENGINE_NAMES = [
   'Unarmored Defense',
 ] as const;
 const ENGINE_KEYS = new Map(ENGINE_NAMES.map((n) => [nameKey(n), n]));
-/** Names whose effect only a feat of the name gets: Alert's Initiative bonus (engine/progression.ts isAlertFeat). */
+/** Names whose effect only a feat of the name gets: Alert's Initiative bonus (engine/character.ts isAlertFeat). */
 const FEAT_ONLY: ReadonlySet<string> = new Set(['Alert']);
 
 /** "a monster", "an item"…: a kind as a noun with its article. */
