@@ -560,8 +560,11 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
     expect((await h.run('transform_character', begin)).isError).toBeUndefined();
     const out = await h.run('update_character', { features_add: [{ name: 'Alert', description: 'Initiative proficiency.', source: 'feat' }] });
     expect(h.sheet().features.filter((f) => f.name.startsWith('Alert')).map((f) => f.source)).toEqual(['transformation', 'feat']);
-    // The DM learns the power is unchanged and the new one outlasts the transformation.
+    // The DM learns the power is unchanged and the new one outlasts the transformation; resent, it joins nothing.
     expect(out.content).toContain("Alert joined the sheet beside Wolf Blood's own Alert, and stays when Wolf Blood ends; to change Wolf Blood's, use transform_character advance.");
+    const resent = await h.run('update_character', { features_add: [{ name: 'Alert', description: 'Initiative proficiency, amended.', source: 'feat' }] });
+    expect(resent.content).not.toContain('joined the sheet beside');
+    expect(h.sheet().features.filter((f) => f.name === 'Alert')).toHaveLength(2);
     expect(h.sheet().initiativeBonusExtra).toBe(2);
     expect((await h.run('transform_character', { action: 'end', name: 'Wolf Blood', reason: 'Cured' })).isError).toBeUndefined();
     expect(h.sheet().features.filter((f) => f.name === 'Alert').map((f) => f.source)).toEqual(['feat']);
@@ -579,7 +582,7 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
     const matched = await handSet.run('update_character', { features_add: [{ name: 'Defense', description: 'A Fighting Style feat.', source: 'feat' }] });
     expect(handSet.sheet().armorClass).toBe(17);
     expect(matched.content).toContain(
-      'AC 17 stays as set by hand; armor and features now give 17 too (Chain Mail 16 + Defense 1). If the hand-set AC counted a spell or another effect, set armor_class to add it.',
+      'AC 17 stays as set by hand; armor and features now give 17 too (Chain Mail 16 + Defense 1). If the hand-set AC counted a bonus that still applies (a spell such as Shield of Faith), set armor_class to include it.',
     );
   });
 
@@ -589,7 +592,24 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
     const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }) });
     const out = await h.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }] });
     expect(h.sheet().armorClass).toBe(18);
-    expect(out.content).toContain('AC 18 stays as set by hand; armor and features now give 18 too (Chain Mail 16 + Shield 2). If the hand-set AC counted a spell or another effect, set armor_class to add it.');
+    expect(out.content).toContain(
+      'AC 18 stays as set by hand; armor and features now give 18 too (Chain Mail 16 + Shield 2). If the hand-set AC counted a bonus that still applies (a spell such as Shield of Faith), set armor_class to include it.',
+    );
+    // The DM's own armor_class in the same call is final, the same value restated too: nothing to ask.
+    const restated = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }) });
+    const final = await restated.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }], armor_class: 18, reason: 'Shield of Faith ends' });
+    expect(final.content).not.toContain('stays as set by hand');
+  });
+
+  it("says when armor whose stats aren't known is donned over a hand-set AC, rather than that it gives the AC", async () => {
+    // Mage Armor set by hand, then homebrew armor the app has no stats for.
+    const h = setup({ character: fighter4({ armorClass: 15, acFormula: 'set by the DM: Mage Armor' }) });
+    const out = await h.run('update_character', { inventory_add: [{ name: 'Dragonhide Coat', quantity: 1, category: 'armor' }] });
+    expect(out.isError).toBeUndefined();
+    const donned = await h.run('update_character', { inventory_update: [{ name: 'Dragonhide Coat', equipped: true }] });
+    expect(h.sheet().armorClass).toBe(15);
+    expect(donned.content).toContain("AC stays 15 (set by hand): Dragonhide Coat's armor stats are unknown, so set armor_class by hand.");
+    expect(donned.content).not.toContain('now give 15 too');
   });
 });
 

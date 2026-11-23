@@ -631,6 +631,8 @@ export const spellAttackBonus: typeof Engine.spellAttackBonus = () => null;
 export const attackAbilityModifier: typeof Engine.attackAbilityModifier = (c, a) => attackMod(c, a);
 export const attackBonus: typeof Engine.attackBonus = (c, a) => attackMod(c, a) + (a.proficient ? pb(c) : 0);
 export const effectiveSpeed: typeof Engine.effectiveSpeed = (c) => c.speed;
+/** The fake knows no armor's stats: any armor worn is unknown (computeArmorClass keeps the sheet's AC for it). */
+export const unknownWornArmor: typeof Engine.unknownWornArmor = (c) => c.inventory.find((i) => i.equipped && i.category === 'armor');
 /** Unarmored: 10 + DEX; with armor or a shield equipped the sheet's AC is kept (as the engine does for unknown armor). */
 export const computeArmorClass: typeof Engine.computeArmorClass = (c) =>
   c.inventory.some((i) => i.equipped && (i.category === 'armor' || i.category === 'shield'))

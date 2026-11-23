@@ -42,6 +42,7 @@ import {
   spendHitDie,
   spendSlot,
   stabilize,
+  unknownWornArmor,
   updateItem,
   useFeature,
   xpToNextLevel,
@@ -595,15 +596,18 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
 }
 
 /**
- * A line for each features_add entry that joined beside a transformation's own power of its name (featureToRewrite never
- * rewrites one): it stays when the transformation ends, and the power is changed with transform_character.
+ * A line for each feature the call added beside a transformation's own power of its name (featureToRewrite never
+ * rewrites one; an entry that rewrote another feature added nothing): it stays when the transformation ends, and the
+ * power is changed with transform_character.
  */
-function besidePowerLines(added: readonly { name: string }[] | undefined, before: Character): string[] {
-  return (added ?? []).flatMap(({ name }) => {
-    const power = before.features.find((f) => f.source === 'transformation' && nameKey(f.name) === nameKey(name.trim()));
+function besidePowerLines(before: Character, after: Character): string[] {
+  const had = new Set(before.features.map((f) => f.id));
+  return after.features.flatMap((f) => {
+    if (had.has(f.id)) return [];
+    const power = before.features.find((p) => p.source === 'transformation' && nameKey(p.name) === nameKey(f.name));
     if (!power) return [];
     const owner = power.sourceName ?? 'the transformation';
-    return [`${power.name} joined the sheet beside ${owner}'s own ${power.name}, and stays when ${owner} ends; to change ${owner}'s, use transform_character advance.`];
+    return [`${f.name} joined the sheet beside ${owner}'s own ${power.name}, and stays when ${owner} ends; to change ${owner}'s, use transform_character advance.`];
   });
 }
 
@@ -783,17 +787,21 @@ function mayChangeArmorClass(input: ToolInput<'update_character'>): boolean {
  * replaced only when it matched the computed value before (no hand-set AC like Mage Armor's);
  * otherwise it stays, with a note of what the armor and scores now give.
  */
-export function refreshArmorClass(before: Character, after: Character, catalog: readonly EquipmentOption[] = []): EngineResult {
-  if (after.armorClass !== before.armorClass) return { character: after, events: [] };
+export function refreshArmorClass(before: Character, after: Character, catalog: readonly EquipmentOption[] = [], acGiven = false): EngineResult {
+  // An AC the call set (armor_class, the same value restated too) is the DM's final word.
+  if (acGiven || after.armorClass !== before.armorClass) return { character: after, events: [] };
   const was = computeArmorClass(before, catalog);
   const now = computeArmorClass(after, catalog);
   if (now.ac === was.ac) return { character: after, events: [] };
   if (before.armorClass !== was.ac) {
+    // Armor whose stats aren't known gives nothing to compare: the engine keeps the sheet's AC for it.
+    const unknown = unknownWornArmor(after, catalog);
     // Set by hand to what the gear and features now give: the DM's own +1 before it recorded Defense, or a spell's AC the
     // new gear only matches (Shield of Faith, then a shield donned). Which, only the DM knows: say so either way.
-    const message =
-      now.ac === after.armorClass
-        ? `AC ${after.armorClass} stays as set by hand; armor and features now give ${now.ac} too (${now.formula}). If the hand-set AC counted a spell or another effect, set armor_class to add it.`
+    const message = unknown
+      ? `AC stays ${after.armorClass} (set by hand): ${unknown.name}'s armor stats are unknown, so set armor_class by hand.`
+      : now.ac === after.armorClass
+        ? `AC ${after.armorClass} stays as set by hand; armor and features now give ${now.ac} too (${now.formula}). If the hand-set AC counted a bonus that still applies (a spell such as Shield of Faith), set armor_class to include it.`
         : `AC stays ${after.armorClass} (set by hand); by armor and ability scores it would now be ${now.ac} (${now.formula}). Set armor_class if that is right.`;
     return { character: after, events: [{ type: 'warning', message }] };
   }
@@ -870,7 +878,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
       current = r.character;
     }
     if (checkAc) {
-      const r = refreshArmorClass(start, current, links.catalog);
+      const r = refreshArmorClass(start, current, links.catalog, input.armor_class !== undefined);
       if (r.events.length) results.push({ section: { icon: 'info', apply: () => r }, before: current, after: r.character, events: r.events });
       current = r.character;
     }
@@ -880,7 +888,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
 
   const lines = results.flatMap((r) => eventLines(r.events)).filter(Boolean);
   // For the DM only (the player's log keeps the change itself).
-  lines.push(...besidePowerLines(input.features_add, before));
+  lines.push(...besidePowerLines(before, change.character));
   lines.push(...keptHomebrewLines(input.conditions_add, change.character.conditions));
   lines.push(...keptStableLines(input.conditions_add, change.character));
   const saves = saveSourcesChangeText(before, change.character);
