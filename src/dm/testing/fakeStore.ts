@@ -3,6 +3,7 @@
  * Transcript params are deep-copied on append, as persistence would.
  */
 import { createStore, type StoreApi } from 'zustand/vanilla';
+import { repeatsNewest } from '@/lib/dmNotices';
 import {
   initialDmStatus,
   type GameStore,
@@ -297,7 +298,8 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
 
       queueDmNotice(text) {
         const notice = text.trim();
-        if (notice && !get().pendingDmNotices.includes(notice)) set({ pendingDmNotices: [...get().pendingDmNotices, notice] });
+        // As the store: only a repeat of the newest note waiting is a retry.
+        if (notice && !repeatsNewest(get().pendingDmNotices, notice)) set({ pendingDmNotices: [...get().pendingDmNotices, notice] });
       },
       takeDmNotices() {
         const notices = get().pendingDmNotices;

@@ -180,4 +180,34 @@ describe('DM notices on the campaign record', () => {
     expect(await putCampaignKeepingNotices({ ...campaign, pendingDmNotices: [] }, saved)).toEqual([]);
     expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual([]);
   });
+
+  const gained = 'Player gained Heroic Inspiration';
+  const spent = 'Player spent Heroic Inspiration';
+
+  it('addPendingDmNotice keeps a change made, undone and made again; only a retry of the newest is dropped', async () => {
+    const { campaign } = await seedCampaign('a');
+    expect(await addPendingDmNotice('a-camp', gained, 5)).toEqual([gained]);
+    expect(await addPendingDmNotice('a-camp', spent, 6)).toEqual([gained, spent]);
+    expect(await addPendingDmNotice('a-camp', gained, 7)).toEqual([gained, spent, gained]);
+    // The same notice again straight away is a retry: stored once, and the record isn't touched.
+    expect(await addPendingDmNotice('a-camp', gained, 8)).toEqual([gained, spent, gained]);
+    expect(await getCampaign('a-camp')).toMatchObject({ pendingDmNotices: [gained, spent, gained], updatedAt: campaign.updatedAt + 3 });
+    // `once`: a notice stored anywhere isn't added again (one that states a fact the app finds until it is saved).
+    expect(await addPendingDmNotice('a-camp', spent, undefined, { once: true })).toEqual([gained, spent, gained]);
+    expect(await addPendingDmNotice('a-camp', 'Top-up.', undefined, { once: true })).toEqual([gained, spent, gained, 'Top-up.']);
+  });
+
+  it('putCampaignKeepingNotices keeps a repeat queued elsewhere, in order', async () => {
+    const a = (await seedCampaign('a')).campaign;
+    const b = (await seedCampaign('b')).campaign;
+    // The caller saw gained and spent; another tab then queued gained again, and a notice of its own.
+    for (const id of ['a-camp', 'b-camp']) for (const notice of [gained, spent, gained, 'From the Library.']) await addPendingDmNotice(id, notice);
+    // Still waiting in the caller's memory: its own first, then the ones queued since, the repeat among them.
+    const kept = [gained, spent, gained, 'From the Library.'];
+    expect(await putCampaignKeepingNotices({ ...a, pendingDmNotices: [gained, spent] }, [gained, spent])).toEqual(kept);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual(kept);
+    // Delivered by the caller: only the ones queued since stay.
+    expect(await putCampaignKeepingNotices({ ...b, pendingDmNotices: [] }, [gained, spent])).toEqual([gained, 'From the Library.']);
+    expect((await getCampaign('b-camp'))?.pendingDmNotices).toEqual([gained, 'From the Library.']);
+  });
 });

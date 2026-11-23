@@ -97,14 +97,21 @@ export const loadCampaignRecords: (campaignId: string) => Promise<CampaignRecord
 export const getCharacter: (id: string) => Promise<Character | undefined> = records.getCharacter;
 export const putCampaign: (c: Campaign) => Promise<void> = records.putCampaign;
 /**
- * putCampaign that keeps DM notices queued elsewhere since the caller last saw the record (stored
- * notices in neither `seen` nor `c`). Returns the notices now stored.
+ * putCampaign that keeps DM notices queued elsewhere since the caller last saw the record: `seen` is the stored list
+ * as it was then, and the stored notices beyond it (a repeat included) follow `c`'s own. Returns the notices now stored.
  */
 export const putCampaignKeepingNotices: (c: Campaign, seen: readonly string[]) => Promise<string[]> =
   records.putCampaignKeepingNotices;
-/** Add a DM notice to a stored campaign (bumps updatedAt). Resolves the stored notices, or null if it doesn't exist. */
-export const addPendingDmNotice: (campaignId: string, notice: string, updatedAt?: number) => Promise<string[] | null> =
-  records.addPendingDmNotice;
+/**
+ * Add a DM notice to a stored campaign (bumps updatedAt), unless it repeats the newest one stored (a retry), or, with
+ * `once`, any stored one. Resolves the stored notices, or null if it doesn't exist.
+ */
+export const addPendingDmNotice: (
+  campaignId: string,
+  notice: string,
+  updatedAt?: number,
+  opts?: { once?: boolean },
+) => Promise<string[] | null> = records.addPendingDmNotice;
 export const putCharacter: (c: Character) => Promise<void> = records.putCharacter;
 /** Remove one character record (the game store calls it when a campaign's character is replaced). */
 export const deleteCharacterRecord: (id: string) => Promise<void> = records.deleteCharacterRecord;

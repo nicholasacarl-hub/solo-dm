@@ -13,6 +13,7 @@ import type {
   Session,
   TranscriptMessage,
 } from '@/types';
+import { noticesAddedSince, repeatsNewest } from '@/lib/dmNotices';
 import { campaignTables, db, ownerRange } from './db';
 import { byCreatedAt } from './campaignData';
 import { listHomebrew } from './library';
@@ -53,15 +54,16 @@ export async function putCampaign(c: Campaign): Promise<void> {
 }
 
 /**
- * Save a campaign record without losing DM notices queued elsewhere (the Library, another tab)
- * since the caller last saw the record: stored notices that are neither in `seen` nor in the
- * record being saved are kept. Returns the notices now stored.
+ * Save a campaign record without losing DM notices queued elsewhere (the Library, another tab) since the caller last
+ * saw the record. `seen` is the stored list as the caller last saw it, repeats and order included: the stored notices
+ * beyond it (noticesAddedSince, so a repeat of a notice it saw counts as new) are kept after the record's own. Returns
+ * the notices now stored.
  */
 export function putCampaignKeepingNotices(c: Campaign, seen: readonly string[]): Promise<string[]> {
   return db.transaction('rw', db.campaigns, async () => {
     const stored = await db.campaigns.get(c.id);
     const own = c.pendingDmNotices ?? [];
-    const queuedElsewhere = (stored?.pendingDmNotices ?? []).filter((n) => !seen.includes(n) && !own.includes(n));
+    const queuedElsewhere = noticesAddedSince(stored?.pendingDmNotices ?? [], seen);
     const next: Campaign = queuedElsewhere.length > 0 ? { ...c, pendingDmNotices: [...own, ...queuedElsewhere] } : c;
     await db.campaigns.put(next);
     return next.pendingDmNotices ?? [];
@@ -69,15 +71,23 @@ export function putCampaignKeepingNotices(c: Campaign, seen: readonly string[]):
 }
 
 /**
- * Add a note for the DM to a stored campaign (once), bumping its updatedAt to at least `updatedAt`.
- * Returns the notices now stored, or null when the campaign doesn't exist (it is never created).
+ * Add a note for the DM to a stored campaign, bumping its updatedAt to at least `updatedAt`. A note that repeats the
+ * newest one stored is a retry and isn't added again; any other repeat is a new note (a change made, undone and made
+ * again). With `once`, a note stored anywhere isn't added again either: for a note that states a fact the app finds
+ * again until it is saved. Returns the notices now stored, or null when the campaign doesn't exist (it is never
+ * created).
  */
-export function addPendingDmNotice(campaignId: string, notice: string, updatedAt = Date.now()): Promise<string[] | null> {
+export function addPendingDmNotice(
+  campaignId: string,
+  notice: string,
+  updatedAt = Date.now(),
+  opts: { once?: boolean } = {},
+): Promise<string[] | null> {
   return db.transaction('rw', db.campaigns, async () => {
     const stored = await db.campaigns.get(campaignId);
     if (!stored) return null;
     const notices = stored.pendingDmNotices ?? [];
-    if (notices.includes(notice)) return notices;
+    if (opts.once ? notices.includes(notice) : repeatsNewest(notices, notice)) return notices;
     const next: Campaign = {
       ...stored,
       pendingDmNotices: [...notices, notice],
