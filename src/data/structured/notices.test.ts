@@ -20,14 +20,22 @@ describe('nameNotices: a name the engine treats specially', () => {
   const engineNotices = (kind: StructuredKind, name: string, extra: Record<string, unknown> = {}) =>
     nameNotices({ kind, name, sourceId: 'gloam', data: { format: '2024', ...extra } }, index).filter((w) => w.code === 'engine-name');
 
-  it("warns for a feat named Alert, not for a species trait or class feature of the name, which Alert's bonus never reaches", () => {
+  it("warns for a feat named Alert or Tough, not for a species trait or class feature of the name, which the feat's numbers never reach", () => {
     expect(engineNotices('feat', 'Alert').map((w) => w.message)).toEqual([
-      "The app gives anything named “Alert” the SRD Alert's automatic effect. Rename this one if it works differently.",
+      "The app gives a feat named “Alert” the SRD Alert's automatic effect. Rename this one if it works differently.",
     ]);
-    expect(engineNotices('species', 'Lantern Folk', { traits: [{ name: 'Alert', description: 'Invented.' }] })).toEqual([]);
-    expect(engineNotices('class', 'Lamp Keeper', { features: [{ name: 'Alert', level: 1, description: 'Invented.' }] })).toEqual([]);
+    // Tough isn't an SRD feat: the notice says what the app counts.
+    expect(engineNotices('feat', 'Tough').map((w) => w.message)).toEqual([
+      "The app gives a feat named “Tough” the Tough feat's Hit Points (twice the level when it's taken, then 2 a level). Rename this one if it works differently.",
+    ]);
+    for (const name of ['Alert', 'Tough']) {
+      expect(engineNotices('species', 'Lantern Folk', { traits: [{ name, description: 'Invented.' }] }), name).toEqual([]);
+      expect(engineNotices('class', 'Lamp Keeper', { features: [{ name, level: 1, description: 'Invented.' }] }), name).toEqual([]);
+    }
     // Another name the engine reads on any feature still warns on a part.
-    expect(engineNotices('species', 'Lantern Folk', { traits: [{ name: 'Tough', description: 'Invented.' }] })).toHaveLength(1);
+    expect(engineNotices('class', 'Lamp Keeper', { features: [{ name: 'Improved Critical', level: 3, description: 'Invented.' }] }).map((w) => w.message)).toEqual([
+      "The app gives anything named “Improved Critical” the SRD Improved Critical's automatic effect. Rename this one if it works differently.",
+    ]);
   });
 });
 

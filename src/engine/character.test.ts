@@ -558,13 +558,14 @@ describe("addFeature: what a feat joining the sheet brings (the DM's features_ad
     expect(rewritten.events.map((e) => e.message)).toEqual(['Updated feature: Alert', 'Initiative +2 → +4 (Alert: Proficiency Bonus +2)']);
   });
 
-  it("adds Tough's twice-the-level Hit Points for the first feature named Tough, current HP with them (the engine's Tough rule)", () => {
+  it("adds Tough's twice-the-level Hit Points for the Tough feat, current HP with them (the engine's Tough rule)", () => {
     // Wizard 3, HP 12 of 17: +6.
     const r = addFeature(mira(), feat('Tough'));
     expect(r.character.hp).toEqual({ max: 23, current: 18, temp: 0 });
     expect(r.events.map((e) => e.message)).toEqual(['Gained feature: Tough', 'HP maximum 17 → 23 (Tough: twice your level, 3)']);
-    // By name, whatever the source (levelUp counts it so).
+    // The DM's entry on neither side of the feat line is the feat too; a species trait or class feature of the name isn't.
     expect(addFeature(mira(), feat('Tough', 'boon')).character.hp.max).toBe(23);
+    for (const source of ['species', 'class', 'subclass'] as const) expect(addFeature(mira(), feat('Tough', source)).character.hp.max, source).toBe(17);
     // A hero at 0 HP gains the maximum and stays at 0, as for a Constitution change.
     expect(addFeature(dying(), feat('Tough')).character.hp).toMatchObject({ max: 23, current: 0 });
   });
@@ -576,9 +577,11 @@ describe("addFeature: what a feat joining the sheet brings (the DM's features_ad
     expect(addFeature(mira({ features: [alert], initiativeBonusExtra: 2 }), feat('Alert')).character.initiativeBonusExtra).toBe(2);
     expect(addFeature(mira({ features: [tough] }), feat('Tough')).character.hp.max).toBe(17);
     expect(addFeature(mira({ features: [tough] }), feat('Tough', 'homebrew')).character.hp.max).toBe(17);
-    // Beside the feat, a class feature named Alert; beside a species trait named Tough, the feat (Tough counts once).
+    // Beside the feat, a class feature of its name (not the feat): nothing more.
     expect(addFeature(mira({ features: [alert], initiativeBonusExtra: 2 }), feat('Alert', 'class')).character.initiativeBonusExtra).toBe(2);
-    expect(addFeature(mira({ features: [{ ...tough, source: 'species' as const }] }), feat('Tough')).character.hp.max).toBe(17);
+    expect(addFeature(mira({ features: [tough] }), feat('Tough', 'class')).character.hp.max).toBe(17);
+    // The feat beside a species trait named Tough, which isn't the feat: the feat's own Hit Points.
+    expect(addFeature(mira({ features: [{ ...tough, source: 'species' as const }] }), feat('Tough')).character.hp.max).toBe(23);
     // Sent twice in one call: the second is an update.
     expect(addFeature(addFeature(mira(), feat('Tough')).character, feat('Tough')).character.hp.max).toBe(23);
     // Any other feature changes neither.
