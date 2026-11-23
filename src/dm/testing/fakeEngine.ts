@@ -29,7 +29,7 @@ export type DiceTerm = Engine.DiceTerm;
 // Transformations and ability score changes run the real engine: pure, and deterministic given ids.
 export { changeAbilityScore } from '@/engine/character';
 // Which side of the feat line a feature's source puts it on, which feature an entry rewrites and how a result names it, run the real rules (pure).
-export { featOrTrait, featureLabel, featureToRewrite } from '@/engine/character';
+export { featOrTrait, featureLabel, featureToRewrite, isAlertFeat, isToughFeat } from '@/engine/character';
 // Which names are unarmed strikes runs the real rule (pure).
 export { isUnarmedStrikeName } from '@/engine/rules';
 export {
