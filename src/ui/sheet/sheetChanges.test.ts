@@ -170,6 +170,10 @@ describe('Hit Point maximum changes from the sheet', () => {
     expect(again.notice).toBeNull();
     expect(again.warning).toContain("the same spell's effects don't combine");
     expect(endHpMaxChange(aided, 'Aid', 'when-ended')).toMatchObject({ character: aided, notice: null });
+    // Nothing ended (a lasting entry that stays): no notice, only the reason.
+    const boon = hpMaxChange(sampleCharacter(), { name: 'Boon', change: 10, ends: 'never' }).character; // 22/27
+    const cursed = hpMaxChange(boon, { name: 'Mummy Rot', change: -25, ends: 'when-ended' }).character; // 2/2
+    expect(endHpMaxChange(cursed, 'Boon')).toMatchObject({ character: cursed, notice: null, warning: 'Boon +10 stays: taking it back would leave a Hit Point maximum below 1.' });
   });
 
   it("won't clear a death mark while the maximum is 0 (srd:rule:...-instant-death: \"A creature dies if its Hit Point maximum reaches 0.\")", () => {

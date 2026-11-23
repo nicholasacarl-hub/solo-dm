@@ -23,13 +23,14 @@ vibe-coding session.
   Style choices and subclass catch-up are in), plus multiclass proficiency gains and features that pick
   more than one option.
 - **Hit Point maximum effects the app doesn't time or trigger**: with no game clock, Aid, Heroes' Feast and a reduction a
-  curse or poison keeps end when the DM or player ends them (the status line names them every turn). The DM rolls a
-  Mummy's or Death Dog's later reductions every 24 hours, and the Mummy's "can't regain Hit Points" isn't enforced. A
-  poison that keeps every reduction through Long Rests (a Death Dog's) keeps only the ones recorded as "until ended".
-  Aura of Life, raises that grow with level (a Berserker Axe) and a transformation's own change to the maximum are
-  entered and ended by hand. A Constitution drop that the maximum's floor of 1 clamps while a drain holds it near 0
-  leaves the drain's record a point or two larger than what it took, so its end gives that back. The player has no
-  control for the Initiative bonus (the DM's `initiative_change` only).
+  curse or poison keeps end when the DM or player ends them (the status line names them every turn), and a Mummy's or
+  Death Dog's reduction is switched by hand to end at the next Long Rest once its cause ends. The DM rolls a Mummy's or
+  Death Dog's later reductions every 24 hours, and the Mummy's "can't regain Hit Points" isn't enforced. A poison that
+  keeps every reduction through Long Rests (a Death Dog's) keeps only the ones recorded as "until ended". Aura of Life
+  (a maximum that can't be reduced) isn't enforced: inside it the DM sends plain damage instead of `hp.drain`. Raises
+  that grow with level (a Berserker Axe) and a transformation's own change to the maximum are entered and ended by
+  hand. The Long Rest's "Ability Scores Restored" isn't applied, so a reduced Constitution is raised back by hand. The
+  player has no control for the Initiative bonus (the DM's `initiative_change` only).
 
 ## Memory and cost
 

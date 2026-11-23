@@ -36,6 +36,7 @@ export {
   applyDrainingDamage,
   changeInitiativeBonus,
   endHpMaxAdjustments,
+  findHpMaxAdjustments,
   hpMaxAdjustmentLabel,
   hpMaxAdjustments,
   hpMaxEndsText,

@@ -277,22 +277,34 @@ reads one number. `Character.hpMaxAdjustments` records each change beyond what t
 actually made (after a maximum of 0 or Harm's floor) and when it `ends` (`long-rest`, `when-ended`, `never`). The
 records are deltas, never a saved old maximum, so level-ups, Constitution changes and the feats' numbers (which all add
 to the maximum in force) compose with them, and ending one gives back exactly its amount (`adjustHpMax`,
-`endHpMaxAdjustments` in the engine; the DM's `hp_max`, `hp_max_end` and `hp.drain`; the sheet's pencil and chips). An
-effect that raises it (Aid, Heroes' Feast) adds as much to current HP and wakes a hero at 0 HP; the same spell again
-doesn't add, and only a stronger casting replaces it, by the difference (Combining Spell Effects: "Aid (3rd level)" is
-Aid). Reductions add up under one name and lower current HP only to fit; a maximum of 0 kills (Instant Death), Harm
-stops at 1. A drain (`hp.drain`: Life Drain, Harm) lowers the maximum by the damage after the Defenses line,
-temporary HP included, once the damage lands, so massive damage is judged on the maximum before it. Ending a reduction
-raises only the maximum ("returns to normal" doesn't heal); ending a raise lowers current HP only to fit, and one that
-leaves a maximum of 0 kills, its shortfall coming off the newest reductions so the records still add up. A lasting
-change (a ruling, a boon, Hit Points the app counted too few) is bookkeeping like Constitution: current HP moves with
-it, never below a maximum of 1, and its record stays so the DM and the player see why the maximum is what it is. A Long
-Rest ends the `long-rest` records first, reductions before raises, then refills (SRD 5.2.1 Long Rest: "If your Hit
-Point maximum was reduced, it returns to normal"), and its result lists what stays. With no game clock, the status line
-names every effect in force each turn ("HP max includes Aid +5 (until a Long Rest)"), which is what reminds the DM to
-end Aid or Heroes' Feast; the sheet text names lasting ones too. Without records nothing is printed, so the prompt and
-the sheet text of a hero without them are byte for byte as before. `initiative_change` adds to the Initiative bonus
-beyond Dexterity (a ruling, or an Alert the app didn't count), never sets a total, and keeps no record.
+`endHpMaxAdjustments` in the engine; the DM's `hp_max`, `hp_max_end` and `hp.drain`; the sheet's pencil and chips). One
+name is one entry, so `hp_max_end` and the status line know each by its name alone: a change under a name that goes the
+other way, or ends differently, is refused (a draining hit under such a name is refused whole, so no damage lands
+without its drain), except a stronger casting of the same spell, which replaces its entry. Names are read the way the
+engine writes them (one line, at most 60 characters), so one from a hand-edited file can still be ended. An effect that
+raises it (Aid, Heroes' Feast) adds as much to current HP and wakes a hero at 0 HP; the same spell again doesn't add,
+and only a stronger casting replaces it, by the difference (Combining Spell Effects: "Aid (3rd level)" is Aid).
+Reductions add up under one name and lower current HP only to fit; a maximum of 0 kills (Instant Death), Harm stops at
+1. A drain (`hp.drain`: Life Drain, Harm) lowers the maximum by the damage after the Defenses line, temporary HP
+included, once the damage lands, so massive damage is judged on the maximum before it. Ending a reduction raises only
+the maximum ("returns to normal" doesn't heal); ending a raise lowers current HP only to fit, and one that leaves a
+maximum of 0 kills, its shortfall coming off the newest effect reductions (a lasting one only for what is left: a
+ruling outlasts the curse that ran the maximum into 0) so the records still add up. `hp_max_end` ends all its names in
+one pass, reductions before raises, so the order of the names never matters; a raise that ran out first (Aid, before
+Greater Restoration) is ended alone, first. A Constitution change keeps the floor of 1 for the hero's own maximum, with
+the effects in force on top: one that a drain holds within reach of 0 kills, like Aid ending, its shortfall coming off
+the drain. A lasting change (a ruling, a boon, Hit Points the app counted too few) is bookkeeping like Constitution:
+current HP moves with it, never below a maximum of 1, and its record stays so the DM and the player see why the maximum
+is what it is. A Long Rest ends the `long-rest` raises first, since Aid's 8 hours are over before the rest finishes
+(casting it would stop the rest), so a drained hero Aid kept alive dies and the drains stay with them; then the
+reductions end and HP refill (SRD 5.2.1 Long Rest: "When you finish the rest … If your Hit Point maximum was reduced, it
+returns to normal"), and its result lists what stays, with how to switch a curse's or a poison's reduction to end at the
+next Long Rest once its cause ends (a Mummy's, a Death Dog's: theirs only stop a Long Rest from restoring the maximum).
+With no game clock, the status line names every effect in force each turn ("HP max includes Aid +5 (until a Long
+Rest)"), which is what reminds the DM to end Aid or Heroes' Feast; the sheet's chips say when each ends, and the sheet
+text names lasting ones too. Without records nothing is printed, so the prompt and the sheet text of a hero without them
+are byte for byte as before. `initiative_change` adds to the Initiative bonus beyond Dexterity (a ruling, or an Alert the
+app didn't count), never sets a total, and keeps no record.
 
 ### Player-side controls that talk to the DM
 

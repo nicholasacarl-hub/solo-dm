@@ -33,6 +33,7 @@ import {
   featOrTrait,
   featureLabel,
   featureToRewrite,
+  findHpMaxAdjustments,
   formatModifier,
   hpMaxAdjustments,
   hpMaxEndsText,
@@ -88,6 +89,7 @@ import {
   type Feature,
   type GameEvent,
   type HitDie,
+  type HpMaxAdjustment,
   type ImportedRef,
   type InventoryItem,
   type KnownSpell,
@@ -161,6 +163,8 @@ function hpSection(hp: NonNullable<ToolInput<'update_character'>['hp']>, reason?
     icon: hp.kind === 'damage' ? 'hp' : 'heal',
     summary: (before, after) => {
       if (hp.kind === 'temp') return `Temp HP ${before.hp.temp} → ${after.hp.temp}`;
+      // A drain under a name it can't take refuses the hit whole (applyDrainingDamage): nothing to log.
+      if (hp.drain && after === before) return '';
       const label = hp.kind === 'damage' ? `${hp.amount}${hp.damage_type ? ` ${hp.damage_type}` : ''}` : `+${hp.amount}`;
       const max = after.hp.max !== before.hp.max ? ` · HP max ${before.hp.max} → ${after.hp.max}` : '';
       return `HP ${before.hp.current} → ${after.hp.current} ${detail(label)}${max}`;
@@ -176,33 +180,56 @@ function hpSection(hp: NonNullable<ToolInput<'update_character'>['hp']>, reason?
   };
 }
 
-/** hp_max_end: each name in turn (endHpMaxAdjustments). */
+const adjustmentKey = (a: HpMaxAdjustment) => `${nameKey(a.name)}|${a.ends}`;
+
+/** The log's tail: what else happened, then the DM's reason. */
+function tail(before: Character, after: Character, reason?: string): string {
+  return `${after.deathSaves.dead && !before.deathSaves.dead ? ' · the hero died' : ''}${reason ? ` · ${reason}` : ''}`;
+}
+
+/** hp_max_end: every name at once (endHpMaxAdjustments), so their order never matters; the log names what ended. */
 function hpMaxEndSection(names: readonly string[], reason?: string): Section {
   return {
     icon: 'info',
-    summary: (before, after) => (after === before ? '' : `HP max ${before.hp.max} → ${after.hp.max} (ended: ${names.join(', ')}${reason ? ` · ${reason}` : ''})`),
-    apply: (c) => chain(c, names.map((name) => (x: Character) => endHpMaxAdjustments(x, name))),
+    summary: (before, after) => {
+      if (after === before) return '';
+      const list = hpMaxAdjustments(before);
+      const left = new Set(hpMaxAdjustments(after).map(adjustmentKey));
+      const ended = [...findHpMaxAdjustments(before, names).indices].map((i) => list[i]).filter((a) => !left.has(adjustmentKey(a)));
+      return `HP max ${before.hp.max} → ${after.hp.max} (ended: ${ended.map((a) => a.name).join(', ')}${tail(before, after, reason)})`;
+    },
+    apply: (c) => endHpMaxAdjustments(c, names),
   };
 }
 
+/** hp_max: the log gives the arrows (the amount applied, after a floor, is in them) and the effect's name and end. */
 function hpMaxSection(spec: NonNullable<ToolInput<'update_character'>['hp_max']>, reason?: string): Section {
   return {
     icon: spec.change > 0 ? 'heal' : 'hp',
-    summary: (before, after) =>
-      after === before ? '' : `HP max ${before.hp.max} → ${after.hp.max} (${spec.name} ${formatModifier(spec.change)} · ${hpMaxEndsText(spec.ends)}${reason ? ` · ${reason}` : ''})`,
+    summary: (before, after) => {
+      if (after === before) return '';
+      const hp = after.hp.current !== before.hp.current ? `, HP ${before.hp.current} → ${after.hp.current}` : '';
+      return `HP max ${before.hp.max} → ${after.hp.max}${hp} (${spec.name.replace(/\s+/g, ' ').trim()} · ${hpMaxEndsText(spec.ends)}${tail(before, after, reason)})`;
+    },
     apply: (c) => adjustHpMax(c, spec),
   };
 }
 
-/** For the DM: an adjustment this call made that only the DM ends (no game clock ends Heroes' Feast). */
+/**
+ * For the DM: an adjustment this call made that only the DM ends (no game clock ends Heroes' Feast). A reduction a curse
+ * or poison only keeps from returning at a Long Rest (SRD 5.2.1 Mummy, Death Dog: "doesn't return to normal when
+ * finishing a Long Rest") returns at the next one once the cause ends, so it switches to ending there.
+ */
 function untilEndedLines(before: Character, after: Character): string[] {
-  const had = new Set(hpMaxAdjustments(before).map((a) => `${nameKey(a.name)}|${a.ends}`));
+  const had = new Set(hpMaxAdjustments(before).map(adjustmentKey));
   return hpMaxAdjustments(after)
-    .filter((a) => a.ends === 'when-ended' && !had.has(`${nameKey(a.name)}|${a.ends}`))
-    .map(
-      (a) =>
-        `${a.name} ${formatModifier(a.amount)} stays until you end it: update_character hp_max_end ["${a.name}"] when its time runs out or its cause ends (the status line keeps it in view).`,
-    );
+    .filter((a) => a.ends === 'when-ended' && !had.has(adjustmentKey(a)))
+    .map((a) => {
+      const end = `update_character hp_max_end ["${a.name}"]`;
+      if (a.amount > 0) return `${a.name} ${formatModifier(a.amount)} stays until you end it: ${end} when its time runs out or its cause ends (the status line keeps it in view).`;
+      const toRest = `${end} with hp_max {"name": "${a.name}", "change": ${a.amount}, "ends": "long-rest"} in one call`;
+      return `${a.name} ${formatModifier(a.amount)} stays until you end it (the status line keeps it in view): ${end} when its cause ends. If the cause only kept a Long Rest from restoring it (a Mummy's curse, a Death Dog's poison), it returns at the next Long Rest once the cause ends: then switch it with ${toRest}.`;
+    });
 }
 
 // -- links to the rules index and builder data (structured imports) ----------
@@ -1060,8 +1087,11 @@ async function longRest(ctx: ToolContext, reason?: string): Promise<ToolOutcome>
   await logTool(ctx, 'take_rest', 'rest', summary, { detail: [reason, ...eventLines(change.events)].filter(Boolean).join('\n') });
   // For the DM only: what the rest didn't end, and nothing else will.
   const kept = died ? [] : hpMaxAdjustments(change.character).filter((a) => a.ends === 'when-ended');
+  const curse = kept.some((a) => a.amount < 0)
+    ? ' A reduction whose cause only kept a Long Rest from restoring it (a Mummy\'s curse, a Death Dog\'s poison) returns at the next Long Rest once the cause ends: then switch it to end there (hp_max_end with an hp_max of the same name, change and ends "long-rest", in one call).'
+    : '';
   const keptLine = kept.length
-    ? [`Still in effect after the rest: ${kept.map((a) => `${a.name} ${formatModifier(a.amount)} (until ended)`).join(', ')}. End each with update_character hp_max_end when its time runs out or its cause ends.`]
+    ? [`Still in effect after the rest: ${kept.map((a) => `${a.name} ${formatModifier(a.amount)} (until ended)`).join(', ')}. End each with update_character hp_max_end when its time runs out or its cause ends.${curse}`]
     : [];
   return ok([summary, ...eventLines(change.events), ...keptLine, `Status: ${characterStatusLine(change.character)}`].join('\n'));
 }

@@ -436,7 +436,7 @@ describe('update_character', () => {
     const before = h.s().log.length;
     await h.run('update_character', { hp: { amount: 2, kind: 'damage' }, hp_max: { name: 'Aid', change: 5, ends: 'long-rest' }, speed: 25 });
     const summaries = h.s().log.slice(before).map((e) => ('summary' in e ? e.summary : ''));
-    expect(summaries).toEqual(['HP 12 → 10 (2)', 'HP max 17 → 22 (Aid +5 · until a Long Rest)', 'Speed 30 ft. → 25 ft']);
+    expect(summaries).toEqual(['HP 12 → 10 (2)', 'HP max 17 → 22, HP 10 → 15 (Aid · until a Long Rest)', 'Speed 30 ft. → 25 ft']);
   });
 
   it('names the field when hp_max is incomplete or has an unknown key', async () => {

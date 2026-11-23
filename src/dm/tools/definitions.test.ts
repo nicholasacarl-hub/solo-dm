@@ -56,10 +56,25 @@ describe('the static tools array (append-only: it never changes during a session
 
 describe('the Hit Point maximum fields explain themselves to sessions whose frozen prompt never mentions them', () => {
   it('update_character and take_rest say how the maximum changes and ends', () => {
-    for (const phrase of ['hp_max', 'hp.drain', 'hp_max_end', 'never temporary HP', 'initiative_change', 'never the total', 'a maximum of 0 kills']) {
+    for (const phrase of [
+      'hp_max',
+      'hp.drain',
+      'hp_max_end',
+      'never temporary HP',
+      'initiative_change',
+      'never the total',
+      'a maximum of 0 kills',
+      // srd:spell:greater-restoration: "Any reduction to the target's Hit Point maximum".
+      'Greater Restoration ends every reduction in effect',
+      'in one call reductions end before raises',
+      // srd:spell:aura-of-life: "your Hit Point maximums can't be reduced".
+      "inside Aura of Life the maximum can't be reduced",
+    ]) {
       expect(TOOL_DESCRIPTIONS.update_character).toContain(phrase);
     }
     expect(TOOL_DESCRIPTIONS.take_rest).toContain('a reduced HP maximum returns to normal');
+    // srd:spell:aid ("Duration: 8 hours") ends before srd:rule:long-rest finishes.
+    expect(TOOL_DESCRIPTIONS.take_rest).toContain("raises that end at a Long Rest end first, since Aid's 8 hours are over before the rest finishes");
   });
 });
 

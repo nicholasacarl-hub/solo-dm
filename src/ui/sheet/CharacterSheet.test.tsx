@@ -260,6 +260,37 @@ describe('CharacterSheet — Hit Point maximum', () => {
     expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
   });
 
+  it('keeps the preview by Apply, outside the form a phone scrolls, with a hint until the change is complete', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const dialog = await openDialog(user);
+    const hint = within(dialog).getByText('Give an amount, a name and when it ends to see the change.');
+    expect(dialog.querySelector('form')?.contains(hint)).toBe(false);
+    expect(hint.parentElement?.contains(within(dialog).getByRole('button', { name: 'Apply' }))).toBe(true);
+  });
+
+  it('after an × ends its chip, focus goes to the × now in its place, else the pencil, never the page', async () => {
+    resetFakeGame({
+      campaign: sampleCampaign(),
+      character: sampleCharacter({
+        hp: { max: 19, current: 12, temp: 0 },
+        hpMaxAdjustments: [
+          { name: 'Aid', amount: 5, ends: 'long-rest' },
+          { name: 'Life Drain', amount: -3, ends: 'long-rest' },
+        ],
+      }),
+    });
+    const user = userEvent.setup();
+    render(<Harness />);
+    const chips = () => screen.getByRole('list', { name: 'Hit point maximum adjustments' });
+    await user.click(within(chips()).getByRole('button', { name: 'End Aid (+5 hit point maximum)' }));
+    expect(screen.getByLabelText('12 of 14 hit points')).toBeInTheDocument();
+    expect(document.activeElement).toBe(within(chips()).getByRole('button', { name: 'End Life Drain (\u22123 hit point maximum)' }));
+    await user.keyboard('{Enter}');
+    expect(screen.getByLabelText('12 of 17 hit points')).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Adjust hit point maximum' }));
+  });
+
   it('shows chips on a read-only sheet, with no pencil and no ×; a lasting chip never has one', () => {
     resetFakeGame({
       campaign: sampleCampaign(),
@@ -275,6 +306,8 @@ describe('CharacterSheet — Hit Point maximum', () => {
     expect(screen.queryByRole('button', { name: 'Adjust hit point maximum' })).toBeNull();
     const chips = screen.getByRole('list', { name: 'Hit point maximum adjustments' });
     expect(within(chips).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Aid +5, until a Long Rest', 'Tough (missed at 1st level) +5, lasting']);
+    // When each ends is shown, not only told to a screen reader or a mouse's tooltip.
+    expect(chips.querySelector('.sr-only')).toBeNull();
     expect(within(chips).queryByRole('button')).toBeNull();
     cleanup();
     render(<Harness />);

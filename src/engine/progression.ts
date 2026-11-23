@@ -625,16 +625,18 @@ export function applyShortRest(c: Character): { character: Character; events: Ga
  * Long rest (2024): regain all HP and all spent hit dice (SRD 5.2.1), all spell slots, features that
  * recharge on short/long rest or dawn; exhaustion −1; death saves reset; temp HP removed.
  * Also: Concentration ends (you sleep), and Resourceful (Human) grants Heroic Inspiration.
- * Like the SRD, it needs at least 1 HP to start. First the Hit Point maximum adjustments that end at a Long Rest end
- * (SRD 5.2.1 Long Rest: "If your Hit Point maximum was reduced, it returns to normal"; Aid's 8 hours are over), reductions
- * before raises, so HP refill to the maximum restored.
+ * Like the SRD, it needs at least 1 HP to start. First the Hit Point maximum adjustments that end at a Long Rest end, so
+ * HP refill to the maximum restored. Raises go first: Aid's 8 hours are over before the rest finishes (casting it would
+ * have stopped the rest: "Casting a spell other than a cantrip"), so if a drain held the maximum within reach of 0, Aid
+ * ending kills before the rest's benefits arrive, and the reductions stay. Then the reductions end (SRD 5.2.1 Long
+ * Rest: "When you finish the rest … If your Hit Point maximum was reduced, it returns to normal").
  */
 export function applyLongRest(start: Character): { character: Character; events: GameEvent[] } {
   if (start.deathSaves.dead) return { character: start, events: [warning("The dead don't rest.")] };
   if (start.hp.current < 1) return { character: start, events: [warning('A Long Rest needs at least 1 HP — stabilize and heal first.')] };
-  const ended = endHpMaxAdjustmentsWhere(start, (a) => a.ends === 'long-rest');
-  // Only Aid ending under a curse the rest doesn't lift can leave a maximum of 0.
-  if (ended.character.deathSaves.dead) return ended;
+  const raises = endHpMaxAdjustmentsWhere(start, (a) => a.ends === 'long-rest' && a.amount > 0);
+  if (raises.character.deathSaves.dead) return raises;
+  const ended = endHpMaxAdjustmentsWhere(raises.character, (a) => a.ends === 'long-rest');
   const c = ended.character;
 
   const regained: string[] = [];
@@ -669,7 +671,7 @@ export function applyLongRest(start: Character): { character: Character; events:
   if (exhaustion !== c.exhaustion) parts.push(`Exhaustion ${c.exhaustion} → ${exhaustion}`);
   if (sc?.concentratingOn) parts.push(`Concentration on ${sc.concentratingOn} ended`);
   if (resourceful) parts.push('gained Heroic Inspiration (Resourceful)');
-  return { character, events: [...ended.events, gameEvent('rest', `Long rest: ${parts.join('; ')}.`)] };
+  return { character, events: [...raises.events, ...ended.events, gameEvent('rest', `Long rest: ${parts.join('; ')}.`)] };
 }
 
 /** XP summary for prompts: "900 XP (1,800 to level 4)". */

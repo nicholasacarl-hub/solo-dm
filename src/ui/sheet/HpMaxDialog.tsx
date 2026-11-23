@@ -43,13 +43,15 @@ export function HpMaxDialog({
   const applies = !!preview?.notice;
   const dies = applies && preview.character.deathSaves.dead;
   const current = preview && preview.character.hp.current !== c.hp.current ? ` · HP ${c.hp.current} → ${preview.character.hp.current}` : '';
-  const previewText = !preview
+  const previewText = dead
     ? ''
-    : !applies
-      ? (preview.warning ?? '')
-      : dies
-        ? 'Your hero dies: a Hit Point maximum of 0 is death.'
-        : `Maximum ${c.hp.max} → ${preview.character.hp.max}${current}`;
+    : !preview
+      ? 'Give an amount, a name and when it ends to see the change.'
+      : !applies
+        ? (preview.warning ?? '')
+        : dies
+          ? 'Your hero dies: a Hit Point maximum of 0 is death.'
+          : `Maximum ${c.hp.max} → ${preview.character.hp.max}${current}`;
 
   const close = () => {
     setDirection('raise');
@@ -73,14 +75,20 @@ export function HpMaxDialog({
       title="Hit point maximum"
       description="For an effect such as Aid or Life Drain, or a lasting change your DM agreed to. Your DM is told."
       footer={
-        <>
-          <Button variant="ghost" onClick={close}>
-            Cancel
-          </Button>
-          <Button type="submit" form={`${id}-form`} variant={dies ? 'danger' : 'primary'} disabled={!applies}>
-            {dies ? 'Apply — your hero dies' : 'Apply'}
-          </Button>
-        </>
+        // The preview sits by Apply, in view however far the form scrolls on a phone.
+        <div className="flex w-full flex-col gap-2">
+          <p aria-live="polite" className={cn('min-h-5 text-sm tabular-nums', dies || (preview && !applies) ? 'text-danger' : 'text-muted')}>
+            {previewText}
+          </p>
+          <div className="flex justify-end gap-2">
+            <Button variant="ghost" onClick={close}>
+              Cancel
+            </Button>
+            <Button type="submit" form={`${id}-form`} variant={dies ? 'danger' : 'primary'} disabled={!applies}>
+              {dies ? 'Apply — your hero dies' : 'Apply'}
+            </Button>
+          </div>
+        </div>
       }
     >
       <form id={`${id}-form`} onSubmit={submit} className="flex flex-col gap-4">
@@ -128,9 +136,6 @@ export function HpMaxDialog({
             ))}
           </fieldset>
         </fieldset>
-        <p aria-live="polite" className={cn('min-h-5 text-sm tabular-nums', dies || (preview && !applies) ? 'text-danger' : 'text-muted')}>
-          {previewText}
-        </p>
       </form>
     </Dialog>
   );
