@@ -201,7 +201,7 @@ function ItemRow({ item, editable, onEdit, catalog }: { item: InventoryItem; edi
             onClick={() => (confirming ? onEdit((c) => removeItemChange(c, item.id, catalog)) : setConfirming(true))}
             className={cn(
               'grid h-8 shrink-0 place-items-center rounded-lg px-2 text-xs font-medium',
-              confirming ? 'bg-danger text-white' : 'text-faint hover:bg-danger-soft hover:text-danger',
+              confirming ? 'bg-danger text-danger-ink' : 'text-faint hover:bg-danger-soft hover:text-danger',
             )}
           >
             {confirming ? 'Remove?' : <Trash2 className="size-4" aria-hidden />}

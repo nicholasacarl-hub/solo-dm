@@ -47,8 +47,9 @@ function contrast(a: Rgb, b: Rgb): number {
 const over = (top: Rgb, under: Rgb, alpha: number): Rgb => top.map((c, i) => c * alpha + under[i] * (1 - alpha));
 
 /**
- * The solid fills that carry text: the Button and ButtonLink variants (src/ui/components). `hover` is another fill
- * under the same ink; `hoverOpacity` fades the whole button, text and fill alike, over the surface it sits on.
+ * The solid fills that carry text or icons: the Button and ButtonLink variants (src/ui/components), the sheet's Heal
+ * button, the inventory's "Remove?" and the builder's done steps. `hover` is another fill under the same ink;
+ * `hoverOpacity` fades the whole button, text and fill alike, over the surface it sits on.
  */
 interface Fill {
   fill: string;
@@ -59,6 +60,8 @@ interface Fill {
 const FILLS: Fill[] = [
   { fill: 'accent', ink: 'accent-ink', hover: 'accent-hover' }, // primary: bg-accent text-accent-ink hover:bg-accent-hover
   { fill: 'arcane', ink: 'arcane-ink', hoverOpacity: 0.9 }, // arcane: bg-arcane text-arcane-ink hover:opacity-90
+  { fill: 'danger', ink: 'danger-ink', hoverOpacity: 0.9 }, // danger (hover:opacity-90), the inventory's "Remove?"
+  { fill: 'success', ink: 'success-ink', hoverOpacity: 0.9 }, // Heal (hover:opacity-90), the builder's done steps
 ];
 /** The surfaces a button sits on. */
 const SURFACES = ['bg', 'surface', 'surface-2', 'surface-3'];

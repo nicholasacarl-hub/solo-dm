@@ -100,7 +100,7 @@ function HpBlock({ character: c, editable, onEdit }: Omit<VitalsProps, 'onRoll'>
             type="button"
             disabled={!valid}
             onClick={() => apply(healChange)}
-            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-success px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-lg bg-success px-3 text-sm font-medium text-success-ink transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <HeartPulse className="size-3.5 @max-sm:hidden" aria-hidden />
             Heal

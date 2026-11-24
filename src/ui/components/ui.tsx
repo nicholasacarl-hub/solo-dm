@@ -28,7 +28,7 @@ const buttonVariants: Record<ButtonVariant, string> = {
   primary: 'bg-accent text-accent-ink hover:bg-accent-hover shadow-sm',
   secondary: 'bg-surface-2 text-text hover:bg-surface-3 border border-border',
   ghost: 'text-muted hover:text-text hover:bg-surface-2',
-  danger: 'bg-danger text-white hover:opacity-90',
+  danger: 'bg-danger text-danger-ink hover:opacity-90',
   arcane: 'bg-arcane text-arcane-ink hover:opacity-90',
 };
 
