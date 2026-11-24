@@ -165,8 +165,13 @@ export interface GameStoreActions {
   /**
    * Remove transcript messages with seq > `seq` (only ever trims from the END — used for
    * regenerate / cancelled turns; never edit the middle of a transcript).
+   *
+   * `putBack`: the notices of a turn the DM never answered, set aside by this trim. They go back at the front of the
+   * queue, in their order, ahead of any queued since, so the DM hears every note in the order it happened; none is
+   * dropped as a retry (each was queued once already). The trim and the campaign record holding them are saved in one
+   * write, so a tab closed in between can't leave them nowhere.
    */
-  truncateTranscriptAfter(seq: number): Promise<void>;
+  truncateTranscriptAfter(seq: number, opts?: { putBack?: readonly string[] }): Promise<void>;
 
   /** Append a display-log entry (assigns id, seq, campaignId, sessionId, createdAt) and persist it. */
   appendLog(entry: NewLogEntry): Promise<LogEntry>;
@@ -237,12 +242,6 @@ export interface GameStoreActions {
    * normally the transcript append that delivers them — so a failed append can't lose them.
    */
   takeDmNotices(): string[];
-  /**
-   * Undo takeDmNotices for a turn the DM never answered (set aside, trimmed from the transcript): its notices go back
-   * at the front of the queue, in their order, ahead of any queued since, so the DM hears every note in the order it
-   * happened. None is dropped as a retry: each was queued once already. Saved with the campaign row.
-   */
-  putBackDmNotices(notices: readonly string[]): void;
 }
 
 export type GameStore = GameStoreState & GameStoreActions;
@@ -349,12 +348,17 @@ function noticesSaved(campaignId: string, stored: string[], queuedElsewhere: rea
   adoptNotices(campaignId, queuedElsewhere);
 }
 
-/** Save the campaign record from a write task, keeping (and picking up) notices queued elsewhere. */
-async function saveCampaign(campaign: Campaign): Promise<void> {
+/**
+ * Save the campaign record from a write task, keeping (and picking up) notices queued elsewhere. With `trim`, the
+ * session's transcript after that seq is deleted in the same transaction (storage.trimTranscriptKeepingNotices).
+ */
+async function saveCampaign(campaign: Campaign, trim?: { sessionId: string; after: number }): Promise<void> {
   const own = campaign.pendingDmNotices ?? [];
   // A campaign this tab never loaded: what it holds is all it has seen.
   const seen = storedNotices.get(campaign.id) ?? own;
-  const stored = await storage.putCampaignKeepingNotices(campaign, seen);
+  const stored = trim
+    ? await storage.trimTranscriptKeepingNotices(trim.sessionId, trim.after, campaign, seen)
+    : await storage.putCampaignKeepingNotices(campaign, seen);
   // Stored beyond this tab's own: the ones queued elsewhere since it last looked.
   noticesSaved(campaign.id, stored, noticesAddedSince(stored, own));
 }
@@ -895,19 +899,24 @@ export const useGame = create<GameStore>()((set, get) => ({
     return messages;
   },
 
-  async truncateTranscriptAfter(seq) {
+  async truncateTranscriptAfter(seq, opts = {}) {
     const s = get();
     const campaign = requireCampaign(s.campaign);
     const session = s.activeSession;
     if (!session) throw new Error('No active session: there is no DM transcript to trim.');
     const kept = s.transcript.filter((m) => m.seq <= seq);
     const changed = kept.length !== s.transcript.length;
-    const touched = changed ? touch(campaign) : campaign;
-    if (changed) set({ transcript: kept, campaign: touched });
-    await persist(campaign.id, 'the DM transcript', async () => {
-      await storage.deleteTranscriptAfter(session.id, seq);
-      if (changed) await saveCampaign(touched);
-    });
+    const back = (opts.putBack ?? []).map((n) => n.trim()).filter(Boolean);
+    if (!changed && back.length === 0) {
+      await persist(campaign.id, 'the DM transcript', () => storage.deleteTranscriptAfter(session.id, seq));
+      return;
+    }
+    // A set-aside turn's notices go back at the front of the queue, ahead of any queued since.
+    const pendingDmNotices = back.length > 0 ? [...back, ...s.pendingDmNotices] : s.pendingDmNotices;
+    const touched: Campaign = { ...touch(campaign), ...(back.length > 0 && { pendingDmNotices }) };
+    set({ transcript: kept, campaign: touched, ...(back.length > 0 && { pendingDmNotices }) });
+    // One write for the trim and the record (which holds those notices again): a tab closed in between can't lose them.
+    await persist(campaign.id, 'the DM transcript', () => saveCampaign(touched, { sessionId: session.id, after: seq }));
   },
 
   async appendLog(entry) {
@@ -1264,22 +1273,6 @@ export const useGame = create<GameStore>()((set, get) => ({
     // clears the stored copy, so a failed append can't lose them.
     set({ pendingDmNotices: [], ...(s.campaign && { campaign: { ...s.campaign, pendingDmNotices: [] } }) });
     return notices;
-  },
-
-  putBackDmNotices(notices) {
-    const back = notices.map((n) => n.trim()).filter(Boolean);
-    const s = get();
-    if (back.length === 0) return;
-    const pendingDmNotices = [...back, ...s.pendingDmNotices];
-    if (!s.campaign) {
-      set({ pendingDmNotices });
-      return;
-    }
-    // A save of the whole row, not a merge: this tab's own notices are written in their new order, then any queued
-    // elsewhere. A failed save is logged; the notices stay in memory and are saved with the next write.
-    const touched: Campaign = { ...touch(s.campaign), pendingDmNotices };
-    set({ pendingDmNotices, campaign: touched });
-    void persist(touched.id, 'the notes for the DM', () => saveCampaign(touched)).catch(noop);
   },
 
   async restoreImportedText() {

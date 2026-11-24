@@ -71,6 +71,18 @@ export function putCampaignKeepingNotices(c: Campaign, seen: readonly string[]):
 }
 
 /**
+ * deleteTranscriptAfter and putCampaignKeepingNotices in one transaction: a turn trimmed from the end of the
+ * transcript and the campaign record that holds its notices again (put back for the next turn) are stored together or
+ * not at all, so a tab that closes in between can't leave the notices nowhere. Returns the notices now stored.
+ */
+export function trimTranscriptKeepingNotices(sessionId: string, seq: number, c: Campaign, seen: readonly string[]): Promise<string[]> {
+  return db.transaction('rw', [db.transcript, db.campaigns], async () => {
+    await deleteTranscriptAfter(sessionId, seq);
+    return putCampaignKeepingNotices(c, seen);
+  });
+}
+
+/**
  * Add a note for the DM to a stored campaign, bumping its updatedAt to at least `updatedAt`. A note that repeats the
  * newest one stored is a retry and isn't added again; any other repeat is a new note (a change made, undone and made
  * again). With `once`, a note stored anywhere isn't added again either: for a note that states a fact the app finds

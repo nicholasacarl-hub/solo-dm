@@ -1029,19 +1029,6 @@ describe('interactions and DM notices', () => {
     expect(game().takeDmNotices()).toEqual(['Player gained Heroic Inspiration', 'Player spent Heroic Inspiration', 'Player gained Heroic Inspiration']);
   });
 
-  it('puts taken notices back ahead of those queued since, in order, dropping none as a retry', () => {
-    const roll = 'The player rolled Stealth on their own: 15 (12 + 3).';
-    game().queueDmNotice(roll);
-    const taken = game().takeDmNotices();
-    // After the turn that took it failed: the same roll again (a second roll), then another change.
-    game().queueDmNotice(roll);
-    game().queueDmNotice('Player spent Heroic Inspiration');
-    game().putBackDmNotices(taken);
-    expect(game().takeDmNotices()).toEqual([roll, roll, 'Player spent Heroic Inspiration']);
-    game().putBackDmNotices([' ', '']);
-    expect(game().pendingDmNotices).toEqual([]);
-  });
-
   it('setDmStatus merges', () => {
     game().setDmStatus({ phase: 'thinking', activity: 'The DM is thinking…' });
     game().setDmStatus({ activity: 'Rolling for the goblins…' });
@@ -1215,14 +1202,54 @@ describe('DM notices are saved with the campaign', () => {
     expect(await stored()).toEqual([]);
     game().queueDmNotice(spent);
     // The player's next message sets that turn aside: trimmed from the end, its notices put back.
-    await game().truncateTranscriptAfter(turn.seq - 1);
-    game().putBackDmNotices(taken);
+    await game().truncateTranscriptAfter(turn.seq - 1, { putBack: taken });
     expect(game().pendingDmNotices).toEqual([gained, spent]);
-    await whenPersisted('a-camp');
     expect(await stored()).toEqual([gained, spent]);
     game().unloadCampaign();
     await game().loadCampaign('a-camp');
     expect(game().takeDmNotices()).toEqual([gained, spent]);
+  });
+
+  it('go back with none dropped as a retry: the same roll before and after the failed turn is two rolls', async () => {
+    await loadSeeded('a');
+    const roll = 'The player rolled Stealth on their own: 15 (12 + 3).';
+    game().queueDmNotice(roll);
+    const taken = game().takeDmNotices();
+    const [turn] = await game().appendTranscript([{ role: 'user', content: 'turn' }]);
+    game().queueDmNotice(roll);
+    await game().truncateTranscriptAfter(turn.seq - 1, { putBack: [...taken, ' '] });
+    expect(game().pendingDmNotices).toEqual([roll, roll]);
+    expect(await stored()).toEqual([roll, roll]);
+  });
+
+  it('keep a set-aside turn when the write that trims it fails halfway (as if the tab closed), to be set aside again', async () => {
+    await loadSeeded('a');
+    game().queueDmNotice(gained);
+    await whenPersisted('a-camp');
+    // A turn takes the notice and is saved with it, then its request fails; the player spends it from the sheet.
+    const taken = game().takeDmNotices();
+    const notes = `Notes from the app since your last turn:\n- ${gained}`;
+    const [turn] = await game().appendTranscript([
+      { role: 'user', content: 'turn' },
+      { role: 'system', content: notes },
+    ]);
+    game().queueDmNotice(spent);
+    await whenPersisted('a-camp');
+    // Setting the turn aside fails after the trim, at the campaign record.
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(db.campaigns, 'put').mockRejectedValueOnce(new Error('The tab closed.'));
+    await expect(game().truncateTranscriptAfter(turn.seq - 1, { putBack: taken })).rejects.toThrow(/The tab closed/);
+    // Storage holds none of that write: the turn and its notes are still in the transcript, and the record holds only
+    // what was queued since. Nothing is lost.
+    const tail = async () => (await storage.loadCampaignRecords('a-camp'))?.transcript.filter((m) => m.seq >= turn.seq).map((m) => m.param);
+    expect(await tail()).toEqual([{ role: 'user', content: 'turn' }, { role: 'system', content: notes }]);
+    expect(await stored()).toEqual([spent]);
+    // Reopened, the turn is still unanswered: setting it aside again stores both notices, in order.
+    game().unloadCampaign();
+    await game().loadCampaign('a-camp');
+    await game().truncateTranscriptAfter(turn.seq - 1, { putBack: taken });
+    expect(await tail()).toEqual([]);
+    expect(await stored()).toEqual([gained, spent]);
   });
 
   it('go back ahead of those queued since, once, when the append that took them failed (the record kept them)', async () => {
@@ -1238,9 +1265,7 @@ describe('DM notices are saved with the campaign', () => {
     expect(await stored()).toEqual([gained, spent]);
     const turn = game().transcript.at(-1);
     if (!turn) throw new Error('the unsaved turn stays in memory');
-    await game().truncateTranscriptAfter(turn.seq - 1);
-    game().putBackDmNotices(taken);
-    await whenPersisted('a-camp');
+    await game().truncateTranscriptAfter(turn.seq - 1, { putBack: taken });
     expect(game().pendingDmNotices).toEqual([gained, spent]);
     expect(await stored()).toEqual([gained, spent]);
   });
