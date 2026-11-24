@@ -30,6 +30,14 @@ export interface NewCampaignInput {
   coverColor?: string;
 }
 
+/** A change to a session's DM transcript, saved with its campaign record: messages trimmed from the end, then added. */
+export interface TranscriptChange {
+  /** Delete the session's messages with seq > `seq`. */
+  trimAfter?: { sessionId: string; seq: number };
+  /** Then store these. */
+  append?: TranscriptMessage[];
+}
+
 export interface CampaignRecords {
   campaign: Campaign;
   character: Character | null;

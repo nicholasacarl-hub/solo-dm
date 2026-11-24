@@ -708,7 +708,12 @@ describe('moves made after a failed request or a reply reach the DM with Retry a
     const [notices] = systemBlocks(h.client.requests[0].messages[1]);
     expect(notices).toContain('The player renamed the hero’s sword.');
     expect((await moveToC7(h)).ok).toBe(true);
+    const truncate = vi.spyOn(h.s(), 'truncateTranscriptAfter');
+    const append = vi.spyOn(h.s(), 'appendTranscript');
     await h.controller.retry();
+    // One store write folds it in (trimmed and appended together), so a tab closed in between can't lose the notices.
+    expect(truncate).not.toHaveBeenCalled();
+    expect(append).toHaveBeenCalledWith([expect.objectContaining({ role: 'system' })], { trimAfter: h.s().transcript[0].seq });
     const messages = h.client.requests[1].messages;
     expect(messages.map((m) => m.role)).toEqual(['user', 'system']);
     expect(messages[0]).toEqual(h.client.requests[0].messages[0]);

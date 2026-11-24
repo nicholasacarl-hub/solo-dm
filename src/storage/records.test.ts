@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CompendiumEntry, LibrarySource } from '@/types';
+import type { CompendiumEntry, LibrarySource, TranscriptMessage } from '@/types';
 import { sampleCombat } from '@/test/fixtures';
 import {
   addPendingDmNotice,
@@ -17,7 +17,7 @@ import {
   putHomebrew,
   saveLibrarySource,
   setLibrarySourceEnabled,
-  trimTranscriptKeepingNotices,
+  writeTranscriptKeepingNotices,
 } from '@/storage';
 import { db } from './db';
 import { resetDatabase, seedCampaign, sharedHomebrew } from './testData';
@@ -201,21 +201,46 @@ describe('DM notices on the campaign record', () => {
     expect(await addPendingDmNotice('a-camp', 'Top-up.', undefined, { once: true })).toEqual([gained, spent, gained, 'Top-up.']);
   });
 
-  it('trimTranscriptKeepingNotices trims the transcript and saves the record in one write: both, or neither', async () => {
+  const ids = async (sessionId: string) => (await getTranscript(sessionId)).map((m) => m.id);
+
+  it('writeTranscriptKeepingNotices trims, adds and saves the record in one write: all of it, or none', async () => {
     const { campaign } = await seedCampaign('a');
-    const seqs = async (sessionId: string) => (await getTranscript(sessionId)).map((m) => m.seq);
-    const setAside = { ...campaign, pendingDmNotices: ['Put back.'] };
-    // The record's write fails after the trim, inside the same transaction (as if the tab closed): nothing is stored.
+    const folded: TranscriptMessage = { id: 'a-fold', sessionId: 'a-sess-2', seq: 2, param: { role: 'system', content: 'Folded.' }, createdAt: 2 };
+    const change = { trimAfter: { sessionId: 'a-sess-2', seq: 1 }, append: [folded] };
+    const record = { ...campaign, pendingDmNotices: ['Put back.'] };
+    // The record's write fails after the trim and the add, inside the same transaction (as if the tab closed).
     const put = vi.spyOn(db.campaigns, 'put').mockRejectedValueOnce(new Error('The tab closed.'));
-    await expect(trimTranscriptKeepingNotices('a-sess-2', 1, setAside, [])).rejects.toThrow('The tab closed.');
+    await expect(writeTranscriptKeepingNotices(change, record, [])).rejects.toThrow('The tab closed.');
     expect(put).toHaveBeenCalledTimes(1);
-    expect(await seqs('a-sess-2')).toEqual([1, 2, 3]);
+    expect(await ids('a-sess-2')).toEqual(['a-t3', 'a-t4', 'a-t5']);
     expect((await getCampaign('a-camp'))?.pendingDmNotices).toBeUndefined();
-    // Again, and it lands: the trim and the record together; the other session's transcript is untouched.
-    expect(await trimTranscriptKeepingNotices('a-sess-2', 1, setAside, [])).toEqual(['Put back.']);
-    expect(await seqs('a-sess-2')).toEqual([1]);
-    expect(await seqs('a-sess-1')).toEqual([1, 2]);
+    // Again, and it lands: all of it together; the other session's transcript is untouched.
+    expect(await writeTranscriptKeepingNotices(change, record, [])).toEqual(['Put back.']);
+    expect(await ids('a-sess-2')).toEqual(['a-t3', 'a-fold']);
+    expect(await ids('a-sess-1')).toEqual(['a-t1', 'a-t2']);
     expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual(['Put back.']);
+  });
+
+  it('writeTranscriptKeepingNotices adds a turn and lets go of the notices it delivers together, or not at all', async () => {
+    const { campaign } = await seedCampaign('a');
+    await addPendingDmNotice('a-camp', 'Delivered with the turn.');
+    const turn: TranscriptMessage = { id: 'a-turn', sessionId: 'a-sess-2', seq: 4, param: { role: 'user', content: 'Next turn.' }, createdAt: 4 };
+    const delivered = { ...campaign, pendingDmNotices: [] };
+    const seen = ['Delivered with the turn.'];
+    // A failure storing the turn's messages leaves the record as it was: the notice still waits, once.
+    vi.spyOn(db.transcript, 'bulkPut').mockRejectedValueOnce(new Error('QuotaExceededError'));
+    await expect(writeTranscriptKeepingNotices({ append: [turn] }, delivered, seen)).rejects.toThrow('QuotaExceededError');
+    expect(await ids('a-sess-2')).toEqual(['a-t3', 'a-t4', 'a-t5']);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual(['Delivered with the turn.']);
+    // So does one at the record's write, after the turn's messages: the turn isn't stored either.
+    vi.spyOn(db.campaigns, 'put').mockRejectedValueOnce(new Error('The tab closed.'));
+    await expect(writeTranscriptKeepingNotices({ append: [turn] }, delivered, seen)).rejects.toThrow('The tab closed.');
+    expect(await ids('a-sess-2')).toEqual(['a-t3', 'a-t4', 'a-t5']);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual(['Delivered with the turn.']);
+    // Then it lands: the turn stored, and the record lets go of the notice it delivers.
+    expect(await writeTranscriptKeepingNotices({ append: [turn] }, delivered, seen)).toEqual([]);
+    expect(await ids('a-sess-2')).toEqual(['a-t3', 'a-t4', 'a-t5', 'a-turn']);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual([]);
   });
 
   it('putCampaignKeepingNotices keeps a repeat queued elsewhere, in order', async () => {

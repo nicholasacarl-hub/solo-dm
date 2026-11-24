@@ -53,6 +53,7 @@ import type {
   NewCampaignInput,
   RemoteSave,
   SyncReport,
+  TranscriptChange,
 } from './types';
 
 export type { ExportReport } from './redact';
@@ -64,6 +65,7 @@ export type {
   NewCampaignInput,
   RemoteSave,
   SyncReport,
+  TranscriptChange,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -103,11 +105,11 @@ export const putCampaign: (c: Campaign) => Promise<void> = records.putCampaign;
 export const putCampaignKeepingNotices: (c: Campaign, seen: readonly string[]) => Promise<string[]> =
   records.putCampaignKeepingNotices;
 /**
- * deleteTranscriptAfter (seq > `seq`) and putCampaignKeepingNotices in one transaction: both are stored or neither.
- * Returns the notices now stored.
+ * A transcript change (trim from the end, then add) and putCampaignKeepingNotices in one transaction: all of it is
+ * stored or none of it. The game store writes the transcript only this way. Returns the notices now stored.
  */
-export const trimTranscriptKeepingNotices: (sessionId: string, seq: number, c: Campaign, seen: readonly string[]) => Promise<string[]> =
-  records.trimTranscriptKeepingNotices;
+export const writeTranscriptKeepingNotices: (change: TranscriptChange, c: Campaign, seen: readonly string[]) => Promise<string[]> =
+  records.writeTranscriptKeepingNotices;
 /**
  * Add a DM notice to a stored campaign (bumps updatedAt), unless it repeats the newest one stored (a retry), or, with
  * `once`, any stored one. Resolves the stored notices, or null if it doesn't exist.
@@ -122,8 +124,7 @@ export const putCharacter: (c: Character) => Promise<void> = records.putCharacte
 /** Remove one character record (the game store calls it when a campaign's character is replaced). */
 export const deleteCharacterRecord: (id: string) => Promise<void> = records.deleteCharacterRecord;
 export const putSession: (s: Session) => Promise<void> = records.putSession;
-export const putTranscript: (messages: TranscriptMessage[]) => Promise<void> = records.putTranscript;
-/** Deletes only messages with seq > `seq`. */
+/** Deletes only messages with seq > `seq`. Adding messages, or a trim saved with the record: writeTranscriptKeepingNotices. */
 export const deleteTranscriptAfter: (sessionId: string, seq: number) => Promise<void> = records.deleteTranscriptAfter;
 /** Ordered by seq. */
 export const getTranscript: (sessionId: string) => Promise<TranscriptMessage[]> = records.getTranscript;

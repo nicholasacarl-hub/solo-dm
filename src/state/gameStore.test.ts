@@ -30,7 +30,6 @@ vi.mock('@/storage', async (importOriginal) => {
   return {
     ...actual,
     putLog: vi.fn(actual.putLog),
-    putTranscript: vi.fn(actual.putTranscript),
     putCombat: vi.fn(actual.putCombat),
     putCharacter: vi.fn(actual.putCharacter),
     putCampaignKeepingNotices: vi.fn(actual.putCampaignKeepingNotices),
@@ -86,7 +85,7 @@ beforeEach(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   // Back to the real implementations (restoreAllMocks only undoes vi.spyOn).
-  for (const fn of [storage.putLog, storage.putTranscript, storage.putCombat, storage.putCharacter, storage.putCampaignKeepingNotices, storage.isCampaignOpenElsewhere]) {
+  for (const fn of [storage.putLog, storage.putCombat, storage.putCharacter, storage.putCampaignKeepingNotices, storage.isCampaignOpenElsewhere]) {
     vi.mocked(fn).mockReset();
   }
 });
@@ -1064,7 +1063,7 @@ describe('DM notices are saved with the campaign', () => {
     expect(await stored()).toEqual(['The player edited their HP: 12 → 17.']);
 
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.mocked(storage.putTranscript).mockRejectedValueOnce(new Error('QuotaExceededError'));
+    vi.spyOn(db.transcript, 'bulkPut').mockRejectedValueOnce(new Error('QuotaExceededError'));
     await expect(game().appendTranscript([{ role: 'user', content: 'turn' }])).rejects.toThrow(/QuotaExceededError/);
     expect(await stored()).toEqual(['The player edited their HP: 12 → 17.']);
 
@@ -1252,13 +1251,63 @@ describe('DM notices are saved with the campaign', () => {
     expect(await stored()).toEqual([gained, spent]);
   });
 
+  it('are stored in one place when the write of the turn that delivers them fails halfway (as if the tab closed)', async () => {
+    await loadSeeded('a');
+    game().queueDmNotice(gained);
+    await whenPersisted('a-camp');
+    const before = (await storage.loadCampaignRecords('a-camp'))?.transcript.map((m) => m.id);
+    // A turn takes the notice; its write fails after the turn's messages, at the record that lets go of the notice.
+    const taken = game().takeDmNotices();
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(db.campaigns, 'put').mockRejectedValueOnce(new Error('The tab closed.'));
+    const turn = game().appendTranscript([
+      { role: 'user', content: 'turn' },
+      { role: 'system', content: `Notes from the app since your last turn:\n- ${taken.join('\n- ')}` },
+    ]);
+    await expect(turn).rejects.toThrow(/The tab closed/);
+    // None of the turn is stored, and the record still holds the notice: reopened, the DM hears it once.
+    expect((await storage.loadCampaignRecords('a-camp'))?.transcript.map((m) => m.id)).toEqual(before);
+    expect(await stored()).toEqual([gained]);
+    game().unloadCampaign();
+    await game().loadCampaign('a-camp');
+    expect(game().pendingDmNotices).toEqual([gained]);
+    expect(game().transcript.filter((m) => JSON.stringify(m.param).includes(gained))).toEqual([]);
+  });
+
+  it("keep an unanswered turn's notes when folding a note into them fails halfway (as if the tab closed)", async () => {
+    await loadSeeded('a');
+    game().queueDmNotice(gained);
+    await whenPersisted('a-camp');
+    const notes = `Notes from the app since your last turn:\n- ${game().takeDmNotices().join('\n- ')}`;
+    const [turn] = await game().appendTranscript([
+      { role: 'user', content: 'turn' },
+      { role: 'system', content: notes },
+    ]);
+    // Its request fails; Retry folds a late note into the turn's notes (trimmed and added again), and that write fails
+    // after the trim and the new message, at the campaign record.
+    const folded = { role: 'system' as const, content: [{ type: 'text' as const, text: notes }, { type: 'text' as const, text: 'Late moves.' }] };
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    vi.spyOn(db.campaigns, 'put').mockRejectedValueOnce(new Error('The tab closed.'));
+    await expect(game().appendTranscript([folded], { trimAfter: turn.seq })).rejects.toThrow(/The tab closed/);
+    // The turn's notes are still stored as they were, not trimmed and lost.
+    const tail = async () => (await storage.loadCampaignRecords('a-camp'))?.transcript.filter((m) => m.seq >= turn.seq).map((m) => m.param);
+    expect(await tail()).toEqual([{ role: 'user', content: 'turn' }, { role: 'system', content: notes }]);
+    // Reopened, the fold goes through, in one write.
+    game().unloadCampaign();
+    await game().loadCampaign('a-camp');
+    const [note] = await game().appendTranscript([folded], { trimAfter: turn.seq });
+    expect(note.seq).toBe(turn.seq + 1);
+    expect(await tail()).toEqual([{ role: 'user', content: 'turn' }, folded]);
+    expect(game().transcript.slice(-2).map((m) => m.param)).toEqual([{ role: 'user', content: 'turn' }, folded]);
+  });
+
   it('go back ahead of those queued since, once, when the append that took them failed (the record kept them)', async () => {
     await loadSeeded('a');
     game().queueDmNotice(gained);
     await whenPersisted('a-camp');
     const taken = game().takeDmNotices();
     vi.spyOn(console, 'error').mockImplementation(() => {});
-    vi.mocked(storage.putTranscript).mockRejectedValueOnce(new Error('QuotaExceededError'));
+    vi.spyOn(db.transcript, 'bulkPut').mockRejectedValueOnce(new Error('QuotaExceededError'));
     await expect(game().appendTranscript([{ role: 'user', content: 'turn' }])).rejects.toThrow(/QuotaExceededError/);
     game().queueDmNotice(spent);
     await whenPersisted('a-camp');

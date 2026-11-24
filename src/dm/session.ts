@@ -342,8 +342,8 @@ export class DmSessionController {
   /**
    * Append an app note as a system message. A system message must follow a user message, not another system message,
    * so a note still trailing the last user message (it was never answered: its request failed) is folded into one
-   * message with the new one — trimmed from the end and appended again, as one text block each; nothing before it
-   * changes.
+   * message with the new one — trimmed from the end and appended again in one write, as one text block each; nothing
+   * before it changes.
    */
   private async appendSystemNote(text: string): Promise<TranscriptMessage | undefined> {
     const store = this.d.store();
@@ -352,9 +352,9 @@ export class DmSessionController {
     while (last >= 0 && transcript[last].param.role === 'system') last--;
     const trailing = last >= 0 ? systemNotes(transcript.slice(last + 1)) : [];
     if (trailing.length === 0) return (await store.appendTranscript([{ role: 'system', content: text }]))[0];
-    await store.truncateTranscriptAfter(transcript[last].seq);
     const content: BetaTextBlockParam[] = [...trailing, text].map((t) => ({ type: 'text', text: t }));
-    return (await store.appendTranscript([{ role: 'system', content }]))[0];
+    // Trimmed and appended in one write: a tab closed in between can't lose the notes being folded in.
+    return (await store.appendTranscript([{ role: 'system', content }], { trimAfter: transcript[last].seq }))[0];
   }
 
   /** Log entries of the active session since its last player message (or since it started). */

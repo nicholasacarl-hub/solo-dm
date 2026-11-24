@@ -17,7 +17,7 @@ import { noticesAddedSince, repeatsNewest } from '@/lib/dmNotices';
 import { campaignTables, db, ownerRange } from './db';
 import { byCreatedAt } from './campaignData';
 import { listHomebrew } from './library';
-import type { CampaignRecords } from './types';
+import type { CampaignRecords, TranscriptChange } from './types';
 
 export function loadCampaignRecords(campaignId: string): Promise<CampaignRecords | null> {
   return db.transaction('r', campaignTables(), async () => {
@@ -71,13 +71,16 @@ export function putCampaignKeepingNotices(c: Campaign, seen: readonly string[]):
 }
 
 /**
- * deleteTranscriptAfter and putCampaignKeepingNotices in one transaction: a turn trimmed from the end of the
- * transcript and the campaign record that holds its notices again (put back for the next turn) are stored together or
- * not at all, so a tab that closes in between can't leave the notices nowhere. Returns the notices now stored.
+ * Change a session's transcript (trim from the end, then add messages) and save its campaign record keeping notices
+ * queued elsewhere (putCampaignKeepingNotices), in one transaction: all of it is stored or none of it. So a tab that
+ * closes in between can neither leave a turn's notices nowhere (trimmed from the transcript, not yet put back on the
+ * record, or not yet folded into the note that replaces them) nor in two places (in an added turn, and still pending
+ * on the record). Returns the notices now stored.
  */
-export function trimTranscriptKeepingNotices(sessionId: string, seq: number, c: Campaign, seen: readonly string[]): Promise<string[]> {
+export function writeTranscriptKeepingNotices(change: TranscriptChange, c: Campaign, seen: readonly string[]): Promise<string[]> {
   return db.transaction('rw', [db.transcript, db.campaigns], async () => {
-    await deleteTranscriptAfter(sessionId, seq);
+    if (change.trimAfter) await deleteTranscriptAfter(change.trimAfter.sessionId, change.trimAfter.seq);
+    if (change.append && change.append.length > 0) await putTranscript(change.append);
     return putCampaignKeepingNotices(c, seen);
   });
 }
