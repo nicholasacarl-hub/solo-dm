@@ -3,7 +3,7 @@ import { Info } from 'lucide-react';
 import { formatModifier, spellAttackBonus, spellSaveDC } from '@/engine';
 import { cn } from '@/lib/cn';
 import { nameKey } from '@/lib/id';
-import { ABILITY_NAMES, type Ability } from '@/types';
+import { ABILITY_NAMES, SRD_SOURCE_ID, type Ability } from '@/types';
 import { Badge, Input, Spinner } from '@/ui/components/ui';
 import { RulesEntryDialog } from '@/ui/sheet/SpellsPanel';
 import { SourceFilter } from '../BookBadges';
@@ -85,9 +85,10 @@ function SpellChoiceList({
                     onChange={() => onChange(toggleInList(valid, spell.id, max))}
                     className="size-4 shrink-0 accent-[var(--arcane)]"
                   />
-                  {/* The name keeps its width; the book's label and the school give way first. */}
+                  {/* The name keeps its width; the source's label and the school give way first. */}
                   <span className="max-w-full shrink-0 truncate font-medium">{spell.name}</span>
-                  {spell.entry.id.startsWith('lib:') && (
+                  {/* A book's or homebrew spell says where it comes from ("From Homebrew"), so it can't pass for the SRD's. */}
+                  {spell.entry.sourceId !== SRD_SOURCE_ID && (
                     <span className="min-w-0 truncate text-xs text-faint">
                       From {spell.entry.sourceName}
                       {unreviewedImport(spell) ? ' · not reviewed' : ''}

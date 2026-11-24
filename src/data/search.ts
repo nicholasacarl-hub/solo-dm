@@ -223,9 +223,15 @@ class MiniSearchRulesIndex implements RulesIndex {
     return undefined;
   }
 
-  list(opts: { kind?: ContentKind; sourceId?: string } = {}): CompendiumEntry[] {
+  list(opts: { kind?: ContentKind; sourceId?: string; campaignId?: string | null } = {}): CompendiumEntry[] {
+    const { kind, sourceId, campaignId } = opts;
     return this.entries.filter(
-      (e) => !isRetired(e) && (!opts.kind || e.kind === opts.kind) && (!opts.sourceId || e.sourceId === opts.sourceId),
+      (e) =>
+        !isRetired(e) &&
+        (!kind || e.kind === kind) &&
+        (!sourceId || e.sourceId === sourceId) &&
+        // Left out, every campaign's homebrew is listed; given (null too), only what search() would show.
+        (campaignId === undefined || !isHomebrew(e) || homebrewVisible(e, campaignId)),
     );
   }
 
