@@ -124,10 +124,13 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
         return ended;
       },
 
-      async appendTranscript(params) {
+      async appendTranscript(params, opts = {}) {
         const session = get().activeSession;
         if (!session) throw new Error('No active session');
-        const last = get().transcript.at(-1)?.seq ?? 0;
+        // As the store: `trimAfter` trims from the end first, in the same step.
+        const { trimAfter } = opts;
+        const kept = trimAfter === undefined ? get().transcript : get().transcript.filter((m) => m.seq <= trimAfter);
+        const last = kept.at(-1)?.seq ?? 0;
         const messages: TranscriptMessage[] = params.map((param, i) => ({
           id: nextId('tm'),
           sessionId: session.id,
@@ -135,7 +138,7 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
           param: JSON.parse(JSON.stringify(param)),
           createdAt: now(),
         }));
-        set({ transcript: [...get().transcript, ...messages] });
+        set({ transcript: [...kept, ...messages] });
         return messages;
       },
       async truncateTranscriptAfter(seq, opts = {}) {

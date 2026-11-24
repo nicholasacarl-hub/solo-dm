@@ -52,7 +52,7 @@ import { noticesAddedSince, repeatsNewest, withoutNewestCopy } from '@/lib/dmNot
 import { nameKey, newId } from '@/lib/id';
 import { copiedTextMissing, staleRedaction } from '@/lib/importedContent';
 import * as storage from '@/storage';
-import type { CampaignRecords } from '@/storage';
+import type { CampaignRecords, TranscriptChange } from '@/storage';
 import { onCampaignChange } from '@/storage/events';
 import { isBusyDmPhase, planHeroMoveCommit, planHeroMoveUndo } from './heroMove';
 
@@ -160,8 +160,13 @@ export interface GameStoreActions {
   /** Mark the active session ended (sets endedAt, clears campaign.activeSessionId). */
   endActiveSession(patch?: Partial<Session>): Promise<Session | null>;
 
-  /** Append API messages to the active session's transcript (append-only), assigning seq. */
-  appendTranscript(params: BetaMessageParam[]): Promise<TranscriptMessage[]>;
+  /**
+   * Append API messages to the active session's transcript (append-only), assigning seq. With `trimAfter`, the messages
+   * after that seq are trimmed first (only ever from the END: a trailing note folded into the one that replaces it).
+   * The transcript change and the campaign record (which lets go of notices the messages deliver) are saved in one
+   * write, so a tab closed in between can't leave notices both in the transcript and still pending, or in neither.
+   */
+  appendTranscript(params: BetaMessageParam[], opts?: { trimAfter?: number }): Promise<TranscriptMessage[]>;
   /**
    * Remove transcript messages with seq > `seq` (only ever trims from the END — used for
    * regenerate / cancelled turns; never edit the middle of a transcript).
@@ -349,15 +354,15 @@ function noticesSaved(campaignId: string, stored: string[], queuedElsewhere: rea
 }
 
 /**
- * Save the campaign record from a write task, keeping (and picking up) notices queued elsewhere. With `trim`, the
- * session's transcript after that seq is deleted in the same transaction (storage.trimTranscriptKeepingNotices).
+ * Save the campaign record from a write task, keeping (and picking up) notices queued elsewhere. With `transcript`,
+ * that change to the transcript is made in the same transaction (storage.writeTranscriptKeepingNotices).
  */
-async function saveCampaign(campaign: Campaign, trim?: { sessionId: string; after: number }): Promise<void> {
+async function saveCampaign(campaign: Campaign, transcript?: TranscriptChange): Promise<void> {
   const own = campaign.pendingDmNotices ?? [];
   // A campaign this tab never loaded: what it holds is all it has seen.
   const seen = storedNotices.get(campaign.id) ?? own;
-  const stored = trim
-    ? await storage.trimTranscriptKeepingNotices(trim.sessionId, trim.after, campaign, seen)
+  const stored = transcript
+    ? await storage.writeTranscriptKeepingNotices(transcript, campaign, seen)
     : await storage.putCampaignKeepingNotices(campaign, seen);
   // Stored beyond this tab's own: the ones queued elsewhere since it last looked.
   noticesSaved(campaign.id, stored, noticesAddedSince(stored, own));
@@ -875,14 +880,16 @@ export const useGame = create<GameStore>()((set, get) => ({
     return ended;
   },
 
-  async appendTranscript(params) {
+  async appendTranscript(params, opts = {}) {
     const s = get();
     const campaign = requireCampaign(s.campaign);
     const session = s.activeSession;
     if (!session) throw new Error('No active session: start a session before adding to the DM transcript.');
     if (params.length === 0) return [];
     const now = Date.now();
-    const lastSeq = s.transcript.at(-1)?.seq ?? 0;
+    const { trimAfter } = opts;
+    const kept = trimAfter === undefined ? s.transcript : s.transcript.filter((m) => m.seq <= trimAfter);
+    const lastSeq = kept.at(-1)?.seq ?? 0;
     const messages: TranscriptMessage[] = params.map((param, i) => ({
       id: newId(),
       sessionId: session.id,
@@ -891,11 +898,9 @@ export const useGame = create<GameStore>()((set, get) => ({
       createdAt: now,
     }));
     const touched = touch(campaign, now);
-    set({ transcript: [...s.transcript, ...messages], campaign: touched });
-    await persist(campaign.id, 'the DM transcript', async () => {
-      await storage.putTranscript(messages);
-      await saveCampaign(touched);
-    });
+    set({ transcript: [...kept, ...messages], campaign: touched });
+    const change: TranscriptChange = { append: messages, ...(trimAfter !== undefined && { trimAfter: { sessionId: session.id, seq: trimAfter } }) };
+    await persist(campaign.id, 'the DM transcript', () => saveCampaign(touched, change));
     return messages;
   },
 
@@ -916,7 +921,7 @@ export const useGame = create<GameStore>()((set, get) => ({
     const touched: Campaign = { ...touch(campaign), ...(back.length > 0 && { pendingDmNotices }) };
     set({ transcript: kept, campaign: touched, ...(back.length > 0 && { pendingDmNotices }) });
     // One write for the trim and the record (which holds those notices again): a tab closed in between can't lose them.
-    await persist(campaign.id, 'the DM transcript', () => saveCampaign(touched, { sessionId: session.id, after: seq }));
+    await persist(campaign.id, 'the DM transcript', () => saveCampaign(touched, { trimAfter: { sessionId: session.id, seq } }));
   },
 
   async appendLog(entry) {
