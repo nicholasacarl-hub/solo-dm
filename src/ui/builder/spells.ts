@@ -4,6 +4,7 @@
  * ("Level 1 Evocation (Sorcerer, Wizard)") is the fallback.
  */
 import type { Attack, ClassOption, CompendiumEntry, ImportedRef, KnownSpell } from '@/types';
+import { spellHomebrewId } from '@/data/options/levelUpChoices';
 import { isReviewedImport } from '@/data/structured/materialize';
 import { nameKey, newId } from '@/lib/id';
 import { wordNumber } from './classFeatures';
@@ -109,13 +110,17 @@ export function findSpellByName(spells: SpellInfo[], name: string): SpellInfo | 
   return spells.find((s) => nameKey(s.name) === key);
 }
 
-/** A KnownSpell for the sheet. Unknown names get a generated id (the sheet looks those up by name). */
+/**
+ * A KnownSpell for the sheet. Unknown names get a generated id (the sheet looks those up by name). A book's spell
+ * carries its ref and a homebrew spell its entry's id as `homebrewId`, so the sheet tags it "homebrew".
+ */
 export function knownSpell(
   spell: SpellInfo | undefined,
   fallback: { name: string; level: number },
   extra: Partial<KnownSpell> = {},
 ): KnownSpell {
   const ref = spellRef(spell);
+  const homebrewId = spell && spellHomebrewId(spell.entry);
   return {
     id: spell?.id ?? newId(),
     name: spell?.name ?? fallback.name,
@@ -124,6 +129,7 @@ export function knownSpell(
     ...(spell?.ritual ? { ritual: true } : {}),
     ...(spell?.concentration ? { concentration: true } : {}),
     ...(ref ? { ref } : {}),
+    ...(homebrewId ? { homebrewId } : {}),
     ...extra,
   };
 }

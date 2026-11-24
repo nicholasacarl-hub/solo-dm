@@ -89,7 +89,11 @@ transformation's summary and way back, an item's description wherever the app di
 item, the DM's words on an SRD magic item or a homebrew item, or the DM's words on a book's item, wrapped like
 copied text; non-magic SRD gear carries the SRD's own text, left to `get_entry`) and a spell's notes (the DM's, or the
 builder's on a feat's or species' spell). A book's item linked without the DM's words gets a line naming the book and
-`get_entry`, then the app's numbers-only line (`describeOption`), so the sheet says which items to read. Numbers name their sources where a condition may matter: the AC formula
+`get_entry`, then the app's numbers-only line (`describeOption`), so the sheet says which items to read. A spell linked
+to a homebrew entry (this campaign's or shared homebrew: picked in the builder, named by `spells_add`, or a subclass's
+spell a level-up adds) keeps the entry's id as `homebrewId` and is tagged "homebrew", so it never reads as the SRD spell
+of its name (`spellHomebrewId`); a spell `spells_add` names again keeps its id, and takes a homebrew id only when it is
+that id. Numbers name their sources where a condition may matter: the AC formula
 names each item it counts, the Saving throws line what every save includes (`saveBonusSources`: a Ring or Cloak of
 Protection, an item's bonus the app read as always on, Aura of Protection), and an active item's attack and damage
 bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Bonuses") say

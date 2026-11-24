@@ -12,6 +12,7 @@ import { addFeature, addSpell, changeAbilityScore, characterLevel, featOrTrait, 
 import { nameKey, newId } from '@/lib/id';
 import {
   ABILITY_NAMES,
+  HOMEBREW_SOURCE_ID,
   type Ability,
   type CasterType,
   type Character,
@@ -90,11 +91,21 @@ export function spellEntryRef(entry: CompendiumEntry): ImportedRef | undefined {
   return { sourceId: entry.sourceId, sourceTitle: entry.sourceName, entryId: entry.id, kind: 'spell', entryName: entry.name, textHash: '', textCopied: false };
 }
 
-/** A sheet spell for a rules-index spell entry: its id, level, flags and (for an imported spell) a ref. */
+/**
+ * A homebrew spell entry's id, for the sheet spell's `homebrewId`, so the hero's sheet tags it "homebrew" (the DM's
+ * snapshot and get_character_sheet would otherwise list it like the SRD's). One rule for every sheet spell a rules-index
+ * entry makes: the builder's, level-up's and the DM's spells_add.
+ */
+export function spellHomebrewId(entry: CompendiumEntry): string | undefined {
+  return entry.sourceId === HOMEBREW_SOURCE_ID ? entry.id : undefined;
+}
+
+/** A sheet spell for a rules-index spell entry: its id, level, flags and a book's ref or homebrew's id. */
 export function knownSpellFromEntry(entry: CompendiumEntry, extra: Partial<KnownSpell> = {}): KnownSpell | null {
   const level = entrySpellLevel(entry);
   if (level === null) return null;
   const ref = spellEntryRef(entry);
+  const homebrewId = spellHomebrewId(entry);
   return {
     id: entry.id,
     name: entry.name,
@@ -103,6 +114,7 @@ export function knownSpellFromEntry(entry: CompendiumEntry, extra: Partial<Known
     ...(entry.data?.ritual === true ? { ritual: true } : {}),
     ...(entry.data?.concentration === true ? { concentration: true } : {}),
     ...(ref ? { ref } : {}),
+    ...(homebrewId ? { homebrewId } : {}),
     ...extra,
   };
 }
