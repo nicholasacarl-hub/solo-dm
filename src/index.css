@@ -3,6 +3,8 @@
 
 /* Theme switching via <html data-theme="dark|light"> (set by applyTheme in settingsStore). */
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+/* A phone held sideways (as the Combat tab's two columns below): little height to spare. */
+@custom-variant phone-landscape (@media (orientation: landscape) and (max-height: 500px));
 
 /*
  * Visual direction: "candlelit table". Dark mode is ink-blue night with ember accents;
@@ -67,6 +69,7 @@
   --accent-ink: #1a1206;
   --accent-soft: #3a2a12;
   --danger: #ef5b5b;
+  /* Dark text on the bright fills: white on them is below 4.5:1 (WCAG AA). */
   --danger-ink: #0f1115;
   --danger-soft: #3a1717;
   --success: #4fbf72;

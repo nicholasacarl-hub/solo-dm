@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { generatePortrait } from '@/images';
@@ -201,6 +201,213 @@ describe('CharacterSheet', () => {
     render(<Harness variant="compact" />);
     expect(screen.queryByRole('tablist')).toBeNull();
     expect(screen.getByRole('list', { name: 'Ability scores' })).toBeInTheDocument();
+  });
+});
+
+describe('CharacterSheet — Hit Point maximum', () => {
+  const openDialog = async (user: ReturnType<typeof userEvent.setup>) => {
+    await user.click(screen.getByRole('button', { name: 'Adjust hit point maximum' }));
+    return screen.getByRole('dialog', { name: 'Hit point maximum' });
+  };
+
+  it('raises it for Aid with a preview, shows a chip, tells the DM, and the × ends it (srd:spell:aid)', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const dialog = await openDialog(user);
+    const apply = within(dialog).getByRole('button', { name: 'Apply' });
+    expect(apply).toBeDisabled();
+    await user.type(within(dialog).getByLabelText('By'), '5');
+    await user.type(within(dialog).getByLabelText('Name'), 'Aid');
+    await user.click(within(dialog).getByRole('radio', { name: /At the end of a Long Rest/ }));
+    expect(within(dialog).getByText('Maximum 17 → 22 · HP 12 → 17')).toBeInTheDocument();
+    await user.click(apply);
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByLabelText('17 of 22 hit points')).toBeInTheDocument();
+    const chips = screen.getByRole('list', { name: 'Hit point maximum adjustments' });
+    expect(within(chips).getByText('Aid +5')).toBeInTheDocument();
+    expect(notices()).toEqual(['Player changed their Hit Point maximum: HP maximum 17 → 22, HP 12 → 17 (Aid +5, until a Long Rest)']);
+    await user.click(within(chips).getByRole('button', { name: 'End Aid (+5 hit point maximum)' }));
+    expect(screen.getByLabelText('17 of 17 hit points')).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Hit point maximum adjustments' })).toBeNull();
+    expect(notices().at(-1)).toBe('Player ended a Hit Point maximum adjustment: Aid +5 ends: HP maximum 22 → 17');
+  });
+
+  it('warns before a reduction that kills (srd:rule:...-instant-death: "A creature dies if its Hit Point maximum reaches 0.")', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const dialog = await openDialog(user);
+    await user.click(within(dialog).getByRole('radio', { name: 'Lower' }));
+    await user.type(within(dialog).getByLabelText('By'), '20');
+    await user.type(within(dialog).getByLabelText('Name'), 'Life Drain');
+    await user.click(within(dialog).getByRole('radio', { name: /At the end of a Long Rest/ }));
+    expect(within(dialog).getByText('Your hero dies: a maximum of 0 is death.')).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Apply — your hero dies' })).toBeEnabled();
+    // Cancel changes nothing.
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    expect(screen.getByLabelText('12 of 17 hit points')).toBeInTheDocument();
+    expect(notices()).toEqual([]);
+  });
+
+  it("shows a refusal in the preview and keeps Apply off (the same spell doesn't combine)", async () => {
+    resetFakeGame({ campaign: sampleCampaign(), character: sampleCharacter({ hp: { max: 22, current: 17, temp: 0 }, hpMaxAdjustments: [{ name: 'Aid', amount: 5, ends: 'long-rest' }] }) });
+    const user = userEvent.setup();
+    render(<Harness />);
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText('By'), '5');
+    await user.type(within(dialog).getByLabelText('Name'), 'Aid');
+    await user.click(within(dialog).getByRole('radio', { name: /When it's ended/ }));
+    expect(within(dialog).getByText(/Aid \+5 already applies/)).toBeInTheDocument();
+    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+  });
+
+  it('keeps the preview by Apply, outside the form a phone scrolls, with a hint until the change is complete', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const dialog = await openDialog(user);
+    const hint = within(dialog).getByText('Give an amount, a name and when it ends.');
+    expect(dialog.querySelector('form')?.contains(hint)).toBe(false);
+    // Held sideways the description is only read out (sr-only), so it stays the dialog's description.
+    expect(dialog).toHaveAccessibleDescription('For an effect such as Aid or Life Drain, or a lasting change your DM agreed to. Your DM is told.');
+    expect(hint.parentElement?.contains(within(dialog).getByRole('button', { name: 'Apply' }))).toBe(true);
+  });
+
+  it('after an × ends its chip, focus goes to the × now in its place, else the pencil, never the page', async () => {
+    resetFakeGame({
+      campaign: sampleCampaign(),
+      character: sampleCharacter({
+        hp: { max: 19, current: 12, temp: 0 },
+        hpMaxAdjustments: [
+          { name: 'Aid', amount: 5, ends: 'long-rest' },
+          { name: 'Life Drain', amount: -3, ends: 'long-rest' },
+        ],
+      }),
+    });
+    const user = userEvent.setup();
+    render(<Harness />);
+    const chips = () => screen.getByRole('list', { name: 'Hit point maximum adjustments' });
+    await user.click(within(chips()).getByRole('button', { name: 'End Aid (+5 hit point maximum)' }));
+    expect(screen.getByLabelText('12 of 14 hit points')).toBeInTheDocument();
+    expect(document.activeElement).toBe(within(chips()).getByRole('button', { name: 'End Life Drain (\u22123 hit point maximum)' }));
+    await user.keyboard('{Enter}');
+    expect(screen.getByLabelText('12 of 17 hit points')).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Adjust hit point maximum' }));
+  });
+
+  it("after the last chip's × ends it, focus goes to the one before", async () => {
+    resetFakeGame({
+      campaign: sampleCampaign(),
+      character: sampleCharacter({
+        hp: { max: 19, current: 12, temp: 0 },
+        hpMaxAdjustments: [
+          { name: 'Aid', amount: 5, ends: 'long-rest' },
+          { name: 'Life Drain', amount: -3, ends: 'long-rest' },
+        ],
+      }),
+    });
+    const user = userEvent.setup();
+    render(<Harness />);
+    const chips = () => screen.getByRole('list', { name: 'Hit point maximum adjustments' });
+    await user.click(within(chips()).getByRole('button', { name: 'End Life Drain (−3 hit point maximum)' }));
+    expect(screen.getByLabelText('12 of 22 hit points')).toBeInTheDocument();
+    expect(document.activeElement).toBe(within(chips()).getByRole('button', { name: 'End Aid (+5 hit point maximum)' }));
+  });
+
+  it("keeps focus on a chip's × when the DM ends an earlier chip", () => {
+    const hero = sampleCharacter({
+      hp: { max: 17, current: 12, temp: 0 },
+      hpMaxAdjustments: [
+        { name: 'Aid', amount: 5, ends: 'long-rest' },
+        { name: 'Life Drain', amount: -3, ends: 'long-rest' },
+        { name: 'Mummy Rot', amount: -2, ends: 'when-ended' },
+      ],
+    });
+    resetFakeGame({ campaign: sampleCampaign(), character: hero });
+    render(<Harness />);
+    const mummy = screen.getByRole('button', { name: 'End Mummy Rot (−2 hit point maximum)' });
+    mummy.focus();
+    // The DM's hp_max_end ["Aid"]: the store's character changes from outside the sheet.
+    act(() => useGame.setState({ character: { ...hero, hp: { max: 12, current: 12, temp: 0 }, hpMaxAdjustments: hero.hpMaxAdjustments!.slice(1) } }));
+    expect(screen.getByLabelText('12 of 12 hit points')).toBeInTheDocument();
+    expect(document.activeElement).toBe(mummy);
+  });
+
+  it('says why an amount given is no use, and keeps Apply off', async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText('Name'), 'Aid');
+    await user.click(within(dialog).getByRole('radio', { name: /At the end of a Long Rest/ }));
+    const by = within(dialog).getByLabelText('By');
+    for (const [typed, said] of [
+      ['1000', 'Use a whole number from 1 to 999.'],
+      ['2.5', 'Use a whole number from 1 to 999.'],
+      ['0', 'Use a whole number from 1 to 999.'],
+      ['-5', 'No minus sign: use Lower to lower it.'],
+    ]) {
+      await user.clear(by);
+      await user.type(by, typed);
+      expect(within(dialog).getByText(said), typed).toBeInTheDocument();
+      expect(by).toHaveAttribute('aria-invalid', 'true');
+      // The reason is By's description, so it's heard again on coming back to the field.
+      expect(by).toHaveAccessibleDescription(said);
+      expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    }
+    await user.clear(by);
+    await user.type(by, '5');
+    expect(by).not.toHaveAttribute('aria-invalid');
+    expect(by).not.toHaveAttribute('aria-describedby');
+    expect(within(dialog).getByText('Maximum 17 → 22 · HP 12 → 17')).toBeInTheDocument();
+  });
+
+  it("says why when the field holds text it can't read as a number (\"5e\", \"--5\")", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    const dialog = await openDialog(user);
+    await user.type(within(dialog).getByLabelText('Name'), 'Aid');
+    await user.click(within(dialog).getByRole('radio', { name: /At the end of a Long Rest/ }));
+    const by = within(dialog).getByLabelText('By');
+    // A browser's number field reports such text as no value, with validity.badInput set (jsdom never sets it).
+    const typed = (badInput: boolean) => {
+      Object.defineProperty(by, 'validity', { configurable: true, get: () => ({ badInput }) });
+      fireEvent.input(by, { target: { value: '' } });
+    };
+    typed(true);
+    expect(within(dialog).getByText('Use a whole number from 1 to 999.')).toBeInTheDocument();
+    expect(by).toHaveAttribute('aria-invalid', 'true');
+    expect(within(dialog).getByRole('button', { name: 'Apply' })).toBeDisabled();
+    // Cleared: no amount, no problem.
+    typed(false);
+    expect(within(dialog).getByText('Give an amount, a name and when it ends.')).toBeInTheDocument();
+    expect(by).not.toHaveAttribute('aria-invalid');
+    // Cancel forgets it: the dialog opens again with no problem.
+    typed(true);
+    await user.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    const again = await openDialog(user);
+    expect(within(again).getByText('Give an amount, a name and when it ends.')).toBeInTheDocument();
+    expect(within(again).getByLabelText('By')).not.toHaveAttribute('aria-invalid');
+  });
+
+  it('shows chips on a read-only sheet, with no pencil and no ×; a lasting chip never has one', () => {
+    resetFakeGame({
+      campaign: sampleCampaign(),
+      character: sampleCharacter({
+        hp: { max: 27, current: 22, temp: 0 },
+        hpMaxAdjustments: [
+          { name: 'Aid', amount: 5, ends: 'long-rest' },
+          { name: 'Tough (missed at 1st level)', amount: 5, ends: 'never' },
+        ],
+      }),
+    });
+    render(<Harness editable={false} />);
+    expect(screen.queryByRole('button', { name: 'Adjust hit point maximum' })).toBeNull();
+    const chips = screen.getByRole('list', { name: 'Hit point maximum adjustments' });
+    expect(within(chips).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Aid +5, until a Long Rest', 'Tough (missed at 1st level) +5, lasting']);
+    // When each ends is shown, not only told to a screen reader or a mouse's tooltip.
+    expect(chips.querySelector('.sr-only')).toBeNull();
+    expect(within(chips).queryByRole('button')).toBeNull();
+    cleanup();
+    render(<Harness />);
+    expect(within(screen.getByRole('list', { name: 'Hit point maximum adjustments' })).getAllByRole('button')).toHaveLength(1);
   });
 });
 

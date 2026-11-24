@@ -4,7 +4,7 @@ import type { BuilderData, Character, Feature, ImportedRef } from '@/types';
 import { importedPlaceholder, redactImported, wrapImported } from '@/lib/importedContent';
 import { sampleCharacter } from '@/test/fixtures';
 import { GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, importedRef, TEXT } from '@/test/structuredFixtures';
-import { applyDamage } from './character';
+import { adjustHpMax, applyDamage } from './character';
 import { characterSheetText, characterStatusLine, SHEET_TEXT_MAX, sheetCutsText } from './summary';
 import { beginTransformation, endTransformation } from './transform';
 
@@ -60,6 +60,30 @@ describe('characterStatusLine', () => {
     });
     expect(characterStatusLine(c)).toContain('(Wizard 3 / Warlock 2)');
     expect(characterStatusLine(c)).toContain('Pact 1/2 (1st)');
+  });
+});
+
+describe('Hit Point maximum adjustments in what the DM reads', () => {
+  const adjusted = () => {
+    let c = adjustHpMax(mira(), { name: 'Aid', change: 5, ends: 'long-rest' }).character;
+    c = adjustHpMax(c, { name: 'Life Drain', change: -3, ends: 'long-rest' }).character;
+    return adjustHpMax(c, { name: 'Tough (missed at 1st level)', change: 6, ends: 'never' }).character;
+  };
+
+  it('the status line names the effects that end, every turn (no game clock reminds the DM otherwise)', () => {
+    expect(characterStatusLine(adjusted())).toBe(
+      'Mira Voss (Wizard 3) · HP 23/25 · HP max includes Aid +5 (until a Long Rest), Life Drain −3 (until a Long Rest) · AC 12 · Slots 1st 3/4, 2nd 2/2 · Hit Dice 2/3 d6 · Heroic Inspiration',
+    );
+    // A lasting change alone adds nothing to the status line.
+    const lasting = adjustHpMax(mira(), { name: 'Tough (missed at 1st level)', change: 6, ends: 'never' }).character;
+    expect(characterStatusLine(lasting)).toBe(characterStatusLine(mira()).replace('HP 12/17', 'HP 18/23'));
+  });
+
+  it('the sheet names every entry, lasting ones too, right after HP', () => {
+    expect(characterSheetText(adjusted())).toContain(
+      '**HP 23/25** · **HP max includes** Aid +5 (until a Long Rest), Life Drain −3 (until a Long Rest), Tough (missed at 1st level) +6 (lasting) · **AC** 12',
+    );
+    expect(characterSheetText(mira())).not.toContain('HP max includes');
   });
 });
 

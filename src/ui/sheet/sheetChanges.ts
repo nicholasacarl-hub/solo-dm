@@ -4,9 +4,11 @@
  */
 import {
   addCondition,
+  adjustHpMax,
   applyDamage,
   applyHealing,
   changeExhaustion,
+  endHpMaxAdjustments,
   saveSourcesChangeText,
   syncArmorClass,
   conditionName,
@@ -19,6 +21,7 @@ import {
   sheetCutsText,
   setTempHp,
   spendSlot,
+  type HpMaxChange,
 } from '@/engine';
 import { safeEnd } from '@/lib/text';
 import type {
@@ -26,6 +29,7 @@ import type {
   Currency,
   EquipmentOption,
   GameEvent,
+  HpMaxEnds,
   InventoryItem,
   Personality,
   SpellSlotLevel,
@@ -103,9 +107,35 @@ export function concentrationChange(c: Character, spellName: string | null): She
   return { character, notice: `Player is now concentrating on ${spellName}${current ? ` (ending ${current})` : ''}` };
 }
 
+/** The engine's messages on one line, warnings left out. */
+function changeText(events: readonly GameEvent[]): string {
+  return events
+    .filter((e) => e.type !== 'warning')
+    .map((e) => e.message.trim().replace(/\.$/, ''))
+    .join('; ');
+}
+
+/** The player's Hit Point maximum change (HpMaxDialog): an effect such as Aid or Life Drain, or a lasting change. */
+export function hpMaxChange(c: Character, spec: HpMaxChange): SheetChange {
+  const { character, events } = adjustHpMax(c, spec);
+  if (character === c) return unchanged(c, firstWarning(events));
+  return { character, notice: `Player changed their Hit Point maximum: ${changeText(events)}` };
+}
+
+/** The player ends an adjustment (its × on the Hit Points bar). */
+export function endHpMaxChange(c: Character, name: string, ends?: HpMaxEnds): SheetChange {
+  const { character, events } = endHpMaxAdjustments(c, name, ends);
+  if (character === c) return unchanged(c, firstWarning(events));
+  return { character, notice: `Player ended a Hit Point maximum adjustment: ${changeText(events)}`, warning: firstWarning(events) };
+}
+
 export function deathSaveMarkChange(c: Character, kind: 'successes' | 'failures', count: number): SheetChange {
   const value = Math.max(0, Math.min(3, count));
   if (c.deathSaves[kind] === value) return unchanged(c);
+  // A living hero always has a maximum; one of 0 is death (SRD 5.2.1 Instant Death), until what lowered it ends.
+  if (kind === 'failures' && c.deathSaves.dead && value < 3 && c.hp.max <= 0) {
+    return unchanged(c, "Your hero's Hit Point maximum is 0: end what lowered it first (its × on the Hit Points bar).");
+  }
   const deathSaves = {
     ...c.deathSaves,
     [kind]: value,

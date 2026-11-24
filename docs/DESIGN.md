@@ -155,7 +155,7 @@ tool_result so Claude can correct itself.
 |---|---|
 | `roll_dice` | DM rolls (NPC attacks, damage, random tables, secret checks). `secret` hides it unless the campaign shows DM rolls. On a battle map, `attacker` and `target` add distance, reach, line of sight and cover, and warn when a melee attacker is out of reach. |
 | `request_player_roll` | Ask the player to roll a check/save/attack/damage/initiative/death save. Uses the sheet's modifiers; resolves per roll mode (auto / tap / physical). Returns total, natural, success vs DC. An unarmed strike by another name (`isUnarmedStrikeName`: "Kick", "Punch", a fist named alone such as "Bare Fists"; never a spell or weapon that names one, such as Arcane Hand's "Clenched Fist") rolls the engine's damage for it (`unarmedDamageExpression`: the sheet's Unarmed Strike, else 1 + STR, with a Monk's Martial Arts die and Dexterity). A roll with no dice (a flat 1 + STR) resolves without the dialog: nothing to roll, no die for Heroic Inspiration. |
-| `update_character` | Batched sheet changes: HP (damage/healing/temp), conditions, exhaustion, slots, feature uses, inventory, currency, XP, inspiration, features, spells, concentration, AC/speed. Returns a summary and warnings. |
+| `update_character` | Batched sheet changes: HP (damage/healing/temp), the HP maximum (`hp_max`, `hp.drain`, `hp_max_end`), conditions, exhaustion, slots, feature uses, inventory, currency, XP, inspiration, features, spells, concentration, AC/speed and the Initiative bonus (`initiative_change`). Returns a summary and warnings. |
 | `take_rest` | Short rest (player chooses hit dice in a dialog) or long rest. |
 | `level_up` | Apply a level (HP, hit dice, slots, proficiency, new features) and return reminders for choices. For an imported class or subclass the app adds that level's features with their text. |
 | `transform_character` | Begin, advance or end a **transformation** (vampirism, lycanthropy, a fey mark...): features, defenses, senses, speeds, size and ability changes applied atomically and recorded with what they granted, so ending one undoes exactly that. Enforces the campaign's transformations rule (see below). |
@@ -270,6 +270,46 @@ nothing and says why (an older save's homebrew "Stable" is still removed). Damag
 tallies from zero however Stable was marked (the sheet's pips keep theirs). A Halfling's natural 1 on physical dice
 is rerolled in the same `request_player_roll` call (the dialog asks for the d20 that showed 1), so a death save
 records only the new roll; and every d20 result names Exhaustion when it is in the total.
+
+**Hit Point maximum adjustments.** `hp.max` stays the maximum in force, so every reader (healing's cap, Hit Point
+Dice, the Long Rest refill, massive damage, the dying rules, Bloodied, the map and tracker, older devices through sync)
+reads one number. `Character.hpMaxAdjustments` records each change beyond what the app counts: a name, the amount it
+actually made (after a maximum of 0 or Harm's floor) and when it `ends` (`long-rest`, `when-ended`, `never`). The
+records are deltas, never a saved old maximum, so level-ups, Constitution changes and the feats' numbers (which all add
+to the maximum in force) compose with them, and ending one gives back exactly its amount (`adjustHpMax`,
+`endHpMaxAdjustments` in the engine; the DM's `hp_max`, `hp_max_end` and `hp.drain`; the sheet's pencil and chips). One
+name is one entry, so `hp_max_end` and the status line know each by its name alone: an effect's change that goes the
+other way under an effect's name, or any change that ends differently from the entry under its name, is refused (a
+draining hit under such a name, or a blank one, is refused whole, so no damage lands without its drain; as `hp` applies
+before `hp_max_end`, its refusal asks for a name of its own, or the other's end in an earlier call), except a
+stronger casting of the same spell, which replaces its entry; a lasting change under a lasting entry's name adds up
+either way, and a total of 0 takes it back. Names are read the way the engine writes them (one line, at most 60
+characters), so one from a hand-edited file can still be ended. A name ends the entries named exactly; else a bare name
+ends the same spell's or effect's ("Aid" ends "Aid (3rd level)") and a qualified one the bare entry, never another
+qualifier's ("Bite (Otyugh)" leaves "Bite (Vampire Spawn)"). An effect that
+raises it (Aid, Heroes' Feast) adds as much to current HP and wakes a hero at 0 HP; the same spell again doesn't add,
+and only a stronger casting replaces it, by the difference (Combining Spell Effects: "Aid (3rd level)" is Aid).
+Reductions add up under one name and lower current HP only to fit; a maximum of 0 kills (Instant Death), Harm stops at
+1. A drain (`hp.drain`: Life Drain, Harm) lowers the maximum by the damage after the Defenses line, temporary HP
+included, once the damage lands, so massive damage is judged on the maximum before it. Ending a reduction raises only
+the maximum ("returns to normal" doesn't heal); ending a raise lowers current HP only to fit, and one that leaves a
+maximum of 0 kills, its shortfall coming off the newest effect reductions (a lasting one only for what is left: a
+ruling outlasts the curse that ran the maximum into 0) so the records still add up. `hp_max_end` ends all its names in
+one pass, every reduction before the raises (a lasting one taken back too), so the order of the names never matters; a
+raise that ran out first (Aid, before Greater Restoration) is ended alone, first. A Constitution increase adds exactly
+its Hit Points; a loss keeps the floor of 1 for the hero's own maximum (lasting entries part of it), with the effects in
+force on top: one that a drain holds within reach of 0 kills, like Aid ending, its shortfall coming off the drain. A lasting change (a ruling, a boon, Hit Points the app counted too few) is bookkeeping like Constitution:
+current HP moves with it, never below a maximum of 1, and its record stays so the DM and the player see why the maximum
+is what it is. A Long Rest ends the `long-rest` raises first, since Aid's 8 hours are over before the rest finishes
+(casting it would stop the rest), so a drained hero Aid kept alive dies and the drains stay with them; then the
+reductions end and HP refill (SRD 5.2.1 Long Rest: "When you finish the rest … If your Hit Point maximum was reduced, it
+returns to normal"), and its result lists what stays, with how to switch a curse's or a poison's reduction to end at the
+next Long Rest once its cause ends (a Mummy's, a Death Dog's: theirs only stop a Long Rest from restoring the maximum).
+With no game clock, the status line names every effect in force each turn ("HP max includes Aid +5 (until a Long
+Rest)"), which is what reminds the DM to end Aid or Heroes' Feast; the sheet's chips say when each ends, and the sheet
+text names lasting ones too. Without records nothing is printed, so the prompt and the sheet text of a hero without them
+are byte for byte as before. `initiative_change` adds to the Initiative bonus beyond Dexterity (a ruling, or an Alert the
+app didn't count), never sets a total, and keeps no record.
 
 ### Player-side controls that talk to the DM
 
@@ -725,8 +765,9 @@ memory with them and saved by the same write (the campaign row carries it). All 
 fails before the hero's row is stored, both come back out of memory (unless a later write already carries them), so
 nothing saves one without the other, and the next load tries again; if the hero's row was stored and the campaign row
 then failed (they are two writes), memory keeps both and the notice is saved on its own at once, so a reload or leaving
-the table doesn't lose it (`refreshClassEditions`, `hitPointsOwedForEditions`; nothing else in the app raises the
-maximum). The top-up covers only what the stand-in rules owed. Level-up counts Draconic Resilience's Hit Points by
+the table doesn't lose it (`refreshClassEditions`, `hitPointsOwedForEditions`; besides level-ups, Constitution and
+the feats' numbers, the maximum changes only by a hand adjustment, whose record the sheet shows, so a mend this top-up
+repeats can be taken back). The top-up covers only what the stand-in rules owed. Level-up counts Draconic Resilience's Hit Points by
 Sorcerer level in either edition (an older book's Draconic Bloodline gives the same one a level), except on a book's
 class whose edition isn't recorded yet, whose levels the top-up pays once it is; the builder counts Tough and a
 1st-level Draconic Resilience in a new hero's Hit Points (`startingFeatureHitPoints`), and the level-up dialog gives the
@@ -769,7 +810,8 @@ either, so the DM's entry for an Epic Boon as a boon rewrites it; its result nam
 takes it now). The sheet coming to hold the Alert or Tough feat gets what it stores for them, as a
 level-up counts it (`joiningNumbers`): Alert's Proficiency Bonus on Initiative and Tough's twice-the-level Hit Points
 (a boon's or other entry rewriting a trait of either name makes it the feat); a change that leaves it holding what it
-held brings nothing, and nothing takes them back, as nothing takes the feat away: a species trait or class feature of
+held brings nothing, and nothing in the app takes them back (the DM can, with a lasting `hp_max` or an
+`initiative_change`), as nothing takes the feat away: a species trait or class feature of
 its name joins beside it rather than rewriting it (`featureToRewrite`; the result names the entry that stays the feat),
 so its numbers stay with it and are never paid twice (see the ROADMAP for a feat a rewrite moved to a trait's source
 before this). No entry rewrites a transformation's power of its name: it joins
@@ -800,7 +842,7 @@ name. `start_combat` takes AC, HP and initiative from the stat block (the SRD's 
 when the DM leaves them out, and says where they came from; the battle map takes size, speeds and reach
 from it (`data.reachFt` first, then the attack lines, 2014 wording included, clamped to 5–60).
 
-**The one deliberate `DM_TOOLS` change.** `start_combat` / `update_combat add` make `ac`, `hp_max` and
+**Deliberate `DM_TOOLS` changes.** The first: `start_combat` / `update_combat add` make `ac`, `hp_max` and
 `initiative_bonus` optional (defaulting to the stat block; explicit numbers win; an error names what is
 missing), three descriptions say "SRD or reviewed import", and `level_up` gains one sentence about
 imported classes. The tools array is sent with every request, so every session in progress at the update
@@ -810,7 +852,12 @@ on Opus 5.5 for a 50–100K-token session) and its earlier thinking blocks are d
 array is static again (`definitions.snapshot.test.ts` pins it). Sessions started after the update with
 imports get two system-prompt lines: what "reviewed" and "Adapted for 2024" mean, and that left-out
 text can be read again with `get_character_sheet` / `get_entry`. Without imports the prompt is
-byte-identical.
+byte-identical. The second, with Hit Point maximum adjustments: `update_character` gains `hp_max`, `hp_max_end`,
+`hp.drain` and `initiative_change`, and its description and `take_rest`'s say how they work (the descriptions are sent
+with every request, so sessions whose frozen prompt never mentions them learn them too; the DM instructions are
+unchanged). Its schema grows to about 8,300 characters, so `update_character` alone may reach 8,500
+(`definitions.test.ts`). The cost is the first one's: each session in progress rewrites its cached prefix once and
+drops its earlier thinking blocks, never a 400.
 
 **Provenance, export redaction, restore.** Every copy of book text onto a character (features, traits,
 lineages, feats, a background's feature; the DM's words about an imported entry) carries an
@@ -874,8 +921,8 @@ Invariants, checked in CI (the definition of done):
   and said aloud, and the Dying line's stabilization by another creature (`update_character` conditions_add "Stable",
   then 1 HP after 1d4 hours); and the Saving throws line names what every save includes (a Ring or Cloak of Protection, Aura of
   Protection), so those sheets and the prompt differ.
-- **One deliberate `DM_TOOLS` change** in this release (above), reviewed with its cost; otherwise
-  `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
+- **Deliberate `DM_TOOLS` changes** only (above: this release's, and the Hit Point maximum adjustments' since), each
+  reviewed with its cost; otherwise `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
 - **Privacy.** No marker sentence of the test book appears in any exported bundle (the e2e test). Every
   copy of book text onto a character carries an `ImportedRef`; exports replace that text with a
   placeholder, and a device that has the book fills it back in.

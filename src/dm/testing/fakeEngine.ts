@@ -30,6 +30,18 @@ export type DiceTerm = Engine.DiceTerm;
 export { changeAbilityScore } from '@/engine/character';
 // Which side of the feat line a feature's source puts it on, which feature an entry rewrites and how a result names it, run the real rules (pure).
 export { featOrTrait, featureLabel, featureToRewrite, isAlertFeat, isToughFeat } from '@/engine/character';
+// Hit Point maximum adjustments and the Initiative bonus run the real rules (pure).
+export {
+  adjustHpMax,
+  applyDrainingDamage,
+  changeInitiativeBonus,
+  drainProblem,
+  endHpMaxAdjustments,
+  findHpMaxAdjustments,
+  hpMaxAdjustmentLabel,
+  hpMaxAdjustments,
+  hpMaxEndsText,
+} from '@/engine/character';
 // Which names are unarmed strikes runs the real rule (pure).
 export { isUnarmedStrikeName } from '@/engine/rules';
 export {

@@ -3,24 +3,28 @@
  * passive Perception, hit dice, Heroic Inspiration, concentration, exhaustion, conditions and —
  * at 0 HP — the death-save tracker.
  */
-import { useId, useState, type FormEvent } from 'react';
-import { Brain, Footprints, Heart, HeartPulse, Shield, Skull, Sparkles, Swords, X, Zap } from 'lucide-react';
+import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } from 'react';
+import { Brain, Footprints, Heart, HeartPulse, Pencil, Shield, Skull, Sparkles, Swords, X, Zap } from 'lucide-react';
 import {
   conditionName,
   effectiveSpeed,
   formatModifier,
+  hpMaxAdjustments,
+  hpMaxEndsText,
   initiativeModifier,
   passivePerception,
   proficiencyBonus,
   characterLevel,
 } from '@/engine';
 import { cn } from '@/lib/cn';
-import type { Character } from '@/types';
-import { Badge, Button } from '@/ui/components/ui';
+import type { Character, HpMaxAdjustment } from '@/types';
+import { Badge, Button, IconButton } from '@/ui/components/ui';
+import { HpMaxDialog } from './HpMaxDialog';
 import {
   concentrationChange,
   damageChange,
   deathSaveMarkChange,
+  endHpMaxChange,
   exhaustionChange,
   healChange,
   inspirationChange,
@@ -44,8 +48,76 @@ function hpTone(c: Character): string {
   return 'bg-success';
 }
 
+const ENDS_TITLE: Record<HpMaxAdjustment['ends'], string> = {
+  'long-rest': 'Ends at a Long Rest',
+  'when-ended': 'Ends when you or your DM end it',
+  never: 'Lasting: part of your hero',
+};
+
+/**
+ * What changes the maximum beyond the app's own count: raises, reductions and lasting changes, each in its tone and
+ * saying when it ends. An effect's × ends it; focus then goes to the × now in its place, else the one before, else the
+ * pencil (`pencil`), never to the page. Chips are keyed by what they are, so one ended elsewhere (the DM, a Long Rest)
+ * leaves focus on the others.
+ */
+function HpMaxChips({ character: c, editable, onEdit, pencil }: Omit<VitalsProps, 'onRoll'> & { pencil: RefObject<HTMLButtonElement | null> }) {
+  const adjustments = hpMaxAdjustments(c);
+  const seen = new Map<string, number>();
+  const keys = adjustments.map((a) => {
+    // One name is one entry; a hand-edited file can still hold two, so a repeat gets its count.
+    const key = `${a.ends}:${a.name}`;
+    const n = seen.get(key) ?? 0;
+    seen.set(key, n + 1);
+    return n ? `${key}#${n}` : key;
+  });
+  const list = useRef<HTMLUListElement>(null);
+  /** The place among the ×s of the one just pressed, until the chips next change. */
+  const ended = useRef<number | null>(null);
+  useEffect(() => {
+    const at = ended.current;
+    ended.current = null;
+    if (at === null || document.activeElement !== document.body) return;
+    const buttons = Array.from(list.current?.querySelectorAll('button') ?? []);
+    (buttons[Math.min(at, buttons.length - 1)] ?? pencil.current)?.focus();
+  }, [c.hpMaxAdjustments, pencil]);
+  if (!adjustments.length) return null;
+  return (
+    <ul ref={list} className="flex flex-wrap gap-1.5" aria-label="Hit point maximum adjustments">
+      {adjustments.map((a, i) => {
+        const effect = a.ends !== 'never';
+        const tone = !effect ? 'bg-surface-2 text-muted' : a.amount > 0 ? 'bg-arcane-soft text-arcane' : 'bg-danger-soft text-danger';
+        const label = `${a.name} ${formatModifier(a.amount)}`;
+        return (
+          <li key={keys[i]} className={cn('inline-flex items-center gap-1 rounded-full py-0.5 pl-2.5 text-xs font-medium', editable && effect ? 'pr-1' : 'pr-2.5', tone)}>
+            <span title={ENDS_TITLE[a.ends]}>
+              {label}
+              <span className="font-normal">, {hpMaxEndsText(a.ends)}</span>
+            </span>
+            {editable && effect && (
+              <button
+                type="button"
+                aria-label={`End ${a.name} (${formatModifier(a.amount)} hit point maximum)`}
+                title={`End ${a.name}`}
+                onClick={(e) => {
+                  ended.current = Array.from(list.current?.querySelectorAll('button') ?? []).indexOf(e.currentTarget);
+                  onEdit((cur) => endHpMaxChange(cur, a.name, a.ends));
+                }}
+                className={cn('grid size-5 place-items-center rounded-full', a.amount > 0 ? 'hover:bg-arcane/20' : 'hover:bg-danger/20')}
+              >
+                <X className="size-3" aria-hidden />
+              </button>
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 function HpBlock({ character: c, editable, onEdit }: Omit<VitalsProps, 'onRoll'>) {
   const [amount, setAmount] = useState('');
+  const [adjusting, setAdjusting] = useState(false);
+  const pencil = useRef<HTMLButtonElement>(null);
   const inputId = useId();
   const value = Number(amount);
   const valid = amount.trim() !== '' && Number.isInteger(value) && value >= 0;
@@ -59,21 +131,29 @@ function HpBlock({ character: c, editable, onEdit }: Omit<VitalsProps, 'onRoll'>
   return (
     <div className="flex flex-col gap-2">
       <div className="flex items-end justify-between gap-2">
-        <span className="flex items-center gap-1.5 text-[10px] font-semibold tracking-wider text-muted uppercase">
+        <span className="flex shrink-0 items-center gap-1.5 text-[10px] font-semibold tracking-wider whitespace-nowrap text-muted uppercase">
           <Heart className="size-3.5 text-danger" aria-hidden /> Hit points
         </span>
-        <span className="flex items-baseline gap-1.5 tabular-nums">
-          <span className="text-2xl leading-none font-semibold" aria-label={`${c.hp.current} of ${c.hp.max} hit points`}>
+        {/* In a narrow rail the badge and pencil wrap below the readout, never the readout itself. */}
+        <span className="flex flex-wrap items-baseline justify-end gap-x-1.5 gap-y-1 tabular-nums">
+          <span className="text-2xl leading-none font-semibold whitespace-nowrap" aria-label={`${c.hp.current} of ${c.hp.max} hit points`}>
             {c.hp.current}
             <span className="text-base font-normal text-muted"> / {c.hp.max}</span>
           </span>
           {c.hp.temp > 0 && <Badge tone="info">+{c.hp.temp} temp</Badge>}
+          {editable && (
+            <IconButton ref={pencil} size="sm" label="Adjust hit point maximum" onClick={() => setAdjusting(true)} className="-my-2 self-center">
+              <Pencil className="size-3.5" aria-hidden />
+            </IconButton>
+          )}
         </span>
       </div>
       <div className="flex h-2.5 overflow-hidden rounded-full bg-surface-3" aria-hidden>
         <div className={cn('h-full transition-[width]', hpTone(c))} style={{ width: `${(c.hp.current / total) * 100}%` }} />
         {c.hp.temp > 0 && <div className="h-full bg-info" style={{ width: `${(c.hp.temp / total) * 100}%` }} />}
       </div>
+      <HpMaxChips character={c} editable={editable} onEdit={onEdit} pencil={pencil} />
+      {editable && <HpMaxDialog open={adjusting} character={c} onClose={() => setAdjusting(false)} onEdit={onEdit} />}
       {editable && (
         <form onSubmit={onSubmit} className="flex flex-wrap items-center gap-1.5">
           <label htmlFor={inputId} className="sr-only">
