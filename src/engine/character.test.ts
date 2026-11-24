@@ -988,6 +988,15 @@ describe('Hit Point maximum adjustments (SRD 5.2.1)', () => {
     expect(drainProblem(aided, 'Aid')).toBe(
       'Aid +5 (until a Long Rest) goes by that name: give the drain a name of its own (as in "Life Drain (Wight)"), or end that one in an earlier call (hp applies before hp_max_end).',
     );
+    // The example is never a name an entry holds: not the one refused (a Wight's drain a Death Dog's poison keeps,
+    // srd:monster:death-dog), nor another's.
+    const poisoned = adjustHpMax(hardy(), { name: 'Life Drain (Wight)', change: -5, ends: 'when-ended' }).character;
+    const kept = 'give the drain a name of its own, or end that one in an earlier call (hp applies before hp_max_end).';
+    expect(drainProblem(poisoned, 'Life Drain (Wight)')).toBe(`Life Drain (Wight) −5 (until ended) goes by that name: ${kept}`);
+    const both = adjustHpMax(poisoned, { name: 'Life Drain', change: -3, ends: 'when-ended' }).character;
+    expect(drainProblem(both, 'Life Drain')).toBe(`Life Drain −3 (until ended) goes by that name: ${kept}`);
+    const twin = adjustHpMax(hardy(), { name: 'Life Drain Wight', change: -5, ends: 'when-ended' }).character; // the same name
+    expect(drainProblem(twin, 'Life Drain Wight')).toBe(`Life Drain Wight −5 (until ended) goes by that name: ${kept}`);
     // A lasting change under a lasting entry's name adds up either way; an effect's can't go the other way.
     const lowered = adjustHpMax(boon, { name: 'Boon', change: -2, ends: 'never' });
     expect(lowered.character.hpMaxAdjustments).toEqual([{ name: 'Boon', amount: 2, ends: 'never' }]);

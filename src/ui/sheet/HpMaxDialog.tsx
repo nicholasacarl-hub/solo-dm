@@ -101,13 +101,16 @@ export function HpMaxDialog({
           >
             {previewText}
           </p>
-          <div className="flex shrink-0 justify-end gap-2">
+          <div className="flex shrink-0 flex-wrap justify-end gap-2">
             <Button variant="ghost" onClick={close}>
               Cancel
             </Button>
             <Button type="submit" form={`${id}-form`} variant={dies ? 'danger' : 'primary'} disabled={!applies}>
-              {/* Held sideways, the preview beside it says the hero dies, and needs the width: the rest is only read out. */}
-              <span>Apply{dies && <> <span className="phone-landscape:sr-only">— your hero dies</span></>}</span>
+              {/* The preview by it says the hero dies: held sideways it needs the width, and on a phone under 360px wide
+                  the row does (it wraps rather than clip if fonts run wider), so the rest is only read out there. */}
+              <span>
+                Apply{dies && <> <span className="phone-landscape:sr-only max-[360px]:sr-only">— your hero dies</span></>}
+              </span>
             </Button>
           </div>
         </div>

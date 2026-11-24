@@ -714,15 +714,18 @@ export function damageTaken(c: Character, amount: number, damageType?: string): 
  * Why a draining hit can't go under the name `drain`, or null: a blank name, or one another change already holds
  * (hpMaxNameProblem). applyDrainingDamage then refuses the hit whole, so its damage never lands without its drain. The
  * hit applies before hp_max_end, so the holder can only be ended in an earlier call; a name of its own comes first, as
- * ending a reduction a curse or poison keeps (SRD 5.2.1 Death Dog, Mummy) would give back what it still holds down.
+ * ending a reduction a curse or poison keeps (SRD 5.2.1 Death Dog, Mummy) would give back what it still holds down. The
+ * example (SRD 5.2.1 Wight: "Life Drain") is left out when an entry already goes by it.
  */
 export function drainProblem(c: Pick<Character, 'hpMaxAdjustments'>, drain: string): string | null {
   const name = adjustmentName(drain);
   if (!name) return 'A drain needs a name (the effect, as in "Life Drain").';
-  const held = hpMaxNameHolder(hpMaxAdjustments(c), name, -1, 'long-rest');
-  return held
-    ? `${hpMaxAdjustmentLabel(held.entry)} goes by that name: give the drain a name of its own (as in "Life Drain (Wight)"), or end that one in an earlier call (hp applies before hp_max_end).`
-    : null;
+  const list = hpMaxAdjustments(c);
+  const held = hpMaxNameHolder(list, name, -1, 'long-rest');
+  if (!held) return null;
+  const example = 'Life Drain (Wight)';
+  const asIn = list.some((a) => nameKey(a.name) === nameKey(example)) ? '' : ` (as in "${example}")`;
+  return `${hpMaxAdjustmentLabel(held.entry)} goes by that name: give the drain a name of its own${asIn}, or end that one in an earlier call (hp applies before hp_max_end).`;
 }
 
 /**
