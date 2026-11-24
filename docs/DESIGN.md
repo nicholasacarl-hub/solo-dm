@@ -146,7 +146,8 @@ the chronicle — "simple compaction", which is compatible with preserved thinki
   and made again reaches the DM as three, in order), unless it repeats the newest one waiting (a retry); a save keeps
   the notices queued elsewhere by position and count, never by text alone (`src/lib/dmNotices.ts`). A turn set aside
   unanswered (its request failed, was refused or stopped before any text) puts its notices back ahead of any queued
-  since (`putBackDmNotices`), so the DM still hears every notice in the order it happened.
+  since, so the DM still hears every notice in the order it happened; the trim and the campaign record holding them
+  are one IndexedDB transaction (`truncateTranscriptAfter`'s `putBack`), so a tab closed in between loses nothing.
 - One tab at a time: the play screen holds a per-campaign Web Lock; the store refuses writes to a
   campaign another tab holds.
 - Rules lookups search the SRD, every import switched on in the Library, and homebrew.

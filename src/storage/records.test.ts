@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CompendiumEntry, LibrarySource } from '@/types';
 import { sampleCombat } from '@/test/fixtures';
 import {
@@ -17,11 +17,15 @@ import {
   putHomebrew,
   saveLibrarySource,
   setLibrarySourceEnabled,
+  trimTranscriptKeepingNotices,
 } from '@/storage';
 import { db } from './db';
 import { resetDatabase, seedCampaign, sharedHomebrew } from './testData';
 
 beforeEach(resetDatabase);
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('loadCampaignRecords', () => {
   it('returns null for an unknown campaign', async () => {
@@ -195,6 +199,23 @@ describe('DM notices on the campaign record', () => {
     // `once`: a notice stored anywhere isn't added again (one that states a fact the app finds until it is saved).
     expect(await addPendingDmNotice('a-camp', spent, undefined, { once: true })).toEqual([gained, spent, gained]);
     expect(await addPendingDmNotice('a-camp', 'Top-up.', undefined, { once: true })).toEqual([gained, spent, gained, 'Top-up.']);
+  });
+
+  it('trimTranscriptKeepingNotices trims the transcript and saves the record in one write: both, or neither', async () => {
+    const { campaign } = await seedCampaign('a');
+    const seqs = async (sessionId: string) => (await getTranscript(sessionId)).map((m) => m.seq);
+    const setAside = { ...campaign, pendingDmNotices: ['Put back.'] };
+    // The record's write fails after the trim, inside the same transaction (as if the tab closed): nothing is stored.
+    const put = vi.spyOn(db.campaigns, 'put').mockRejectedValueOnce(new Error('The tab closed.'));
+    await expect(trimTranscriptKeepingNotices('a-sess-2', 1, setAside, [])).rejects.toThrow('The tab closed.');
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(await seqs('a-sess-2')).toEqual([1, 2, 3]);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toBeUndefined();
+    // Again, and it lands: the trim and the record together; the other session's transcript is untouched.
+    expect(await trimTranscriptKeepingNotices('a-sess-2', 1, setAside, [])).toEqual(['Put back.']);
+    expect(await seqs('a-sess-2')).toEqual([1]);
+    expect(await seqs('a-sess-1')).toEqual([1, 2]);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual(['Put back.']);
   });
 
   it('putCampaignKeepingNotices keeps a repeat queued elsewhere, in order', async () => {

@@ -138,8 +138,10 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
         set({ transcript: [...get().transcript, ...messages] });
         return messages;
       },
-      async truncateTranscriptAfter(seq) {
-        set({ transcript: get().transcript.filter((m) => m.seq <= seq) });
+      async truncateTranscriptAfter(seq, opts = {}) {
+        // As the store: a set-aside turn's notices go back ahead of any queued since, in their order, none dropped.
+        const back = (opts.putBack ?? []).map((n) => n.trim()).filter(Boolean);
+        set({ transcript: get().transcript.filter((m) => m.seq <= seq), ...(back.length > 0 && { pendingDmNotices: [...back, ...get().pendingDmNotices] }) });
       },
 
       async appendLog(entry) {
@@ -305,11 +307,6 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
         const notices = get().pendingDmNotices;
         set({ pendingDmNotices: [] });
         return notices;
-      },
-      putBackDmNotices(notices) {
-        // As the store: ahead of any queued since, in their order, none dropped.
-        const back = notices.map((n) => n.trim()).filter(Boolean);
-        if (back.length > 0) set({ pendingDmNotices: [...back, ...get().pendingDmNotices] });
       },
       // Structured imports: nothing to restore in the DM's tests.
       async restoreImportedText() {

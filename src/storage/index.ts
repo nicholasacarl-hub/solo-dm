@@ -103,6 +103,12 @@ export const putCampaign: (c: Campaign) => Promise<void> = records.putCampaign;
 export const putCampaignKeepingNotices: (c: Campaign, seen: readonly string[]) => Promise<string[]> =
   records.putCampaignKeepingNotices;
 /**
+ * deleteTranscriptAfter (seq > `seq`) and putCampaignKeepingNotices in one transaction: both are stored or neither.
+ * Returns the notices now stored.
+ */
+export const trimTranscriptKeepingNotices: (sessionId: string, seq: number, c: Campaign, seen: readonly string[]) => Promise<string[]> =
+  records.trimTranscriptKeepingNotices;
+/**
  * Add a DM notice to a stored campaign (bumps updatedAt), unless it repeats the newest one stored (a retry), or, with
  * `once`, any stored one. Resolves the stored notices, or null if it doesn't exist.
  */
