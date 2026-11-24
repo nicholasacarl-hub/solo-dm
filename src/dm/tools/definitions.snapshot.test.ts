@@ -1,10 +1,14 @@
 /**
  * DM_TOOLS is sent with every DM request (request.ts): any change to its bytes rewrites the cache prefix
  * of every session in progress and drops their earlier thinking blocks (CLAUDE.md rule 1). This pins
- * today's array. It changes exactly once in the structured-imports batch — E1's one deliberate change
- * (spec §6.5: optional ac / hp_max / initiative_bonus, three description edits) — with
+ * today's array. It has changed twice, each a deliberate change reviewed with its one-time cost:
+ * - the structured-imports batch, E1 (spec §6.5: optional ac / hp_max / initiative_bonus on start_combat
+ *   combatants, three description edits);
+ * - Hit Point maximum adjustments (update_character hp_max, hp_max_end, hp.drain and initiative_change, with
+ *   the update_character and take_rest descriptions).
+ * Each was regenerated once with
  *   npx vitest run src/dm/tools/definitions.snapshot.test.ts -u
- * and the PR states its one-time cost. Nothing else may update this snapshot.
+ * Nothing else may update this snapshot.
  */
 import { describe, expect, it } from 'vitest';
 import { DM_TOOLS } from './definitions';

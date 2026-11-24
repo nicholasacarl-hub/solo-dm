@@ -501,6 +501,24 @@ describe('parseCampaignBundle', () => {
     expect(parseCampaignBundle(data).character).not.toHaveProperty('transformations');
   });
 
+  it('reads Hit Point maximum adjustments, setting aside what it cannot read', () => {
+    const data = valid();
+    const adjustments = [
+      { name: 'Aid', amount: 5, ends: 'long-rest' },
+      { name: 'Tough (missed at 1st level)', amount: 4, ends: 'never' },
+      { name: 'Mummy Rot', amount: -7, ends: 'when-ended' },
+    ];
+    const read = (hpMaxAdjustments: unknown) => parseCampaignBundle({ ...data, character: { ...(data.character as object), hpMaxAdjustments } }).character;
+    expect(read(adjustments)?.hpMaxAdjustments).toEqual(adjustments);
+    const odd = read([...adjustments, { name: '', amount: 3, ends: 'never' }, { name: 'Zero', amount: 0, ends: 'never' }, { name: 'Half', amount: 1.5, ends: 'never' }, 'Aid +5']);
+    expect(odd?.hpMaxAdjustments).toEqual(adjustments);
+    // An end from a later version stays in view until someone ends it.
+    expect(read([{ name: 'Moonblight', amount: -2, ends: 'next-dawn' }])?.hpMaxAdjustments).toEqual([{ name: 'Moonblight', amount: -2, ends: 'when-ended' }]);
+    expect(read('Aid +5')?.hpMaxAdjustments).toBeUndefined();
+    // An old save gains no such key.
+    expect(parseCampaignBundle(data).character).not.toHaveProperty('hpMaxAdjustments');
+  });
+
   it('reads the battle-maps table rule, treating an unknown value as missing (When it helps)', () => {
     const data = valid();
     const campaign = data.campaign as { settings: Record<string, unknown> };

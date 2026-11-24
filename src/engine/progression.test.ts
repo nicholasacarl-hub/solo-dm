@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Character, ClassLevel, Feature, ImportedRef, SourceFormat } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import { asiLevels, findSrdClass, SRD_CLASSES } from './classData';
-import { addFeature } from './character';
+import { addFeature, adjustHpMax } from './character';
 import type { Rng } from './dice';
 import {
   applyLongRest,
@@ -445,6 +445,66 @@ describe('applyLongRest (SRD 5.2.1)', () => {
     const r = applyLongRest(mira({ hp: { max: 17, current: 0, temp: 0 } }));
     expect(r.events[0].type).toBe('warning');
     expect(r.character.hp.current).toBe(0);
+  });
+
+  it('a reduced Hit Point maximum returns to normal, and Aid ends; HP refill to it (srd:rule:long-rest)', () => {
+    // "If your Hit Point maximum was reduced, it returns to normal." Aid's 8 hours are over by the end of the rest.
+    const drained = adjustHpMax(mira({ hp: { max: 17, current: 6, temp: 0 } }), { name: 'Life Drain', change: -7, ends: 'long-rest' }).character; // 6/10
+    const r = applyLongRest(drained);
+    expect(r.character.hp).toEqual({ max: 17, current: 17, temp: 0 });
+    expect(r.character).not.toHaveProperty('hpMaxAdjustments');
+    expect(r.events[0].message).toBe('Life Drain −7 ends: HP maximum 10 → 17');
+    expect(r.events[1].message).toMatch(/^Long rest: HP 6 → 17;/);
+    const aided = adjustHpMax(mira(), { name: 'Aid', change: 5, ends: 'long-rest' }).character;
+    expect(applyLongRest(aided).character.hp).toEqual({ max: 17, current: 17, temp: 0 });
+  });
+
+  it("keeps what a rest doesn't end: Heroes' Feast, a Death Dog's reduction, a lasting change (srd:spell:heroes-feast, srd:monster:death-dog)", () => {
+    // Heroes' Feast: "which last for 24 hours"; Death Dog: "the target's Hit Point maximum doesn't return to normal when
+    // finishing a Long Rest".
+    let c = mira();
+    c = adjustHpMax(c, { name: "Heroes' Feast", change: 11, ends: 'when-ended' }).character;
+    c = adjustHpMax(c, { name: 'Death Dog poison', change: -5, ends: 'when-ended' }).character;
+    c = adjustHpMax(c, { name: 'Blessing of the Grove', change: 2, ends: 'never' }).character;
+    const r = applyLongRest(c);
+    expect(r.character.hpMaxAdjustments).toEqual(c.hpMaxAdjustments);
+    expect(r.character.hp).toEqual({ max: 25, current: 25, temp: 0 });
+    expect(r.events).toHaveLength(1);
+  });
+
+  it("ends Aid before the drains: its 8 hours are over before the rest finishes, so a drained hero it kept alive dies (srd:rule:long-rest, srd:spell:aid)", () => {
+    // Aid: "Duration: 8 hours"; Long Rest: "at least 8 hours", stopped by "Casting a spell other than a cantrip", and only
+    // "When you finish the rest … If your Hit Point maximum was reduced, it returns to normal."
+    let c = adjustHpMax(mira(), { name: 'Aid', change: 5, ends: 'long-rest' }).character; // 17/22
+    c = adjustHpMax(c, { name: 'Life Drain', change: -20, ends: 'long-rest' }).character; // 2/2
+    const r = applyLongRest(c);
+    expect(r.character.deathSaves.dead).toBe(true);
+    expect(r.events).toEqual([{ type: 'died', message: 'Aid +5 ends: HP maximum 2 → 0 — a creature dies if its Hit Point maximum reaches 0.' }]);
+    // The hero never finished the rest: the drain stays, its records adding up to the maximum of 0.
+    expect(r.character.hp).toEqual({ max: 0, current: 0, temp: 0 });
+    expect(r.character.hpMaxAdjustments).toEqual([{ name: 'Life Drain', amount: -17, ends: 'long-rest' }]);
+    // With room to spare, Aid ends first and the drain then returns to normal: the same full rest as ever.
+    let spare = adjustHpMax(mira(), { name: 'Aid', change: 5, ends: 'long-rest' }).character; // 17/22
+    spare = adjustHpMax(spare, { name: 'Life Drain', change: -10, ends: 'long-rest' }).character; // 12/12
+    const rested = applyLongRest(spare);
+    expect(rested.character.hp).toEqual({ max: 17, current: 17, temp: 0 });
+    expect(rested.events.slice(0, 2).map((e) => e.message)).toEqual(['Aid +5 ends: HP maximum 12 → 7, HP 12 → 7', 'Life Drain −10 ends: HP maximum 7 → 17']);
+    expect(rested.events[2].message).toMatch(/^Long rest: HP 7 → 17[;.]/);
+  });
+
+  it("Aid ending under a curse the rest doesn't lift can kill (srd:rule:...-instant-death: \"A creature dies if its Hit Point maximum reaches 0.\")", () => {
+    let c = adjustHpMax(mira(), { name: 'Aid', change: 5, ends: 'long-rest' }).character; // 17/22
+    c = adjustHpMax(c, { name: 'Mummy Rot', change: -21, ends: 'when-ended' }).character; // 1/1
+    const r = applyLongRest(c);
+    expect(r.character.deathSaves.dead).toBe(true);
+    expect(r.character.hp).toEqual({ max: 0, current: 0, temp: 0 });
+    expect(r.events.map((e) => e.type)).toEqual(['died']);
+  });
+
+  it('a Short Rest changes no maximum (srd:rule:short-rest)', () => {
+    const c = adjustHpMax(mira(), { name: 'Life Drain', change: -3, ends: 'long-rest' }).character;
+    expect(applyShortRest(c).character.hp.max).toBe(14);
+    expect(applyShortRest(c).character.hpMaxAdjustments).toEqual(c.hpMaxAdjustments);
   });
 });
 

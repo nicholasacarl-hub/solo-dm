@@ -22,6 +22,15 @@ vibe-coding session.
 - **Level-up spell picks**: choosing new spells in the level-up dialog (ASI/feat, Epic Boon and Fighting
   Style choices and subclass catch-up are in), plus multiclass proficiency gains and features that pick
   more than one option.
+- **Hit Point maximum effects the app doesn't time or trigger**: with no game clock, Aid, Heroes' Feast and a reduction a
+  curse or poison keeps end when the DM or player ends them (the status line names them every turn), and a Mummy's or
+  Death Dog's reduction is switched by hand to end at the next Long Rest once its cause ends. The DM rolls a Mummy's or
+  Death Dog's later reductions every 24 hours, and the Mummy's "can't regain Hit Points" isn't enforced. A poison that
+  keeps every reduction through Long Rests (a Death Dog's) keeps only the ones recorded as "until ended". Aura of Life
+  (a maximum that can't be reduced) isn't enforced: inside it the DM sends plain damage instead of `hp.drain`. Raises
+  that grow with level (a Berserker Axe) and a transformation's own change to the maximum are entered and ended by
+  hand. The Long Rest's "Ability Scores Restored" isn't applied, so a reduced Constitution is raised back by hand. The
+  player has no control for the Initiative bonus (the DM's `initiative_change` only).
 
 ## Memory and cost
 
@@ -70,19 +79,21 @@ The first version of structured imports deliberately leaves these out:
   feature, Aura of Protection, Draconic Resilience's Hit Points…): its Martial Arts die stays the one on the sheet (a
   2014 Monk's grows d4 → d6 → d8 → d10), and an unarmed strike off the sheet (a Kick) follows the sheet's Unarmed
   Strike, or uses Strength when the sheet has none. The engine would need each edition's numbers.
-- **Hit Points a character missed**: nothing in the app raises a Hit Point maximum by hand, so a character keeps the
-  Hit Points it has where the app once counted too few: Tough taken at 1st level (an origin feat), in the level-up
-  dialog's feat panel or recorded by the DM (features_add) before the app counted it there, or beside a feature of its
-  name before the feat's Hit Points were its own, and Draconic Resilience on a 2014 book's Sorcerer, or on a 2024
-  book's while its record's Edition said Older, for levels gained before level-up counted it in either edition. A
-  book's Sorcerer leveled while its edition isn't recorded yet (a hero made before refs recorded it, its book away)
-  waits for the one-time top-up, which pays only a 2024 book's. A way to adjust the maximum (on the sheet and for the
-  DM) would mend these, and cover Aid and a Wraith's Life Drain too. An Alert the DM recorded before the app counted it
-  keeps its Initiative short the same way: nothing sets the Initiative bonus by hand either.
+- **Hit Points a character missed**: the app doesn't find them itself, so a character keeps the Hit Points it has where
+  the app once counted too few: Tough taken at 1st level (an origin feat), in the level-up dialog's feat panel or
+  recorded by the DM (features_add) before the app counted it there, or beside a feature of its name before the feat's
+  Hit Points were its own, and Draconic Resilience on a 2014 book's Sorcerer, or on a 2024 book's while its record's
+  Edition said Older, for levels gained before level-up counted it in either edition. A book's Sorcerer leveled while
+  its edition isn't recorded yet (a hero made before refs recorded it, its book away) waits for the one-time top-up,
+  which pays only a 2024 book's. The DM or the player mends these with a lasting adjustment ("Never" on the sheet,
+  `ends: "never"` for the DM), whose record shows on the sheet and in the DM's sheet text so it isn't paid twice; a
+  top-up that later pays the same Draconic Resilience is taken back the same way. An Alert the DM recorded before the
+  app counted it keeps its Initiative short until the DM mends it with `initiative_change`.
 - **A feat moved off the feat line before**: on a sheet where the DM's entry rewrote the Alert or Tough feat under a
   species trait's or class feature's source before the app kept it the feat, the numbers stay without the feat and stop
   growing, and the feat recorded again (features_add, or the level-up panel, which offers it) pays them a second time.
-  Nothing lowers a maximum or an Initiative bonus by hand.
+  The DM can take the second payment back by hand (a negative lasting `hp_max`, a negative `initiative_change`); the
+  app doesn't do it itself.
 - **A Repeatable feat the DM records again**: the DM's features_add rewrites a feature of the same name, so a second
   taking it records under the feat's own name stays one feature (its spent uses kept). The level-up panel adds a
   second taking, and the DM can give one its own name ("Magic Initiate (Wizard)").

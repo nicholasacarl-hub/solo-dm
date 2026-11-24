@@ -3,6 +3,8 @@
 
 /* Theme switching via <html data-theme="dark|light"> (set by applyTheme in settingsStore). */
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+/* A phone held sideways (as the Combat tab's two columns below): little height to spare. */
+@custom-variant phone-landscape (@media (orientation: landscape) and (max-height: 500px));
 
 /*
  * Visual direction: "candlelit table". Dark mode is ink-blue night with ember accents;
@@ -23,8 +25,10 @@
   --accent-ink: #fffaf2;
   --accent-soft: #f1dcc3;
   --danger: #b4232c;
+  --danger-ink: #ffffff;
   --danger-soft: #f6d6d3;
   --success: #2b7344;
+  --success-ink: #ffffff;
   --success-soft: #d5ecd9;
   --arcane: #674dc3;
   --arcane-soft: #e3dcf7;
@@ -64,8 +68,11 @@
   --accent-ink: #1a1206;
   --accent-soft: #3a2a12;
   --danger: #ef5b5b;
+  /* Dark text on the bright fills: white on them is below 4.5:1 (WCAG AA). */
+  --danger-ink: #0f1115;
   --danger-soft: #3a1717;
   --success: #4fbf72;
+  --success-ink: #0f1115;
   --success-soft: #15301f;
   --arcane: #a590ff;
   --arcane-soft: #262044;
@@ -104,8 +111,10 @@
   --color-accent-ink: var(--accent-ink);
   --color-accent-soft: var(--accent-soft);
   --color-danger: var(--danger);
+  --color-danger-ink: var(--danger-ink);
   --color-danger-soft: var(--danger-soft);
   --color-success: var(--success);
+  --color-success-ink: var(--success-ink);
   --color-success-soft: var(--success-soft);
   --color-arcane: var(--arcane);
   --color-arcane-soft: var(--arcane-soft);

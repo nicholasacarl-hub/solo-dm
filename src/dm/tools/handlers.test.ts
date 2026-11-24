@@ -426,6 +426,30 @@ describe('update_character', () => {
     expect(await h.run('update_character', { reason: 'nothing' })).toMatchObject({ isError: true });
   });
 
+  it('takes a call with only hp_max_end, hp_max or initiative_change as a change, each section logged in order', async () => {
+    const h = setup();
+    const end = await h.run('update_character', { hp_max_end: ['Aid'] });
+    expect(end.isError).toBeUndefined();
+    expect(end.content).toContain('No Hit Point maximum adjustment named "Aid".');
+    expect((await h.run('update_character', { initiative_change: 1 })).isError).toBeUndefined();
+    expect(h.s().character?.initiativeBonusExtra).toBe(1);
+    const before = h.s().log.length;
+    await h.run('update_character', { hp: { amount: 2, kind: 'damage' }, hp_max: { name: 'Aid', change: 5, ends: 'long-rest' }, speed: 25 });
+    const summaries = h.s().log.slice(before).map((e) => ('summary' in e ? e.summary : ''));
+    expect(summaries).toEqual(['HP 12 → 10 (2)', 'HP max 17 → 22, HP 10 → 15 (Aid · until a Long Rest)', 'Speed 30 ft. → 25 ft']);
+  });
+
+  it('names the field when hp_max is incomplete or has an unknown key', async () => {
+    const h = setup();
+    const missing = await h.run('update_character', { hp_max: { name: 'Aid', change: 5 } });
+    expect(missing.isError).toBe(true);
+    expect(missing.content).toContain('hp_max');
+    expect(missing.content).toContain('ends');
+    const unknown = await h.run('update_character', { hp_max: { name: 'Aid', change: 5, ends: 'long-rest', duration: '8 hours' } });
+    expect(unknown.content).toContain('hp_max: unknown field "duration"');
+    expect(h.s().character?.hp).toEqual({ max: 17, current: 12, temp: 0 });
+  });
+
   it('refuses unknown fields instead of silently dropping them', async () => {
     const h = setup();
     const out = await h.run('update_character', { hp: { amount: 7, kind: 'damage' }, temp_hp: 5 });

@@ -8,6 +8,7 @@
  */
 import {
   ABILITY_NAMES,
+  HP_MAX_ENDS,
   type Ability,
   type ActiveCondition,
   type Character,
@@ -17,11 +18,14 @@ import {
   type FeatureSource,
   type FeatureUses,
   type GameEvent,
+  type HpMaxAdjustment,
+  type HpMaxEnds,
   type InventoryItem,
   type KnownSpell,
   type Spellcasting,
 } from '@/types';
 import { nameKey, newId } from '@/lib/id';
+import { safeEnd } from '@/lib/text';
 import { CONDITIONS, INCAPACITATING_CONDITIONS, conditionKey, conditionName, matchStandardCondition } from './conditions';
 import { levelForXp } from './progression';
 import {
@@ -386,6 +390,369 @@ export function recordDeathSave(c: Character, natural: number): EngineResult & {
     events: [gameEvent('death-save', `Death save failed (${why}) — ${saves.successes} success${saves.successes === 1 ? '' : 'es'}, ${failures} failure${failures > 1 ? 's' : ''}.`)],
     outcome: 'failure',
   };
+}
+
+// ---------------------------------------------------------------------------
+// Hit Point maximum adjustments
+// ---------------------------------------------------------------------------
+//
+// hp.max stays the maximum in force, so every reader (healing, Hit Point Dice, rests, massive damage, Bloodied) keeps
+// reading one number. hpMaxAdjustments records each change beyond what the app counts with the amount it made, so
+// ending one takes back exactly that, whatever level-ups or Constitution changes came between.
+
+const HP_MAX_NAME_MAX = 60;
+
+/** How long an adjustment lasts, for labels: "until a Long Rest", "until ended", "lasting". */
+export function hpMaxEndsText(ends: HpMaxEnds): string {
+  return ends === 'long-rest' ? 'until a Long Rest' : ends === 'when-ended' ? 'until ended' : 'lasting';
+}
+
+function readEnds(ends: unknown): HpMaxEnds {
+  return (HP_MAX_ENDS as readonly unknown[]).includes(ends) ? (ends as HpMaxEnds) : 'when-ended';
+}
+
+/**
+ * The sheet's adjustments, read leniently: a name (on one line, at most 60 characters, as the engine writes it, so a
+ * longer one from a hand-edited file can still be ended) and a whole, non-zero amount; an unknown `ends` reads as
+ * 'when-ended'.
+ */
+export function hpMaxAdjustments(c: Pick<Character, 'hpMaxAdjustments'>): HpMaxAdjustment[] {
+  return (Array.isArray(c.hpMaxAdjustments) ? c.hpMaxAdjustments : []).flatMap((a) => {
+    const name = typeof a?.name === 'string' ? adjustmentName(a.name) : '';
+    const amount = toInt(a?.amount);
+    return name && amount !== 0 ? [{ name, amount, ends: readEnds(a.ends) }] : [];
+  });
+}
+
+/** "Aid +5 (until a Long Rest)", "Life Drain −10 (until a Long Rest)", "Tough (missed at 1st level) +4 (lasting)". */
+export function hpMaxAdjustmentLabel(a: HpMaxAdjustment): string {
+  return `${a.name} ${formatModifier(a.amount)} (${hpMaxEndsText(a.ends)})`;
+}
+
+/** A name on one line, at most 60 characters. */
+function adjustmentName(name: unknown): string {
+  const flat = String(name ?? '').replace(/\s+/g, ' ').trim();
+  return flat.slice(0, safeEnd(flat, HP_MAX_NAME_MAX)).trimEnd();
+}
+
+/** The spell or effect a name is for: "Aid (3rd level)" is Aid (SRD 5.2.1 Combining Spell Effects). */
+function effectKey(name: string): string {
+  return nameKey(splitQualifier(name)?.base ?? name);
+}
+
+function withAdjustments(c: Character, list: readonly HpMaxAdjustment[]): Character {
+  const next: Character = { ...c, hpMaxAdjustments: [...list] };
+  if (!list.length) delete next.hpMaxAdjustments;
+  return next;
+}
+
+/** A maximum of 0 kills (SRD 5.2.1 Instant Death: "A creature dies if its Hit Point maximum reaches 0."); temporary HP go too. */
+function dieAtMaxZero(c: Character, message: string): EngineResult {
+  return die({ ...c, hp: { max: 0, current: 0, temp: 0 } }, { ...c.deathSaves, stable: false, dead: true }, message);
+}
+
+export interface HpMaxChange {
+  /** The spell or effect ("Aid", "Life Drain"), or what a lasting change is for ("Tough (missed at 1st level)"). */
+  name: string;
+  /** Signed change to the maximum. */
+  change: number;
+  ends: HpMaxEnds;
+}
+
+/**
+ * Raise or lower the Hit Point maximum, recorded in hpMaxAdjustments so it can be ended.
+ * - An effect that raises it (Aid, Heroes' Feast) adds as much to current HP, waking a hero at 0 HP (SRD 5.2.1 Falling
+ *   Unconscious: "until you regain any Hit Points"). The same spell again doesn't add (Combining Spell Effects: "the
+ *   effects of the same spell cast multiple times don't combine"): only a stronger casting replaces it, by the difference.
+ * - An effect that lowers it (Life Drain, a curse) adds up under one name and lowers current HP only to fit (Hit Points:
+ *   "You can't have more Hit Points than your Hit Point maximum"); a maximum of 0 kills. Harm stops at 1 (SRD 5.2.1 Harm:
+ *   "This spell can't reduce a target's Hit Point maximum below 1").
+ * - A lasting change (`never`: a ruling, a boon, missed Hit Points) is bookkeeping, like a Constitution change: current
+ *   HP moves with it, a hero at 0 HP stays at 0, and it never takes the maximum below 1. The same name again adds up, and
+ *   a total of 0 takes it back.
+ */
+export function adjustHpMax(c: Character, spec: HpMaxChange): EngineResult {
+  const name = adjustmentName(spec.name);
+  const change = toInt(spec.change);
+  const ends = readEnds(spec.ends);
+  if (!name) return unchanged(c, 'A Hit Point maximum adjustment needs a name.');
+  if (change === 0) return unchanged(c, 'No change to the Hit Point maximum.');
+  if (c.deathSaves.dead) return unchanged(c, "The hero is dead: the Hit Point maximum doesn't change (an adjustment can still be ended).");
+  if (c.hp.max <= 0) return unchanged(c, 'No Hit Point maximum yet.');
+  const list = hpMaxAdjustments(c);
+  const problem = hpMaxNameProblem(list, name, change, ends);
+  if (problem) return unchanged(c, problem);
+  if (ends === 'never') return lastingHpMaxChange(c, list, name, change);
+  return change > 0 ? raiseHpMax(c, list, name, change, ends) : lowerHpMax(c, list, name, -change, ends);
+}
+
+/**
+ * Why `name` can't take this change, or null. One name is one entry, so hp_max_end and the status line know each by its
+ * name alone: an effect's change can't go the other way under an effect's name, and no change can end differently from
+ * the entry already under its name (a stronger casting of the same spell replaces its entry whatever its end). A lasting
+ * change under a lasting entry's name adds up either way, and a total of 0 takes it back.
+ */
+function hpMaxNameProblem(list: readonly HpMaxAdjustment[], name: string, change: number, ends: HpMaxEnds): string | null {
+  const held = hpMaxNameHolder(list, name, change, ends);
+  if (!held) return null;
+  const { entry, opposite } = held;
+  return opposite
+    ? `${entry.name} ${entry.amount > 0 ? 'raises' : 'lowers'} the Hit Point maximum: end it first, or give this change another name.`
+    : `${hpMaxAdjustmentLabel(entry)} goes by that name: give this change another name, or end that one first.`;
+}
+
+/** The entry under `name` that keeps it from taking this change (hpMaxNameProblem), and whether it goes the other way. */
+function hpMaxNameHolder(
+  list: readonly HpMaxAdjustment[],
+  name: string,
+  change: number,
+  ends: HpMaxEnds,
+): { entry: HpMaxAdjustment; opposite: boolean } | null {
+  const named = list.filter((a) => nameKey(a.name) === nameKey(name));
+  const opposite = ends !== 'never' && named.find((a) => a.ends !== 'never' && a.amount > 0 !== change > 0);
+  if (opposite) return { entry: opposite, opposite: true };
+  const recast = (a: HpMaxAdjustment) => change > 0 && ends !== 'never' && a.amount > 0 && a.ends !== 'never';
+  const other = named.find((a) => a.ends !== ends && !recast(a));
+  return other ? { entry: other, opposite: false } : null;
+}
+
+function raiseHpMax(c: Character, list: readonly HpMaxAdjustment[], name: string, amount: number, ends: HpMaxEnds): EngineResult {
+  const index = list.findIndex((a) => a.ends !== 'never' && a.amount > 0 && effectKey(a.name) === effectKey(name));
+  const same = index >= 0 ? list[index] : undefined;
+  if (same && amount <= same.amount) {
+    return unchanged(c, `${same.name} ${formatModifier(same.amount)} already applies: the same spell's effects don't combine (the most potent applies), so only a stronger casting replaces it.`);
+  }
+  const gain = amount - (same?.amount ?? 0);
+  const entry: HpMaxAdjustment = { name, amount, ends };
+  const max = c.hp.max + gain;
+  const base = withAdjustments({ ...c, hp: { ...c.hp, max } }, same ? list.map((a, i) => (i === index ? entry : a)) : [...list, entry]);
+  const why = `${name} ${formatModifier(amount)}${same ? ` replaces ${same.name} ${formatModifier(same.amount)}` : ''}, ${hpMaxEndsText(ends)}`;
+  if (c.hp.current <= 0) {
+    return {
+      character: touch(revive(base, gain)),
+      events: [gameEvent('revived', `HP maximum ${c.hp.max} → ${max}, HP 0 → ${gain} (${why}) — conscious again, but still Prone.`)],
+    };
+  }
+  const current = c.hp.current + gain;
+  return {
+    character: touch({ ...base, hp: { ...base.hp, current } }),
+    events: [gameEvent('hp-changed', `HP maximum ${c.hp.max} → ${max}, HP ${c.hp.current} → ${current} (${why})`)],
+  };
+}
+
+function lowerHpMax(c: Character, list: readonly HpMaxAdjustment[], name: string, amount: number, ends: HpMaxEnds): EngineResult {
+  const harm = effectKey(name) === 'harm';
+  const applied = Math.min(amount, harm ? c.hp.max - 1 : c.hp.max);
+  if (applied <= 0) return unchanged(c, "Harm can't reduce a target's Hit Point maximum below 1 (it is 1).");
+  const index = list.findIndex((a) => a.ends === ends && a.amount < 0 && nameKey(a.name) === nameKey(name));
+  const total = (index >= 0 ? list[index].amount : 0) - applied;
+  const next = index >= 0 ? list.map((a, i) => (i === index ? { ...a, amount: total } : a)) : [...list, { name, amount: -applied, ends }];
+  const max = c.hp.max - applied;
+  const floor = applied < amount && harm ? ": it can't reduce a Hit Point maximum below 1" : '';
+  const why = `${name} ${formatModifier(-applied)}${floor}${index >= 0 ? `, ${formatModifier(total)} in all` : ''}, ${hpMaxEndsText(ends)}`;
+  const base = withAdjustments({ ...c, hp: { ...c.hp, max } }, next);
+  if (max <= 0) return dieAtMaxZero(base, `HP maximum ${c.hp.max} → 0 (${why}): a creature dies if its Hit Point maximum reaches 0.`);
+  const current = Math.min(c.hp.current, max);
+  const hp = current !== c.hp.current ? `, HP ${c.hp.current} → ${current}` : '';
+  return { character: touch({ ...base, hp: { ...base.hp, current } }), events: [gameEvent('hp-changed', `HP maximum ${c.hp.max} → ${max}${hp} (${why})`)] };
+}
+
+function lastingHpMaxChange(c: Character, list: readonly HpMaxAdjustment[], name: string, change: number): EngineResult {
+  const max = c.hp.max + change;
+  if (max < 1) return unchanged(c, `A lasting change can't take the Hit Point maximum below 1 (it is ${c.hp.max}).`);
+  const index = list.findIndex((a) => a.ends === 'never' && nameKey(a.name) === nameKey(name));
+  const total = (index >= 0 ? list[index].amount : 0) + change;
+  const next =
+    index < 0
+      ? [...list, { name, amount: change, ends: 'never' as const }]
+      : list.flatMap((a, i) => (i !== index ? [a] : total === 0 ? [] : [{ ...a, amount: total }]));
+  const current = c.hp.current > 0 ? clamp(c.hp.current + change, 1, max) : 0;
+  const sum = index < 0 ? '' : total === 0 ? ', taken back' : `, ${formatModifier(total)} in all`;
+  const hp = c.hp.current > 0 ? `, HP ${c.hp.current} → ${current}` : '';
+  const atZero = c.hp.current > 0 ? '' : '; HP stays 0 until healed';
+  return {
+    character: touch(withAdjustments({ ...c, hp: { ...c.hp, max, current } }, next)),
+    events: [gameEvent('hp-changed', `HP maximum ${c.hp.max} → ${max}${hp} (${name} ${formatModifier(change)}${sum}, lasting)${atZero}`)],
+  };
+}
+
+/**
+ * End the adjustments each name finds (findHpMaxAdjustments; with `ends`, only those that end so). Its time ran out,
+ * Greater Restoration ended the reductions (SRD 5.2.1 Greater Restoration: "Any reduction to the target's Hit Point
+ * maximum"), or a lasting one is taken back. All of them end together (endHpMaxAdjustmentsWhere), so the order of the
+ * names never matters: a raise that ran out first is ended alone, first. A name that finds nothing warns with what is
+ * left in effect.
+ */
+export function endHpMaxAdjustments(c: Character, names: string | readonly string[], ends?: HpMaxEnds): EngineResult {
+  const { indices, missing } = findHpMaxAdjustments(c, names, ends);
+  const ended = endHpMaxAdjustmentsWhere(c, (_, i) => indices.has(i));
+  const left = hpMaxAdjustments(ended.character);
+  const inEffect = left.length ? ` (in effect: ${left.map(hpMaxAdjustmentLabel).join(', ')})` : '';
+  const notFound = missing.map((given) => warning(`No Hit Point maximum adjustment named "${given}"${inEffect}.`));
+  return { character: ended.character, events: [...ended.events, ...notFound] };
+}
+
+/**
+ * The entries of hpMaxAdjustments (by index) each name finds, and the names (as the engine writes them) that find none.
+ * A name finds the entries named exactly; else a bare name finds those for the same spell or effect ("Aid" finds "Aid
+ * (3rd level)") and a qualified one the bare entry ("Aid (2nd level)" finds "Aid"), never another qualifier's ("Bite
+ * (Otyugh)" doesn't find "Bite (Vampire Spawn)", another creature's).
+ */
+export function findHpMaxAdjustments(c: Pick<Character, 'hpMaxAdjustments'>, names: string | readonly string[], ends?: HpMaxEnds): { indices: Set<number>; missing: string[] } {
+  const list = hpMaxAdjustments(c);
+  const indices = new Set<number>();
+  const missing: string[] = [];
+  for (const name of typeof names === 'string' ? [names] : names) {
+    const given = adjustmentName(name);
+    const where = (keyOf: (n: string) => string, key: string) =>
+      given ? list.flatMap((a, i) => ((!ends || a.ends === ends) && keyOf(a.name) === key ? [i] : [])) : [];
+    const exact = where(nameKey, nameKey(given));
+    const base = splitQualifier(given)?.base;
+    const found = exact.length ? exact : base ? where(nameKey, nameKey(base)) : where(effectKey, effectKey(given));
+    if (!found.length) missing.push(given);
+    for (const i of found) indices.add(i);
+  }
+  return { indices, missing };
+}
+
+/**
+ * Take `shortfall` off the newest reductions, an effect's before a lasting one's (a ruling is part of the hero's own
+ * maximum, and outlasts the effect that ran it into 0), so the records still add up to a maximum held at 0.
+ */
+function absorbShortfall(list: readonly (HpMaxAdjustment | null)[], shortfall: number): (HpMaxAdjustment | null)[] {
+  const next: (HpMaxAdjustment | null)[] = [...list];
+  let left = shortfall;
+  for (const lasting of [false, true]) {
+    for (let j = next.length - 1; j >= 0 && left > 0; j -= 1) {
+      const x = next[j];
+      if (!x || x.amount >= 0 || (x.ends === 'never') !== lasting) continue;
+      const take = Math.min(left, -x.amount);
+      left -= take;
+      next[j] = x.amount + take === 0 ? null : { ...x, amount: x.amount + take };
+    }
+  }
+  return next;
+}
+
+/**
+ * End every adjustment that passes `test` (given each entry of hpMaxAdjustments and its index), giving back exactly what
+ * each changed: every reduction first (a lasting one taken back too), then the effects' raises, then lasting raises, so
+ * ending a drain or a ruling together with Aid never dips the maximum.
+ * - A reduction ending raises the maximum only: "returns to normal" doesn't heal.
+ * - A raise ending lowers current HP only to fit. If that leaves a maximum of 0 (Aid ending under a bigger curse), the
+ *   hero dies, and the shortfall comes off the newest reductions left (absorbShortfall), so ending them later gives back
+ *   the hero's own maximum.
+ * - A lasting entry is taken back as bookkeeping (current HP moves with it; a hero at 0 stays at 0), never below 1.
+ * On the dead it is bookkeeping only: how a hero drained to 0 gets a maximum back. They stay dead. When nothing ends (a
+ * lasting entry that stays), the character comes back unchanged, with the warnings.
+ */
+export function endHpMaxAdjustmentsWhere(c: Character, test: (a: HpMaxAdjustment, index: number) => boolean): EngineResult {
+  const all = hpMaxAdjustments(c);
+  const rank = (a: HpMaxAdjustment) => (a.amount < 0 ? 0 : a.ends === 'never' ? 2 : 1);
+  const order = all.flatMap((a, i) => (test(a, i) ? [i] : [])).sort((i, j) => rank(all[i]) - rank(all[j]) || i - j);
+  if (!order.length) return { character: c, events: [] };
+  // The entries as they stand: null once ended; a reduction shrinks when a shortfall comes off it.
+  let list: (HpMaxAdjustment | null)[] = [...all];
+  let character = c;
+  const events: GameEvent[] = [];
+  const setHp = (max: number, current: number) => {
+    character = { ...character, hp: { ...character.hp, max, current } };
+  };
+  for (const i of order) {
+    const a = list[i];
+    if (!a) continue;
+    const label = `${a.name} ${formatModifier(a.amount)}`;
+    const { max, current } = character.hp;
+    const after = max - a.amount;
+    const hpText = (now: number) => (now !== current ? `, HP ${current} → ${now}` : '');
+    if (a.ends === 'never') {
+      if (after < 1) {
+        events.push(warning(`${label} stays: taking it back would leave a Hit Point maximum below 1.`));
+        continue;
+      }
+      const now = current > 0 ? clamp(current - a.amount, 1, after) : 0;
+      list[i] = null;
+      setHp(after, now);
+      events.push(gameEvent('hp-changed', `${label} taken back: HP maximum ${max} → ${after}${hpText(now)}`));
+      continue;
+    }
+    list[i] = null;
+    if (after > 0) {
+      const now = Math.min(current, after);
+      setHp(after, now);
+      events.push(gameEvent('hp-changed', `${label} ends: HP maximum ${max} → ${after}${hpText(now)}`));
+      continue;
+    }
+    // A raise ending at a maximum of 0 or less: the shortfall comes off the reductions left, so the records still add up
+    // to the maximum.
+    list = absorbShortfall(list, -after);
+    if (character.deathSaves.dead) {
+      setHp(0, 0);
+      events.push(gameEvent('hp-changed', `${label} ends: HP maximum ${max} → 0`));
+      continue;
+    }
+    const died = dieAtMaxZero(character, `${label} ends: HP maximum ${max} → 0 — a creature dies if its Hit Point maximum reaches 0.`);
+    character = died.character;
+    events.push(...died.events);
+  }
+  if (events.every((e) => e.type === 'warning')) return { character: c, events };
+  return { character: touch(withAdjustments(character, list.filter((x): x is HpMaxAdjustment => x !== null))), events };
+}
+
+/**
+ * The damage a hit deals the hero after the Defenses (Immunity 0, then Resistance halves, then Vulnerability doubles;
+ * SRD 5.2.1 Order of Application): what a drain lowers the maximum by. Temporary HP don't lower it (damage they absorb is
+ * still damage taken), nor does damage past 0 HP. 0 for the dead.
+ */
+export function damageTaken(c: Character, amount: number, damageType?: string): number {
+  const raw = Math.max(0, toInt(amount));
+  if (raw === 0 || c.deathSaves.dead) return 0;
+  return adjustForDefenses(c, raw, damageType).amount;
+}
+
+/**
+ * Why a draining hit can't go under the name `drain`, or null: a blank name, or one another change already holds
+ * (hpMaxNameProblem). applyDrainingDamage then refuses the hit whole, so its damage never lands without its drain. The
+ * hit applies before hp_max_end, so the holder can only be ended in an earlier call; a name of its own comes first, as
+ * ending a reduction a curse or poison keeps (SRD 5.2.1 Death Dog, Mummy) would give back what it still holds down. The
+ * example (SRD 5.2.1 Wight: "Life Drain") is left out when an entry already goes by it.
+ */
+export function drainProblem(c: Pick<Character, 'hpMaxAdjustments'>, drain: string): string | null {
+  const name = adjustmentName(drain);
+  if (!name) return 'A drain needs a name (the effect, as in "Life Drain").';
+  const list = hpMaxAdjustments(c);
+  const held = hpMaxNameHolder(list, name, -1, 'long-rest');
+  if (!held) return null;
+  const example = 'Life Drain (Wight)';
+  const asIn = list.some((a) => nameKey(a.name) === nameKey(example)) ? '' : ` (as in "${example}")`;
+  return `${hpMaxAdjustmentLabel(held.entry)} goes by that name: give the drain a name of its own${asIn}, or end that one in an earlier call (hp applies before hp_max_end).`;
+}
+
+/**
+ * Damage that also lowers the Hit Point maximum by the damage taken, under the name `drain` (a Wraith's Life Drain,
+ * Harm): applyDamage first, so massive damage and damage at 0 HP are judged on the maximum before the drain; then, if the
+ * hero lives, adjustHpMax until a Long Rest (SRD 5.2.1 Long Rest: "If your Hit Point maximum was reduced, it returns to
+ * normal"). A name the drain can't take (drainProblem) refuses the hit whole.
+ */
+export function applyDrainingDamage(c: Character, amount: number, opts: { critical?: boolean; damageType?: string; drain: string }): EngineResult {
+  const problem = drainProblem(c, opts.drain);
+  if (problem) return unchanged(c, `${problem} This hit wasn't applied (neither its damage nor its drain).`);
+  const hit = applyDamage(c, amount, { critical: opts.critical, damageType: opts.damageType });
+  const taken = damageTaken(c, amount, opts.damageType);
+  if (taken === 0 || hit.character.deathSaves.dead) return hit;
+  const drained = adjustHpMax(hit.character, { name: opts.drain, change: -taken, ends: 'long-rest' });
+  return { character: drained.character, events: [...hit.events, ...drained.events] };
+}
+
+/**
+ * Change the Initiative bonus beyond Dexterity by `delta` (update_character initiative_change): a ruling, or an Alert the
+ * app didn't count. Always a change, never a total, so Alert's share stays and level-ups keep growing it.
+ */
+export function changeInitiativeBonus(c: Character, delta: number): EngineResult {
+  const d = toInt(delta);
+  if (d === 0) return { character: c, events: [] };
+  const character = touch({ ...c, initiativeBonusExtra: toInt(c.initiativeBonusExtra) + d });
+  return { character, events: [gameEvent('combat', `Initiative ${formatModifier(initiativeModifier(c))} → ${formatModifier(initiativeModifier(character))}`)] };
 }
 
 // ---------------------------------------------------------------------------
@@ -756,8 +1123,11 @@ export const ABILITY_SCORE_LIMIT = 30;
  * Change one ability score by `change`, never above `max` (20 for Ability Score Improvements and
  * feats, SRD 5.2.1; up to 30 for Epic Boons and transformations) nor below 1. An increase never
  * lowers a score already above the cap (e.g. set by a magic item). A Constitution modifier change
- * also changes the HP maximum as though the new modifier had applied from level 1 (SRD 5.2.1 "Hit
- * Points") — current HP moves with it, and a hero at 0 HP stays at 0.
+ * also changes the HP maximum by the change for each level (SRD 5.2.1 Gaining a Level: "When your
+ * Constitution modifier increases by 1, your Hit Point maximum increases by 1 for each level you
+ * have attained"; a decrease mirrors it) — current HP moves with it, and a hero at 0 HP stays at 0.
+ * An increase adds exactly that; a loss never takes the hero's own maximum below 1, but one that
+ * drains hold near 0 can reach 0 and kill, like Aid ending.
  */
 export function changeAbilityScore(c: Character, ability: Ability, change: number, max = 20): EngineResult {
   const before = c.abilityScores[ability];
@@ -775,10 +1145,28 @@ export function changeAbilityScore(c: Character, ability: Ability, change: numbe
     const perLevel = abilityModifier(target) - abilityModifier(before);
     const hpChange = perLevel * characterLevel(c);
     if (hpChange !== 0) {
-      const maxHp = Math.max(1, c.hp.max + hpChange);
+      const why = `Constitution modifier ${perLevel > 0 ? '+' : ''}${perLevel} per level`;
+      // An increase adds exactly hpChange. On a loss the floor of 1 is the hero's own maximum's (lasting entries are part
+      // of it); effects in force (Aid, a drain) come on top of it, so their records still add up and ending one gives
+      // back exactly its amount. A loss never raises the maximum.
+      const adjustments = hpMaxAdjustments(c);
+      const effects = adjustments.reduce((sum, a) => sum + (a.ends === 'never' ? 0 : a.amount), 0);
+      const maxHp = hpChange > 0 ? c.hp.max + hpChange : Math.min(c.hp.max, Math.max(1, c.hp.max - effects + hpChange) + effects);
+      if (maxHp <= 0) {
+        // Drains held the maximum within reach of the loss, so it reaches 0 (SRD 5.2.1 Instant Death: "A creature dies if
+        // its Hit Point maximum reaches 0"); the shortfall comes off the reductions, so their records still add up.
+        const records = absorbShortfall(adjustments, -maxHp).filter((x): x is HpMaxAdjustment => x !== null);
+        const zeroed = withAdjustments({ ...character, hp: { ...c.hp, max: 0, current: 0 } }, records);
+        if (c.deathSaves.dead) {
+          if (c.hp.max !== 0) events.push(gameEvent('hp-changed', `HP maximum ${c.hp.max} → 0 (${why})`));
+          return { character: touch(zeroed), events };
+        }
+        const died = dieAtMaxZero(zeroed, `HP maximum ${c.hp.max} → 0 (${why}) — a creature dies if its Hit Point maximum reaches 0.`);
+        return { character: died.character, events: [...events, ...died.events] };
+      }
       const current = c.hp.current > 0 ? Math.min(maxHp, Math.max(1, c.hp.current + hpChange)) : 0;
       character = { ...character, hp: { ...c.hp, max: maxHp, current } };
-      events.push(gameEvent('hp-changed', `HP maximum ${c.hp.max} → ${maxHp} (Constitution modifier ${perLevel > 0 ? '+' : ''}${perLevel} per level)`));
+      events.push(gameEvent('hp-changed', `HP maximum ${c.hp.max} → ${maxHp} (${why})`));
     }
   }
   return { character: touch(character), events };

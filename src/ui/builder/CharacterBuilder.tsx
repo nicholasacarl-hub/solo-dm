@@ -95,7 +95,7 @@ function StepNav({
                   aria-hidden
                   className={cn(
                     'grid size-6 shrink-0 place-items-center rounded-full border text-xs tabular-nums',
-                    done ? 'border-success bg-success text-white' : isCurrent ? 'border-accent text-accent' : 'border-border',
+                    done ? 'border-success bg-success text-success-ink' : isCurrent ? 'border-accent text-accent' : 'border-border',
                   )}
                 >
                   {done ? <Check className="size-3.5" /> : i + 1}

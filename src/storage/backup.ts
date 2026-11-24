@@ -11,7 +11,7 @@ import { findSrdClass } from '@/engine/classData';
 import { normalizeCombatState } from '@/engine/mapNormalize';
 import { slugify } from '@/lib/id';
 import { hasImported, redactImported } from '@/lib/importedContent';
-import type { Campaign, CombatState, HitDiceEntry, HitDie } from '@/types';
+import { HP_MAX_ENDS, type Campaign, type CombatState, type HitDiceEntry, type HitDie } from '@/types';
 import { campaignAndImageTables, db } from './db';
 import { deleteCampaignData, normalizeCampaignData, readCampaignData, writeCampaignData } from './campaignData';
 import { isCampaignOpenElsewhere, OPEN_ELSEWHERE_ERROR } from './campaignLock';
@@ -256,6 +256,20 @@ const transformationSchema = z.looseObject({
   updatedAt: timestamp.default(0),
 });
 
+/**
+ * A Hit Point maximum adjustment: its amount is already in hp.max, so an unreadable one is set aside (its amount stays
+ * in the maximum) rather than refusing the file. An `ends` from a later version reads as "when-ended": in view every
+ * turn, and ended only on purpose.
+ */
+const hpMaxAdjustmentSchema = z.looseObject({
+  name: z.string().trim().min(1),
+  amount: z
+    .number()
+    .int()
+    .refine((n) => n !== 0),
+  ends: z.enum(HP_MAX_ENDS).catch('when-ended'),
+});
+
 const characterSchema = z
   .looseObject({
     id,
@@ -273,6 +287,7 @@ const characterSchema = z
       cha: z.number(),
     }),
     hp: z.looseObject({ max: z.number(), current: z.number(), temp: z.number().default(0) }),
+    hpMaxAdjustments: keepReadable(hpMaxAdjustmentSchema).optional().catch(undefined),
     xp: z.number().default(0),
     savingThrows: strings,
     skills: z.record(z.string(), z.number()).default(() => ({})),

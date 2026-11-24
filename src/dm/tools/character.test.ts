@@ -14,7 +14,7 @@ vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
 import { characterSheetText, levelUp, weaponCritRange } from '@/engine';
-import { sampleCharacter } from '@/test/fixtures';
+import { sampleCharacter, sampleCombat } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
 import type { BuilderData, Character, ClassFeatureDef, ClassLevel, ClassOption, CompendiumEntry, FeatOption, OptionSource, SubclassOption, TranscriptMessage } from '@/types';
 import { redactImportedDeep } from '@/storage/backup';
@@ -1213,5 +1213,250 @@ describe("book text the DM names on the sheet keeps its book's ref (exports repl
     expect(out.isError).toBe(true);
     expect(out.content).toContain('(23 characters)');
     expect(out.content).not.toContain('Your skin grows thorns.');
+  });
+});
+
+describe('Hit Point maximum adjustments (update_character hp_max, hp.drain, hp_max_end; take_rest)', () => {
+  const fighter4 = (extra: Partial<Character> = {}) => hero({ classId: FIGHTER.id, name: 'Fighter', level: 4, hitDie: 10 }, extra);
+  const toolLogs = (h: ReturnType<typeof setup>) =>
+    (h.s().log as { kind: string; tool?: string; icon?: string; summary?: string }[]).filter((e) => e.kind === 'tool' && e.tool === 'update_character');
+  const wraith = { amount: 21, kind: 'damage', damage_type: 'necrotic', drain: 'Life Drain' } as const;
+
+  it('hp_max raises the maximum and current HP for Aid, and the status line keeps it in view (srd:spell:aid)', async () => {
+    // "Each target's Hit Point maximum and current Hit Points increase by 5 for the duration."
+    const h = setup({ character: fighter4({ hp: { max: 30, current: 20, temp: 0 } }) });
+    const out = await h.run('update_character', { hp_max: { name: 'Aid', change: 5, ends: 'long-rest' }, reason: 'Aid from the temple priest' });
+    expect(out.isError).toBeUndefined();
+    expect(h.sheet().hp).toEqual({ max: 35, current: 25, temp: 0 });
+    expect(out.content).toContain('HP maximum 30 → 35, HP 20 → 25 (Aid +5, until a Long Rest)');
+    expect(out.content).toContain('· HP 25/35 · HP max includes Aid +5 (until a Long Rest) · AC 12');
+    expect(toolLogs(h).at(-1)).toMatchObject({ icon: 'heal', summary: 'HP max 30 → 35, HP 20 → 25 (Aid · until a Long Rest · Aid from the temple priest)' });
+  });
+
+  it("hp.drain lowers the maximum by the damage after the Defenses line, temporary HP included (srd:monster:wraith)", async () => {
+    // "its Hit Point maximum decreases by an amount equal to the damage taken"; Resistance halves 21 to 10.
+    const h = setup({ character: fighter4({ damageResistances: ['Necrotic'] }) });
+    const out = await h.run('update_character', { hp: wraith, reason: 'Wraith: Life Drain' });
+    expect(h.sheet().hp).toEqual({ max: 20, current: 20, temp: 0 });
+    expect(out.content).toContain('Damage adjusted: Resistance to necrotic halves 21 → 10.\nHP 30 → 20 (10 necrotic)\nHP maximum 30 → 20 (Life Drain −10, until a Long Rest)');
+    expect(toolLogs(h).at(-1)).toMatchObject({ icon: 'hp', summary: 'HP 30 → 20 (21 necrotic · Wraith: Life Drain) · HP max 30 → 20' });
+    // Damage temporary HP absorb is still damage taken.
+    const temp = setup({ character: fighter4({ hp: { max: 30, current: 30, temp: 8 } }) });
+    await temp.run('update_character', { hp: wraith });
+    expect(temp.sheet().hp).toEqual({ max: 9, current: 9, temp: 0 });
+  });
+
+  it('judges massive damage before the drain: at 10/30 a 25-point hit leaves the hero dying with a maximum of 5', async () => {
+    // srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death: "the character dies if the remainder equals or
+    // exceeds their Hit Point maximum" — 15 left over against 30.
+    const h = setup({ character: fighter4({ hp: { max: 30, current: 10, temp: 0 } }) });
+    const out = await h.run('update_character', { hp: { ...wraith, amount: 25 } });
+    expect(h.sheet().hp).toEqual({ max: 5, current: 0, temp: 0 });
+    expect(h.sheet().deathSaves.dead).toBe(false);
+    expect(out.content).toContain('Status: Mira Voss (Fighter 4) · HP 0/5 · Dying');
+  });
+
+  it('a drain to 0 kills; hp_max is then refused, and hp_max_end gives the maximum back (srd:rule:...-instant-death)', async () => {
+    // "A creature dies if its Hit Point maximum reaches 0."
+    const h = setup({ character: fighter4({ hp: { max: 30, current: 30, temp: 0 } }) });
+    await h.run('update_character', { hp: { amount: 10, kind: 'damage' } });
+    const out = await h.run('update_character', { hp_max: { name: 'Mummy Rot', change: -30, ends: 'when-ended' } });
+    expect(out.content).toContain('HP maximum 30 → 0 (Mummy Rot −30, until ended): a creature dies if its Hit Point maximum reaches 0.');
+    expect(out.content).toContain('· DEAD ·');
+    // No advice to end it or switch it at a Long Rest: the dead don't rest (srd:rule:long-rest).
+    expect(out.content).not.toContain('stays until you end it');
+    const refused = await h.run('update_character', { hp_max: { name: 'Aid', change: 5, ends: 'long-rest' } });
+    expect(refused.content).toContain("The hero is dead: the Hit Point maximum doesn't change");
+    await h.run('update_character', { hp_max_end: ['Mummy Rot'] });
+    expect(h.sheet().hp).toEqual({ max: 30, current: 0, temp: 0 });
+    expect(h.sheet().deathSaves.dead).toBe(true);
+  });
+
+  it("take_rest long ends Aid, then a drain; Heroes' Feast stays and the result says so (srd:rule:long-rest, srd:spell:heroes-feast)", async () => {
+    // Aid's 8 hours are over before the rest finishes; Long Rest: "When you finish the rest … If your Hit Point maximum
+    // was reduced, it returns to normal." Heroes' Feast: "which last for 24 hours".
+    const h = setup({ character: fighter4() });
+    await h.run('update_character', { hp_max: { name: 'Aid', change: 5, ends: 'long-rest' } });
+    const feast = await h.run('update_character', { hp_max: { name: "Heroes' Feast", change: 11, ends: 'when-ended' } });
+    expect(feast.content).toContain(
+      `Heroes' Feast +11 stays until you end it: update_character hp_max_end ["Heroes' Feast"] when its time runs out or its cause ends (the status line keeps it in view).`,
+    );
+    // The guidance comes once: a later call that leaves the entry as it is doesn't repeat it.
+    const hit = await h.run('update_character', { hp: { ...wraith, amount: 12 }, xp_gain: 50 });
+    expect(hit.content).not.toContain('stays until you end it');
+    expect(h.sheet().hp).toEqual({ max: 34, current: 34, temp: 0 });
+    const rest = await h.run('take_rest', { kind: 'long' });
+    expect(h.sheet().hp).toEqual({ max: 41, current: 41, temp: 0 });
+    expect(h.sheet().hpMaxAdjustments).toEqual([{ name: "Heroes' Feast", amount: 11, ends: 'when-ended' }]);
+    expect(rest.content).toContain('Aid +5 ends: HP maximum 34 → 29, HP 34 → 29\nLife Drain −12 ends: HP maximum 29 → 41\nLong rest: HP 29 → 41');
+    expect(rest.content).toContain(
+      "Still in effect after the rest: Heroes' Feast +11 (until ended). End each with update_character hp_max_end when its time runs out or its cause ends.",
+    );
+  });
+
+  it('hp_max_end restores a drained maximum (srd:spell:greater-restoration) and names what is in effect for an unknown name', async () => {
+    // Greater Restoration ends "Any reduction to the target's Hit Point maximum".
+    const h = setup({ character: fighter4() });
+    await h.run('update_character', { hp: wraith });
+    const unknown = await h.run('update_character', { hp_max_end: ['Aid'] });
+    expect(unknown.content).toContain('No Hit Point maximum adjustment named "Aid" (in effect: Life Drain −21 (until a Long Rest)).');
+    const out = await h.run('update_character', { hp_max_end: ['Life Drain'], reason: 'Greater Restoration' });
+    expect(h.sheet().hp).toEqual({ max: 30, current: 9, temp: 0 });
+    expect(out.content).toContain('Life Drain −21 ends: HP maximum 9 → 30');
+    expect(toolLogs(h).at(-1)).toMatchObject({ icon: 'info', summary: 'HP max 9 → 30 (ended: Life Drain · Greater Restoration)' });
+  });
+
+  it('hp_max_end ends its names together, whatever their order; the log names what ended, and a death (srd:spell:greater-restoration)', async () => {
+    // Greater Restoration ends "Any reduction to the target's Hit Point maximum": with Aid still on, ending both in one
+    // call never dips the maximum; Aid ended alone kills (srd:rule:...-instant-death).
+    const drained = async () => {
+      const h = setup({ character: fighter4() });
+      await h.run('update_character', { hp_max: { name: 'Aid', change: 5, ends: 'long-rest' } });
+      await h.run('update_character', { hp: { amount: 33, kind: 'damage', damage_type: 'necrotic', drain: 'Life Drain' } }); // 2/2
+      return h;
+    };
+    const h = await drained();
+    expect(h.sheet().hp).toEqual({ max: 2, current: 2, temp: 0 });
+    const both = await h.run('update_character', { hp_max_end: ['Aid', 'Life Drain', 'Bless'], reason: 'Greater Restoration; Aid has run out' });
+    expect(h.sheet().hp).toEqual({ max: 30, current: 2, temp: 0 });
+    expect(h.sheet().deathSaves.dead).toBe(false);
+    expect(toolLogs(h).at(-1)).toMatchObject({ summary: 'HP max 2 → 30 (ended: Aid, Life Drain · Greater Restoration; Aid has run out)' });
+    // The name that found nothing is told against what is left, not what the call just ended.
+    expect(both.content).toContain('Warning: No Hit Point maximum adjustment named "Bless".');
+    // A lasting reduction is taken back before Aid ends too, so the order of the names never kills.
+    const ruled = setup({ character: fighter4() });
+    await ruled.run('update_character', { hp_max: { name: 'Aid', change: 5, ends: 'long-rest' } }); // 35
+    await ruled.run('update_character', { hp_max: { name: 'Mummy Rot', change: -25, ends: 'when-ended' } }); // 10
+    await ruled.run('update_character', { hp_max: { name: 'Lost an eye (ruling)', change: -6, ends: 'never' } }); // 4/4
+    await ruled.run('update_character', { hp_max_end: ['Aid', 'Lost an eye (ruling)'] });
+    expect(ruled.sheet().hp).toEqual({ max: 5, current: 5, temp: 0 });
+    expect(ruled.sheet().deathSaves.dead).toBe(false);
+    const alone = await drained();
+    const out = await alone.run('update_character', { hp_max_end: ['Aid'] });
+    expect(out.content).toContain('Aid +5 ends: HP maximum 2 → 0 — a creature dies if its Hit Point maximum reaches 0.');
+    expect(toolLogs(alone).at(-1)).toMatchObject({ summary: 'HP max 2 → 0 (ended: Aid · the hero died)' });
+  });
+
+  it('hp_max_end logs only what ended: nothing for a lasting entry that stays', async () => {
+    const h = setup({ character: fighter4() });
+    await h.run('update_character', { hp_max: { name: 'Blessing of the Grove', change: 10, ends: 'never' } }); // 40
+    await h.run('update_character', { hp_max: { name: 'Mummy Rot', change: -35, ends: 'when-ended' } }); // 5
+    await h.run('update_character', { hp_max: { name: 'Aid', change: 5, ends: 'long-rest' } }); // 10
+    const logged = toolLogs(h).length;
+    const out = await h.run('update_character', { hp_max_end: ['Blessing of the Grove'] });
+    expect(out.content).toContain('Blessing of the Grove +10 stays: taking it back would leave a Hit Point maximum below 1.');
+    expect(toolLogs(h)).toHaveLength(logged);
+    // With one that ends, the log names only that one.
+    await h.run('update_character', { hp_max_end: ['Blessing of the Grove', 'Aid'] });
+    expect(toolLogs(h).at(-1)).toMatchObject({ summary: 'HP max 10 → 5 (ended: Aid)' });
+    // With the curse in the same call, the curse ends first, so the blessing can be taken back too.
+    await h.run('update_character', { hp_max_end: ['Blessing of the Grove', 'Mummy Rot'] });
+    expect(toolLogs(h).at(-1)).toMatchObject({ summary: 'HP max 5 → 30 (ended: Blessing of the Grove, Mummy Rot)' });
+  });
+
+  it("the hp_max log line gives the arrows, not the amount asked: Harm stops at 1 (srd:spell:harm)", async () => {
+    // "This spell can't reduce a target's Hit Point maximum below 1."
+    const h = setup({ character: fighter4() });
+    await h.run('update_character', { hp_max: { name: 'Harm', change: -40, ends: 'long-rest' } });
+    expect(h.sheet().hpMaxAdjustments).toEqual([{ name: 'Harm', amount: -29, ends: 'long-rest' }]);
+    expect(toolLogs(h).at(-1)).toMatchObject({ summary: 'HP max 30 → 1, HP 30 → 1 (Harm · until a Long Rest)' });
+  });
+
+  it("a curse's reduction is told how to switch to ending at a Long Rest once the cause ends (srd:monster:mummy)", async () => {
+    // Mummy: "its Hit Point maximum doesn't return to normal when finishing a Long Rest" while cursed; once the curse
+    // ends, the next Long Rest returns it (srd:rule:long-rest).
+    const h = setup({ character: fighter4() });
+    const out = await h.run('update_character', { hp_max: { name: 'Mummy Rot', change: -10, ends: 'when-ended' } });
+    expect(out.content).toContain(
+      'Mummy Rot −10 stays until you end it (the status line keeps it in view): update_character hp_max_end ["Mummy Rot"] when its cause ends. If the cause only kept a Long Rest from restoring it (a Mummy\'s curse, a Death Dog\'s poison), it returns at the next Long Rest once the cause ends: then switch it with update_character hp_max_end ["Mummy Rot"] with hp_max {"name": "Mummy Rot", "change": -10, "ends": "long-rest"} in one call.',
+    );
+    const rest = await h.run('take_rest', { kind: 'long' });
+    expect(rest.content).toContain('a Death Dog\'s poison) returns at the next Long Rest once the cause ends');
+    // A call that leaves the curse as it is doesn't repeat the guidance.
+    const xp = await h.run('update_character', { xp_gain: 50 });
+    expect(xp.content).not.toContain('stays until you end it');
+    // Mummy: "decreases by 10 (3d6) every 24 hours that elapse": as it grows the call is given again, with the new amount.
+    const grown = await h.run('update_character', { hp_max: { name: 'Mummy Rot', change: -7, ends: 'when-ended' } });
+    expect(grown.content).toContain('hp_max {"name": "Mummy Rot", "change": -17, "ends": "long-rest"} in one call.');
+    // The switch: same maximum, same HP, ending at the next Long Rest.
+    await h.run('update_character', { hp_max_end: ['Mummy Rot'], hp_max: { name: 'Mummy Rot', change: -17, ends: 'long-rest' }, reason: 'Remove Curse' });
+    expect(h.sheet().hp).toEqual({ max: 13, current: 13, temp: 0 });
+    expect(h.sheet().hpMaxAdjustments).toEqual([{ name: 'Mummy Rot', amount: -17, ends: 'long-rest' }]);
+    await h.run('take_rest', { kind: 'long' });
+    expect(h.sheet().hp).toEqual({ max: 30, current: 30, temp: 0 });
+  });
+
+  it('refuses a draining hit whole when its name goes by another end, or is blank: no damage without its drain', async () => {
+    const h = setup({ character: fighter4() });
+    await h.run('update_character', { hp_max: { name: 'Life Drain', change: -5, ends: 'when-ended' } }); // 25/25
+    const logged = toolLogs(h).length;
+    const out = await h.run('update_character', { hp: wraith, xp_gain: 50 });
+    // The refusal is the hit's alone: the rest of the call applies.
+    // hp applies before hp_max_end, so its advice is a name of its own, or the end in an earlier call.
+    expect(out.content).toContain(
+      'Life Drain −5 (until ended) goes by that name: give the drain a name of its own (as in "Life Drain (Wight)"), or end that one in an earlier call (hp applies before hp_max_end). This hit wasn\'t applied (neither its damage nor its drain).',
+    );
+    expect(out.content).toContain('+50 XP');
+    expect(h.sheet().hp).toEqual({ max: 25, current: 25, temp: 0 });
+    expect(toolLogs(h).filter((e) => e.icon !== 'xp')).toHaveLength(logged);
+    const blank = await h.run('update_character', { hp: { ...wraith, drain: '   ' } });
+    expect(blank.content).toContain('A drain needs a name (the effect, as in "Life Drain").');
+    expect(h.sheet().hp).toEqual({ max: 25, current: 25, temp: 0 });
+    // Both ways out work. Ending the holder in the same call doesn't (the hit is refused before it ends); in an earlier
+    // call it does. A name of its own lands at once (srd:monster:wight: "Life Drain").
+    const batched = await h.run('update_character', { hp: wraith, hp_max_end: ['Life Drain'] });
+    expect(batched.content).toContain("This hit wasn't applied");
+    expect(h.sheet().hp).toEqual({ max: 30, current: 25, temp: 0 });
+    await h.run('update_character', { hp: wraith });
+    expect(h.sheet().hp).toEqual({ max: 9, current: 4, temp: 0 });
+    await h.run('update_character', { hp: { ...wraith, amount: 3, drain: 'Life Drain (Wight)' } });
+    expect(h.sheet().hp).toEqual({ max: 6, current: 1, temp: 0 });
+    expect(h.sheet().hpMaxAdjustments).toEqual([
+      { name: 'Life Drain', amount: -21, ends: 'long-rest' },
+      { name: 'Life Drain (Wight)', amount: -3, ends: 'long-rest' },
+    ]);
+  });
+
+  it('a draining hit that changes nothing (Immunity) logs as a plain hit does', async () => {
+    // srd:rule:damage-and-healing-immunity: "Immunity to a damage type means you don't take damage of that type."
+    const h = setup({ character: fighter4({ damageImmunities: ['Necrotic'] }) });
+    await h.run('update_character', { hp: wraith });
+    expect(h.sheet().hp).toEqual({ max: 30, current: 30, temp: 0 });
+    expect(toolLogs(h).at(-1)).toMatchObject({ icon: 'hp', summary: 'HP 30 → 30 (21 necrotic)' });
+  });
+
+  it('take_rest long: a drained hero Aid kept alive dies when Aid ends, before the rest finishes (srd:spell:aid, srd:rule:long-rest)', async () => {
+    const h = setup({ character: fighter4() });
+    await h.run('update_character', { hp_max: { name: 'Aid', change: 5, ends: 'long-rest' } });
+    await h.run('update_character', { hp: { amount: 33, kind: 'damage', damage_type: 'necrotic', drain: 'Life Drain' } }); // 2/2
+    const rest = await h.run('take_rest', { kind: 'long' });
+    expect(rest.content).toContain('Long rest: the hero died (an HP maximum reached 0)');
+    expect(rest.content).toContain('Aid +5 ends: HP maximum 2 → 0 — a creature dies if its Hit Point maximum reaches 0.');
+    expect(h.sheet().deathSaves.dead).toBe(true);
+    expect(h.sheet().hpMaxAdjustments).toEqual([{ name: 'Life Drain', amount: -30, ends: 'long-rest' }]);
+  });
+
+  it('refuses hp.drain with healing, naming the fix', async () => {
+    const h = setup({ character: fighter4() });
+    const out = await h.run('update_character', { hp: { amount: 5, kind: 'healing', drain: 'Life Drain' } });
+    expect(out.isError).toBe(true);
+    expect(out.content).toContain('hp.drain lowers the HP maximum by the damage taken, so it needs kind "damage".');
+    expect(h.sheet().hp).toEqual({ max: 30, current: 30, temp: 0 });
+  });
+
+  it("initiative_change mends an Alert the app didn't count, and level-ups keep growing it (srd:feat:alert)", async () => {
+    // "When you roll Initiative, you can add your Proficiency Bonus to the roll": Fighter 4 (+2), then Fighter 5 (+3).
+    const alert = { id: 'al', name: 'Alert', source: 'feat' as const, description: 'Initiative proficiency.' };
+    const h = setup({ character: fighter4({ features: [alert] }) });
+    const out = await h.run('update_character', { initiative_change: 2, reason: 'Alert the builder missed' });
+    expect(out.content).toContain('Initiative +2 → +4');
+    expect(out.content).not.toContain('already rolled');
+    expect(h.sheet().initiativeBonusExtra).toBe(2);
+    await h.run('level_up', { class_name: 'Fighter' });
+    expect(h.sheet().initiativeBonusExtra).toBe(3);
+    // During a fight: the roll already made stays.
+    const fight = setup({ character: fighter4(), state: { combat: sampleCombat() } });
+    const during = await fight.run('update_character', { initiative_change: 1 });
+    expect(during.content).toContain('The initiative already rolled for this fight stays; the new bonus counts from the next Initiative roll.');
   });
 });
