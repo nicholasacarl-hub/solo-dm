@@ -140,7 +140,9 @@ the chronicle — "simple compaction", which is compatible with preserved thinki
 - DM notices (sheet edits, vetoes, Library homebrew edits) persist on the campaign record until
   delivered; a new session delivers them with its opening request. A repeat is a new notice (a change made, undone
   and made again reaches the DM as three, in order), unless it repeats the newest one waiting (a retry); a save keeps
-  the notices queued elsewhere by position and count, never by text alone (`src/lib/dmNotices.ts`).
+  the notices queued elsewhere by position and count, never by text alone (`src/lib/dmNotices.ts`). A turn set aside
+  unanswered (its request failed, was refused or stopped before any text) puts its notices back ahead of any queued
+  since (`putBackDmNotices`), so the DM still hears every notice in the order it happened.
 - One tab at a time: the play screen holds a per-campaign Web Lock; the store refuses writes to a
   campaign another tab holds.
 - Rules lookups search the SRD, every import switched on in the Library, and homebrew.

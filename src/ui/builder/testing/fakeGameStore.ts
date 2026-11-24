@@ -82,6 +82,7 @@ function baseState(): GameStore {
     'resolveInteraction',
     'cancelInteraction',
     'takeDmNotices',
+    'putBackDmNotices',
   ] as const;
   const stubs = Object.fromEntries(missing.map((name) => [name, notUsed(name)])) as unknown as GameStore;
   return {
