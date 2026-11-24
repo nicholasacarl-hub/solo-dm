@@ -306,6 +306,11 @@ export function createFakeGameStore(initial: Partial<GameStoreState> = {}): Fake
         set({ pendingDmNotices: [] });
         return notices;
       },
+      putBackDmNotices(notices) {
+        // As the store: ahead of any queued since, in their order, none dropped.
+        const back = notices.map((n) => n.trim()).filter(Boolean);
+        if (back.length > 0) set({ pendingDmNotices: [...back, ...get().pendingDmNotices] });
+      },
       // Structured imports: nothing to restore in the DM's tests.
       async restoreImportedText() {
         return null;

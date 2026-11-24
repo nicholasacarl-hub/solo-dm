@@ -237,6 +237,12 @@ export interface GameStoreActions {
    * normally the transcript append that delivers them — so a failed append can't lose them.
    */
   takeDmNotices(): string[];
+  /**
+   * Undo takeDmNotices for a turn the DM never answered (set aside, trimmed from the transcript): its notices go back
+   * at the front of the queue, in their order, ahead of any queued since, so the DM hears every note in the order it
+   * happened. None is dropped as a retry: each was queued once already. Saved with the campaign row.
+   */
+  putBackDmNotices(notices: readonly string[]): void;
 }
 
 export type GameStore = GameStoreState & GameStoreActions;
@@ -1258,6 +1264,22 @@ export const useGame = create<GameStore>()((set, get) => ({
     // clears the stored copy, so a failed append can't lose them.
     set({ pendingDmNotices: [], ...(s.campaign && { campaign: { ...s.campaign, pendingDmNotices: [] } }) });
     return notices;
+  },
+
+  putBackDmNotices(notices) {
+    const back = notices.map((n) => n.trim()).filter(Boolean);
+    const s = get();
+    if (back.length === 0) return;
+    const pendingDmNotices = [...back, ...s.pendingDmNotices];
+    if (!s.campaign) {
+      set({ pendingDmNotices });
+      return;
+    }
+    // A save of the whole row, not a merge: this tab's own notices are written in their new order, then any queued
+    // elsewhere. A failed save is logged; the notices stay in memory and are saved with the next write.
+    const touched: Campaign = { ...touch(s.campaign), pendingDmNotices };
+    set({ pendingDmNotices, campaign: touched });
+    void persist(touched.id, 'the notes for the DM', () => saveCampaign(touched)).catch(noop);
   },
 
   async restoreImportedText() {

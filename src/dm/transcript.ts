@@ -172,7 +172,7 @@ export function systemNotes(messages: readonly TranscriptMessage[]): string[] {
   return notes;
 }
 
-/** Text of the system notes that follow the latest turn start (to re-queue if that turn is dropped). */
+/** Text of the system notes that follow the latest turn start (to put back if that turn is dropped). */
 export function noticesAfterLastTurn(messages: readonly TranscriptMessage[]): string[] {
   const start = lastTurnStartIndex(messages);
   if (start < 0) return [];
