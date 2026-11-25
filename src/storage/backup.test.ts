@@ -519,6 +519,20 @@ describe('parseCampaignBundle', () => {
     expect(parseCampaignBundle(data).character).not.toHaveProperty('hpMaxAdjustments');
   });
 
+  it("reads a class's open spell choices, setting aside what it cannot read", () => {
+    const data = valid();
+    const character = data.character as { spellcasting: object };
+    const read = (spellPicks: unknown) => parseCampaignBundle({ ...data, character: { ...character, spellcasting: { ...character.spellcasting, spellPicks } } }).character?.spellcasting;
+    const picks = [{ classId: 'srd:class:wizard' }, { classId: 'srd:class:sorcerer', replaceSpell: true, replaceCantrip: true }];
+    expect(read(picks)?.spellPicks).toEqual(picks);
+    // A bad entry is left out and a bad flag reads as unset: the file is never refused for them.
+    expect(read([...picks, { replaceSpell: true }, 'Wizard 4', { classId: 'srd:class:bard', replaceSpell: 'yes' }])?.spellPicks).toEqual([...picks, { classId: 'srd:class:bard' }]);
+    expect(read('Wizard 4')?.spellPicks).toBeUndefined();
+    // An old save gains no such key.
+    expect(parseCampaignBundle(data).character?.spellcasting).toBeDefined();
+    expect(parseCampaignBundle(data).character?.spellcasting).not.toHaveProperty('spellPicks');
+  });
+
   it('reads the battle-maps table rule, treating an unknown value as missing (When it helps)', () => {
     const data = valid();
     const campaign = data.campaign as { settings: Record<string, unknown> };

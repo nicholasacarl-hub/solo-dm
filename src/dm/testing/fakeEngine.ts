@@ -44,6 +44,11 @@ export {
 } from '@/engine/character';
 // Which names are unarmed strikes runs the real rule (pure).
 export { isUnarmedStrikeName } from '@/engine/rules';
+// Spell picks run the real rules (pure): removing a sheet spell by id, a class's own spell-level cap and the generic
+// reminder they replace.
+export { removeSpellById } from '@/engine/character';
+export { spellReviewReminder } from '@/engine/progression';
+export { classSpellLevelCap } from '@/engine/spellcasting';
 export {
   activeTransformations,
   advanceTransformation,

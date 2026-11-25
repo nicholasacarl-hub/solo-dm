@@ -24,8 +24,10 @@ import type {
 } from '@/types';
 import { SKILL_ABILITY } from '@/types';
 // Pure name rules and Hit Point maximum adjustments: the real ones (the module itself; '@/engine' is what tests mock).
-import { adjustHpMax, endHpMaxAdjustments, featOrTrait, featureLabel, hpMaxAdjustmentLabel, hpMaxAdjustments, hpMaxEndsText } from '@/engine/character';
+import { addSpell, adjustHpMax, endHpMaxAdjustments, featOrTrait, featureLabel, hpMaxAdjustmentLabel, hpMaxAdjustments, hpMaxEndsText, removeSpellById } from '@/engine/character';
+import { spellReviewReminder } from '@/engine/progression';
 import { isFightingStyle } from '@/engine/rules';
+import { classSpellLevelCap } from '@/engine/spellcasting';
 
 type Rng = Engine.Rng;
 
@@ -225,6 +227,12 @@ export const fakeEngine = {
   hpMaxAdjustmentLabel,
   hpMaxAdjustments,
   hpMaxEndsText,
+  // Spell picks run the real rules (pure): adding and removing a sheet spell, a class's own spell-level cap, and the
+  // generic reminder they replace.
+  addSpell,
+  removeSpellById,
+  classSpellLevelCap,
+  spellReviewReminder,
   // The stored AC stays as it is here; sheetChanges.test.ts checks equip, attune and remove against the real engine.
   syncArmorClass: (_before: Character, after: Character) => ({ character: after, events: [] as GameEvent[] }),
   saveSourcesChangeText: () => null,

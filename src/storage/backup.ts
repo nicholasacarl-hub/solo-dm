@@ -270,6 +270,13 @@ const hpMaxAdjustmentSchema = z.looseObject({
   ends: z.enum(HP_MAX_ENDS).catch('when-ended'),
 });
 
+/** A class level's open spell choices (Spellcasting.spellPicks): what is owed is worked out live, so only these are kept. */
+const spellPicksSchema = z.looseObject({
+  classId: z.string(),
+  replaceSpell: z.boolean().optional().catch(undefined),
+  replaceCantrip: z.boolean().optional().catch(undefined),
+});
+
 const characterSchema = z
   .looseObject({
     id,
@@ -313,6 +320,7 @@ const characterSchema = z
         ability: abilitySchema.optional().catch(undefined),
         slots: z.record(z.string(), z.looseObject({ max: z.number(), used: z.number().default(0) })).default(() => ({})),
         spells: z.array(z.looseObject({ name: z.string(), ref: optionalRef })).default([]),
+        spellPicks: keepReadable(spellPicksSchema).optional().catch(undefined),
       })
       .optional(),
     features: z.array(z.looseObject({ id, name: z.string(), ref: optionalRef })).default([]),

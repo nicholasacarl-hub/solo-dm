@@ -246,11 +246,18 @@ export function classLanguages(cls: ClassOption | undefined): { fixed: string[];
   return { fixed, extraChoices };
 }
 
-/** Spells a feature says you "always have prepared" (e.g. Favored Enemy -> Hunter's Mark). */
+/**
+ * Spells a feature says you "always have prepared": one (Favored Enemy -> Hunter's Mark) or several ("always have the
+ * _Power Word Heal_ and _Power Word Kill_ spells prepared", SRD 5.2.1 Words of Creation, whose text has two spaces
+ * before "spells").
+ */
 export function alwaysPreparedSpellNames(description: string): string[] {
   const names: string[] = [];
   for (const match of description.matchAll(/always have (?:the )?_?([A-Z][\w' /-]+?)_? spell prepared/g)) {
     names.push(match[1].trim());
+  }
+  for (const match of description.matchAll(/always have (?:the )?((?:_[^_\n]+_(?:,\s*|,?\s+and\s+))+_[^_\n]+_)\s+spells prepared/g)) {
+    for (const name of match[1].matchAll(/_([^_\n]+)_/g)) names.push(name[1].trim());
   }
   return names;
 }

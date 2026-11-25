@@ -264,6 +264,18 @@ export function resetSpellSlots(sc: Spellcasting): Spellcasting {
   return { ...sc, slots, ...(sc.pact ? { pact: { ...sc.pact, slots: { ...sc.pact.slots, used: 0 } } } : {}) };
 }
 
+/**
+ * The highest spell level one class may prepare or learn: its own slots as if single-classed, or its Pact Magic slot
+ * level; 0 when it has none. Never the hero's combined slots (SRD 5.2.1 Multiclassing, Spellcasting: "You determine
+ * what spells you can prepare for each class individually, as if you were a single-classed member of that class"; a
+ * Warlock's spells are "of a level no higher than what's shown in the table's Slot Level column").
+ */
+export function classSpellLevelCap(cl: ClassLevel): number {
+  const own = spellSlotsForClasses([cl]);
+  const regular = SLOT_LEVELS.filter((l) => (own.slots[l]?.max ?? 0) > 0);
+  return Math.max(0, ...regular, own.pact ? own.pact.slotLevel : 0);
+}
+
 /** Highest slot level the character can currently cast with (regular or pact), 0 if none. */
 export function highestSlotLevel(c: Character): number {
   const sc = c.spellcasting;
