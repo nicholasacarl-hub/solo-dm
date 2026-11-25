@@ -1123,8 +1123,9 @@ describe("LevelUpDialog: the level's spells", () => {
     render(<Reopenable />);
     const button = screen.getByRole('button', { name: 'Level up' });
     await user.click(button);
-    // Waiting: the button keeps focus and says so, and can't be pressed again.
+    // Waiting: the button keeps focus (a disabled one would drop it) and says so, and can't be pressed again.
     expect(button).toHaveFocus();
+    expect(button).not.toBeDisabled();
     expect(button).toHaveAttribute('aria-disabled', 'true');
     expect(screen.getByText('Leveling up…')).toBeInTheDocument();
     // Closed meanwhile, the Level up still applies; reopened, the dialog shows the wait rather than the same level again.
