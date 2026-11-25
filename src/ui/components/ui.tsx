@@ -29,7 +29,7 @@ const buttonVariants: Record<ButtonVariant, string> = {
   secondary: 'bg-surface-2 text-text hover:bg-surface-3 border border-border',
   ghost: 'text-muted hover:text-text hover:bg-surface-2',
   danger: 'bg-danger text-danger-ink hover:opacity-90',
-  arcane: 'bg-arcane text-white hover:opacity-90',
+  arcane: 'bg-arcane text-arcane-ink hover:opacity-90',
 };
 
 const buttonSizes: Record<ButtonSize, string> = {

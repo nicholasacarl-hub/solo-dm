@@ -31,6 +31,7 @@
   --success-ink: #ffffff;
   --success-soft: #d5ecd9;
   --arcane: #674dc3;
+  --arcane-ink: #ffffff;
   --arcane-soft: #e3dcf7;
   --gold: #835e07;
   --gold-soft: #f3e3b5;
@@ -75,6 +76,7 @@
   --success-ink: #0f1115;
   --success-soft: #15301f;
   --arcane: #a590ff;
+  --arcane-ink: #0f1115;
   --arcane-soft: #262044;
   --gold: #e3b341;
   --gold-soft: #3a2f12;
@@ -117,6 +119,7 @@
   --color-success-ink: var(--success-ink);
   --color-success-soft: var(--success-soft);
   --color-arcane: var(--arcane);
+  --color-arcane-ink: var(--arcane-ink);
   --color-arcane-soft: var(--arcane-soft);
   --color-gold: var(--gold);
   --color-gold-soft: var(--gold-soft);
