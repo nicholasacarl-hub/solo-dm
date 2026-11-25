@@ -263,7 +263,7 @@ describe("spell choices from the sheet (SRD 5.2.1, each class's Spellcasting)", 
       cls('Wizard'),
       choice('srd:class:wizard', { cantrips: [pick('Ray of Frost')], spellbook: [pick('Web'), pick('Hold Person')], prepare: ['srd:spell:web', 'srd:spell:sleep'] }),
     );
-    expect(r.notice).toBe('Player chose spells for Wizard 4: cantrip Ray of Frost; spellbook Web, Hold Person; prepared Web, Sleep; still to choose: 4 spellbook spells');
+    expect(r.notice).toBe('Player chose spells for Wizard 4: cantrip Ray of Frost; spellbook Web, Hold Person; prepared Web, Sleep; still to choose: 4 spellbook spells (4 of level 1)');
     expect(named(r.character, 'Ray of Frost')).toMatchObject({ id: 'srd:spell:ray-of-frost', level: 0, source: 'Wizard', prepared: true });
     expect(named(r.character, 'Web')).toMatchObject({ level: 2, source: 'Wizard', prepared: true, concentration: true });
     expect(named(r.character, 'Hold Person')).toMatchObject({ source: 'Wizard', prepared: false });
@@ -286,7 +286,7 @@ describe("spell choices from the sheet (SRD 5.2.1, each class's Spellcasting)", 
     const ashen: CompendiumEntry = { id: 'lib:gloam:40', sourceId: 'gloam', sourceName: GLOAMWOOD_TITLE, kind: 'spell', name: 'Ashen Choir', text: 'Invented.', data: { level: 2, classes: ['Wizard'] } };
     const r = spellPicksChange(wizard4(), cls('Wizard'), choice('srd:class:wizard', { spellbook: [knownSpellFromEntry(ashen)!], prepare: [ashen.id] }));
     expect(r.notice).toBe(
-      `Player chose spells for Wizard 4: spellbook Ashen Choir (${GLOAMWOOD_TITLE}); prepared Ashen Choir (${GLOAMWOOD_TITLE}); still to choose: 1 cantrip, 5 spellbook spells and 1 prepared spell`,
+      `Player chose spells for Wizard 4: spellbook Ashen Choir (${GLOAMWOOD_TITLE}); prepared Ashen Choir (${GLOAMWOOD_TITLE}); still to choose: 1 cantrip, 5 spellbook spells (1 up to level 2 and 4 of level 1) and 1 prepared spell`,
     );
     expect(named(r.character, 'Ashen Choir')?.ref).toMatchObject({ entryId: 'lib:gloam:40', textCopied: false });
   });
@@ -365,7 +365,7 @@ describe("spell choices from the sheet (SRD 5.2.1, each class's Spellcasting)", 
       choice('srd:class:wizard', { spellbook: [pick('Fireball'), pick('Counterspell'), pick('Fly'), pick('Web'), pick('Haste')], prepare: ['srd:spell:invisibility'] }),
     );
     // Fly would be a third of level 3 and Haste a fifth spell: neither has a place.
-    expect(r.notice).toBe('Player chose spells for Wizard 5: spellbook Fireball, Counterspell, Web; prepared Invisibility; still to choose: 1 cantrip, 1 spellbook spell and 2 prepared spells');
+    expect(r.notice).toBe('Player chose spells for Wizard 5: spellbook Fireball, Counterspell, Web; prepared Invisibility; still to choose: 1 cantrip, 1 spellbook spell (1 up to level 2) and 2 prepared spells');
     expect(named(r.character, 'Fly')).toBeUndefined();
     // The copy is prepared like the book's other spells and counts against the Prepared Spells column; it stays a copy.
     expect(named(r.character, 'Invisibility')).toMatchObject({ source: 'Wizard (copied)', prepared: true });

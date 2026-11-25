@@ -5,7 +5,7 @@
  *
  * Built with container queries so it works in a ~360 px rail and in a full-width mobile tab.
  */
-import { useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { Backpack, BookOpen, NotebookPen, Sparkles, Swords, UserRound } from 'lucide-react';
 import { useGame } from '@/state/gameStore';
@@ -91,6 +91,15 @@ function ManualRollDialog({ roll, onSubmit, onClose }: { roll: SheetRoll | null;
   );
 }
 
+/**
+ * Focus left on the page goes back to the sheet: its open tab (the compact sheet's first button). One query per target:
+ * a selector list would give the first in the page's order.
+ */
+function focusSheet(sheet: HTMLElement | null): void {
+  if (document.activeElement !== document.body) return;
+  (sheet?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? sheet?.querySelector<HTMLElement>('button'))?.focus();
+}
+
 export function CharacterSheet({ character, variant = 'full', editable = false }: CharacterSheetProps) {
   const edit = useSheetEdit();
   const logRoll = useLogRoll();
@@ -103,14 +112,18 @@ export function CharacterSheet({ character, variant = 'full', editable = false }
   // The note and the badge read the class data: mounted only while a level's spell choices are marked open.
   const picksOpen = editable && hasSpellPicks(character);
   const closeChoices = () => {
-    // Closed now, so the dialog's own close has put focus back on the note that opened it, if that is still there.
+    // Closed now, so the dialog's own close has put focus back on the note that opened it, if that is still there; the
+    // note is gone once its choices are made.
     flushSync(() => setChoosing(null));
-    // The note is gone once its choices are made: focus stays on the sheet (its open tab; the compact sheet's first
-    // button), not the page. One query per target: a selector list would give the first in the page's order.
-    if (document.activeElement !== document.body) return;
-    const sheet = root.current;
-    (sheet?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? sheet?.querySelector<HTMLElement>('button'))?.focus();
+    focusSheet(root.current);
   };
+  // The DM's spells can settle the choices while their dialog is open: it goes with the mark, without a close, so its
+  // target goes too (the next open choices mustn't bring it back by themselves) and focus comes back to the sheet.
+  useEffect(() => {
+    if (picksOpen || choosing === null) return;
+    setChoosing(null);
+    focusSheet(root.current);
+  }, [picksOpen, choosing]);
 
   const onEdit = (change: (c: Character) => SheetChange) => {
     if (editable) void edit(change);

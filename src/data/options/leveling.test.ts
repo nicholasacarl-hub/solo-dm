@@ -171,7 +171,7 @@ describe('always-prepared spells of an imported subclass', () => {
     expect(plan.add[0].ref).toBeUndefined();
     expect(plan.add[2].ref).toEqual({ sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:40', kind: 'spell', entryName: 'Ashen Choir', textHash: '', textCopied: false });
     // Darkness isn't in this index: the DM adds it.
-    expect(plan.missing).toEqual(['Darkness']);
+    expect(plan.missing).toEqual([{ name: 'Darkness', source: 'Dusk Domain' }]);
   });
 
   it('leaves rows above the class level, and turns a row spell the hero picked always prepared', () => {
@@ -181,7 +181,7 @@ describe('always-prepared spells of an imported subclass', () => {
     const plan = alwaysPreparedGained(picked, CLERIC, DUSK, 1, find);
     expect(plan.add.map((s) => s.name)).toEqual(['Faerie Fire']);
     // It leaves the Cleric's list (the class its source names), which owes that place again.
-    expect(plan.flip).toEqual([{ id: 'my-sleep', name: 'Sleep', source: 'Dusk Domain', owner: 'Cleric' }]);
+    expect(plan.flip).toEqual([{ id: 'my-sleep', name: 'Sleep', source: 'Dusk Domain', owner: 'Cleric', counted: true }]);
   });
 
   it("gives a spell the lookup finds in homebrew its entry's id as homebrewId, which the sheet tags", () => {

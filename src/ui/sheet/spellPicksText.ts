@@ -136,7 +136,6 @@ export function restTitle(kind: 'spells' | 'cantrip' | null): string {
  * below the class's highest spell level ("…: 2 of level 1."); "" when the places take any level the list shows.
  */
 export function bookCapsNote(className: string, caps: readonly number[], maxLevel: number): string {
-  const one = caps.length > 0 && new Set(caps).size === 1 && caps[0] < maxLevel;
-  const text = bookCapsText(caps) || (one ? (caps[0] <= 1 ? `${caps.length} of level 1` : `${caps.length} up to level ${caps[0]}`) : '');
+  const text = bookCapsText(caps, maxLevel);
   return text ? `Each ${className} level adds spells of a level its slots allowed then: ${text}.` : '';
 }

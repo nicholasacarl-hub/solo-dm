@@ -808,16 +808,47 @@ describe('spell choices on the sheet', () => {
     expect(behindOpenDialog).toBe(false);
   });
 
-  it("keeps focus on the Spells tab's controls once a Skip from its banner closes the form", async () => {
+  it('puts focus on the Spells tab once a Skip from its banner closes the form, not on a slot pip (srd:rule:sorcerer-spellcasting)', async () => {
+    const user = userEvent.setup();
+    // A Sorcerer has no Long Rest change, so the panel's first control left would be a 1st-level slot's pip, which Enter
+    // would mark used.
+    mocks.builder = SRD_BUILDER_DATA;
+    const base = sampleCharacter();
+    const sorcerer = { classId: 'srd:class:sorcerer', name: 'Sorcerer', level: 2, hitDie: 6 as const, casterType: 'full' as const, spellcastingAbility: 'cha' as const };
+    const spells = [0, 0, 0, 0, 1, 1].map((level, i) => ({ id: `s-${i}`, name: `Sorcerer spell ${i}`, level, prepared: true, source: 'Sorcerer' }));
+    const character: Character = {
+      ...base,
+      classes: [sorcerer],
+      spellcasting: { ability: 'cha', slots: { 1: { max: 3, used: 0 } }, spells, concentratingOn: null, spellPicks: [{ classId: 'srd:class:sorcerer', replaceSpell: true, replaceCantrip: true }] },
+    };
+    resetFakeGame({ campaign: sampleCampaign(), character });
+    render(<Harness />);
+    const tab = screen.getByRole('tab', { name: /Spells/ });
+    await user.click(tab);
+    await user.click(screen.getByRole('button', { name: 'Choose spells for Sorcerer 2' }));
+    await user.click(within(screen.getByRole('dialog', { name: 'Choose spells' })).getByRole('button', { name: 'Skip these choices' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Choose spells for Sorcerer 2' })).toBeNull();
+    expect(tab).toHaveFocus();
+    await user.keyboard('{Enter}');
+    expect(useGame.getState().character?.spellcasting?.slots[1]).toEqual({ max: 3, used: 0 });
+  });
+
+  it("closes the note's form when the DM's spells settle the choices, and doesn't bring it back with the next ones", async () => {
     const user = userEvent.setup();
     resetFakeGame({ campaign: sampleCampaign(), character: wizard4() });
     render(<Harness />);
-    await user.click(screen.getByRole('tab', { name: /Spells/ }));
-    await user.click(screen.getByRole('button', { name: 'Choose spells for Wizard 4' }));
-    await user.click(within(screen.getByRole('dialog', { name: 'Choose spells' })).getByRole('button', { name: 'Skip these choices' }));
+    await user.click(screen.getByRole('button', { name: 'Spells to choose: Wizard 4' }));
+    expect(screen.getByRole('dialog', { name: 'Choose spells' })).toBeInTheDocument();
+    // update_character's settle removes the mark while the form is open: it goes, and focus comes back to the sheet.
+    const c = useGame.getState().character!;
+    const { spellPicks: _settled, ...rest } = c.spellcasting!;
+    act(() => useGame.setState({ character: { ...c, spellcasting: rest } }));
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.queryByRole('button', { name: 'Choose spells for Wizard 4' })).toBeNull();
-    expect(document.activeElement).not.toBe(document.body);
-    expect(screen.getByRole('tabpanel', { name: 'Spells' })).toContainElement(document.activeElement as HTMLElement);
+    expect(screen.getByRole('tab', { name: /Overview/ })).toHaveFocus();
+    // A later level marks choices open again: the note returns, and nothing opens by itself.
+    act(() => useGame.setState({ character: wizard4() }));
+    expect(screen.getByRole('button', { name: 'Spells to choose: Wizard 4' })).toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

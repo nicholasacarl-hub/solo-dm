@@ -131,7 +131,7 @@ describe("the spell choices form: a level's picks", () => {
     expect(status()).toHaveTextContent('Still to choose: 4 for your book');
 
     await user.click(screen.getByRole('button', { name: 'Apply' }));
-    expect(notices()).toEqual(['Player chose spells for Wizard 4: cantrip Ray of Frost; spellbook Web, Hold Person; prepared Web, Sleep; still to choose: 4 spellbook spells']);
+    expect(notices()).toEqual(['Player chose spells for Wizard 4: cantrip Ray of Frost; spellbook Web, Hold Person; prepared Web, Sleep; still to choose: 4 spellbook spells (4 of level 1)']);
     expect(spellOf('Hold Person')).toMatchObject({ source: 'Wizard', prepared: false });
     expect(spellOf('Sleep')?.prepared).toBe(true);
     expect(sheet().spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:wizard' }]);
@@ -342,7 +342,7 @@ describe("the spell choices form: a level's picks", () => {
     expect(box('Lightning Bolt')).not.toHaveAccessibleDescription();
     await user.click(box('Lightning Bolt'));
     await user.click(screen.getByRole('button', { name: 'Apply' }));
-    expect(notices()).toEqual(['Player chose spells for Wizard 5: spellbook Counterspell, Web, Hold Person, Lightning Bolt; still to choose: 1 cantrip, 4 spellbook spells and 4 prepared spells']);
+    expect(notices()).toEqual(['Player chose spells for Wizard 5: spellbook Counterspell, Web, Hold Person, Lightning Bolt; still to choose: 1 cantrip, 4 spellbook spells (4 of level 1) and 4 prepared spells']);
     expect(spellOf('Lightning Bolt')).toMatchObject({ source: 'Wizard', prepared: false });
   });
 
@@ -355,7 +355,7 @@ describe("the spell choices form: a level's picks", () => {
     expect(prepare.getAllByRole('checkbox').map((c) => c.closest('label')?.querySelector('span')?.textContent)).toEqual(['Feather Fall', 'Sleep']);
     await user.click(prepare.getByRole('checkbox', { name: /^Feather Fall/ }));
     await user.click(screen.getByRole('button', { name: 'Apply' }));
-    expect(notices()).toEqual(['Player chose spells for Wizard 4: prepared Feather Fall; still to choose: 1 cantrip, 6 spellbook spells and 1 prepared spell']);
+    expect(notices()).toEqual(['Player chose spells for Wizard 4: prepared Feather Fall; still to choose: 1 cantrip, 6 spellbook spells (2 up to level 2 and 4 of level 1) and 1 prepared spell']);
     expect(spellOf('Feather Fall')).toMatchObject({ source: 'Wizard (copied)', prepared: true });
   });
 

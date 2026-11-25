@@ -14,6 +14,7 @@ import {
   classSpellRules,
   closeSpellPicks,
   fitsBookCaps,
+  keepsBookExtra,
   levelSpellsEdit,
   openSpellPicks,
   owedSpells,
@@ -266,7 +267,8 @@ describe('alwaysPreparedGained: always-prepared spells added, or an ordinary pic
     const gain = alwaysPreparedGained(c, cls('Paladin'), undefined, 2, () => undefined);
     expect(gain).toEqual({ add: [], flip: [], missing: [] });
     const missing = alwaysPreparedGained(hero([entry('Paladin', 2)], []), cls('Paladin'), undefined, 2, () => undefined);
-    expect(missing.missing).toEqual(['Divine Smite']);
+    // With the feature granting it, so the DM adds it under that name, outside the Paladin's count.
+    expect(missing.missing).toEqual([{ name: 'Divine Smite', source: "Paladin's Smite" }]);
   });
 });
 
@@ -281,7 +283,11 @@ describe('words for the DM and the sheet', () => {
     // The book catches up from its six (srd:rule:wizard-spellcasting): its Misty Step and Scorching Ray hold two of the
     // places of a level 2 limit (Wizard 3's or 4's), so the other two such places remain, and the rest are of level 1.
     expect(owedSpellsLine(owed)).toBe('Wizard 4 (spells of level 1–2): up to 1 cantrip (the sheet has 3 of 4), 6 spellbook spells (6 of at least 12: 2 up to level 2 and 4 of level 1) and 2 prepared spells (5 of 7).');
-    expect(recordingHint(owed)).toContain('source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it later: source "Wizard (copied)")');
+    // Copied spells and those a feature adds free (Evocation Savant: "add them to your spellbook for free") come on top of
+    // each level's two; a book spell is prepared by name alone, so it keeps its own source.
+    expect(recordingHint(owed)).toContain(
+      'source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it, or one a feature adds to it free: source "Wizard (copied)"; to prepare a spell already in it: re-add it by name with prepared true and no source)',
+    );
     const bard = hero([entry('Bard', 12)], [...fill('Bard', 4, 0), ...fill('Bard', 16, 1)]);
     const bardOwed = owedSpells(bard, bard.classes[0], cls('Bard'));
     if (!bardOwed) throw new Error('expected a count');
@@ -314,6 +320,21 @@ describe('what a class holds, as the SRD counts it', () => {
     expect(bookSpellsOf(other, 'Wizard')).toEqual([]);
   });
 
+  it("keeps a spellbook extra's source when it is re-added under the class's own name (srd:rule:wizard-spellcasting)", () => {
+    // A copied spell is prepared "like the other spells in your spellbook", and stays apart from each level's two.
+    const c = hero([entry('Wizard', 5), entry('Cleric', 1)], []);
+    const classes = SRD_BUILDER_DATA.classes;
+    expect(keepsBookExtra(c, 'Wizard (copied)', 'Wizard', classes)).toBe(true);
+    expect(keepsBookExtra(c, 'Wizard (Evocation Savant)', 'wizard', classes)).toBe(true);
+    // Another source given, or a spell that is the class's own already, takes what the call says.
+    expect(keepsBookExtra(c, 'Wizard (copied)', 'Granted in play', classes)).toBe(false);
+    expect(keepsBookExtra(c, 'Wizard', 'Wizard', classes)).toBe(false);
+    // A class without a spellbook has no extras, nor does a feat named for a class, nor a class whose data isn't here.
+    expect(keepsBookExtra(c, 'Cleric (Dusk Domain)', 'Cleric', classes)).toBe(false);
+    expect(keepsBookExtra(c, 'Magic Initiate (Wizard)', 'Magic Initiate', classes)).toBe(false);
+    expect(keepsBookExtra(c, 'Wizard (copied)', 'Wizard', [])).toBe(false);
+  });
+
   it('counts only spells of a level the class has slots for (srd:rule:warlock-pact-magic, srd:rule:warlock-mystic-arcanum)', () => {
     // "The chosen spells must be of a level no higher than what's shown in the table's Slot Level column": a Warlock 11's
     // Mystic Arcanum, a level 6 spell recorded under "Warlock" ("you can cast your arcanum spell once without expending a
@@ -342,14 +363,28 @@ describe('always-prepared spells across classes (srd:rule:gaining-spells, "Alway
       [...fill('Wizard', 3, 0), spell('Chromatic Orb', 1, 'Wizard'), ...fill('Wizard', 5, 1), ...fill('Wizard', 4, 1, false, 'book'), ...fill('Sorcerer', 4, 0), ...fill('Sorcerer', 4, 1)],
     );
     const gain = alwaysPreparedGained(c, cls('Sorcerer'), sub('Sorcerer', 'Draconic Sorcery'), 3, findSpell, SRD_BUILDER_DATA.classes);
-    expect(gain.flip).toEqual([{ id: 'id-chromatic-orb', name: 'Chromatic Orb', source: 'Draconic Sorcery', owner: 'Wizard', inBook: true }]);
+    expect(gain.flip).toEqual([{ id: 'id-chromatic-orb', name: 'Chromatic Orb', source: 'Draconic Sorcery', owner: 'Wizard', inBook: true, counted: true }]);
     const after = applyAlwaysPrepared(c, gain);
     expect(after.spellcasting?.spells.find((s) => s.name === 'Chromatic Orb')).toMatchObject({ source: 'Wizard', alwaysPrepared: true, prepared: true });
     expect(owedSpells(after, after.classes[0], cls('Wizard'))).toMatchObject({ spellbook: { target: 10, held: 10, owed: 0 }, prepared: { target: 6, held: 5, owed: 1 } });
     // Without the class data the owner isn't known to keep a book: the spell takes the grant's name, as before.
     expect(alwaysPreparedGained(c, cls('Sorcerer'), sub('Sorcerer', 'Draconic Sorcery'), 3, findSpell).flip).toEqual([
-      { id: 'id-chromatic-orb', name: 'Chromatic Orb', source: 'Draconic Sorcery', owner: 'Wizard' },
+      { id: 'id-chromatic-orb', name: 'Chromatic Orb', source: 'Draconic Sorcery', owner: 'Wizard', counted: true },
     ]);
+  });
+
+  it('frees no place for a turned spell that was not prepared (srd:rule:gaining-spells)', () => {
+    // "A spell that you always have prepared doesn't count against the number of spells on that list": an unprepared
+    // book spell wasn't on the list, so turning it frees nothing there, and the book still holds it.
+    const c = hero(
+      [entry('Wizard', 3), entry('Sorcerer', 3)],
+      [...fill('Wizard', 3, 0), spell('Chromatic Orb', 1, 'Wizard', false), ...fill('Wizard', 6, 1), ...fill('Wizard', 3, 1, false, 'book'), ...fill('Sorcerer', 4, 0), ...fill('Sorcerer', 4, 1)],
+    );
+    const gain = alwaysPreparedGained(c, cls('Sorcerer'), sub('Sorcerer', 'Draconic Sorcery'), 3, findSpell, SRD_BUILDER_DATA.classes);
+    expect(gain.flip).toEqual([{ id: 'id-chromatic-orb', name: 'Chromatic Orb', source: 'Draconic Sorcery', owner: 'Wizard', inBook: true }]);
+    const before = owedSpells(c, c.classes[0], cls('Wizard'));
+    const after = applyAlwaysPrepared(c, gain);
+    expect(owedSpells(after, after.classes[0], cls('Wizard'))).toEqual(before);
   });
 
   it('marks the other class open for the place its turned spell left', () => {
@@ -361,7 +396,7 @@ describe('always-prepared spells across classes (srd:rule:gaining-spells, "Alway
       [...fill('Cleric', 4, 0), spell('Shield of Faith', 1, 'Cleric'), ...fill('Cleric', 8, 1), spell('Divine Smite', 1, "Paladin's Smite", true, { alwaysPrepared: true }), ...fill('Paladin', 3, 1)],
     );
     const r = levelSpellsEdit(c, c.classes[1], cls('Paladin'), sub('Paladin', 'Oath of Devotion'), findSpell, SRD_BUILDER_DATA.classes);
-    expect(r.gain.flip).toEqual([{ id: 'id-shield-of-faith', name: 'Shield of Faith', source: 'Oath of Devotion', owner: 'Cleric' }]);
+    expect(r.gain.flip).toEqual([{ id: 'id-shield-of-faith', name: 'Shield of Faith', source: 'Oath of Devotion', owner: 'Cleric', counted: true }]);
     expect(r.others).toEqual([{ cl: c.classes[0], owed: expect.objectContaining({ prepared: { target: preparedSpellCount(cls('Cleric'), 5), held: 8, owed: preparedSpellCount(cls('Cleric'), 5) - 8 } }), entry: { classId: 'srd:class:cleric' } }]);
     expect(r.character.spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:paladin' }, { classId: 'srd:class:cleric' }]);
     expect(r.entry).toEqual({ classId: 'srd:class:paladin' });
@@ -386,21 +421,29 @@ describe("spellbook spells chosen late keep each level's limit (srd:rule:wizard-
     expect(bookCapBlock(2, [3, 3], caps)).toBeNull();
     expect(bookCapBlock(1, [3, 3, 2, 2], caps)).toBeNull();
     expect(bookCapBlock(2, [2, 2], [3, 2, 1, 1])).toBe('Only 2 may be of level 2 or higher here; the others are for earlier levels.');
-    expect(bookCapsText(caps)).toBe('2 up to level 3 and 2 up to level 2');
+    expect(bookCapsText(caps, 3)).toBe('2 up to level 3 and 2 up to level 2');
     // Part made: two of level 3 took Wizard 5's places, so Wizard 4's are left, of level 1–2; a level 2 pick would have
-    // left one of each.
+    // left one of each. Those two share a limit below the class's level 3 spells: the DM's line and the dialog's notice
+    // say it, so a spell the player names to the DM keeps it too.
     const part = hero([entry('Wizard', 5)], [...fill('Wizard', 3, 0), ...fill('Wizard', 6, 1), ...fill('Wizard', 4, 1, false, 'book'), spell('Fireball', 3, 'Wizard', false), spell('Fly', 3, 'Wizard', false)]);
-    expect(owedSpells(part, part.classes[0], cls('Wizard'))?.bookCaps).toEqual([2, 2]);
+    const partOwed = owedSpells(part, part.classes[0], cls('Wizard'))!;
+    expect(partOwed.bookCaps).toEqual([2, 2]);
+    expect(bookCapsText(partOwed.bookCaps, partOwed.maxLevel)).toBe('2 up to level 2');
+    expect(owedSpellsLine(partOwed)).toContain('2 spellbook spells (12 of at least 14: 2 up to level 2)');
+    expect(owedSpellsSummary(partOwed, true)).toBe('1 cantrip, 2 spellbook spells (2 up to level 2) and 3 prepared spells');
+    expect(owedSpellsSummary(partOwed)).toBe('1 cantrip, 2 spellbook spells and 3 prepared spells');
+    expect(bookCapsText([1, 1], 2)).toBe('2 of level 1');
     const web = hero([entry('Wizard', 5)], [...fill('Wizard', 3, 0), ...fill('Wizard', 6, 1), ...fill('Wizard', 4, 1, false, 'book'), spell('Web', 2, 'Wizard', false)]);
     expect(owedSpells(web, web.classes[0], cls('Wizard'))?.bookCaps).toEqual([3, 3, 2]);
     // Chosen at each level: one limit, nothing more to say.
     const onTime = hero([entry('Wizard', 5)], [...fill('Wizard', 3, 0), ...fill('Wizard', 6, 1), ...fill('Wizard', 6, 1, false, 'book')]);
     expect(owedSpells(onTime, onTime.classes[0], cls('Wizard'))?.bookCaps).toEqual([3, 3]);
-    expect(bookCapsText([3, 3])).toBe('');
+    expect(bookCapsText([3, 3], 3)).toBe('');
+    expect(bookCapsText([], 3)).toBe('');
     // An older Wizard 7 with its starting six: each level's two, back to Wizard 2's of level 1.
     const older = hero([entry('Wizard', 7)], fill('Wizard', 6, 1, false, 'book'));
     expect(owedSpells(older, older.classes[0], cls('Wizard'))?.bookCaps).toEqual([4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1]);
-    expect(bookCapsText([4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1])).toBe('2 up to level 4, 4 up to level 3, 4 up to level 2 and 2 of level 1');
+    expect(bookCapsText([4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1], 4)).toBe('2 up to level 4, 4 up to level 3, 4 up to level 2 and 2 of level 1');
   });
 });
 

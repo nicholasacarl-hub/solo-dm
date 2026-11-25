@@ -76,6 +76,7 @@ import { subclassesOf } from '@/data/options/replaced';
 import { classByName, classOptionFor, multiclassPrimariesFor, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
 import {
   classSpellRules,
+  keepsBookExtra,
   levelSpellsEdit,
   owedSpellsLine,
   recordingHint,
@@ -270,9 +271,11 @@ interface Links {
   feats: (BookMatch | null)[];
   /** The merged equipment catalog, for Armor Class ([] when it couldn't load: the SRD armor table). */
   catalog: readonly EquipmentOption[];
+  /** The merged classes, for a spellbook's extras a re-added spell keeps ([] when they couldn't load). */
+  classes: readonly ClassOption[];
 }
 
-const NO_LINKS: Links = { items: [], spells: [], spellCopies: [], updateCopies: [], feats: [], catalog: [] };
+const NO_LINKS: Links = { items: [], spells: [], spellCopies: [], updateCopies: [], feats: [], catalog: [], classes: [] };
 
 async function loadIndexOrNull(ctx: ToolContext): Promise<RulesIndex | null> {
   try {
@@ -566,6 +569,7 @@ async function resolveLinks(input: ToolInput<'update_character'>, ctx: ToolConte
     updateCopies: updates.map((u) => itemCopyRef(u.description, index)),
     feats: feats.map((f) => featureRef(f, data, index)),
     catalog,
+    classes: data?.classes ?? [],
   };
 }
 
@@ -660,10 +664,13 @@ function spellSteps(input: ToolInput<'update_character'>, links: Links): ((c: Ch
       // its notes, so it keeps their copy mark too. It keeps its id as well, so it stays the entry that id names: a
       // homebrew id joins it only when it is that id (a book's spell re-added once homebrew holds its name stays the book's).
       // And it keeps its source and prepared flag unless the call gives them: the defaults would make a class's own pick
-      // one "Granted in play", prepared, which that class's count no longer sees (spellPicks.ts classSpellsOf).
+      // one "Granted in play", prepared, which that class's count no longer sees (spellPicks.ts classSpellsOf). A
+      // spellbook's extra keeps its source ("Wizard (copied)") when the call gives the class's own name, as a DM preparing
+      // it does: it stays outside the two each level adds (keepsBookExtra).
       const had = c.spellcasting?.spells.find((s) => nameKey(s.name) === nameKey(spell.name));
       const { homebrewId, source, ...rest } = !spell.notes && had?.ref?.textCopied ? { ...add, ref: had.ref } : add;
-      const own = had ? { ...rest, prepared: spell.prepared ?? had.prepared, ...(spell.source !== undefined ? { source } : {}) } : { ...rest, source };
+      const resourced = spell.source !== undefined && !(had && keepsBookExtra(c, had.source, spell.source, links.classes));
+      const own = had ? { ...rest, prepared: spell.prepared ?? had.prepared, ...(resourced ? { source } : {}) } : { ...rest, source };
       return addSpell(c, homebrewId && (!had || had.id === homebrewId) ? { ...own, homebrewId } : own);
     });
   });
@@ -1129,7 +1136,8 @@ async function shortRest(ctx: ToolContext, reason?: string): Promise<ToolOutcome
  * For the DM after a Long Rest: the hero's classes whose own Spellcasting text lets their prepared spells change now
  * (SRD 5.2.1 srd:rule:gaining-spells, "Preparing Spells": a Cleric or Druid any, a Paladin or Ranger one, a Wizard any
  * from its spellbook and one cantrip; classSpellRules reads it), and how to record what the player names. Null when no
- * class has one. A spellbook's spells stay in the book: a Wizard prepares them, so spells_remove isn't for them.
+ * class has one. A spellbook's spells stay in the book: a Wizard prepares them by name, keeping each one's source (a
+ * copied spell's "Wizard (copied)" keeps it outside the two each level adds), so spells_remove isn't for them.
  */
 function restSpellLine(c: Character, data: BuilderData): string | null {
   const books: string[] = [];
@@ -1142,7 +1150,10 @@ function restSpellLine(c: Character, data: BuilderData): string | null {
     return what.length ? [`${cl.name} (${what.join('; ')})`] : [];
   });
   if (!parts.length) return null;
-  const book = books.length ? ` (the ${books.join(' and ')}'s spellbook spells stay in the book: re-add them with prepared true or false)` : '';
+  const copied = books.map((b) => `"${b} (copied)"`).join(' or ');
+  const book = books.length
+    ? ` (the ${books.join(' and ')}'s spellbook spells stay in the book: re-add one by name with prepared true or false and no source, so it keeps its own; a spell newly copied into the book takes source ${copied})`
+    : '';
   return `The player may now change prepared spells on their sheet: ${parts.join(', ')}. Record any they tell you with update_character spells_remove and spells_add, source the class's name${book}.`;
 }
 
@@ -1346,12 +1357,12 @@ interface LevelSpells {
   /** Spells now always prepared, with their source: new to the sheet, or held from no class of the hero's (a DM's grant). */
   added: { name: string; source: string }[];
   /**
-   * A class's own spells now always prepared: they no longer count against its list, so their places are free again; a
-   * spellbook's stay in the book (inBook).
+   * A class's own spells now always prepared: those it counted (prepared) no longer do, so their places are free again;
+   * a spellbook's stay in the book (inBook).
    */
-  turned: { name: string; className: string; inBook: boolean }[];
-  /** Names the rules index doesn't have (a book's spell not accepted yet): the DM adds them. */
-  missing: string[];
+  turned: { name: string; className: string; inBook: boolean; counted: boolean }[];
+  /** Spells the rules index doesn't have (a book's spell not accepted yet), with what grants them: the DM adds them. */
+  missing: { name: string; source: string }[];
   /** What the levelled class may still choose, counted live (null: its table can't be counted). */
   owed: OwedSpells | null;
   /** The levelled class's open choices (null: none open). */
@@ -1377,7 +1388,8 @@ function withLevelSpells(c: Character, plan: DataLevel, findSpell: (name: string
   const r = levelSpellsEdit(c, cl, plan.option, plan.sub, findSpell, classes);
   out.added = r.gain.add.map((s) => ({ name: s.name, source: s.source ?? '' }));
   for (const f of r.gain.flip) {
-    if (f.owner) out.turned.push({ name: f.name, className: f.owner, inBook: f.inBook === true });
+    // A class's spell it didn't count (unprepared) frees nothing: outside a spellbook it reads as a spell added.
+    if (f.owner && (f.counted || f.inBook)) out.turned.push({ name: f.name, className: f.owner, inBook: f.inBook === true, counted: f.counted === true });
     else out.added.push({ name: f.name, source: f.source });
   }
   out.missing = r.gain.missing;
@@ -1394,22 +1406,43 @@ function groupNames<T extends { name: string }>(items: readonly T[], key: (item:
   return [...groups];
 }
 
+/** "Divine Smite (Paladin's Smite); Aid, Lesser Restoration (Life Domain)": names by what grants them, in order. */
+function namesBySource(spells: readonly { name: string; source: string }[]): string {
+  return groupNames(spells, (s) => s.source)
+    .map(([source, names]) => `${names.join(', ')}${source ? ` (${source})` : ''}`)
+    .join('; ');
+}
+
 /**
  * The result's lines about always-prepared spells: "Always prepared now: Divine Smite (Paladin's Smite); Aid, Lesser
- * Restoration (Life Domain).", the class's own picks turned always prepared, and the names the DM adds by hand.
+ * Restoration (Life Domain).", the class's own picks turned always prepared, and the spells the rules here lack. For the
+ * DM (`forDm`) those last say how to add them: with what grants them as the source, so no class counts them (SRD 5.2.1
+ * srd:rule:gaining-spells: "a spell that you always have prepared doesn't count against the number of spells on that
+ * list"); the player's log names them only.
  */
-function alwaysPreparedLines(spells: LevelSpells): string[] {
+function alwaysPreparedLines(spells: LevelSpells, forDm: boolean): string[] {
   const lines: string[] = [];
-  const now = groupNames(spells.added, (s) => s.source).map(([source, names]) => `${names.join(', ')}${source ? ` (${source})` : ''}`);
-  if (now.length) lines.push(`Always prepared now: ${now.join('; ')}.`);
+  if (spells.added.length) lines.push(`Always prepared now: ${namesBySource(spells.added)}.`);
   for (const [className, names] of groupNames(spells.turned.filter((s) => !s.inBook), (s) => s.className)) {
     lines.push(`Now always prepared, no longer counted among the ${className}'s spells: ${names.join(', ')}.`);
   }
-  // A spellbook still holds its spell (srd:rule:wizard-spellcasting: "The book contains the level 1+ spells you know").
-  for (const [className, names] of groupNames(spells.turned.filter((s) => s.inBook), (s) => s.className)) {
+  // A spellbook still holds its spell (srd:rule:wizard-spellcasting: "The book contains the level 1+ spells you know");
+  // only a prepared one was counted.
+  for (const [className, names] of groupNames(spells.turned.filter((s) => s.inBook && s.counted), (s) => s.className)) {
     lines.push(`Now always prepared, no longer counted among the ${className}'s prepared spells (still in the spellbook): ${names.join(', ')}.`);
   }
-  if (spells.missing.length) lines.push(`Not in the rules you can consult: ${spells.missing.join(', ')} — add with update_character spells_add if they apply.`);
+  for (const [className, names] of groupNames(spells.turned.filter((s) => s.inBook && !s.counted), (s) => s.className)) {
+    lines.push(`Now always prepared (still in the ${className}'s spellbook): ${names.join(', ')}.`);
+  }
+  if (spells.missing.length && !forDm) lines.push(`Not in the rules here: ${namesBySource(spells.missing)}.`);
+  if (spells.missing.length && forDm) {
+    const sources = [...new Set(spells.missing.map((s) => s.source))];
+    const how = sources.length === 1 ? `source "${sources[0]}"` : 'each with the source named here';
+    const add = spells.missing.length === 1 ? 'If it applies, add it' : 'If they apply, add them';
+    lines.push(
+      `Not in the rules you can consult: ${namesBySource(spells.missing)}. ${add} with update_character spells_add, ${how} (not a class's name: an always-prepared spell isn't one of its choices).`,
+    );
+  }
   return lines;
 }
 
@@ -1462,9 +1495,9 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   const summary = `Level up! Level ${change.newLevel} (${className}) · HP +${change.hpGained} (max ${change.character.hp.max})`;
   const uses = updatedUses(before, change.character);
   const notes = (change.character.adaptationNotes ?? []).filter((n) => !(before.adaptationNotes ?? []).includes(n));
-  const books = [
+  const books = (forDm: boolean) => [
     ...bookLines(plan, replaced, replacedBySrd, kept),
-    ...alwaysPreparedLines(spells),
+    ...alwaysPreparedLines(spells, forDm),
     ...(notes.length ? ['Older-edition notes now on the sheet (app notes):', ...notes.map((n) => `- ${n}`)] : []),
   ];
   // What the class may still choose, from its table and the sheet: it replaces the engine's generic spell line wherever
@@ -1475,8 +1508,8 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   // The levelled class's choices, then each other class open for a place its turned spell left.
   const picks: ClassPicks[] = [...(owed && entry ? [{ owed, entry }] : []), ...spells.others];
   const choices = picks.map((p) => `Spell choices: ${owedSpellsLine(p.owed, p.entry)}`);
-  await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...books, ...reminders, ...choices].join('\n') || undefined });
-  const lines = [summary, ...eventLines(change.events), ...books];
+  await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...books(false), ...reminders, ...choices].join('\n') || undefined });
+  const lines = [summary, ...eventLines(change.events), ...books(true)];
   if (uses.length) lines.push('Limited-use features that grew with the level (already on the sheet):', ...uses.map((u) => `- ${u}`));
   // The numbers of uses the DM ruled, which the level-up left as they are.
   const rulings = keptRulings(change.character);

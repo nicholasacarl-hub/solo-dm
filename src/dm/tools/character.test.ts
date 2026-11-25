@@ -146,7 +146,19 @@ describe('level_up from the merged builder data', () => {
       [gloamwoodEntryId('Ashen Choir'), 'Ashen Choir', true],
     ]);
     expect(out.content).toContain('Always prepared now: Faerie Fire, Sleep, Ashen Choir (Dusk Domain).');
-    expect(out.content).toContain('Not in the rules you can consult: Darkness');
+    // Darkness isn't in the rules here: added under the subclass's name, as the line says, no class counts it (SRD 5.2.1
+    // srd:rule:gaining-spells: "a spell that you always have prepared doesn't count against the number of spells on that
+    // list"), so the Cleric's choices stay open. The player's log names it only.
+    expect(out.content).toContain(
+      'Not in the rules you can consult: Darkness (Dusk Domain). If it applies, add it with update_character spells_add, source "Dusk Domain" (not a class\'s name: an always-prepared spell isn\'t one of its choices).',
+    );
+    const detail = toolLog(h, 'level_up')?.detail ?? '';
+    expect(detail).toContain('Not in the rules here: Darkness (Dusk Domain).');
+    expect(detail).not.toContain('update_character');
+    const marks = h.sheet().spellcasting?.spellPicks;
+    const added = await h.run('update_character', { spells_add: [{ name: 'Darkness', level: 2, source: 'Dusk Domain' }] });
+    expect(added.content).not.toContain('Spell choices');
+    expect(h.sheet().spellcasting?.spellPicks).toEqual(marks);
   });
 
   it('keeps a number of uses the DM ruled through a level-up, and lists no growth (FeatureUses.ruled; SRD 5.2.1 Fighter: Second Wind)', async () => {
@@ -455,7 +467,7 @@ function caster(name: string, level: number, spells: KnownSpell[], extra: Partia
 const toolLog = (h: ReturnType<typeof setup>, tool: string) =>
   (h.s().log as { kind: string; tool?: string; summary?: string; detail?: string }[]).filter((e) => e.kind === 'tool' && e.tool === tool).at(-1);
 const RECORD_WIZARD =
-  'The player chooses these on their sheet\'s Spells tab, and you\'ll get a note. If they tell you their choices instead, record each with update_character spells_add, source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it later: source "Wizard (copied)").';
+  'The player chooses these on their sheet\'s Spells tab, and you\'ll get a note. If they tell you their choices instead, record each with update_character spells_add, source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it, or one a feature adds to it free: source "Wizard (copied)"; to prepare a spell already in it: re-add it by name with prepared true and no source).';
 
 describe('level_up: always-prepared spells and the spell choices still open (SRD 5.2.1, each class\'s Spellcasting)', () => {
   it("Wizard 3 → 4: one line with the sheet's numbers in place of the engine's generic one, and the choices marked open (srd:rule:wizard-spellcasting)", async () => {
@@ -503,7 +515,9 @@ describe('level_up: always-prepared spells and the spell choices still open (SRD
     // A name the rules the DM may consult don't have is the DM's to add, as before.
     const unknown = setup({ builderData: SRD_BUILDER_DATA, character: start });
     const told = await unknown.run('level_up', { class_name: 'Paladin' });
-    expect(told.content).toContain('Not in the rules you can consult: Divine Smite — add with update_character spells_add if they apply.');
+    expect(told.content).toContain(
+      'Not in the rules you can consult: Divine Smite (Paladin\'s Smite). If it applies, add it with update_character spells_add, source "Paladin\'s Smite" (not a class\'s name: an always-prepared spell isn\'t one of its choices).',
+    );
     expect(unknown.sheet().spellcasting?.spells.map((s) => s.name)).toEqual(['Bless', 'Command']);
   });
 
@@ -685,6 +699,76 @@ describe('level_up and update_character: other classes, spellbooks and choices t
     expect(out.content).toContain('Spell choices: Wizard 4 (spells of level 1–2): up to 1 cantrip (the sheet has 3 of 4), 2 spellbook spells (10 of at least 12) and 1 prepared spell (6 of 7).');
   });
 
+  it("a copied spell the DM prepares under the class's name stays a copy, outside each level's two (srd:rule:wizard-spellcasting)", async () => {
+    // "Copying a Spell into the Book … Afterward you can prepare the spell like the other spells in your spellbook": a
+    // Wizard 5 at its table (4 cantrips, a 14-spell book, 9 prepared) prepares its copied Fly after a Long Rest, and the DM
+    // gives the class's name as the source. Wizard 6 still adds two ("Whenever you gain a Wizard level after 1, add two
+    // Wizard spells of your choice to your spellbook").
+    const book = [...fill('Wizard', 9, 1), ...fill('Wizard', 5, 1, false).map((sp) => ({ ...sp, id: `${sp.id}-book`, name: `${sp.name} book` }))];
+    const h = setup({ builderData: SRD_BUILDER_DATA, character: caster('Wizard', 5, [...fill('Wizard', 4, 0), ...book, held('Fly', 'Wizard (copied)', { prepared: false })]) });
+    const rest = await h.run('take_rest', { kind: 'long' });
+    expect(rest.content).toContain('re-add one by name with prepared true or false and no source, so it keeps its own; a spell newly copied into the book takes source "Wizard (copied)"');
+    const prepare = await h.run('update_character', {
+      spells_add: [
+        { name: 'Fly', level: 3, source: 'Wizard', prepared: true },
+        { name: 'Wizard spell 1-0', level: 1, source: 'Wizard', prepared: false },
+      ],
+    });
+    expect(prepare.isError).toBeUndefined();
+    expect(h.sheet().spellcasting?.spells.find((sp) => sp.name === 'Fly')).toMatchObject({ source: 'Wizard (copied)', prepared: true });
+    expect((await h.run('level_up', { class_name: 'Wizard' })).content).toContain('Spell choices: Wizard 6 (spells of level 1–3): up to 2 spellbook spells (14 of at least 16) and 1 prepared spell (9 of 10).');
+    // Taken out and added again, it becomes one of a level's two: the DM's way to make it one.
+    await h.run('update_character', { spells_remove: ['Fly'], spells_add: [{ name: 'Fly', level: 3, source: 'Wizard' }] });
+    expect(h.sheet().spellcasting?.spells.find((sp) => sp.name === 'Fly')?.source).toBe('Wizard');
+    // Prepared as one of a level's picks the same way: the level's book spells stay owed.
+    const four = [...fill('Wizard', 7, 1), ...fill('Wizard', 5, 1, false).map((sp) => ({ ...sp, id: `${sp.id}-book`, name: `${sp.name} book` }))];
+    const w = setup({ builderData: SRD_BUILDER_DATA, character: caster('Wizard', 4, [...fill('Wizard', 4, 0), ...four, held('Invisibility', 'Wizard (copied)', { prepared: false })]) });
+    await w.run('level_up', { class_name: 'Wizard' });
+    const picked = await w.run('update_character', { spells_add: [{ name: 'Invisibility', level: 2, source: 'Wizard', prepared: true }] });
+    expect(picked.content).toContain('Spell choices still open: Wizard 5 (spells of level 1–3): up to 2 spellbook spells (12 of at least 14) and 1 prepared spell (8 of 9).');
+    // Without the class data, whether "Wizard" keeps a spellbook isn't known: the source given stands.
+    const blind = setup({ builderData: null, character: caster('Wizard', 5, [held('Fly', 'Wizard (copied)', { prepared: false })]) });
+    await blind.run('update_character', { spells_add: [{ name: 'Fly', level: 3, source: 'Wizard', prepared: true }] });
+    expect(blind.sheet().spellcasting?.spells.find((sp) => sp.name === 'Fly')?.source).toBe('Wizard');
+  });
+
+  it("names a spellbook place's limit when the places left share one below the class's spell level (srd:rule:wizard-spellcasting)", async () => {
+    // "Each of these spells must be of a level for which you have spell slots": a Wizard 4 one spell short (a book of
+    // eight level 1 and three level 2 spells) owes Wizard 4's place, of level 1–2, besides Wizard 5's two of level 1–3.
+    const book = [...fill('Wizard', 7, 1), ...fill('Wizard', 1, 1, false).map((sp) => ({ ...sp, id: `${sp.id}-book`, name: `${sp.name} book` })), ...fill('Wizard', 3, 2, false)];
+    const h = setup({ builderData: SRD_BUILDER_DATA, character: caster('Wizard', 4, [...fill('Wizard', 4, 0), ...book]) });
+    expect((await h.run('level_up', { class_name: 'Wizard' })).content).toContain('3 spellbook spells (11 of at least 14: 2 up to level 3 and 1 up to level 2)');
+    // The player names Fireball and Fly: the place left is Wizard 4's, and the line still says so.
+    const out = await h.run('update_character', {
+      spells_add: [
+        { name: 'Fireball', level: 3, source: 'Wizard', prepared: false },
+        { name: 'Fly', level: 3, source: 'Wizard', prepared: false },
+      ],
+    });
+    expect(out.content).toContain('Spell choices still open: Wizard 5 (spells of level 1–3): up to 1 spellbook spell (13 of at least 14: 1 up to level 2) and 2 prepared spells (7 of 9).');
+  });
+
+  it('frees no place for a spell turned always prepared that was not prepared, and says so (srd:rule:gaining-spells)', async () => {
+    // "A spell that you always have prepared doesn't count against the number of spells on that list": an unprepared spell
+    // wasn't on it. Wizard 3 / Sorcerer 2 → Sorcerer 3, Draconic Sorcery, with Chromatic Orb unprepared in the Wizard's book.
+    const wizard = [...fill('Wizard', 3, 0), held('Chromatic Orb', 'Wizard', { prepared: false }), ...fill('Wizard', 6, 1), ...fill('Wizard', 3, 1, false)].map((sp, i) =>
+      i >= 10 ? { ...sp, id: `${sp.id}-book`, name: `${sp.name} book` } : sp,
+    );
+    const spells = [...wizard, ...fill('Sorcerer', 4, 0), ...fill('Sorcerer', 4, 1)];
+    const h = setup({ builderData: SRD_BUILDER_DATA, rules: rulesWith('Alter Self', 'Command', "Dragon's Breath"), character: multiCaster([srdEntry('Wizard', 3), srdEntry('Sorcerer', 2)], spells) });
+    const out = await h.run('level_up', { class_name: 'Sorcerer', subclass: 'Draconic Sorcery' });
+    expect(out.content).toContain("Now always prepared (still in the Wizard's spellbook): Chromatic Orb.");
+    expect(out.content).not.toContain('no longer counted');
+    expect(out.content).not.toContain('Spell choices: Wizard');
+    // A Cleric's unticked Shield of Faith, turned by Oath of Devotion, is named with the spells new to the sheet.
+    const cleric = [...fill('Cleric', 4, 0), held('Shield of Faith', 'Cleric', { prepared: false }), ...fill('Cleric', 9, 1), held('Divine Smite', "Paladin's Smite", { alwaysPrepared: true }), ...fill('Paladin', 3, 1)];
+    const p = setup({ builderData: SRD_BUILDER_DATA, rules: rulesWith('Protection from Evil and Good'), character: multiCaster([srdEntry('Cleric', 5), srdEntry('Paladin', 2)], cleric) });
+    const turned = await p.run('level_up', { class_name: 'Paladin', subclass: 'Oath of Devotion' });
+    expect(turned.content).toContain('Always prepared now: Protection from Evil and Good, Shield of Faith (Oath of Devotion).');
+    expect(turned.content).not.toContain('no longer counted');
+    expect(turned.content).not.toContain('Spell choices: Cleric');
+  });
+
   it("a swap and a new spell the DM records settle the Sorcerer's level; part of the choices leaves the rest open (srd:rule:sorcerer-spellcasting)", async () => {
     // "Whenever you gain a Sorcerer level, you can replace one spell on your list": the level_up result tells the DM to
     // record a replacement with spells_remove and spells_add; once nothing is owed, the sheet's reminder clears.
@@ -717,7 +801,7 @@ describe('level_up and update_character: other classes, spellbooks and choices t
 
 describe('take_rest long: the prepared spells a class may change now (srd:rule:gaining-spells, "Preparing Spells")', () => {
   const LINE =
-    'The player may now change prepared spells on their sheet: Cleric (any), Paladin (one), Wizard (any from the spellbook; one cantrip). Record any they tell you with update_character spells_remove and spells_add, source the class\'s name (the Wizard\'s spellbook spells stay in the book: re-add them with prepared true or false).';
+    'The player may now change prepared spells on their sheet: Cleric (any), Paladin (one), Wizard (any from the spellbook; one cantrip). Record any they tell you with update_character spells_remove and spells_add, source the class\'s name (the Wizard\'s spellbook spells stay in the book: re-add one by name with prepared true or false and no source, so it keeps its own; a spell newly copied into the book takes source "Wizard (copied)").';
 
   it("names each class whose own text allows a change after a Long Rest, and how to record what the player names", async () => {
     // "Preparing Spells": Cleric, Druid and Wizard change their list "Finish a Long Rest: Any", Paladin and Ranger "One";

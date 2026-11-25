@@ -4,6 +4,7 @@
  */
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import { cantripsKnown, preparedSpellCount } from '@/data/options/classFeatures';
@@ -13,14 +14,15 @@ import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
 import { DUSK_DOMAIN_MERGE_ADAPTATIONS, EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT, importedRef } from '@/test/structuredFixtures';
 import type { BuilderData, Character, ClassLevel, ClassOption, CompendiumEntry, KnownSpell } from '@/types';
 import { installDialogPolyfill, resetFakeGame } from '@/ui/builder/testing/fakeGameStore';
+import { toast } from '@/ui/components/toast';
 import { autoCleanup } from '@/ui/shell/testUtils';
 import { LevelUpDialog } from './LevelUpDialog';
 
 /**
  * `indexReady: false`: the rules index isn't built yet (useRulesIndex is null, useRulesIndexState loading) and
- * getRulesIndex builds it, or fails with `indexFails`.
+ * getRulesIndex builds it (once `indexGate` settles, when set), or fails with `indexFails`.
  */
-const mocks = vi.hoisted(() => ({ data: null as BuilderData | null, spells: [] as CompendiumEntry[], indexReady: true, indexFails: false }));
+const mocks = vi.hoisted(() => ({ data: null as BuilderData | null, spells: [] as CompendiumEntry[], indexReady: true, indexFails: false, indexGate: null as Promise<void> | null }));
 
 vi.mock('@/state/gameStore', async () => (await import('@/ui/builder/testing/fakeGameStore')).fakeGameStoreModule());
 vi.mock('@/data', () => {
@@ -37,6 +39,7 @@ vi.mock('@/data', () => {
     useRulesIndex: () => (mocks.indexReady ? index : null),
     useRulesIndexState: () => (mocks.indexReady ? { index, loading: false, error: null } : { index: null, loading: true, error: null }),
     getRulesIndex: async () => {
+      if (mocks.indexGate) await mocks.indexGate;
       if (mocks.indexFails) throw new Error('the rules index failed');
       return index;
     },
@@ -85,6 +88,7 @@ beforeEach(() => {
   mocks.spells = [spell('srd:spell:faerie-fire', 'Faerie Fire', 1), spell('srd:spell:sleep', 'Sleep', 1), spell('lib:gloam:40', 'Ashen Choir', 2)];
   mocks.indexReady = true;
   mocks.indexFails = false;
+  mocks.indexGate = null;
   resetFakeGame({ campaign: sampleCampaign(), character: fighter(2) });
 });
 afterEach(() => {
@@ -146,7 +150,8 @@ describe('LevelUpDialog with imported options', () => {
       ['lib:gloam:40', 'Ashen Choir', true],
     ]);
     expect(spells[2].ref).toMatchObject({ entryId: 'lib:gloam:40', textCopied: false });
-    expect(notices()[0]).toContain('always prepared: Faerie Fire, Sleep, Ashen Choir; not added (not in the rules here): Darkness');
+    // Darkness isn't in the rules here: the DM can add it, under the subclass's name so no class counts it.
+    expect(notices()[0]).toContain("always prepared: Faerie Fire, Sleep, Ashen Choir; not added (not in the rules here; add with the source named, not a class's name): Darkness (Dusk Domain)");
   });
 
   it("B6: an older subclass chosen at level 3 adds its older-edition notes to the character, once, and a feat's notes too", async () => {
@@ -788,10 +793,10 @@ describe("LevelUpDialog: the level's spells", () => {
     await user.click(screen.getByRole('button', { name: 'Level up' }));
 
     const notice = notices()[0];
-    expect(notice).toMatch(/^Player leveled up to Wizard 4 \(character level 4\): \+5 HP \(max 22\); new features: [^;]+; spells to choose: 1 cantrip, 6 spellbook spells and 2 prepared spells; /);
+    expect(notice).toMatch(/^Player leveled up to Wizard 4 \(character level 4\): \+5 HP \(max 22\); new features: [^;]+; spells to choose: 1 cantrip, 6 spellbook spells \(2 up to level 2 and 4 of level 1\) and 2 prepared spells; /);
     // A DM whose session began before its level_up said how still learns how to record what the player names.
     expect(notice).toContain(
-      '; spells to choose: 1 cantrip, 6 spellbook spells and 2 prepared spells; if the player names them to you instead: update_character spells_add, source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it later: source "Wizard (copied)"); still to choose: ',
+      '; spells to choose: 1 cantrip, 6 spellbook spells (2 up to level 2 and 4 of level 1) and 2 prepared spells; if the player names them to you instead: update_character spells_add, source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it, or one a feature adds to it free: source "Wizard (copied)"; to prepare a spell already in it: re-add it by name with prepared true and no source); still to choose: ',
     );
     expect(notice).not.toContain('Review your Wizard cantrips and prepared spells');
     expect(sheet().spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:wizard' }]);
@@ -815,7 +820,7 @@ describe("LevelUpDialog: the level's spells", () => {
     await user.click(group(/^Prepare from your spellbook/).getByRole('checkbox', { name: /^Web/ }));
     await user.click(group(/^Prepare from your spellbook/).getByRole('checkbox', { name: /^Sleep/ }));
     await user.click(screen.getByRole('button', { name: 'Apply' }));
-    expect(notices()[1]).toBe('Player chose spells for Wizard 4: cantrip Ray of Frost; spellbook Web, Hold Person; prepared Web, Sleep; still to choose: 4 spellbook spells');
+    expect(notices()[1]).toBe('Player chose spells for Wizard 4: cantrip Ray of Frost; spellbook Web, Hold Person; prepared Web, Sleep; still to choose: 4 spellbook spells (4 of level 1)');
     expect(onClose).toHaveBeenCalled();
   });
 
@@ -1023,9 +1028,28 @@ describe("LevelUpDialog: the level's spells", () => {
     expect(sheet().spellcasting?.spells.find((s) => s.name === 'Scorching Ray')).toMatchObject({ alwaysPrepared: true, source: 'Wizard' });
     // Her Wizard 3 now prepares 4 of 6, and her book (6 of 10, a hero from before the choices were counted) catches up.
     expect(notices()[0]).toContain('; now always prepared: Scorching Ray; spells to choose: 1 prepared spell (may also replace one spell and one cantrip); ');
-    expect(notices()[0]).toContain('; Wizard 3 spells to choose: 4 spellbook spells and 2 prepared spells;');
+    // With the book's limits by level, as level_up's line gives them: her two level 2 spells took Wizard 3's places.
+    expect(notices()[0]).toContain('; Wizard 3 spells to choose: 4 spellbook spells (4 of level 1) and 2 prepared spells;');
     expect(await screen.findByText('Warlock 3: choose 1 prepared spell; you may also replace a spell and a cantrip')).toBeInTheDocument();
     expect(screen.getByText('Wizard 3: choose 4 spellbook spells and 2 prepared spells')).toBeInTheDocument();
+  });
+
+  it('says only that a turned spellbook spell stays in the book when it was not prepared (srd:rule:gaining-spells)', async () => {
+    const user = userEvent.setup();
+    // Unprepared, Scorching Ray wasn't one of her prepared Wizard spells, so it frees no place there.
+    const mira = sampleCharacter();
+    const unprepared = mira.spellcasting!.spells.map((s) => (s.name === 'Scorching Ray' ? { ...s, prepared: false } : s));
+    const multi: Character = {
+      ...mira,
+      classes: [srdEntry('Warlock', 2), ...mira.classes],
+      hitDice: [...mira.hitDice, { die: 8, total: 2, spent: 0 }],
+      abilityScores: { ...mira.abilityScores, cha: 13 },
+      spellcasting: { ...mira.spellcasting!, spells: [...unprepared, ...fill('Warlock', 2, 0), ...fill('Warlock', 3, 1)] },
+    };
+    resetFakeGame({ campaign: sampleCampaign(), character: multi });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Subclass' })).getByRole('radio', { name: /Fiend Patron/ }));
+    expect(screen.getByText('Now always prepared from Fiend Patron: Scorching Ray')).toHaveTextContent(/^Now always prepared from Fiend Patron: Scorching Ray — it stays in your spellbook$/);
   });
 
   it("waits for the rules index on a quick Level up, so a granted spell isn't skipped (srd:rule:paladin-s-smite)", async () => {
@@ -1057,7 +1081,78 @@ describe("LevelUpDialog: the level's spells", () => {
     render(<LevelUpDialog open onClose={() => undefined} />);
     await user.click(screen.getByRole('button', { name: 'Level up' }));
     expect(sheet().spellcasting?.spells.some((s) => s.name === 'Divine Smite')).toBe(false);
-    expect(notices()[0]).toContain('; not added (not in the rules here): Divine Smite; spells to choose: 1 prepared spell');
+    expect(notices()[0]).toContain("; not added (not in the rules here; add with the source named, not a class's name): Divine Smite (Paladin's Smite); spells to choose: 1 prepared spell");
+  });
+
+  /** A Paladin 1 at its table, slots and all. */
+  const paladin1 = () =>
+    hero(srdEntry('Paladin', 1), {
+      spellcasting: { ability: 'cha', slots: { 1: { max: 2, used: 0 } }, spells: fill('Paladin', preparedSpellCount(srdClass('Paladin'), 1), 1), concentratingOn: null },
+    });
+  /** Holds getRulesIndex until the returned function is called. */
+  const holdIndex = (): (() => Promise<void>) => {
+    mocks.indexReady = false;
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    mocks.indexGate = gate;
+    return async () => {
+      await act(async () => {
+        release();
+        await gate;
+      });
+    };
+  };
+  function Reopenable() {
+    const [open, setOpen] = useState(true);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open level up
+        </button>
+        <LevelUpDialog open={open} onClose={() => setOpen(false)} />
+      </>
+    );
+  }
+
+  it('levels the hero once when the dialog is reopened while a Level up waits for the rules index', async () => {
+    const user = userEvent.setup();
+    const release = holdIndex();
+    resetFakeGame({ campaign: sampleCampaign(), character: paladin1() });
+    render(<Reopenable />);
+    const button = screen.getByRole('button', { name: 'Level up' });
+    await user.click(button);
+    // Waiting: the button keeps focus and says so, and can't be pressed again.
+    expect(button).toHaveFocus();
+    expect(button).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.getByText('Leveling up…')).toBeInTheDocument();
+    // Closed meanwhile, the Level up still applies; reopened, the dialog shows the wait rather than the same level again.
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Open level up' }));
+    const again = within(screen.getByRole('dialog', { name: 'Level up' })).getByRole('button', { name: 'Level up' });
+    expect(again).toHaveAttribute('aria-disabled', 'true');
+    await user.click(again);
+    await release();
+    expect(sheet().classes[0].level).toBe(2);
+    expect(sheet().features.filter((f) => f.name === "Paladin's Smite")).toHaveLength(1);
+    expect(notices()).toHaveLength(1);
+    expect(screen.getByRole('button', { name: 'Level up' })).not.toHaveAttribute('aria-disabled');
+  });
+
+  it("doesn't apply a plan for a level the hero passed while it waited (the DM's level_up)", async () => {
+    const user = userEvent.setup();
+    const release = holdIndex();
+    resetFakeGame({ campaign: sampleCampaign(), character: paladin1() });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    act(() => useGame.setState({ character: levelUp(sheet(), { className: 'Paladin', classId: 'srd:class:paladin', hpMethod: 'average' }).character }));
+    const info = vi.spyOn(toast, 'info');
+    await release();
+    expect(sheet().classes[0].level).toBe(2);
+    expect(notices()).toEqual([]);
+    expect(info).toHaveBeenCalledWith('Not applied: your character reached level 2 while this level-up waited. Open Level up again for the next level.');
   });
 
   it('tells the DM how to record a swap the player names when nothing new is owed (srd:rule:bard-spellcasting)', async () => {

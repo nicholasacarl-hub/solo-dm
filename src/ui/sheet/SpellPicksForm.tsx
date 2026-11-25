@@ -204,7 +204,7 @@ function useReader(backRef?: RefObject<ReaderBack | null>) {
 // ---------------------------------------------------------------------------
 
 /** The element that scrolls the form (the dialog's body). */
-function scrollParent(el: HTMLElement): HTMLElement | null {
+export function scrollParent(el: HTMLElement): HTMLElement | null {
   for (let node = el.parentElement; node; node = node.parentElement) {
     const { overflowY } = getComputedStyle(node);
     if (overflowY === 'auto' || overflowY === 'scroll') return node;

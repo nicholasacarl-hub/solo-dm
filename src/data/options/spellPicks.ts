@@ -102,6 +102,20 @@ function inBookOf(spell: Pick<KnownSpell, 'source'>, className: string): boolean
   return nameKey(spell.source ?? '') === key || extraClassKey(spell.source) === key;
 }
 
+/**
+ * Whether a spell re-added with its class's own name as the source keeps the spellbook extra's source it has ("Wizard
+ * (copied)" re-added as "Wizard" to prepare it): a spell copied into the book or added free stays outside the two each
+ * level adds (srd:rule:wizard-spellcasting), so only removing it and adding it again makes it one of those. Only for a
+ * class of the hero's whose data (`classes`) gives it a spellbook.
+ */
+export function keepsBookExtra(c: Character, held: string | undefined, given: string, classes: readonly ClassOption[]): boolean {
+  const key = extraClassKey(held);
+  if (key === null || nameKey(given) !== key) return false;
+  const cl = c.classes.find((x) => nameKey(x.name) === key);
+  const option = cl ? classOptionFor(cl, classes) : undefined;
+  return option ? classSpellRules(option).spellbook.start > 0 : false;
+}
+
 export interface SpellCount {
   /** What the class's table (and its chosen options) say the class holds at its level. */
   target: number;
@@ -244,9 +258,12 @@ export function bookCapBlock(level: number, picked: readonly number[], caps: rea
   return `Only ${room} may be of level ${level}${level < (caps[0] ?? level) ? ' or higher' : ''} here; the others are for earlier levels.`;
 }
 
-/** "2 up to level 3 and 2 up to level 2" for the owed book places, "" when they share one limit. */
-export function bookCapsText(caps: readonly number[]): string {
-  if (new Set(caps).size < 2) return '';
+/**
+ * "2 up to level 3 and 2 up to level 2" for the owed book places. Places that share one limit say it ("1 up to level 2",
+ * "2 of level 1") only when it is below the class's highest spell level (`maxLevel`); "" when they take any level it has.
+ */
+export function bookCapsText(caps: readonly number[], maxLevel: number): string {
+  if (!caps.length || (new Set(caps).size < 2 && caps[0] >= maxLevel)) return '';
   const groups: [number, number][] = [];
   for (const cap of caps) {
     const last = groups[groups.length - 1];
@@ -391,6 +408,8 @@ export interface TurnedSpell {
   owner?: string;
   /** It stays in that class's spellbook, whose count still holds it (its source is kept): a Wizard's book spell. */
   inBook?: boolean;
+  /** It was prepared, so it counted against that class's prepared spells: its place there is free now. */
+  counted?: boolean;
 }
 
 export interface AlwaysPreparedGain {
@@ -398,8 +417,8 @@ export interface AlwaysPreparedGain {
   add: KnownSpell[];
   /** Spells the sheet already holds as ordinary level 1+ spells, now always prepared with that source. */
   flip: TurnedSpell[];
-  /** Names the rules index doesn't have (a book's spell not accepted yet): the DM adds them. */
-  missing: string[];
+  /** Spells the rules index doesn't have (a book's spell not accepted yet), with the feature or subclass granting them: the DM adds them. */
+  missing: { name: string; source: string }[];
 }
 
 /** An SRD subclass's spell table: "When you reach a Cleric level specified in the … table, you thereafter always have the listed spells prepared." */
@@ -426,8 +445,9 @@ function spellTableRows(text: string): { level: number; spells: string[] }[] {
  * are read too, so a subclass chosen late and an older hero catch up. A name the sheet lacks is added; one it holds as an
  * ordinary level 1+ spell is turned always prepared (it stops counting against the class's list, SRD 5.2.1
  * srd:rule:gaining-spells); one already always prepared stays as it is. A turned spell names the hero's class whose list
- * it leaves; one in a spellbook (a class of `classes` with one) keeps its source, so the book still holds it
- * (srd:rule:wizard-spellcasting: "The book contains the level 1+ spells you know").
+ * it leaves, and whether it was prepared there (only then was it counted, so only then is a place free); one in a
+ * spellbook (a class of `classes` with one) keeps its source, so the book still holds it (srd:rule:wizard-spellcasting:
+ * "The book contains the level 1+ spells you know"). A name the rules lack comes with the feature or subclass granting it.
  */
 export function alwaysPreparedGained(
   c: Character,
@@ -476,13 +496,20 @@ export function alwaysPreparedGained(
     if (have) {
       if (have.alwaysPrepared || have.level < 1) continue;
       const owner = ownerOf(have);
-      out.flip.push({ id: have.id, name: have.name, source: grant.source, ...(owner ? { owner: owner.cl.name } : {}), ...(owner?.inBook ? { inBook: true } : {}) });
+      out.flip.push({
+        id: have.id,
+        name: have.name,
+        source: grant.source,
+        ...(owner ? { owner: owner.cl.name } : {}),
+        ...(owner?.inBook ? { inBook: true } : {}),
+        ...(owner && have.prepared ? { counted: true } : {}),
+      });
       continue;
     }
     const entry = findSpell(grant.name);
     const spell = entry?.kind === 'spell' ? knownSpellFromEntry(entry, { alwaysPrepared: true, prepared: true, source: grant.source }) : null;
     if (spell) out.add.push(spell);
-    else out.missing.push(grant.name.trim());
+    else out.missing.push({ name: grant.name.trim(), source: grant.source });
   }
   return out;
 }
@@ -576,11 +603,17 @@ export function spellLevelsText(maxLevel: number): string {
   return maxLevel === 1 ? 'level 1 spells' : `spells of level 1–${maxLevel}`;
 }
 
-/** "1 cantrip, 6 spellbook spells and 2 prepared spells" ("" when nothing is owed). */
-export function owedSpellsSummary(o: OwedSpells): string {
+/**
+ * "1 cantrip, 6 spellbook spells and 2 prepared spells" ("" when nothing is owed); with `limits`, the spellbook spells'
+ * limits by level where they have any (bookCapsText): "6 spellbook spells (2 up to level 2 and 4 of level 1)".
+ */
+export function owedSpellsSummary(o: OwedSpells, limits = false): string {
   const parts: string[] = [];
   if (o.cantrips?.owed) parts.push(plural(o.cantrips.owed, 'cantrip', 'cantrips'));
-  if (o.spellbook?.owed) parts.push(plural(o.spellbook.owed, 'spellbook spell', 'spellbook spells'));
+  if (o.spellbook?.owed) {
+    const caps = limits ? bookCapsText(o.bookCaps, o.maxLevel) : '';
+    parts.push(`${plural(o.spellbook.owed, 'spellbook spell', 'spellbook spells')}${caps ? ` (${caps})` : ''}`);
+  }
   if (o.prepared.owed) parts.push(plural(o.prepared.owed, 'prepared spell', 'prepared spells'));
   return andList(parts);
 }
@@ -594,14 +627,14 @@ export function swapsText(entry: Pick<SpellPicksOwed, 'replaceSpell' | 'replaceC
 /**
  * The DM's line for a class's open choices, with the sheet's numbers so a catch-up is plain: "Wizard 4 (spells of level
  * 1–2): up to 1 cantrip (the sheet has 3 of 4), 6 spellbook spells (6 of at least 12) and 2 prepared spells (5 of 7);
- * may also replace one cantrip." Spellbook spells owed across levels say each level's limit: "4 spellbook spells (10 of
- * at least 14: 2 up to level 3 and 2 up to level 2)".
+ * may also replace one cantrip." Spellbook spells owed for earlier levels say those levels' limits: "4 spellbook spells
+ * (10 of at least 14: 2 up to level 3 and 2 up to level 2)", "1 spellbook spell (13 of at least 14: 1 up to level 2)".
  */
 export function owedSpellsLine(o: OwedSpells, entry: Pick<SpellPicksOwed, 'replaceSpell' | 'replaceCantrip'> = {}): string {
   const parts: string[] = [];
   if (o.cantrips?.owed) parts.push(`${plural(o.cantrips.owed, 'cantrip', 'cantrips')} (the sheet has ${o.cantrips.held} of ${o.cantrips.target})`);
   if (o.spellbook?.owed) {
-    const caps = bookCapsText(o.bookCaps);
+    const caps = bookCapsText(o.bookCaps, o.maxLevel);
     parts.push(`${plural(o.spellbook.owed, 'spellbook spell', 'spellbook spells')} (${o.spellbook.held} of at least ${o.spellbook.target}${caps ? `: ${caps}` : ''})`);
   }
   if (o.prepared.owed) parts.push(`${plural(o.prepared.owed, 'prepared spell', 'prepared spells')} (${o.prepared.held} of ${o.prepared.target})`);
@@ -614,11 +647,15 @@ export function owedSpellsLine(o: OwedSpells, entry: Pick<SpellPicksOwed, 'repla
 
 /**
  * How the DM records choices the player names, so the sheet counts them: "update_character spells_add, source
- * "Wizard" (prepared: false for a spell only added to the spellbook), and spells_remove for one they give up". A
- * spellbook's copied spells come on top of each level's two (srd:rule:wizard-spellcasting), so they take their own source.
+ * "Wizard" (prepared: false for a spell only added to the spellbook; …), and spells_remove for one they give up". A
+ * spellbook's copied spells, and those a feature adds free (Evocation Savant), come on top of each level's two
+ * (srd:rule:wizard-spellcasting), so they take their own source; a spell already in the book is prepared by name alone,
+ * so it keeps its own.
  */
 export function recordingClause(o: Pick<OwedSpells, 'className' | 'spellbook'>, entry: Pick<SpellPicksOwed, 'replaceSpell' | 'replaceCantrip'> = {}): string {
-  const book = o.spellbook ? ` (prepared: false for a spell only added to the spellbook; a spell copied into it later: source "${o.className} (copied)")` : '';
+  const book = o.spellbook
+    ? ` (prepared: false for a spell only added to the spellbook; a spell copied into it, or one a feature adds to it free: source "${o.className} (copied)"; to prepare a spell already in it: re-add it by name with prepared true and no source)`
+    : '';
   const swap = entry.replaceSpell || entry.replaceCantrip ? ', and spells_remove for one they give up' : '';
   return `update_character spells_add, source "${o.className}"${book}${swap}`;
 }

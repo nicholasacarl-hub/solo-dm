@@ -212,8 +212,10 @@ export function SpellsPanel({
   const closeChoices = () => {
     // Closed now, so the dialog's own close has put focus back on the button that opened it, if that is still there.
     flushSync(() => setChoosing(null));
-    // The banner that opened the form is gone once its choices are made: focus stays on the tab, not the page.
-    if (document.activeElement === document.body) root.current?.querySelector<HTMLElement>('button, input')?.focus();
+    // The banner that opened the form is gone once its choices are made: focus goes to the sheet's Spells tab, not the
+    // page, and not a control in the panel (its first may be a slot's pip, which Enter would spend).
+    if (document.activeElement !== document.body) return;
+    root.current?.closest('[role="tabpanel"]')?.parentElement?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus();
   };
   return (
     <div ref={root} className="flex flex-col gap-4">

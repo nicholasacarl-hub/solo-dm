@@ -11,7 +11,7 @@
  * Summary's "Choose spells" continues into the choices form in this same dialog.
  */
 import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { ArrowBigUpDash, Check, Sparkles, TriangleAlert } from 'lucide-react';
+import { ArrowBigUpDash, Check, Loader2, Sparkles, TriangleAlert } from 'lucide-react';
 import { XP_THRESHOLDS, abilityModifier, characterLevel, levelUp, type LevelUpOptions, type LevelUpResult } from '@/engine';
 import { getRulesIndex, useBuilderData, useRulesIndexState } from '@/data';
 import { withAdaptationNotes } from '@/data/options/adaptationNotes';
@@ -72,7 +72,7 @@ import { Badge, Button, Dialog, EmptyState, Input, Segmented, Select, Spinner } 
 import { BookBadge, OlderEditionBadge, OlderEditionNotes } from '@/ui/builder/BookBadges';
 import { RadioCards } from '@/ui/builder/BuilderParts';
 import { FeatChoicePanel, featChoiceReady, featPanelTitle } from './FeatChoicePanel';
-import { SpellPicksForm, type ReaderBack } from './SpellPicksForm';
+import { scrollParent, SpellPicksForm, type ReaderBack } from './SpellPicksForm';
 import { openPicksText, picksText } from './spellPicksText';
 import { useSheetEdit } from './useSheetActions';
 
@@ -89,6 +89,9 @@ export function LevelUpDialog({ open, onClose }: LevelUpDialogProps) {
   const [footer, setFooter] = useState<HTMLDivElement | null>(null);
   const chooseButton = useRef<HTMLButtonElement>(null);
   const readerBack = useRef<ReaderBack | null>(null);
+  // A Level up waiting for the rules index applies even if the dialog closes meanwhile: reopened, it shows that wait
+  // rather than offering the same level again.
+  const [busy, setBusy] = useState(false);
   if (!open && picking !== null) setPicking(null);
   const close = () => {
     setPicking(null);
@@ -107,7 +110,7 @@ export function LevelUpDialog({ open, onClose }: LevelUpDialogProps) {
     <Dialog open={open} onClose={close} onCancel={cancel} title={picking ? 'Choose spells' : 'Level up'} size="lg" footer={picking ? <div ref={setFooter} className="w-full" /> : undefined}>
       {/* Mounted only while open, so builder data loads on demand. */}
       <div hidden={picking !== null}>
-        <LevelUpForm onClose={close} onChooseSpells={setPicking} chooseButton={chooseButton} />
+        <LevelUpForm onClose={close} onChooseSpells={setPicking} chooseButton={chooseButton} busy={busy} onBusy={setBusy} />
       </div>
       {picking && <SpellPicksForm target={{ mode: 'level', classId: picking }} footer={footer} onCancel={back} onDone={close} focusOnOpen readerBackRef={readerBack} />}
     </Dialog>
@@ -242,12 +245,12 @@ interface NoticeParts {
 
 /**
  * The class's open spell choices for the DM, in place of the engine's generic "Review your … spells" line: "spells to
- * choose: 1 cantrip, 6 spellbook spells and 2 prepared spells", with the level's swaps; a level that only swaps says
- * nothing new is owed. Then how to record spells the player names instead, for a DM whose session began before its
- * level_up said so.
+ * choose: 1 cantrip, 6 spellbook spells (2 up to level 2 and 4 of level 1) and 2 prepared spells", with the level's
+ * swaps; a level that only swaps says nothing new is owed. Then how to record spells the player names instead, for a DM
+ * whose session began before its level_up said so: the spellbook's limits by level hold for those too.
  */
 function spellsToChooseNotice(owed: OwedSpells, entry: SpellPicksOwed): string {
-  const summary = owedSpellsSummary(owed);
+  const summary = owedSpellsSummary(owed, true);
   const swaps = swapsText(entry);
   const recording = `; if the player names them to you instead: ${recordingClause(owed, entry)}`;
   if (!summary) return `spells to choose: none new (may ${swaps})${recording}`;
@@ -268,29 +271,40 @@ interface TurnedGroup {
   owner?: string;
   /** They stay in that class's spellbook. */
   inBook: boolean;
+  /** They were prepared, so that class counted them. */
+  counted: boolean;
   names: string[];
 }
 
-/** Turned spells by their new source, the class whose list they leave and whether a spellbook keeps them, in order. */
+/** Turned spells by their new source, the class whose list they leave, whether a spellbook keeps them and whether they counted, in order. */
 function turnedGroups(flips: readonly TurnedSpell[]): TurnedGroup[] {
   const groups: TurnedGroup[] = [];
   for (const f of flips) {
     const inBook = f.inBook === true;
-    const group = groups.find((g) => g.source === f.source && g.owner === f.owner && g.inBook === inBook);
+    const counted = f.counted === true;
+    const group = groups.find((g) => g.source === f.source && g.owner === f.owner && g.inBook === inBook && g.counted === counted);
     if (group) group.names.push(f.name);
-    else groups.push({ source: f.source, ...(f.owner ? { owner: f.owner } : {}), inBook, names: [f.name] });
+    else groups.push({ source: f.source, ...(f.owner ? { owner: f.owner } : {}), inBook, counted, names: [f.name] });
   }
   return groups;
 }
 
 /**
  * " — no longer counted among your Cleric prepared spells; it stays in your spellbook": the class named when it isn't
- * the one gaining the level.
+ * the one gaining the level. One that wasn't prepared wasn't counted, so nothing is freed: only the spellbook is named.
  */
 function turnedTail(group: TurnedGroup, levelled: string): string {
+  const stays = `${group.names.length === 1 ? 'it stays' : 'they stay'} in your spellbook`;
+  if (!group.counted) return group.inBook ? ` — ${stays}` : '';
   const other = group.owner && nameKey(group.owner) !== nameKey(levelled) ? `${group.owner} ` : '';
-  const book = group.inBook ? `; ${group.names.length === 1 ? 'it stays' : 'they stay'} in your spellbook` : '';
-  return ` — no longer counted among your ${other}prepared spells${book}`;
+  return ` — no longer counted among your ${other}prepared spells${group.inBook ? `; ${stays}` : ''}`;
+}
+
+/** "Ashen Choir, Darkness (Dusk Domain)": spells the rules here lack, by what grants them. */
+function missingText(missing: readonly { name: string; source: string }[]): string {
+  return bySource(missing)
+    .map(([source, names]) => `${names.join(', ')}${source ? ` (${source})` : ''}`)
+    .join('; ');
 }
 
 /**
@@ -378,10 +392,15 @@ function Summary({
   chooseButton?: RefObject<HTMLButtonElement | null>;
   onClose: () => void;
 }) {
-  // The form and its Level up button are gone: focus the first line, so it is read and Tab goes on to the actions.
+  // The form and its Level up button are gone: focus the first line, so it is read and Tab goes on to the actions. The
+  // dialog's body was scrolled down to that button: the Summary starts at its top, with this line in view.
   const heading = useRef<HTMLParagraphElement>(null);
   useEffect(() => {
-    heading.current?.focus({ preventScroll: true });
+    const el = heading.current;
+    if (!el) return;
+    const scroller = scrollParent(el);
+    if (scroller) scroller.scrollTop = 0;
+    el.focus({ preventScroll: true });
   }, []);
   // "Choose spells" opens the levelled class's choices while they are open, else the next class's.
   const first = picks[0];
@@ -612,14 +631,16 @@ function GainedSection({ plan, bookMissing, rulesLoading }: { plan: LevelPlan; b
         </p>
       ))}
       {turnedGroups(plan.spells.flip).map((group) => (
-        <p key={`flip:${group.source}:${group.owner ?? ''}:${group.inBook}`} className="text-sm">
+        <p key={`flip:${group.source}:${group.owner ?? ''}:${group.inBook}:${group.counted}`} className="text-sm">
           {`Now always prepared from ${group.source}: ${group.names.join(', ')}`}
           <span className="text-muted">{turnedTail(group, plan.className)}</span>
         </p>
       ))}
       {/* Until the rules index is first built, every spell looks missing: Level up looks them up once it's there. */}
       {!rulesLoading && plan.spells.missing.length > 0 && (
-        <p className="text-xs text-muted">Not in your rules yet: {plan.spells.missing.join(', ')} — your DM can add {plan.spells.missing.length === 1 ? 'it' : 'them'}.</p>
+        <p className="text-xs text-muted">
+          Not in your rules yet: {plan.spells.missing.map((s) => s.name).join(', ')} — your DM can add {plan.spells.missing.length === 1 ? 'it' : 'them'}.
+        </p>
       )}
       {plan.next && picksText(plan.next.owed, plan.next.entry) && (
         <p className="flex items-start gap-1.5 text-sm text-arcane">
@@ -639,10 +660,15 @@ function LevelUpForm({
   onClose,
   onChooseSpells,
   chooseButton,
+  busy,
+  onBusy,
 }: {
   onClose: () => void;
   onChooseSpells?: (classId: string) => void;
   chooseButton?: RefObject<HTMLButtonElement | null>;
+  /** A Level up is applying (the dialog's, so it outlives a close). */
+  busy: boolean;
+  onBusy: (busy: boolean) => void;
 }) {
   const character = useGame((s) => s.character);
   const campaignId = useGame((s) => s.campaignId);
@@ -659,7 +685,6 @@ function LevelUpForm({
   const [allowAnyway, setAllowAnyway] = useState(false);
   const [featChoice, setFeatChoice] = useState<FeatChoice>({ kind: 'dm' });
   const [featAllowed, setFeatAllowed] = useState(false);
-  const [busy, setBusy] = useState(false);
   // `classIds`: the classes whose spell choices this level-up left open, the levelled class first.
   const [result, setResult] = useState<{ level: LevelUpResult; uses: string[]; choice: string | null; classIds: string[] } | null>(null);
   const faceId = useId();
@@ -728,7 +753,15 @@ function LevelUpForm({
 
   const apply = async () => {
     if (!canApply) return;
-    setBusy(true);
+    onBusy(true);
+    try {
+      await applyLevel();
+    } finally {
+      onBusy(false);
+    }
+  };
+
+  const applyLevel = async () => {
     // The always-prepared spells are looked up in the rules index, which a quick Level up can reach before it is first
     // built (Divine Smite would look missing): wait for it, and without it name what wasn't added.
     const rules = index ?? (await getRulesIndex().catch(() => null));
@@ -743,6 +776,11 @@ function LevelUpForm({
         : base;
     const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null; classIds: string[] } = { result: null, uses: [], choice: null, classIds: [] };
     const saved = await edit((c) => {
+      // The plan is for the level the hero had: one gained meanwhile (the DM's level_up while the rules loaded) would make
+      // this a second level with the first one's features.
+      if (characterLevel(c) !== level) {
+        return { character: c, notice: null, warning: `Not applied: your character reached level ${characterLevel(c)} while this level-up waited. Open Level up again for the next level.` };
+      }
       const r = levelUp(c, opts);
       if (r.character === c) {
         return { character: c, notice: null, warning: r.events.find((e) => e.type === 'warning')?.message ?? 'Could not level up.' };
@@ -799,8 +837,9 @@ function LevelUpForm({
             ...(chose ? [chose] : []),
             ...(gain.add.length ? [`always prepared: ${gain.add.map((s) => s.name).join(', ')}`] : []),
             ...(gain.flip.length ? [`now always prepared: ${gain.flip.map((s) => s.name).join(', ')}`] : []),
-            // A granted spell the rules here lack (a book that isn't on this device): the DM can add it.
-            ...(gain.missing.length ? [`not added (not in the rules here): ${gain.missing.join(', ')}`] : []),
+            // A granted spell the rules here lack (a book that isn't on this device): the DM can add it, under what grants it,
+            // so no class counts it among its choices.
+            ...(gain.missing.length ? [`not added (not in the rules here; add with the source named, not a class's name): ${missingText(gain.missing)}`] : []),
             ...(owed && spells?.entry ? [spellsToChooseNotice(owed, spells.entry)] : []),
             // Another class whose pick was turned always prepared has that place to fill again, recorded under its name.
             ...others.map((o) => `${o.cl.name} ${o.cl.level} ${spellsToChooseNotice(o.owed, o.entry)}`),
@@ -812,7 +851,6 @@ function LevelUpForm({
         warning: warnings.join(' ') || null,
       };
     });
-    setBusy(false);
     if (saved && outcome.result) setResult({ level: { ...outcome.result, character: saved }, uses: outcome.uses, choice: outcome.choice, classIds: outcome.classIds });
   };
 
@@ -891,9 +929,20 @@ function LevelUpForm({
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="primary" loading={busy} disabled={!canApply} icon={<ArrowBigUpDash className="size-4" aria-hidden />} onClick={() => void apply()}>
+        {/* Busy, it stays focusable (aria-disabled), so focus doesn't fall to the page while the level applies. */}
+        <Button
+          variant="primary"
+          disabled={!canApply && !busy}
+          aria-disabled={busy || undefined}
+          icon={busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <ArrowBigUpDash className="size-4" aria-hidden />}
+          className="aria-disabled:cursor-wait aria-disabled:opacity-50"
+          onClick={() => void apply()}
+        >
           Level up
         </Button>
+        <span role="status" className="sr-only">
+          {busy ? 'Leveling up…' : ''}
+        </span>
       </div>
     </div>
   );

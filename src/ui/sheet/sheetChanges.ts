@@ -317,7 +317,8 @@ export function spellPicksChange(c: Character, cls: ClassOption, choice: SpellPi
   }
   const levelled = next.classes.find((x) => x.classId === cl.classId) ?? cl;
   const after = owedSpells(next, levelled, cls);
-  const remaining = after ? owedSpellsSummary(after) : '';
+  // What is left, with the spellbook's limits by level: the DM may record what the player names later.
+  const remaining = after ? owedSpellsSummary(after, true) : '';
   next = remaining ? withoutSwaps(next, cl.classId) : closeSpellPicks(next, cl.classId);
 
   const parts: string[] = [];
