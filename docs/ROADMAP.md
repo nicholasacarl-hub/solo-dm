@@ -40,15 +40,22 @@ vibe-coding session.
   to end. Repeated saves at the end of a target's turns (Hold Person) are the DM's. A spell cast between the caster's
   turns (a Reaction, a Legendary Action, a readied spell) can end up to a round early unless the DM gives `rounds`. An
   NPC's Concentration save is a plain Constitution save: Bless, Bane, Exhaustion, Advantage and War Caster aren't
-  counted, and imported or homebrew stat blocks carry no saves, so the DM rolls those. Conditions a spell imposed,
-  creatures it summoned and its map areas are named for the DM, never removed by the app; Flesh to Stone's permanence
-  at full duration, Haste's lethargy and Fly's fall are the DM's. A Short Rest ends nothing. Only Mage Armor and
-  Shield of Faith change the AC (the DM folds Shield into an attack's DC and sets Barkskin, Haste, Slow and Warding
-  Bond by hand); another caster's Shield of Faith on the hero ends with `ac_spells_end`, two overlapping castings are
-  one record, and putting on armor doesn't end Mage Armor (it stops counting; the DM ends it). An NPC's Concentration
-  isn't shown to the player, and NPC AC from spells isn't tracked. Changing gear and an ability score in one
-  `update_character` call leaves the ability's change out of the AC (refreshArmorClass stops once the gear has moved
-  it), a separate fix.
+  counted, and imported or homebrew stat blocks carry no saves, so the DM rolls those. Conditions a spell imposed and
+  its map areas are named for the DM, never removed by the app, and creatures it summoned are the DM's to remove.
+  `effects_end` ends every area with a label, so when two casters' areas share a name the DM is told and places the
+  other one again with `resolve_area`. A hero's spell given with a note ("Hold Person (3rd level)") keeps the DM's
+  words, so conditions sourced "Hold Person" aren't named when it ends. Flesh to Stone's permanence at full duration,
+  Haste's lethargy and Fly's fall are the DM's. A Short Rest ends nothing. Only Mage Armor and Shield of Faith change
+  the AC (the DM folds Shield into an attack's DC and sets Barkskin, Haste, Slow and Warding Bond by hand); another
+  caster's Shield of Faith on the hero ends with `ac_spells_end`, two overlapping castings are one record, and putting
+  on armor doesn't end Mage Armor (it stops counting; the DM ends it). While the hero concentrates on Shield of Faith,
+  the app takes the recorded +2 to be the hero's own casting (`ac_spells_add` says so): an ally's Shield of Faith on
+  the hero then ends with the hero's Concentration, and the ally's losing Concentration isn't flagged. A save synced
+  through an older app version on another device keeps the records, but that version neither counts nor ends them:
+  its Long Rest, Concentration end and 0 HP leave both spells recorded, and its gear or ability changes keep the AC as
+  it was. An NPC's Concentration isn't shown to the player, and NPC AC from spells isn't tracked. Changing gear and an
+  ability score in one `update_character` call leaves the ability's change out of the AC (refreshArmorClass stops once
+  the gear has moved it), a separate fix.
 
 ## Memory and cost
 
