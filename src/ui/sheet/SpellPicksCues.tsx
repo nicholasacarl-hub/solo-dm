@@ -64,15 +64,30 @@ function hasRestChange(cl: ClassLevel, classes: Parameters<typeof classOptionFor
   return (rules.spells !== null && !rules.fromSpellbook) || rules.cantrip;
 }
 
-/** The Spells tab's top: a banner per class with open choices, and "Change prepared spells" where a Long Rest allows. */
+function Unavailable({ children }: { children: string }) {
+  return <p className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm text-muted">{children}</p>;
+}
+
+/**
+ * The Spells tab's top: a banner per class with open choices, and "Change prepared spells" where a Long Rest allows. A
+ * class marked open whose details aren't on this device (a book that isn't here, data that couldn't load) says so: the
+ * choices stay open, and the DM can add the spells.
+ */
 export function SpellChoicesBar({ character, onOpen }: { character: Character; onOpen: (target: SpellPicksTarget) => void }) {
-  const { data } = useBuilderData();
-  if (!data) return null;
+  const { data, error } = useBuilderData();
+  const marked = (character.spellcasting?.spellPicks ?? []).flatMap((p) => character.classes.filter((cl) => cl.classId === p.classId));
+  if (!data) {
+    return error && marked.length ? <Unavailable>{`Your spell choices are open, but class details couldn't load (${error}). Your DM can add spells.`}</Unavailable> : null;
+  }
   const open = openSpellPicks(character, data.classes);
+  const missing = marked.filter((cl) => !classOptionFor(cl, data.classes));
   const rest = character.classes.filter((cl) => hasRestChange(cl, data.classes));
-  if (!open.length && !rest.length) return null;
+  if (!open.length && !missing.length && !rest.length) return null;
   return (
     <div className="flex flex-col gap-2">
+      {missing.map((cl) => (
+        <Unavailable key={cl.classId}>{`${cl.name} ${cl.level}: its spell choices are open, but its details aren't on this device. Your DM can add spells.`}</Unavailable>
+      ))}
       {open.map((p) => (
         <div key={p.cl.classId} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-arcane/40 bg-arcane-soft px-3 py-2">
           <Sparkles className="size-4 shrink-0 text-arcane" aria-hidden />

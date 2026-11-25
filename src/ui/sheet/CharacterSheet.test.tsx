@@ -732,6 +732,18 @@ describe('spell choices on the sheet', () => {
     expect(screen.queryByRole('button', { name: /Spells to choose/ })).toBeNull();
   });
 
+  it("says on the Spells tab when a class marked open has no details on this device; the choices stay open", async () => {
+    const user = userEvent.setup();
+    const fixture = builderFixture();
+    mocks.builder = { ...fixture, classes: fixture.classes.filter((c) => c.name !== 'Wizard') };
+    resetFakeGame({ campaign: sampleCampaign(), character: wizard4() });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    expect(screen.getByText("Wizard 4: its spell choices are open, but its details aren't on this device. Your DM can add spells.")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Choose spells/ })).toBeNull();
+    expect(useGame.getState().character?.spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:wizard' }]);
+  });
+
   it('loads no class data for a sheet without open choices', () => {
     const calls = vi.mocked(useBuilderData).mock.calls.length;
     render(<Harness />);

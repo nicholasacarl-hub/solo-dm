@@ -761,9 +761,10 @@ describe("LevelUpDialog: the level's spells", () => {
     expect(screen.queryByText(/Review your Wizard cantrips/)).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Choose spells' }));
 
-    // The same dialog: no dialog on top of it.
+    // The same dialog: no dialog on top of it, and focus moves into the choices.
     expect(screen.getAllByRole('dialog')).toHaveLength(1);
     expect(screen.getByRole('dialog', { name: 'Choose spells' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Spell choices' })).toHaveFocus();
     expect(screen.queryByRole('button', { name: 'Done' })).toBeNull();
     await user.click(group(/^Cantrips/).getByRole('checkbox', { name: /^Ray of Frost/ }));
     await user.click(group(/^Spellbook/).getByRole('checkbox', { name: /^Web/ }));

@@ -179,8 +179,8 @@ export function SpellPicksForm({ target, footer, onCancel, onDone, focusOnOpen =
     el.focus({ preventScroll: true });
   }, [focusOnOpen]);
   return (
-    // One wrapper whatever the form shows (loading, the lists), so focus moved into it stays.
-    <div ref={root} tabIndex={-1} className="flex flex-col gap-5 outline-none">
+    // One wrapper whatever the form shows (loading, the lists), so focus moved into it stays; named when it takes focus.
+    <div ref={root} tabIndex={-1} className="flex flex-col gap-5 outline-none" {...(focusOnOpen ? { role: 'region', 'aria-label': 'Spell choices' } : {})}>
       <FormBody target={target} footer={footer} onCancel={onCancel} onDone={onDone} />
     </div>
   );
