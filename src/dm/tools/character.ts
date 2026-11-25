@@ -75,15 +75,15 @@ import { classRefOf, subclassCastingOf, subclassRefOf, spellEntryRef, spellHomeb
 import { subclassesOf } from '@/data/options/replaced';
 import { classByName, classOptionFor, multiclassPrimariesFor, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
 import {
-  alwaysPreparedGained,
-  applyAlwaysPrepared,
   classSpellRules,
-  owedSpells,
+  levelSpellsEdit,
   owedSpellsLine,
   recordingHint,
-  spellPicksAfterLevel,
+  settleSpellPicks,
   withoutSpellReview,
+  type ClassPicks,
   type OwedSpells,
+  type SettledPicks,
 } from '@/data/options/spellPicks';
 import { matchByName } from '@/engine/util';
 import { nameKey } from '@/lib/id';
@@ -988,8 +988,14 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   let results: SectionResult[] = [];
   const checkAc = mayChangeArmorClass(input);
   const before = requireCharacter(ctx.deps.store());
+  // Spells recorded for a class whose spell choices are open settle them, as the level_up result says (the class data
+  // counts what is still owed; without it the choices stay as they are).
+  const recordsSpells = Boolean(input.spells_add?.length || input.spells_remove?.length);
+  const classData = recordsSpells && before.spellcasting?.spellPicks?.length ? await loadBuilderOrNull(ctx) : null;
+  let settled: SettledPicks[] = [];
   const change = await mutateCharacter(ctx, (start) => {
     results = [];
+    settled = [];
     let current = start;
     for (const section of sections) {
       const r = section.apply(current);
@@ -1000,6 +1006,11 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
       const r = refreshArmorClass(start, current, links.catalog, input.armor_class !== undefined);
       if (r.events.length) results.push({ section: { icon: 'info', apply: () => r }, before: current, after: r.character, events: r.events });
       current = r.character;
+    }
+    if (classData) {
+      const r = settleSpellPicks(start, current, classData.classes);
+      current = r.character;
+      settled = r.settled;
     }
     return { character: current };
   });
@@ -1012,6 +1023,8 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   if (input.initiative_change && ctx.deps.store().combat?.active) {
     lines.push('The initiative already rolled for this fight stays; the new bonus counts from the next Initiative roll.');
   }
+  // For the DM only: whether the class's spell choices are done (the sheet's reminder clears) or what is left.
+  for (const p of settled) lines.push(p.owed ? `Spell choices still open: ${owedSpellsLine(p.owed)}` : `Spell choices for ${p.className} ${p.level} recorded: nothing left to choose.`);
   lines.push(...keptHomebrewLines(input.conditions_add, change.character.conditions));
   lines.push(...keptStableLines(input.conditions_add, change.character));
   const saves = saveSourcesChangeText(before, change.character);
@@ -1332,44 +1345,46 @@ function bookLines(plan: DataLevel | null, replaced: string[], replacedBySrd: st
 interface LevelSpells {
   /** Spells now always prepared, with their source: new to the sheet, or held from no class of the hero's (a DM's grant). */
   added: { name: string; source: string }[];
-  /** A class's own spells now always prepared: they no longer count against its list, so their places are free again. */
-  turned: { name: string; className: string }[];
+  /**
+   * A class's own spells now always prepared: they no longer count against its list, so their places are free again; a
+   * spellbook's stay in the book (inBook).
+   */
+  turned: { name: string; className: string; inBook: boolean }[];
   /** Names the rules index doesn't have (a book's spell not accepted yet): the DM adds them. */
   missing: string[];
   /** What the levelled class may still choose, counted live (null: its table can't be counted). */
   owed: OwedSpells | null;
   /** The levelled class's open choices (null: none open). */
   entry: SpellPicksOwed | null;
+  /** Other classes open now for the places their turned spells left. */
+  others: ClassPicks[];
 }
 
-const noLevelSpells = (): LevelSpells => ({ added: [], turned: [], missing: [], owed: null, entry: null });
+const noLevelSpells = (): LevelSpells => ({ added: [], turned: [], missing: [], owed: null, entry: null, others: [] });
 
 /**
- * The levelled class's spells, in the level-up's own edit (SRD 5.2.1 srd:rule:gaining-spells): the always-prepared spells
- * its features and its subclass grant up to its level, added, or turned always prepared where the sheet holds one as an
- * ordinary spell ("a spell that you always have prepared doesn't count against the number of spells on that list", so
- * its place is free again); then the mark that its choices are open, counted after them (spellPicksAfterLevel). The class
- * is the levelled entry: the hero's by its id, or a new one by the option's id levelUp was given. Fills `out`.
+ * The levelled class's spells, in the level-up's own edit (levelSpellsEdit, SRD 5.2.1 srd:rule:gaining-spells): the
+ * always-prepared spells its features and its subclass grant up to its level, added, or turned always prepared where the
+ * sheet holds one as an ordinary spell ("a spell that you always have prepared doesn't count against the number of
+ * spells on that list", so its place is free again: the class it leaves is marked open too); then the mark that its
+ * choices are open, counted after them. The class is the levelled entry: the hero's by its id, or a new one by the
+ * option's id levelUp was given. Fills `out`.
  */
-function withLevelSpells(c: Character, plan: DataLevel, findSpell: (name: string) => CompendiumEntry | undefined, out: LevelSpells): Character {
+function withLevelSpells(c: Character, plan: DataLevel, findSpell: (name: string) => CompendiumEntry | undefined, classes: readonly ClassOption[], out: LevelSpells): Character {
   const classId = plan.existing?.classId ?? plan.option.id;
   const cl = c.classes.find((x) => x.classId === classId);
   if (!cl) return c;
-  const gain = alwaysPreparedGained(c, plan.option, plan.sub, cl.level, findSpell);
-  // Whose list a turned spell leaves: the class its source names (a builder pick, a spells_add with the class's name).
-  const owners = new Map(c.classes.map((x) => [nameKey(x.name), x.name]));
-  const sources = new Map((c.spellcasting?.spells ?? []).map((s) => [s.id, nameKey(s.source ?? '')]));
-  out.added = gain.add.map((s) => ({ name: s.name, source: s.source ?? '' }));
-  for (const f of gain.flip) {
-    const owner = owners.get(sources.get(f.id) ?? '');
-    if (owner) out.turned.push({ name: f.name, className: owner });
+  const r = levelSpellsEdit(c, cl, plan.option, plan.sub, findSpell, classes);
+  out.added = r.gain.add.map((s) => ({ name: s.name, source: s.source ?? '' }));
+  for (const f of r.gain.flip) {
+    if (f.owner) out.turned.push({ name: f.name, className: f.owner, inBook: f.inBook === true });
     else out.added.push({ name: f.name, source: f.source });
   }
-  out.missing = gain.missing;
-  const next = spellPicksAfterLevel(applyAlwaysPrepared(c, gain), cl, plan.option);
-  out.owed = next.spellcasting ? owedSpells(next, cl, plan.option) : null;
-  out.entry = next.spellcasting?.spellPicks?.find((p) => p.classId === cl.classId) ?? null;
-  return next;
+  out.missing = r.gain.missing;
+  out.owed = r.owed;
+  out.entry = r.entry;
+  out.others = r.others;
+  return r.character;
 }
 
 /** Names grouped by a key, in the order they came: [key, names]. */
@@ -1387,8 +1402,12 @@ function alwaysPreparedLines(spells: LevelSpells): string[] {
   const lines: string[] = [];
   const now = groupNames(spells.added, (s) => s.source).map(([source, names]) => `${names.join(', ')}${source ? ` (${source})` : ''}`);
   if (now.length) lines.push(`Always prepared now: ${now.join('; ')}.`);
-  for (const [className, names] of groupNames(spells.turned, (s) => s.className)) {
+  for (const [className, names] of groupNames(spells.turned.filter((s) => !s.inBook), (s) => s.className)) {
     lines.push(`Now always prepared, no longer counted among the ${className}'s spells: ${names.join(', ')}.`);
+  }
+  // A spellbook still holds its spell (srd:rule:wizard-spellcasting: "The book contains the level 1+ spells you know").
+  for (const [className, names] of groupNames(spells.turned.filter((s) => s.inBook), (s) => s.className)) {
+    lines.push(`Now always prepared, no longer counted among the ${className}'s prepared spells (still in the spellbook): ${names.join(', ')}.`);
   }
   if (spells.missing.length) lines.push(`Not in the rules you can consult: ${spells.missing.join(', ')} — add with update_character spells_add if they apply.`);
   return lines;
@@ -1436,7 +1455,7 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
     if (r.character === c || !plan) return r;
     // The older-edition notes of the class and its subclass (a 2014 subclass chosen now) join the sheet's (B6); then the
     // class's always-prepared spells and the mark that its spell choices are open.
-    const next = withLevelSpells(withAdaptationNotes(r.character, [plan.option, plan.sub]), plan, findSpell, spells);
+    const next = withLevelSpells(withAdaptationNotes(r.character, [plan.option, plan.sub]), plan, findSpell, data?.classes ?? [], spells);
     return next === r.character ? r : { ...r, character: next };
   });
   const className = plan && !plan.existing ? plan.option.name : input.class_name;
@@ -1453,15 +1472,17 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   // player's log gets the choices too, without the DM's note on recording them.
   const { owed, entry } = spells;
   const reminders = owed ? withoutSpellReview(change.reminders, owed.className, owed.level) : change.reminders;
-  const choices = owed && entry ? `Spell choices: ${owedSpellsLine(owed, entry)}` : null;
-  await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...books, ...reminders, ...(choices ? [choices] : [])].join('\n') || undefined });
+  // The levelled class's choices, then each other class open for a place its turned spell left.
+  const picks: ClassPicks[] = [...(owed && entry ? [{ owed, entry }] : []), ...spells.others];
+  const choices = picks.map((p) => `Spell choices: ${owedSpellsLine(p.owed, p.entry)}`);
+  await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...books, ...reminders, ...choices].join('\n') || undefined });
   const lines = [summary, ...eventLines(change.events), ...books];
   if (uses.length) lines.push('Limited-use features that grew with the level (already on the sheet):', ...uses.map((u) => `- ${u}`));
   // The numbers of uses the DM ruled, which the level-up left as they are.
   const rulings = keptRulings(change.character);
   if (rulings) lines.push(`${rulings.charAt(0).toUpperCase()}${rulings.slice(1)}.`);
   if (reminders.length) lines.push('Choices the player still needs to make:', ...reminders.map((r) => `- ${r}`));
-  if (choices && owed && entry) lines.push(`${choices} ${recordingHint(owed, entry)}`);
+  picks.forEach((p, i) => lines.push(`${choices[i]} ${recordingHint(p.owed, p.entry)}`));
   const saves = saveSourcesChangeText(before, change.character);
   if (saves) lines.push(`${saves}.`);
   lines.push(`Status: ${characterStatusLine(change.character)}`);

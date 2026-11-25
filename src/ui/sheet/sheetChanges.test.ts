@@ -403,6 +403,9 @@ describe("spell choices from the sheet (SRD 5.2.1, each class's Spellcasting)", 
     // A replacement the sheet already holds, or above the class's own slots (Cleric 3: level 2), isn't taken.
     expect(restSpellChange(cleric3(), cls('Cleric'), { classId: 'srd:class:cleric', giveUp: ['srd:spell:bless'], picks: [pick('Guiding Bolt')] }).notice).toBeNull();
     expect(restSpellChange(cleric3(), cls('Cleric'), { classId: 'srd:class:cleric', giveUp: ['srd:spell:bless'], picks: [pick('Revivify')] }).notice).toBeNull();
+    // A spell above the class's own spell level, recorded under its name, isn't on its list: nothing to give up there.
+    const above = hero([entry('Cleric', 3)], [...fill('Cleric', 3, 0), own('Revivify', 'Cleric'), ...fill('Cleric', 6, 1)], []);
+    expect(restSpellChange(above, cls('Cleric'), { classId: 'srd:class:cleric', giveUp: ['srd:spell:revivify'], picks: [pick('Sanctuary')] }).notice).toBeNull();
   });
 
   it('lets a Paladin replace one spell after a Long Rest, and a Wizard one cantrip (srd:rule:paladin-spellcasting, srd:rule:wizard-spellcasting)', () => {

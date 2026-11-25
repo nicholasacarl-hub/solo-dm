@@ -385,6 +385,7 @@ describe("spellbook spells chosen late keep each level's limit (srd:rule:wizard-
     expect(bookCapBlock(3, [3, 3], caps)).toBe('Only 2 may be of level 3 here; the others are for earlier levels.');
     expect(bookCapBlock(2, [3, 3], caps)).toBeNull();
     expect(bookCapBlock(1, [3, 3, 2, 2], caps)).toBeNull();
+    expect(bookCapBlock(2, [2, 2], [3, 2, 1, 1])).toBe('Only 2 may be of level 2 or higher here; the others are for earlier levels.');
     expect(bookCapsText(caps)).toBe('2 up to level 3 and 2 up to level 2');
     // Part made: two of level 3 took Wizard 5's places, so Wizard 4's are left, of level 1–2; a level 2 pick would have
     // left one of each.
