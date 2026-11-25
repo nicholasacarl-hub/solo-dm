@@ -51,7 +51,12 @@ export interface RulesIndex {
   get(id: string): CompendiumEntry | undefined;
   /** Exact-ish name lookup (case/punctuation-insensitive), preferring homebrew > imports > SRD. */
   findByName(name: string, opts?: { kind?: ContentKind; campaignId?: string | null }): CompendiumEntry | undefined;
-  list(opts?: { kind?: ContentKind; sourceId?: string }): CompendiumEntry[];
+  /**
+   * Every entry of a kind and/or source (retired homebrew never). With `campaignId`, homebrew is listed as
+   * search() and findByName() show it: shared homebrew, and that campaign's (null: shared only). Without it,
+   * every campaign's homebrew is listed (the Library's Browse, the DM's tools, copy detection).
+   */
+  list(opts?: { kind?: ContentKind; sourceId?: string; campaignId?: string | null }): CompendiumEntry[];
   sources(): { id: string; name: string; count: number }[];
 }
 

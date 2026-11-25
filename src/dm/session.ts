@@ -272,11 +272,12 @@ export class DmSessionController {
 
   /**
    * Make the transcript ready for a new turn: answer tool calls left hanging by a closed tab, and
-   * set aside a turn that never got a reply (trimming from the end and re-queueing its notices).
-   * Returns the words of a set-aside player turn, to send again inside the next turn — unless Claude
-   * refused them (the player was asked to rephrase). An unanswered session opening is kept, so the
-   * DM still opens the session; only app notes after it are set aside (a user turn can't follow a
-   * system message) and re-queued for the next turn.
+   * set aside a turn that never got a reply (trimming from the end and putting its notices back
+   * ahead of any queued since, in the same write, so the DM hears them in the order they happened
+   * and a tab closed in between can't lose them). Returns the words of a set-aside player turn, to
+   * send again inside the next turn — unless Claude refused them (the player was asked to rephrase).
+   * An unanswered session opening is kept, so the DM still opens the session; only app notes after
+   * it are set aside (a user turn can't follow a system message) and put back for the next turn.
    */
   private async prepareForNewTurn(): Promise<string[]> {
     await answerUnfinishedToolCalls(this.d);
@@ -292,13 +293,11 @@ export class DmSessionController {
     const notices = noticesAfterLastTurn(transcript).flatMap(parseNotices).filter((n) => !isLateMovesNote(n));
     if (kind === 'session_start') {
       if (!endsWithSystem(transcript)) return [];
-      await store.truncateTranscriptAfter(transcript[start].seq);
-      for (const notice of notices) store.queueDmNotice(notice);
+      await store.truncateTranscriptAfter(transcript[start].seq, { putBack: notices });
       return [];
     }
     const carried = kind === null && !this.lastTurnRefused() ? turnWords(transcript[start].param).flatMap(unansweredMessages) : [];
-    await store.truncateTranscriptAfter(transcript[start].seq - 1);
-    for (const notice of notices) store.queueDmNotice(notice);
+    await store.truncateTranscriptAfter(transcript[start].seq - 1, { putBack: notices });
     return carried;
   }
 
@@ -314,8 +313,7 @@ export class DmSessionController {
     while (last >= 0 && transcript[last].param.role === 'system') last--;
     if (last < 0) return;
     const notices = systemNotes(transcript.slice(last + 1)).flatMap(parseNotices).filter((n) => !isLateMovesNote(n));
-    await store.truncateTranscriptAfter(transcript[last].seq);
-    for (const notice of notices) store.queueDmNotice(notice);
+    await store.truncateTranscriptAfter(transcript[last].seq, { putBack: notices });
   }
 
   /**
@@ -344,8 +342,8 @@ export class DmSessionController {
   /**
    * Append an app note as a system message. A system message must follow a user message, not another system message,
    * so a note still trailing the last user message (it was never answered: its request failed) is folded into one
-   * message with the new one — trimmed from the end and appended again, as one text block each; nothing before it
-   * changes.
+   * message with the new one — trimmed from the end and appended again in one write, as one text block each; nothing
+   * before it changes.
    */
   private async appendSystemNote(text: string): Promise<TranscriptMessage | undefined> {
     const store = this.d.store();
@@ -354,9 +352,9 @@ export class DmSessionController {
     while (last >= 0 && transcript[last].param.role === 'system') last--;
     const trailing = last >= 0 ? systemNotes(transcript.slice(last + 1)) : [];
     if (trailing.length === 0) return (await store.appendTranscript([{ role: 'system', content: text }]))[0];
-    await store.truncateTranscriptAfter(transcript[last].seq);
     const content: BetaTextBlockParam[] = [...trailing, text].map((t) => ({ type: 'text', text: t }));
-    return (await store.appendTranscript([{ role: 'system', content }]))[0];
+    // Trimmed and appended in one write: a tab closed in between can't lose the notes being folded in.
+    return (await store.appendTranscript([{ role: 'system', content }], { trimAfter: transcript[last].seq }))[0];
   }
 
   /** Log entries of the active session since its last player message (or since it started). */
@@ -436,7 +434,7 @@ export class DmSessionController {
   /**
    * Append a turn: the <game_state> block, the words of any turn that never got a reply, the new
    * words, then the pending app notices (plus `extraNotices`, plus a note for any table mode that
-   * changed) as a system message. A mode note re-queued from a set-aside turn is replaced by a
+   * changed) as a system message. A mode note put back from a set-aside turn is replaced by a
    * fresh one, so the DM never gets a stale or duplicate one.
    */
   private async appendTurn(

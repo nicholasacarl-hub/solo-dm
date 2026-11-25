@@ -53,6 +53,7 @@ import type {
   NewCampaignInput,
   RemoteSave,
   SyncReport,
+  TranscriptChange,
 } from './types';
 
 export type { ExportReport } from './redact';
@@ -64,6 +65,7 @@ export type {
   NewCampaignInput,
   RemoteSave,
   SyncReport,
+  TranscriptChange,
 } from './types';
 
 // ---------------------------------------------------------------------------
@@ -97,20 +99,32 @@ export const loadCampaignRecords: (campaignId: string) => Promise<CampaignRecord
 export const getCharacter: (id: string) => Promise<Character | undefined> = records.getCharacter;
 export const putCampaign: (c: Campaign) => Promise<void> = records.putCampaign;
 /**
- * putCampaign that keeps DM notices queued elsewhere since the caller last saw the record (stored
- * notices in neither `seen` nor `c`). Returns the notices now stored.
+ * putCampaign that keeps DM notices queued elsewhere since the caller last saw the record: `seen` is the stored list
+ * as it was then, and the stored notices beyond it (a repeat included) follow `c`'s own. Returns the notices now stored.
  */
 export const putCampaignKeepingNotices: (c: Campaign, seen: readonly string[]) => Promise<string[]> =
   records.putCampaignKeepingNotices;
-/** Add a DM notice to a stored campaign (bumps updatedAt). Resolves the stored notices, or null if it doesn't exist. */
-export const addPendingDmNotice: (campaignId: string, notice: string, updatedAt?: number) => Promise<string[] | null> =
-  records.addPendingDmNotice;
+/**
+ * A transcript change (trim from the end, then add) and putCampaignKeepingNotices in one transaction: all of it is
+ * stored or none of it. The game store writes the transcript only this way. Returns the notices now stored.
+ */
+export const writeTranscriptKeepingNotices: (change: TranscriptChange, c: Campaign, seen: readonly string[]) => Promise<string[]> =
+  records.writeTranscriptKeepingNotices;
+/**
+ * Add a DM notice to a stored campaign (bumps updatedAt), unless it repeats the newest one stored (a retry), or, with
+ * `once`, any stored one. Resolves the stored notices, or null if it doesn't exist.
+ */
+export const addPendingDmNotice: (
+  campaignId: string,
+  notice: string,
+  updatedAt?: number,
+  opts?: { once?: boolean },
+) => Promise<string[] | null> = records.addPendingDmNotice;
 export const putCharacter: (c: Character) => Promise<void> = records.putCharacter;
 /** Remove one character record (the game store calls it when a campaign's character is replaced). */
 export const deleteCharacterRecord: (id: string) => Promise<void> = records.deleteCharacterRecord;
 export const putSession: (s: Session) => Promise<void> = records.putSession;
-export const putTranscript: (messages: TranscriptMessage[]) => Promise<void> = records.putTranscript;
-/** Deletes only messages with seq > `seq`. */
+/** Deletes only messages with seq > `seq`. Adding messages, or a trim saved with the record: writeTranscriptKeepingNotices. */
 export const deleteTranscriptAfter: (sessionId: string, seq: number) => Promise<void> = records.deleteTranscriptAfter;
 /** Ordered by seq. */
 export const getTranscript: (sessionId: string) => Promise<TranscriptMessage[]> = records.getTranscript;

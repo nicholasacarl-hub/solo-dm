@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import type { CompendiumEntry, LibrarySource } from '@/types';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CompendiumEntry, LibrarySource, TranscriptMessage } from '@/types';
 import { sampleCombat } from '@/test/fixtures';
 import {
   addPendingDmNotice,
@@ -17,11 +17,15 @@ import {
   putHomebrew,
   saveLibrarySource,
   setLibrarySourceEnabled,
+  writeTranscriptKeepingNotices,
 } from '@/storage';
 import { db } from './db';
 import { resetDatabase, seedCampaign, sharedHomebrew } from './testData';
 
 beforeEach(resetDatabase);
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe('loadCampaignRecords', () => {
   it('returns null for an unknown campaign', async () => {
@@ -179,5 +183,77 @@ describe('DM notices on the campaign record', () => {
     // Nothing new: saved exactly as given.
     expect(await putCampaignKeepingNotices({ ...campaign, pendingDmNotices: [] }, saved)).toEqual([]);
     expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual([]);
+  });
+
+  const gained = 'Player gained Heroic Inspiration';
+  const spent = 'Player spent Heroic Inspiration';
+
+  it('addPendingDmNotice keeps a change made, undone and made again; only a retry of the newest is dropped', async () => {
+    const { campaign } = await seedCampaign('a');
+    expect(await addPendingDmNotice('a-camp', gained, 5)).toEqual([gained]);
+    expect(await addPendingDmNotice('a-camp', spent, 6)).toEqual([gained, spent]);
+    expect(await addPendingDmNotice('a-camp', gained, 7)).toEqual([gained, spent, gained]);
+    // The same notice again straight away is a retry: stored once, and the record isn't touched.
+    expect(await addPendingDmNotice('a-camp', gained, 8)).toEqual([gained, spent, gained]);
+    expect(await getCampaign('a-camp')).toMatchObject({ pendingDmNotices: [gained, spent, gained], updatedAt: campaign.updatedAt + 3 });
+    // `once`: a notice stored anywhere isn't added again (one that states a fact the app finds until it is saved).
+    expect(await addPendingDmNotice('a-camp', spent, undefined, { once: true })).toEqual([gained, spent, gained]);
+    expect(await addPendingDmNotice('a-camp', 'Top-up.', undefined, { once: true })).toEqual([gained, spent, gained, 'Top-up.']);
+  });
+
+  const ids = async (sessionId: string) => (await getTranscript(sessionId)).map((m) => m.id);
+
+  it('writeTranscriptKeepingNotices trims, adds and saves the record in one write: all of it, or none', async () => {
+    const { campaign } = await seedCampaign('a');
+    const folded: TranscriptMessage = { id: 'a-fold', sessionId: 'a-sess-2', seq: 2, param: { role: 'system', content: 'Folded.' }, createdAt: 2 };
+    const change = { trimAfter: { sessionId: 'a-sess-2', seq: 1 }, append: [folded] };
+    const record = { ...campaign, pendingDmNotices: ['Put back.'] };
+    // The record's write fails after the trim and the add, inside the same transaction (as if the tab closed).
+    const put = vi.spyOn(db.campaigns, 'put').mockRejectedValueOnce(new Error('The tab closed.'));
+    await expect(writeTranscriptKeepingNotices(change, record, [])).rejects.toThrow('The tab closed.');
+    expect(put).toHaveBeenCalledTimes(1);
+    expect(await ids('a-sess-2')).toEqual(['a-t3', 'a-t4', 'a-t5']);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toBeUndefined();
+    // Again, and it lands: all of it together; the other session's transcript is untouched.
+    expect(await writeTranscriptKeepingNotices(change, record, [])).toEqual(['Put back.']);
+    expect(await ids('a-sess-2')).toEqual(['a-t3', 'a-fold']);
+    expect(await ids('a-sess-1')).toEqual(['a-t1', 'a-t2']);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual(['Put back.']);
+  });
+
+  it('writeTranscriptKeepingNotices adds a turn and lets go of the notices it delivers together, or not at all', async () => {
+    const { campaign } = await seedCampaign('a');
+    await addPendingDmNotice('a-camp', 'Delivered with the turn.');
+    const turn: TranscriptMessage = { id: 'a-turn', sessionId: 'a-sess-2', seq: 4, param: { role: 'user', content: 'Next turn.' }, createdAt: 4 };
+    const delivered = { ...campaign, pendingDmNotices: [] };
+    const seen = ['Delivered with the turn.'];
+    // A failure storing the turn's messages leaves the record as it was: the notice still waits, once.
+    vi.spyOn(db.transcript, 'bulkPut').mockRejectedValueOnce(new Error('QuotaExceededError'));
+    await expect(writeTranscriptKeepingNotices({ append: [turn] }, delivered, seen)).rejects.toThrow('QuotaExceededError');
+    expect(await ids('a-sess-2')).toEqual(['a-t3', 'a-t4', 'a-t5']);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual(['Delivered with the turn.']);
+    // So does one at the record's write, after the turn's messages: the turn isn't stored either.
+    vi.spyOn(db.campaigns, 'put').mockRejectedValueOnce(new Error('The tab closed.'));
+    await expect(writeTranscriptKeepingNotices({ append: [turn] }, delivered, seen)).rejects.toThrow('The tab closed.');
+    expect(await ids('a-sess-2')).toEqual(['a-t3', 'a-t4', 'a-t5']);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual(['Delivered with the turn.']);
+    // Then it lands: the turn stored, and the record lets go of the notice it delivers.
+    expect(await writeTranscriptKeepingNotices({ append: [turn] }, delivered, seen)).toEqual([]);
+    expect(await ids('a-sess-2')).toEqual(['a-t3', 'a-t4', 'a-t5', 'a-turn']);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual([]);
+  });
+
+  it('putCampaignKeepingNotices keeps a repeat queued elsewhere, in order', async () => {
+    const a = (await seedCampaign('a')).campaign;
+    const b = (await seedCampaign('b')).campaign;
+    // The caller saw gained and spent; another tab then queued gained again, and a notice of its own.
+    for (const id of ['a-camp', 'b-camp']) for (const notice of [gained, spent, gained, 'From the Library.']) await addPendingDmNotice(id, notice);
+    // Still waiting in the caller's memory: its own first, then the ones queued since, the repeat among them.
+    const kept = [gained, spent, gained, 'From the Library.'];
+    expect(await putCampaignKeepingNotices({ ...a, pendingDmNotices: [gained, spent] }, [gained, spent])).toEqual(kept);
+    expect((await getCampaign('a-camp'))?.pendingDmNotices).toEqual(kept);
+    // Delivered by the caller: only the ones queued since stay.
+    expect(await putCampaignKeepingNotices({ ...b, pendingDmNotices: [] }, [gained, spent])).toEqual([gained, 'From the Library.']);
+    expect((await getCampaign('b-camp'))?.pendingDmNotices).toEqual([gained, 'From the Library.']);
   });
 });

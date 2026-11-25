@@ -16,13 +16,14 @@ import { isToldAndAnswered } from '@/engine';
 import { isSeqAnswered } from '@/lib/answered';
 import { heroMoveBlock, pendingPlayerStop } from '@/state/heroMove';
 import { sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
-import type { BattleMap, CombatState, DmLogEntry, PlayerLogEntry, TurnMove } from '@/types';
+import type { BattleMap, CombatState, DmLogEntry, PlayerLogEntry, TranscriptMessage, TurnMove } from '@/types';
 import { MAX_ITERATIONS, MAX_MAPPED_ITERATIONS, NOTES } from './agent';
 import { resetDmDeps } from './deps';
 import { DM_INSTRUCTIONS } from './prompts';
 import { makeMessage, textBlock, thinkingBlock, toolUseBlock } from './scripted';
 import { canRegenerate } from './index';
-import { LATE_MOVES_NOTE, WRAP_UP_REQUEST } from './session';
+import { LATE_MOVES_NOTE, parseNotices, WRAP_UP_REQUEST } from './session';
+import { systemNotes } from './transcript';
 import { fakeDice } from './testing/fakeEngine';
 import { autoRespond } from './testing/fakeStore';
 import { answerRolls, NO_IMAGE_KEY, setupHarness } from './testing/harness';
@@ -45,6 +46,9 @@ function textOfUser(param: BetaMessageParam, index: number): string {
 function toolResults(param: BetaMessageParam): BetaToolResultBlockParam[] {
   return blocksOf(param).filter((b): b is BetaToolResultBlockParam => b.type === 'tool_result');
 }
+
+/** The app's notes a system message carries, in the order the DM reads them. */
+const notesOf = (m: TranscriptMessage) => systemNotes([m]).flatMap(parseNotices);
 
 const refusal: BetaRefusalStopDetails = {
   type: 'refusal',
@@ -430,6 +434,20 @@ describe('notices at a session start', () => {
     expect(JSON.stringify(t[2].param)).toContain('Narration length is now brief.');
   });
 
+  it("puts an unanswered opening's notices back ahead of those queued since, so the DM hears them in order", async () => {
+    const h = setupHarness({ steps: [{ error: new APIConnectionError({ message: 'offline' }) }, end('The fog parts.')] });
+    h.s().queueDmNotice('Player gained Heroic Inspiration');
+    await h.controller.beginOrResume();
+    expect(h.s().transcript.map((m) => m.param.role)).toEqual(['user', 'system']);
+    // While the opening waits, the player spends it from the sheet, then speaks first.
+    h.s().queueDmNotice('Player spent Heroic Inspiration');
+    await h.controller.sendPlayerMessage('I look around.');
+    const t = h.s().transcript;
+    expect(t.map((m) => m.param.role)).toEqual(['user', 'user', 'system', 'assistant']);
+    expect(notesOf(t[2])).toEqual(['Player gained Heroic Inspiration', 'Player spent Heroic Inspiration']);
+    expect(h.s().pendingDmNotices).toEqual([]);
+  });
+
   it("lists the imported books switched on in the player's Library in the prompt", async () => {
     const h = setupHarness({ libraryImports: [{ id: 'lib-phb', name: 'My PHB notes' }], steps: [end('Hello.')] });
     await h.controller.beginOrResume();
@@ -454,6 +472,25 @@ describe('unanswered turns', () => {
     expect(JSON.stringify(t[1].param)).toContain('Blood Pact');
     // The second request no longer carries the refused words.
     expect(JSON.stringify(h.client.requests[1].messages)).not.toContain('Something refused.');
+  });
+
+  it("puts a failed turn's notices back ahead of those queued since, so the DM hears them in the order they happened", async () => {
+    const h = setupHarness({
+      withSession: true,
+      steps: [{ error: new APIConnectionError({ message: 'offline' }) }, end('The spark is gone.')],
+    });
+    h.s().queueDmNotice('Player gained Heroic Inspiration');
+    await h.controller.sendPlayerMessage('I steady my breath.');
+    expect(h.s().dm.phase).toBe('error');
+    // After the failed request, the player spends it from the sheet, then speaks again.
+    h.s().queueDmNotice('Player spent Heroic Inspiration');
+    await h.controller.sendPlayerMessage('I swing at the ogre.');
+    const t = h.s().transcript;
+    expect(t.map((m) => m.param.role)).toEqual(['user', 'system', 'assistant']);
+    // The DM's last word matches the sheet: spent.
+    expect(notesOf(t[1])).toEqual(['Player gained Heroic Inspiration', 'Player spent Heroic Inspiration']);
+    expect(h.client.requests[1].messages.at(-1)).toEqual(t[1].param);
+    expect(h.s().pendingDmNotices).toEqual([]);
   });
 
   it('demo mode makes no API calls', async () => {
@@ -671,7 +708,12 @@ describe('moves made after a failed request or a reply reach the DM with Retry a
     const [notices] = systemBlocks(h.client.requests[0].messages[1]);
     expect(notices).toContain('The player renamed the hero’s sword.');
     expect((await moveToC7(h)).ok).toBe(true);
+    const truncate = vi.spyOn(h.s(), 'truncateTranscriptAfter');
+    const append = vi.spyOn(h.s(), 'appendTranscript');
     await h.controller.retry();
+    // One store write folds it in (trimmed and appended together), so a tab closed in between can't lose the notices.
+    expect(truncate).not.toHaveBeenCalled();
+    expect(append).toHaveBeenCalledWith([expect.objectContaining({ role: 'system' })], { trimAfter: h.s().transcript[0].seq });
     const messages = h.client.requests[1].messages;
     expect(messages.map((m) => m.role)).toEqual(['user', 'system']);
     expect(messages[0]).toEqual(h.client.requests[0].messages[0]);

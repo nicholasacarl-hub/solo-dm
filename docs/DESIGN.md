@@ -89,7 +89,11 @@ transformation's summary and way back, an item's description wherever the app di
 item, the DM's words on an SRD magic item or a homebrew item, or the DM's words on a book's item, wrapped like
 copied text; non-magic SRD gear carries the SRD's own text, left to `get_entry`) and a spell's notes (the DM's, or the
 builder's on a feat's or species' spell). A book's item linked without the DM's words gets a line naming the book and
-`get_entry`, then the app's numbers-only line (`describeOption`), so the sheet says which items to read. Numbers name their sources where a condition may matter: the AC formula
+`get_entry`, then the app's numbers-only line (`describeOption`), so the sheet says which items to read. A spell linked
+to a homebrew entry (this campaign's or shared homebrew: picked in the builder, named by `spells_add`, or a subclass's
+spell a level-up adds) keeps the entry's id as `homebrewId` and is tagged "homebrew", so it never reads as the SRD spell
+of its name (`spellHomebrewId`); a spell `spells_add` names again keeps its id, and takes a homebrew id only when it is
+that id. Numbers name their sources where a condition may matter: the AC formula
 names each item it counts, the Saving throws line what every save includes (`saveBonusSources`: a Ring or Cloak of
 Protection, an item's bonus the app read as always on, Aura of Protection), and an active item's attack and damage
 bonuses, which the engine doesn't add, are tagged "not counted by the app". The DM instructions ("Bonuses") say
@@ -138,7 +142,14 @@ the chronicle — "simple compaction", which is compatible with preserved thinki
   (`pendingToolResults`) as it completes, so recovery returns the real results for finished tools and
   an "interrupted — check the current state" note only for the one in flight (no double damage).
 - DM notices (sheet edits, vetoes, Library homebrew edits) persist on the campaign record until
-  delivered; a new session delivers them with its opening request.
+  delivered; a new session delivers them with its opening request. A repeat is a new notice (a change made, undone
+  and made again reaches the DM as three, in order), unless it repeats the newest one waiting (a retry); a save keeps
+  the notices queued elsewhere by position and count, never by text alone (`src/lib/dmNotices.ts`). A turn set aside
+  unanswered (its request failed, was refused or stopped before any text) puts its notices back ahead of any queued
+  since, so the DM still hears every notice in the order it happened. Every transcript write (a turn appended, a turn
+  set aside, a note folded into an unanswered turn's notes) is one IndexedDB transaction with the campaign record that
+  holds or lets go of the notices (`writeTranscriptKeepingNotices`), so a tab closed mid-write neither loses a notice
+  nor leaves one to be delivered twice.
 - One tab at a time: the play screen holds a per-campaign Web Lock; the store refuses writes to a
   campaign another tab holds.
 - Rules lookups search the SRD, every import switched on in the Library, and homebrew.
@@ -351,7 +362,9 @@ Screens (hash routing, so GitHub Pages refreshes work):
   (+ lineage, size) → ability scores (standard array / point buy / 4d6-drop-lowest roll) → skills →
   equipment (class + background packages, or gold) → details (name, pronouns, alignment, personality,
   backstory, portrait emoji) → review. "Let the DM help" is always an option: the builder stays
-  editable, and the DM can finish details during session one.
+  editable, and the DM can finish details during session one. Its spell lists (and "Let the DM decide")
+  take homebrew as the rules search shows it, this campaign's and shared homebrew only, and a spell that
+  isn't the SRD's says where it comes from ("From Homebrew", "From <book>").
 - `#/play/:id` **Play** — the table.
   - Desktop (≥1024px): left rail (scene header, quests, journal, homebrew), center narrative log +
     composer, right rail (character sheet; combat tracker on top when combat is active).

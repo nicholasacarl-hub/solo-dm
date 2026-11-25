@@ -166,6 +166,19 @@ describe('rules index lookups', () => {
     ]);
   });
 
+  it('lists only the homebrew search() shows when given a campaign: its own and shared, never another campaign’s', () => {
+    const ids = (campaignId?: string | null) => index.list({ kind: 'spell', campaignId }).map((e) => e.id);
+    const srdAndImports = ['srd:spell:fireball', 'srd:spell:fire-bolt', 'srd:spell:shield', 'lib:import-phb:1'];
+    // camp-1 (campaign A) and camp-2 (campaign B): each sees its own homebrew and the shared one, not the other's.
+    expect(ids('camp-1')).toEqual([...srdAndImports, 'hb:shared', 'hb:camp-1']);
+    expect(ids('camp-2')).toEqual([...srdAndImports, 'hb:shared', 'hb:camp-2']);
+    // No campaign: shared homebrew only, as search() and findByName() default to.
+    expect(ids(null)).toEqual([...srdAndImports, 'hb:shared']);
+    // Left out: every campaign's, as before (the Library's Browse, the DM's tools, copy detection). Retired never.
+    expect(ids()).toEqual([...srdAndImports, 'hb:shared', 'hb:camp-1', 'hb:camp-2']);
+    expect(index.list({ sourceId: 'homebrew', campaignId: 'camp-1' }).map((e) => e.id)).toEqual(['hb:shared', 'hb:camp-1']);
+  });
+
   it('keeps the first entry when ids repeat', () => {
     const dup = createRulesIndex([FIXTURE[0], { ...FIXTURE[0], name: 'Duplicate' }]);
     expect(dup.list()).toHaveLength(1);

@@ -6,13 +6,14 @@
  * prerequisites: only "Level N+" is checked).
  */
 import { describe, expect, it } from 'vitest';
-import { characterLevel, computeArmorClass, levelUp } from '@/engine';
+import { characterLevel, characterSheetText, computeArmorClass, levelUp } from '@/engine';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
-import type { Character, ClassFeatureDef, ClassLevel, ClassOption, CompendiumEntry, FeatOption, Feature, OptionSource, SubclassOption } from '@/types';
+import { HOMEBREW_SOURCE_ID, type Character, type ClassFeatureDef, type ClassLevel, type ClassOption, type CompendiumEntry, type FeatOption, type Feature, type OptionSource, type SubclassOption } from '@/types';
 import { featureUseChanges, gainedFeatures, keptRulings } from './leveling';
 import {
+  addSubclassSpells,
   applyFeatChoice,
   caughtUpFeatures,
   dropChoiceReminder,
@@ -175,6 +176,20 @@ describe('always-prepared spells of an imported subclass', () => {
   it('skips spells already on the sheet and rows above the class level; SRD subclasses list none', () => {
     expect(subclassSpellsToAdd(DUSK, 1, [{ name: 'Sleep' }], find).spells.map((s) => s.name)).toEqual(['Faerie Fire']);
     expect(subclassSpellsToAdd(subOf(CLERIC, 'Life Domain'), 5, [], find)).toEqual({ spells: [], missing: [] });
+  });
+
+  it("gives a spell the lookup finds in homebrew its entry's id as homebrewId, which the sheet tags", () => {
+    // The level-up lookups rank the campaign's homebrew first, so a name the subclass lists can be a homebrew spell.
+    const veil: CompendiumEntry = { ...spell('hb:gloaming-veil', 'Gloaming Veil', 1), sourceId: HOMEBREW_SOURCE_ID, sourceName: 'Homebrew' };
+    const withVeil: SubclassOption = { ...DUSK, alwaysPreparedSpells: [{ level: 1, spells: ['Faerie Fire', 'Gloaming Veil'] }] };
+    const plan = subclassSpellsToAdd(withVeil, 1, [], (name) => (nameKey(name) === nameKey(veil.name) ? veil : find(name)));
+    expect(plan.spells.map((s) => [s.id, s.homebrewId])).toEqual([
+      ['srd:spell:faerie-fire', undefined],
+      ['hb:gloaming-veil', 'hb:gloaming-veil'],
+    ]);
+    expect(plan.spells[0]).not.toHaveProperty('homebrewId');
+    const cleric = addSubclassSpells(hero({ classId: CLERIC.id, name: 'Cleric', level: 1, hitDie: 8, casterType: 'full', spellcastingAbility: 'wis' }), plan.spells);
+    expect(characterSheetText(cleric).split('\n')).toContain('- Level 1: Faerie Fire (C, always prepared, Dusk Domain), Gloaming Veil (always prepared, Dusk Domain, homebrew)');
   });
 });
 

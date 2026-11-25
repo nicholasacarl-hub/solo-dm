@@ -51,7 +51,8 @@ export function CharacterBuilderScreen() {
     useShallow((s) => ({ campaignId: s.campaignId, campaign: s.campaign, character: s.character, loading: s.loading, loadError: s.loadError })),
   );
   const builder = useBuilderData();
-  const spells = useSpellOptions();
+  // This campaign's homebrew and shared homebrew, never another campaign's.
+  const spells = useSpellOptions(id ?? null);
   useDocumentTitle(character && !rebuilding ? `Edit ${character.name}` : 'Create your hero');
 
   useEffect(() => {
