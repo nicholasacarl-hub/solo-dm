@@ -1461,7 +1461,7 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   const rulings = keptRulings(change.character);
   if (rulings) lines.push(`${rulings.charAt(0).toUpperCase()}${rulings.slice(1)}.`);
   if (reminders.length) lines.push('Choices the player still needs to make:', ...reminders.map((r) => `- ${r}`));
-  if (choices && owed) lines.push(`${choices} ${recordingHint(owed)}`);
+  if (choices && owed && entry) lines.push(`${choices} ${recordingHint(owed, entry)}`);
   const saves = saveSourcesChangeText(before, change.character);
   if (saves) lines.push(`${saves}.`);
   lines.push(`Status: ${characterStatusLine(change.character)}`);

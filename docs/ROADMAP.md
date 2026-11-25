@@ -19,8 +19,13 @@ vibe-coding session.
   spell-based AC (Mage Armor, Shield of Faith).
 - **Class extras**: Unarmored Movement, lineage spells gained at levels 3 and 5, and replacing
   "Action Surge (two uses)" / "Indomitable" entries in place at Fighter 13 and 17.
-- **Level-up spell picks**: choosing new spells in the level-up dialog (ASI/feat, Epic Boon and Fighting
-  Style choices and subclass catch-up are in), plus multiclass proficiency gains and features that pick
+- **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
+  DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
+  Signature Spells, Evocation Savant's free spells, Magic Initiate's spell change and its picks when the feat is taken
+  at an Ability Score Improvement, the High Elf's cantrip, Blessed and Druidic Warrior cantrips, Circle of the
+  Land's spells, a Divine or Primal Order chosen at a multiclass level 1, and third casters' counts (their tables
+  aren't stored). Spell save DCs per class on the sheet; DM-made
+  homebrew spells that name no class are on no class's list. Also multiclass proficiency gains and features that pick
   more than one option.
 - **Hit Point maximum effects the app doesn't time or trigger**: with no game clock, Aid, Heroes' Feast and a reduction a
   curse or poison keeps end when the DM or player ends them (the status line names them every turn), and a Mummy's or

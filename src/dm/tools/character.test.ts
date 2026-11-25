@@ -568,7 +568,7 @@ describe('level_up: always-prepared spells and the spell choices still open (SRD
     const h = setup({ builderData: SRD_BUILDER_DATA, character: caster('Sorcerer', 5, [...fill('Sorcerer', 5, 0), ...fill('Sorcerer', 9, 1)]) });
     const out = await h.run('level_up', { class_name: 'Sorcerer' });
     expect(out.content).toContain(
-      'Spell choices: Sorcerer 6 (spells of level 1–3): up to 1 prepared spell (9 of 10); may also replace one spell and one cantrip. The player chooses these on their sheet\'s Spells tab, and you\'ll get a note. If they tell you their choices instead, record each with update_character spells_add, source "Sorcerer".',
+      'Spell choices: Sorcerer 6 (spells of level 1–3): up to 1 prepared spell (9 of 10); may also replace one spell and one cantrip. The player chooses these on their sheet\'s Spells tab, and you\'ll get a note. If they tell you their choices instead, record each with update_character spells_add, source "Sorcerer", and spells_remove for one they give up.',
     );
     expect(out.content).not.toContain('Review your Sorcerer');
     expect(h.sheet().spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:sorcerer', replaceSpell: true, replaceCantrip: true }]);

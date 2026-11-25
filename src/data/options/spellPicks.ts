@@ -366,10 +366,14 @@ export function owedSpellsLine(o: OwedSpells, entry: Pick<SpellPicksOwed, 'repla
   return `${head}: up to ${andList(parts)}${swaps ? `; may also ${swaps}` : ''}.`;
 }
 
-/** How the DM records choices the player names instead of picking them on the sheet, so the sheet counts them. */
-export function recordingHint(o: Pick<OwedSpells, 'className' | 'spellbook'>): string {
+/**
+ * How the DM records choices the player names instead of picking them on the sheet, so the sheet counts them: a
+ * replacement takes spells_remove for the spell given up as well.
+ */
+export function recordingHint(o: Pick<OwedSpells, 'className' | 'spellbook'>, entry: Pick<SpellPicksOwed, 'replaceSpell' | 'replaceCantrip'> = {}): string {
   const book = o.spellbook ? ' (prepared: false for a spell only added to the spellbook)' : '';
-  return `The player chooses these on their sheet's Spells tab, and you'll get a note. If they tell you their choices instead, record each with update_character spells_add, source "${o.className}"${book}.`;
+  const swap = entry.replaceSpell || entry.replaceCantrip ? ', and spells_remove for one they give up' : '';
+  return `The player chooses these on their sheet's Spells tab, and you'll get a note. If they tell you their choices instead, record each with update_character spells_add, source "${o.className}"${book}${swap}.`;
 }
 
 /** The engine's generic spell line for this class level, dropped wherever the class's choices could be counted. */

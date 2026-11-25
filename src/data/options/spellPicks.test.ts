@@ -279,6 +279,9 @@ describe('words for the DM and the sheet', () => {
     if (!bardOwed) throw new Error('expected a count');
     expect(owedSpellsLine(bardOwed, { replaceSpell: true, replaceCantrip: true })).toBe('Bard 12 (spells of level 1–6): may replace one spell and one cantrip; nothing new to choose.');
     expect(recordingHint(bardOwed)).not.toContain('spellbook');
+    // A replacement is recorded by removing the spell given up as well.
+    expect(recordingHint(bardOwed, { replaceSpell: true })).toContain('and spells_remove for one they give up.');
+    expect(recordingHint(bardOwed)).not.toContain('spells_remove');
   });
 
   it("drops exactly the engine's generic spell line", () => {
