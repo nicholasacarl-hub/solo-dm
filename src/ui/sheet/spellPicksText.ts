@@ -2,7 +2,7 @@
  * Words for the sheet's spell choices: the Spells tab's banner, the header note, the level-up dialog's lines and the
  * choices form's status. Pure; the numbers come from src/data/options/spellPicks.ts, worked out live.
  */
-import { owedSpellsSummary, type OpenSpellPicks } from '@/data/options/spellPicks';
+import { bookCapsText, classSpellRules, owedSpellsSummary, type OpenSpellPicks } from '@/data/options/spellPicks';
 import { classSpellLevelCap } from '@/engine';
 import { nameKey } from '@/lib/id';
 import type { Character, ClassLevel, ClassOption, SpellPicksOwed } from '@/types';
@@ -105,4 +105,38 @@ export function restStatus(parts: readonly { givenUp: number; picked: number }[]
 /** "Clerics", "Paladins": the class's members, for the Long Rest change's copy. */
 export function membersOf(className: string): string {
   return /s$/i.test(className) ? className : `${className}s`;
+}
+
+/**
+ * What the choices form changes for a class after a Long Rest (its own Spellcasting text, classSpellRules): prepared
+ * spells (a Cleric's or Druid's, any; a Paladin's or Ranger's, one), only a cantrip (the Wizard's: its prepared spells
+ * change with the Spells tab's checkboxes, from its spellbook), or nothing.
+ */
+export function restChangeKind(cls: ClassOption): 'spells' | 'cantrip' | null {
+  const rules = classSpellRules(cls).longRest;
+  if (rules.spells !== null && !rules.fromSpellbook) return 'spells';
+  return rules.cantrip ? 'cantrip' : null;
+}
+
+/** The Spells tab's button for that change: "Change prepared spells" or "Replace a cantrip", the class named beside another's. */
+export function restButtonText(kind: 'spells' | 'cantrip', className: string, named: boolean): string {
+  if (kind === 'cantrip') return named ? `Replace ${article(className)} ${className} cantrip` : 'Replace a cantrip';
+  return named ? `Change ${className} prepared spells` : 'Change prepared spells';
+}
+
+/** The choices form's title for that change (prepared spells when the class's data isn't known). */
+export function restTitle(kind: 'spells' | 'cantrip' | null): string {
+  return kind === 'cantrip' ? 'Replace a cantrip' : 'Change prepared spells';
+}
+
+/**
+ * The spellbook list's line on the limit of each place still owed (SRD 5.2.1 srd:rule:wizard-spellcasting: "Each of
+ * these spells must be of a level for which you have spell slots", as they were at that level): "Each Wizard level adds
+ * spells of a level its slots allowed then: 2 up to level 3 and 2 up to level 2." Also when every place shares one limit
+ * below the class's highest spell level ("…: 2 of level 1."); "" when the places take any level the list shows.
+ */
+export function bookCapsNote(className: string, caps: readonly number[], maxLevel: number): string {
+  const one = caps.length > 0 && new Set(caps).size === 1 && caps[0] < maxLevel;
+  const text = bookCapsText(caps) || (one ? (caps[0] <= 1 ? `${caps.length} of level 1` : `${caps.length} up to level ${caps[0]}`) : '');
+  return text ? `Each ${className} level adds spells of a level its slots allowed then: ${text}.` : '';
 }

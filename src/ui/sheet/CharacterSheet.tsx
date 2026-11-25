@@ -6,6 +6,7 @@
  * Built with container queries so it works in a ~360 px rail and in a full-width mobile tab.
  */
 import { useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { flushSync } from 'react-dom';
 import { Backpack, BookOpen, NotebookPen, Sparkles, Swords, UserRound } from 'lucide-react';
 import { useGame } from '@/state/gameStore';
 import type { Character, D20TestResult } from '@/types';
@@ -102,11 +103,13 @@ export function CharacterSheet({ character, variant = 'full', editable = false }
   // The note and the badge read the class data: mounted only while a level's spell choices are marked open.
   const picksOpen = editable && hasSpellPicks(character);
   const closeChoices = () => {
-    setChoosing(null);
-    // The note that opened the form is gone once its choices are made: focus stays on the sheet (its open tab), not the page.
-    requestAnimationFrame(() => {
-      if (document.activeElement === document.body) root.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], button')?.focus();
-    });
+    // Closed now, so the dialog's own close has put focus back on the note that opened it, if that is still there.
+    flushSync(() => setChoosing(null));
+    // The note is gone once its choices are made: focus stays on the sheet (its open tab; the compact sheet's first
+    // button), not the page. One query per target: a selector list would give the first in the page's order.
+    if (document.activeElement !== document.body) return;
+    const sheet = root.current;
+    (sheet?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? sheet?.querySelector<HTMLElement>('button'))?.focus();
   };
 
   const onEdit = (change: (c: Character) => SheetChange) => {

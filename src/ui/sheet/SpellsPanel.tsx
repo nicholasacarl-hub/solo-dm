@@ -5,6 +5,7 @@
  * them, open the choices form (SpellPicksForm).
  */
 import { useEffect, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Brain, BookOpen } from 'lucide-react';
 import { formatModifier, ordinal, spellAttackBonus, spellSaveDC } from '@/engine';
 import { getRulesIndex } from '@/data';
@@ -209,11 +210,10 @@ export function SpellsPanel({
   // The banner and the Long Rest change read the class data: only a spellcasting class (or an open choice) mounts them.
   const choices = editable && (hasSpellPicks(c) || c.classes.some((cl) => cl.casterType !== 'none'));
   const closeChoices = () => {
-    setChoosing(null);
+    // Closed now, so the dialog's own close has put focus back on the button that opened it, if that is still there.
+    flushSync(() => setChoosing(null));
     // The banner that opened the form is gone once its choices are made: focus stays on the tab, not the page.
-    requestAnimationFrame(() => {
-      if (document.activeElement === document.body) root.current?.querySelector<HTMLElement>('button, input')?.focus();
-    });
+    if (document.activeElement === document.body) root.current?.querySelector<HTMLElement>('button, input')?.focus();
   };
   return (
     <div ref={root} className="flex flex-col gap-4">

@@ -754,16 +754,57 @@ describe('spell choices on the sheet', () => {
   it("offers a Long Rest's change on the Spells tab where the class's rules allow it (srd:rule:wizard-spellcasting)", async () => {
     const user = userEvent.setup();
     // The SRD's own Wizard: "Whenever you finish a Long Rest, you can replace one of your cantrips from this feature with
-    // another Wizard cantrip of your choice."
+    // another Wizard cantrip of your choice." Its prepared spells change with the checkboxes: here it only replaces a cantrip.
     mocks.builder = SRD_BUILDER_DATA;
     render(<Harness />);
     await user.click(screen.getByRole('tab', { name: /Spells/ }));
-    await user.click(screen.getByRole('button', { name: 'Change prepared spells' }));
-    const dialog = screen.getByRole('dialog', { name: 'Change prepared spells' });
+    expect(screen.queryByRole('button', { name: /prepared spells/ })).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Replace a cantrip' }));
+    const dialog = screen.getByRole('dialog', { name: 'Replace a cantrip' });
     expect(within(dialog).getByText('Wizards replace one cantrip after a Long Rest. Your DM is told.')).toBeInTheDocument();
     await user.selectOptions(within(dialog).getByLabelText('Cantrip to replace'), 'Light');
     await user.click(within(within(dialog).getByRole('group', { name: /^Replacement cantrip/ })).getByRole('checkbox', { name: /^Ray of Frost/ }));
     await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
     expect(notices()).toEqual(['Player changed their Wizard cantrips (allowed after a Long Rest): Light → Ray of Frost']);
+  });
+
+  it("names each class's Long Rest change beside another's: a Wizard cantrip, Cleric prepared spells (srd:rule:wizard-spellcasting, srd:rule:cleric-spellcasting)", async () => {
+    const user = userEvent.setup();
+    mocks.builder = SRD_BUILDER_DATA;
+    const base = sampleCharacter();
+    const cleric = { classId: 'srd:class:cleric', name: 'Cleric', level: 1, hitDie: 8 as const, casterType: 'full' as const, spellcastingAbility: 'wis' as const };
+    resetFakeGame({ campaign: sampleCampaign(), character: { ...base, classes: [...base.classes, cleric] } });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    await user.click(screen.getByRole('button', { name: 'Replace a Wizard cantrip' }));
+    expect(screen.getByRole('dialog', { name: 'Replace a cantrip' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await user.click(screen.getByRole('button', { name: 'Change Cleric prepared spells' }));
+    expect(screen.getByRole('dialog', { name: 'Change prepared spells' })).toBeInTheDocument();
+  });
+
+  it('puts focus on the open tab once a Skip from the header note closes the form, not on the page or Level up', async () => {
+    const user = userEvent.setup();
+    resetFakeGame({ campaign: sampleCampaign(), character: wizard4() });
+    render(<Harness />);
+    await user.click(screen.getByRole('button', { name: 'Spells to choose: Wizard 4' }));
+    await user.click(within(screen.getByRole('dialog', { name: 'Choose spells' })).getByRole('button', { name: 'Skip these choices' }));
+    // Closed by then, not a frame later, and the note that opened it is gone.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('button', { name: /Spells to choose/ })).toBeNull();
+    expect(screen.getByRole('tab', { name: /Overview/ })).toHaveFocus();
+  });
+
+  it("keeps focus on the Spells tab's controls once a Skip from its banner closes the form", async () => {
+    const user = userEvent.setup();
+    resetFakeGame({ campaign: sampleCampaign(), character: wizard4() });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    await user.click(screen.getByRole('button', { name: 'Choose spells for Wizard 4' }));
+    await user.click(within(screen.getByRole('dialog', { name: 'Choose spells' })).getByRole('button', { name: 'Skip these choices' }));
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Choose spells for Wizard 4' })).toBeNull();
+    expect(document.activeElement).not.toBe(document.body);
+    expect(screen.getByRole('tabpanel', { name: 'Spells' })).toContainElement(document.activeElement as HTMLElement);
   });
 });

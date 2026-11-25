@@ -1,19 +1,19 @@
 /**
  * Where the sheet says spell choices are open: a banner per class on the Spells tab ("Wizard 4: choose 1 cantrip, 6
- * spellbook spells and 2 prepared spells", opening the choices form), "Change prepared spells" for a class whose rules
- * allow a change after a Long Rest, a one-line note in the sheet's header and a badge on the Spells tab. Each reads the
- * class data (useBuilderData), so the sheet mounts the note and the badge only while Spellcasting.spellPicks has
- * entries: a sheet without them loads nothing new. What they show is live (openSpellPicks): spells the DM recorded
- * meanwhile settle them.
+ * spellbook spells and 2 prepared spells", opening the choices form), "Change prepared spells" (or, for the Wizard,
+ * "Replace a cantrip") for a class whose rules allow a change after a Long Rest, a one-line note in the sheet's header
+ * and a badge on the Spells tab. Each reads the class data (useBuilderData), so the sheet mounts the note and the badge
+ * only while Spellcasting.spellPicks has entries: a sheet without them loads nothing new. What they show is live
+ * (openSpellPicks): spells the DM recorded meanwhile settle them.
  */
 import { Sparkles } from 'lucide-react';
 import { useBuilderData } from '@/data';
-import { classSpellRules, openSpellPicks, type OpenSpellPicks } from '@/data/options/spellPicks';
+import { openSpellPicks, type OpenSpellPicks } from '@/data/options/spellPicks';
 import { classOptionFor } from '@/data/options/resolve';
 import type { Character, ClassLevel } from '@/types';
 import { Button } from '@/ui/components/ui';
 import type { SpellPicksTarget } from './SpellPicksForm';
-import { openPicksText, picksNoteText } from './spellPicksText';
+import { openPicksText, picksNoteText, restButtonText, restChangeKind } from './spellPicksText';
 
 /** The classes whose choices are open now (none until the class data loads). */
 function useOpenPicks(c: Character): OpenSpellPicks[] {
@@ -56,12 +56,13 @@ export function SpellPicksBadge({ character }: { character: Character }) {
   );
 }
 
-/** A class's change after a Long Rest that the form makes (a Wizard's prepared spells change with the checkboxes). */
-function hasRestChange(cl: ClassLevel, classes: Parameters<typeof classOptionFor>[1]): boolean {
-  const cls = classOptionFor(cl, classes);
-  if (!cls) return false;
-  const rules = classSpellRules(cls).longRest;
-  return (rules.spells !== null && !rules.fromSpellbook) || rules.cantrip;
+/** The classes with a change after a Long Rest that the form makes (a Wizard's prepared spells change with the checkboxes). */
+function restChanges(c: Character, classes: Parameters<typeof classOptionFor>[1]): { cl: ClassLevel; kind: 'spells' | 'cantrip' }[] {
+  return c.classes.flatMap((cl) => {
+    const cls = classOptionFor(cl, classes);
+    const kind = cls ? restChangeKind(cls) : null;
+    return kind ? [{ cl, kind }] : [];
+  });
 }
 
 function Unavailable({ children }: { children: string }) {
@@ -69,9 +70,10 @@ function Unavailable({ children }: { children: string }) {
 }
 
 /**
- * The Spells tab's top: a banner per class with open choices, and "Change prepared spells" where a Long Rest allows. A
- * class marked open whose details aren't on this device (a book that isn't here, data that couldn't load) says so: the
- * choices stay open, and the DM can add the spells.
+ * The Spells tab's top: a banner per class with open choices, and "Change prepared spells" ("Replace a cantrip" for a
+ * Wizard, whose Long Rest change in the form is only that) where a Long Rest allows. A class marked open whose details
+ * aren't on this device (a book that isn't here, data that couldn't load) says so: the choices stay open, and the DM can
+ * add the spells.
  */
 export function SpellChoicesBar({ character, onOpen }: { character: Character; onOpen: (target: SpellPicksTarget) => void }) {
   const { data, error } = useBuilderData();
@@ -81,7 +83,7 @@ export function SpellChoicesBar({ character, onOpen }: { character: Character; o
   }
   const open = openSpellPicks(character, data.classes);
   const missing = marked.filter((cl) => !classOptionFor(cl, data.classes));
-  const rest = character.classes.filter((cl) => hasRestChange(cl, data.classes));
+  const rest = restChanges(character, data.classes);
   if (!open.length && !missing.length && !rest.length) return null;
   return (
     <div className="flex flex-col gap-2">
@@ -99,9 +101,9 @@ export function SpellChoicesBar({ character, onOpen }: { character: Character; o
       ))}
       {rest.length > 0 && (
         <div className="flex flex-wrap justify-end gap-2">
-          {rest.map((cl) => (
+          {rest.map(({ cl, kind }) => (
             <Button key={cl.classId} size="sm" variant="ghost" onClick={() => onOpen({ mode: 'rest', classId: cl.classId })} className="pointer-coarse:min-h-11">
-              {rest.length > 1 ? `Change ${cl.name} prepared spells` : 'Change prepared spells'}
+              {restButtonText(kind, cl.name, rest.length > 1)}
             </Button>
           ))}
         </div>

@@ -2,10 +2,11 @@
  * The level-up dialog with the player's books (spec §5.4, §8.3): the real engine, the merged builder data
  * of the invented Gloamwood fixture (SRD Cleric and Fighter + the book), a fake game store.
  */
-import { cleanup, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
+import { cantripsKnown, preparedSpellCount } from '@/data/options/classFeatures';
 import { levelUp } from '@/engine';
 import { useGame } from '@/state/gameStore';
 import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
@@ -15,7 +16,11 @@ import { installDialogPolyfill, resetFakeGame } from '@/ui/builder/testing/fakeG
 import { autoCleanup } from '@/ui/shell/testUtils';
 import { LevelUpDialog } from './LevelUpDialog';
 
-const mocks = vi.hoisted(() => ({ data: null as BuilderData | null, spells: [] as CompendiumEntry[] }));
+/**
+ * `indexReady: false`: the rules index isn't built yet (useRulesIndex is null, useRulesIndexState loading) and
+ * getRulesIndex builds it, or fails with `indexFails`.
+ */
+const mocks = vi.hoisted(() => ({ data: null as BuilderData | null, spells: [] as CompendiumEntry[], indexReady: true, indexFails: false }));
 
 vi.mock('@/state/gameStore', async () => (await import('@/ui/builder/testing/fakeGameStore')).fakeGameStoreModule());
 vi.mock('@/data', () => {
@@ -29,9 +34,12 @@ vi.mock('@/data', () => {
   return {
     useBuilderData: () => ({ data: mocks.data, error: null, loading: false }),
     loadBuilderData: async () => mocks.data,
-    useRulesIndex: () => index,
-    useRulesIndexState: () => ({ index, loading: false, error: null }),
-    getRulesIndex: async () => index,
+    useRulesIndex: () => (mocks.indexReady ? index : null),
+    useRulesIndexState: () => (mocks.indexReady ? { index, loading: false, error: null } : { index: null, loading: true, error: null }),
+    getRulesIndex: async () => {
+      if (mocks.indexFails) throw new Error('the rules index failed');
+      return index;
+    },
     countUnreviewedOptions: async () => [],
   };
 });
@@ -75,7 +83,12 @@ autoCleanup();
 beforeEach(() => {
   mocks.data = EXPECTED_MERGED;
   mocks.spells = [spell('srd:spell:faerie-fire', 'Faerie Fire', 1), spell('srd:spell:sleep', 'Sleep', 1), spell('lib:gloam:40', 'Ashen Choir', 2)];
+  mocks.indexReady = true;
+  mocks.indexFails = false;
   resetFakeGame({ campaign: sampleCampaign(), character: fighter(2) });
+});
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 describe('LevelUpDialog with imported options', () => {
@@ -133,7 +146,7 @@ describe('LevelUpDialog with imported options', () => {
       ['lib:gloam:40', 'Ashen Choir', true],
     ]);
     expect(spells[2].ref).toMatchObject({ entryId: 'lib:gloam:40', textCopied: false });
-    expect(notices()[0]).toContain('always prepared: Faerie Fire, Sleep, Ashen Choir');
+    expect(notices()[0]).toContain('always prepared: Faerie Fire, Sleep, Ashen Choir; not added (not in the rules here): Darkness');
   });
 
   it("B6: an older subclass chosen at level 3 adds its older-edition notes to the character, once, and a feat's notes too", async () => {
@@ -718,6 +731,29 @@ describe('LevelUpDialog with imported options', () => {
     expect(notices()[0]).toMatch(/Multiclass prerequisite not met: Cleric needs 13\+ \(Wisdom 8\)/);
   });
 
+  it('focuses the Summary\'s first line when it takes the form\'s place, so it is read and Tab goes on to Done', async () => {
+    const user = userEvent.setup();
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Subclass' })).getByRole('radio', { name: /Champion/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(await screen.findByText('Level 3!')).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Done' })).toHaveFocus();
+  });
+
+  it('lists each prerequisite class once while the Summary is swapped in (no duplicate keys)', async () => {
+    const user = userEvent.setup();
+    const error = vi.spyOn(console, 'error');
+    resetFakeGame({ campaign: sampleCampaign(), character: fighter(3, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }) });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.selectOptions(screen.getByLabelText('Or multiclass into'), `Wickwright · ${GLOAMWOOD_TITLE} (d8)`);
+    await user.click(screen.getByLabelText('My DM allows it anyway'));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(await screen.findByText('Level 4!')).toBeInTheDocument();
+    expect(sheet().classes.map((cl) => cl.name)).toEqual(['Fighter', 'Wickwright']);
+    expect(error.mock.calls.map((args) => args.join(' ')).filter((m) => /same key/.test(m))).toEqual([]);
+  });
+
   it("says when an imported class's data isn't on this device", () => {
     const ref = { sourceId: 'other', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:other:class:lampwright', kind: 'class' as const, entryName: 'Lampwright', textHash: '', textCopied: false };
     resetFakeGame({ campaign: sampleCampaign(), character: hero({ classId: ref.entryId, name: 'Lampwright', level: 2, hitDie: 8, ref }) });
@@ -752,13 +788,20 @@ describe("LevelUpDialog: the level's spells", () => {
     await user.click(screen.getByRole('button', { name: 'Level up' }));
 
     const notice = notices()[0];
-    expect(notice).toMatch(/^Player leveled up to Wizard 4 \(character level 4\): \+5 HP \(max 22\); new features: [^;]+; spells to choose: 1 cantrip, 6 spellbook spells and 2 prepared spells; still to choose: /);
+    expect(notice).toMatch(/^Player leveled up to Wizard 4 \(character level 4\): \+5 HP \(max 22\); new features: [^;]+; spells to choose: 1 cantrip, 6 spellbook spells and 2 prepared spells; /);
+    // A DM whose session began before its level_up said how still learns how to record what the player names.
+    expect(notice).toContain(
+      '; spells to choose: 1 cantrip, 6 spellbook spells and 2 prepared spells; if the player names them to you instead: update_character spells_add, source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it later: source "Wizard (copied)"); still to choose: ',
+    );
     expect(notice).not.toContain('Review your Wizard cantrips and prepared spells');
     expect(sheet().spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:wizard' }]);
 
-    // The Summary lists them, without the generic line in Still to do.
+    // The Summary lists them, without the generic line in Still to do; its first line has focus, then Choose spells.
     expect(await screen.findByText('Wizard 4: choose 1 cantrip, 6 spellbook spells and 2 prepared spells')).toBeInTheDocument();
     expect(screen.queryByText(/Review your Wizard cantrips/)).toBeNull();
+    expect(screen.getByText('Level 4!')).toHaveFocus();
+    await user.tab();
+    expect(screen.getByRole('button', { name: 'Choose spells' })).toHaveFocus();
     await user.click(screen.getByRole('button', { name: 'Choose spells' }));
 
     // The same dialog: no dialog on top of it, and focus moves into the choices.
@@ -774,6 +817,46 @@ describe("LevelUpDialog: the level's spells", () => {
     await user.click(screen.getByRole('button', { name: 'Apply' }));
     expect(notices()[1]).toBe('Player chose spells for Wizard 4: cantrip Ray of Frost; spellbook Web, Hold Person; prepared Web, Sleep; still to choose: 4 spellbook spells');
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('goes back to the lists on Escape or Android Back while a spell is read in the choices; from the lists it closes', async () => {
+    const user = userEvent.setup();
+    resetFakeGame({ campaign: sampleCampaign(), character: sampleCharacter() });
+    const onClose = vi.fn();
+    render(<LevelUpDialog open onClose={onClose} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    await user.click(await screen.findByRole('button', { name: 'Choose spells' }));
+    const dialog = screen.getByRole('dialog', { name: 'Choose spells' });
+    await user.click(group(/^Cantrips/).getByRole('checkbox', { name: /^Ray of Frost/ }));
+    const cancel = (cancelable: boolean) =>
+      act(() => {
+        fireEvent(dialog, new Event('cancel', { cancelable }));
+        // A Back the page can't refuse: the browser closes the dialog anyway.
+        if (!cancelable && dialog.hasAttribute('open')) {
+          dialog.removeAttribute('open');
+          fireEvent(dialog, new Event('close'));
+        }
+      });
+    for (const request of [
+      async () => {
+        await user.keyboard('{Escape}');
+        cancel(true);
+      },
+      () => cancel(true),
+      () => cancel(false),
+    ]) {
+      await user.click(group(/^Cantrips/).getByRole('button', { name: 'About Ray of Frost' }));
+      expect(screen.getByRole('region', { name: 'Ray of Frost' })).toBeInTheDocument();
+      await request();
+      expect(screen.queryByRole('region', { name: 'Ray of Frost' })).toBeNull();
+      expect(group(/^Cantrips/).getByRole('button', { name: 'About Ray of Frost' })).toHaveFocus();
+      expect(group(/^Cantrips/).getByRole('checkbox', { name: /^Ray of Frost/ })).toBeChecked();
+      expect(screen.getByRole('dialog', { name: 'Choose spells' })).toHaveAttribute('open');
+    }
+    expect(onClose).not.toHaveBeenCalled();
+    cancel(true);
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(notices()).toHaveLength(1);
   });
 
   it("goes back to the Summary from the choices, which stay open (Cancel)", async () => {
@@ -845,5 +928,152 @@ describe("LevelUpDialog: the level's spells", () => {
     expect(sheet().spellcasting?.spellPicks).toBeUndefined();
     expect(await screen.findByRole('button', { name: 'Done' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Choose spells' })).toBeNull();
+  });
+
+  const srdClass = (name: string) => SRD_BUILDER_DATA.classes.find((c) => c.name === name)!;
+  const srdEntry = (name: string, level: number, extra: Partial<ClassLevel> = {}): ClassLevel => {
+    const o = srdClass(name);
+    return { classId: o.id, name: o.name, level, hitDie: o.hitDie, casterType: o.casterType, ...(o.spellcastingAbility ? { spellcastingAbility: o.spellcastingAbility } : {}), ...extra };
+  };
+  /** `n` placeholder spells of a level for a class: what counts, nothing an always-prepared grant names. */
+  const fill = (className: string, n: number, level: number): KnownSpell[] =>
+    Array.from({ length: n }, (_, i) => ({ id: `fill-${className}-${level}-${i}`, name: `${className} spell ${level}-${i}`, level, prepared: true, source: className }));
+  /** A Paladin 2 / Cleric 1 at both tables, Shield of Faith among the Cleric's prepared spells. */
+  const paladinCleric = (paladinPrepared = preparedSpellCount(srdClass('Paladin'), 2)): Character =>
+    hero(srdEntry('Paladin', 2), {
+      classes: [srdEntry('Paladin', 2), srdEntry('Cleric', 1)],
+      hitDice: [
+        { die: 10, total: 2, spent: 0 },
+        { die: 8, total: 1, spent: 0 },
+      ],
+      abilityScores: { str: 16, dex: 10, con: 13, int: 8, wis: 13, cha: 14 },
+      spellcasting: {
+        ability: 'cha',
+        slots: { 1: { max: 3, used: 0 } },
+        spells: [
+          ...fill('Cleric', cantripsKnown(srdClass('Cleric'), 1), 0),
+          srdSpell('Shield of Faith', 'Cleric'),
+          ...fill('Cleric', preparedSpellCount(srdClass('Cleric'), 1) - 1, 1),
+          ...fill('Paladin', paladinPrepared, 1),
+          { ...srdSpell('Divine Smite', "Paladin's Smite"), alwaysPrepared: true },
+        ],
+        concentratingOn: null,
+      },
+    });
+
+  it("names the class whose list a turned spell leaves, and leaves that class's choices open too (srd:rule:gaining-spells)", async () => {
+    const user = userEvent.setup();
+    // Oath of Devotion's Paladin 3 row: Protection from Evil and Good, Shield of Faith — "you thereafter always have the
+    // listed spells prepared", and "a spell that you always have prepared doesn't count against the number of spells on
+    // that list": the Cleric's place is free again, and the Paladin 3 prepares one more (3 → 4).
+    resetFakeGame({ campaign: sampleCampaign(), character: paladinCleric() });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Subclass' })).getByRole('radio', { name: /Oath of Devotion/ }));
+    expect(screen.getByText('Always prepared from Oath of Devotion: Protection from Evil and Good')).toBeInTheDocument();
+    expect(screen.getByText('Now always prepared from Oath of Devotion: Shield of Faith')).toHaveTextContent(
+      'Now always prepared from Oath of Devotion: Shield of Faith — no longer counted among your Cleric prepared spells',
+    );
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(notices()[0]).toContain(
+      '; now always prepared: Shield of Faith; spells to choose: 1 prepared spell; if the player names them to you instead: update_character spells_add, source "Paladin"; Cleric 1 spells to choose: 1 prepared spell',
+    );
+    expect(sheet().spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:paladin' }, { classId: 'srd:class:cleric' }]);
+    // The Summary lists both; Choose spells opens the levelled class's choices first.
+    expect(await screen.findByText('Paladin 3: choose 1 prepared spell')).toBeInTheDocument();
+    expect(screen.getByText('Cleric 1: choose 1 prepared spell')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Choose spells' }));
+    expect(screen.getByRole('region', { name: 'Spell choices' })).toHaveTextContent(/^Paladin 3/);
+  });
+
+  it("opens another class's choices from the Summary when the levelled class owes nothing", async () => {
+    const user = userEvent.setup();
+    // The Paladin already holds the Paladin 3 count: only the Cleric's turned Shield of Faith leaves a place to fill.
+    resetFakeGame({ campaign: sampleCampaign(), character: paladinCleric(preparedSpellCount(srdClass('Paladin'), 3)) });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Subclass' })).getByRole('radio', { name: /Oath of Devotion/ }));
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(notices()[0]).toContain('; now always prepared: Shield of Faith; Cleric 1 spells to choose: 1 prepared spell');
+    expect(notices()[0]).not.toContain('; spells to choose');
+    expect(await screen.findByText('Cleric 1: choose 1 prepared spell')).toBeInTheDocument();
+    expect(screen.queryByText(/^Paladin 3:/)).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Choose spells' }));
+    expect(screen.getByRole('region', { name: 'Spell choices' })).toHaveTextContent(/^Cleric 1/);
+  });
+
+  it('says a turned spellbook spell stays in the book (srd:rule:wizard-spellcasting, Fiend Patron spells)', async () => {
+    const user = userEvent.setup();
+    // Mira (Wizard 3, Scorching Ray in her book and prepared) with Warlock 2 gains Warlock 3 and the Fiend Patron, whose
+    // level 3 row lists Burning Hands, Command, Scorching Ray and Suggestion. "The book contains the level 1+ spells you
+    // know": Scorching Ray stays in it, no longer one of her prepared Wizard spells.
+    const mira = sampleCharacter();
+    const multi: Character = {
+      ...mira,
+      classes: [srdEntry('Warlock', 2), ...mira.classes],
+      hitDice: [...mira.hitDice, { die: 8, total: 2, spent: 0 }],
+      abilityScores: { ...mira.abilityScores, cha: 13 },
+      spellcasting: { ...mira.spellcasting!, spells: [...mira.spellcasting!.spells, ...fill('Warlock', 2, 0), ...fill('Warlock', 3, 1)] },
+    };
+    resetFakeGame({ campaign: sampleCampaign(), character: multi });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(within(screen.getByRole('radiogroup', { name: 'Subclass' })).getByRole('radio', { name: /Fiend Patron/ }));
+    expect(screen.getByText('Now always prepared from Fiend Patron: Scorching Ray')).toHaveTextContent(
+      'Now always prepared from Fiend Patron: Scorching Ray — no longer counted among your Wizard prepared spells; it stays in your spellbook',
+    );
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().spellcasting?.spells.find((s) => s.name === 'Scorching Ray')).toMatchObject({ alwaysPrepared: true, source: 'Wizard' });
+    // Her Wizard 3 now prepares 4 of 6, and her book (6 of 10, a hero from before the choices were counted) catches up.
+    expect(notices()[0]).toContain('; now always prepared: Scorching Ray; spells to choose: 1 prepared spell (may also replace one spell and one cantrip); ');
+    expect(notices()[0]).toContain('; Wizard 3 spells to choose: 4 spellbook spells and 2 prepared spells;');
+    expect(await screen.findByText('Warlock 3: choose 1 prepared spell; you may also replace a spell and a cantrip')).toBeInTheDocument();
+    expect(screen.getByText('Wizard 3: choose 4 spellbook spells and 2 prepared spells')).toBeInTheDocument();
+  });
+
+  it("waits for the rules index on a quick Level up, so a granted spell isn't skipped (srd:rule:paladin-s-smite)", async () => {
+    const user = userEvent.setup();
+    // Paladin 2: "You always have the Divine Smite spell prepared." The rules index isn't built yet when the dialog opens.
+    mocks.indexReady = false;
+    const paladin = hero(srdEntry('Paladin', 1), {
+      spellcasting: { ability: 'cha', slots: { 1: { max: 2, used: 0 } }, spells: fill('Paladin', preparedSpellCount(srdClass('Paladin'), 1), 1), concentratingOn: null },
+    });
+    resetFakeGame({ campaign: sampleCampaign(), character: paladin });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    // Loading isn't missing: no "Not in your rules yet" while the index builds.
+    expect(screen.getByRole('heading', { name: 'New at Paladin level 2' })).toBeInTheDocument();
+    expect(screen.queryByText(/Not in your rules yet/)).toBeNull();
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().spellcasting?.spells.find((s) => s.name === 'Divine Smite')).toMatchObject({ id: 'srd:spell:divine-smite', alwaysPrepared: true, source: "Paladin's Smite" });
+    expect(notices()[0]).toContain("; always prepared: Divine Smite; spells to choose: 1 prepared spell");
+    expect(notices()[0]).not.toContain('not added');
+  });
+
+  it('names a granted spell it could not add for the DM when the rules index fails', async () => {
+    const user = userEvent.setup();
+    mocks.indexReady = false;
+    mocks.indexFails = true;
+    const paladin = hero(srdEntry('Paladin', 1), {
+      spellcasting: { ability: 'cha', slots: { 1: { max: 2, used: 0 } }, spells: fill('Paladin', preparedSpellCount(srdClass('Paladin'), 1), 1), concentratingOn: null },
+    });
+    resetFakeGame({ campaign: sampleCampaign(), character: paladin });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(sheet().spellcasting?.spells.some((s) => s.name === 'Divine Smite')).toBe(false);
+    expect(notices()[0]).toContain('; not added (not in the rules here): Divine Smite; spells to choose: 1 prepared spell');
+  });
+
+  it('tells the DM how to record a swap the player names when nothing new is owed (srd:rule:bard-spellcasting)', async () => {
+    const user = userEvent.setup();
+    // Bard 11 → 12: the table doesn't grow (4 cantrips, 16 prepared); "Whenever you gain a Bard level, you can replace one
+    // spell on your list", and one cantrip.
+    const BARD = srdClass('Bard');
+    const bard = hero(srdEntry('Bard', 11, { subclass: 'College of Lore' }), {
+      spellcasting: { ability: 'cha', slots: {}, spells: [...fill('Bard', cantripsKnown(BARD, 12), 0), ...fill('Bard', preparedSpellCount(BARD, 12), 1)], concentratingOn: null },
+    });
+    resetFakeGame({ campaign: sampleCampaign(), character: bard });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(notices()[0]).toContain(
+      '; spells to choose: none new (may replace one spell and one cantrip); if the player names them to you instead: update_character spells_add, source "Bard", and spells_remove for one they give up',
+    );
+    expect(await screen.findByText('Bard 12: you may replace a spell and a cantrip')).toBeInTheDocument();
   });
 });
