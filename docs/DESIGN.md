@@ -351,7 +351,9 @@ Screens (hash routing, so GitHub Pages refreshes work):
   (+ lineage, size) → ability scores (standard array / point buy / 4d6-drop-lowest roll) → skills →
   equipment (class + background packages, or gold) → details (name, pronouns, alignment, personality,
   backstory, portrait emoji) → review. "Let the DM help" is always an option: the builder stays
-  editable, and the DM can finish details during session one.
+  editable, and the DM can finish details during session one. Its spell lists (and "Let the DM decide")
+  take homebrew as the rules search shows it, this campaign's and shared homebrew only, and a spell that
+  isn't the SRD's says where it comes from ("From Homebrew", "From <book>").
 - `#/play/:id` **Play** — the table.
   - Desktop (≥1024px): left rail (scene header, quests, journal, homebrew), center narrative log +
     composer, right rail (character sheet; combat tracker on top when combat is active).

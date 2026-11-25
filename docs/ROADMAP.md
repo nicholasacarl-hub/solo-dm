@@ -120,9 +120,6 @@ The first version of structured imports deliberately leaves these out:
   title, say). The fingerprint can't decide it alone: it changes when the book's text is read differently (a newer
   reader, another file). Option refs now record their edition, which could break the tie for options taken since;
   the hero's copied text compared with the candidate's could for older ones.
-- **Homebrew spells in the builder by campaign**: the builder's spell lists include homebrew spells saved in other
-  campaigns (`RulesIndex.list()` skips the campaign check that search and name lookups make), unlabeled, so a hero
-  can pick one its DM can't look up. List only this campaign's and shared homebrew, and label them.
 - **Book text the DM repeats elsewhere**: the book's words in the journal, quests, recaps or narration, in a feature
   the DM names otherwise than the book does, or in a quote shorter than about 80 characters among the DM's own words
   (a text under 60 characters counts only when its first 40 are the book's) aren't marked as copied, so exports keep
