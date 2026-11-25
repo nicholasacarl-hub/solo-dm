@@ -45,6 +45,9 @@ vibe-coding session.
 - **Offline/PWA**: a service worker so the app (and demo mode) works offline; installable on phones.
 - **More sync targets**: an export to Google Drive or a GitHub Gist alongside the private-repo sync.
 - **End-to-end tests in CI**: run `e2e/` (demo flow + fake-API flow) on pull requests.
+- **A player's change and its DM notice in one save**: a sheet edit, a quest objective, an X-card veil or a table-rules
+  change is saved first and its notice to the DM second, so a tab closed between the two keeps the change and loses the
+  notice. (The DM transcript's own writes are already one transaction with the campaign record.)
 
 ## Battle map follow-ups
 
