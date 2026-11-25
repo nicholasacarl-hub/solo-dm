@@ -168,6 +168,17 @@ describe('buildSystemPrompt', () => {
     expect(dying).toContain('unhealed they regain 1 HP after 1d4 hours (roll_dice 1d4, then update_character hp healing 1)');
   });
 
+  it('has the player pick new spells on the sheet, and the DM record the ones they name under the class (srd:rule:gaining-spells)', () => {
+    // The sheet counts a class's spells by their source: a spell the DM records as "Granted in play" leaves the class
+    // owing it again, and a Wizard's spellbook addition isn't prepared (srd:rule:wizard-spellcasting).
+    const leveling = section(DM_INSTRUCTIONS, '## Memory and bookkeeping').split('\n').find((line) => line.startsWith('- Leveling follows')) ?? '';
+    expect(leveling).toContain(
+      'The player picks new spells on their sheet; record spells they name to you with spells_add, source the class\'s name ("Wizard"; prepared: false for a spell only added to a Wizard\'s spellbook), so the sheet counts them.',
+    );
+    // After the choices the DM already records.
+    expect(leveling.indexOf('features_add for a feat or feature')).toBeLessThan(leveling.indexOf('The player picks new spells'));
+  });
+
   it('gives damage, spells, rulings, charges and missed calls their verified paths', () => {
     const rolls = section(DM_INSTRUCTIONS, '## Rolls and rulings');
     // A damage roll's expression replaces the sheet attack's dice (the dice dialog uses it first).
