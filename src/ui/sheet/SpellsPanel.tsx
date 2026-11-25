@@ -1,8 +1,10 @@
 /**
  * Spells tab: spellcasting numbers, slot pips per level (toggleable), and the spell list with
- * prepared toggles. Spell names open the rules entry in a dialog.
+ * prepared toggles. Spell names open the rules entry in a dialog. On an editable sheet, a banner per class
+ * whose level's spell choices are open, and "Change prepared spells" for a class a Long Rest lets change
+ * them, open the choices form (SpellPicksForm).
  */
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Brain, BookOpen } from 'lucide-react';
 import { formatModifier, ordinal, spellAttackBonus, spellSaveDC } from '@/engine';
 import { getRulesIndex } from '@/data';
@@ -16,6 +18,8 @@ import { BookBadge } from '@/ui/builder/BookBadges';
 import { FromBookLine } from './FromBook';
 import { concentrationChange, preparedChange, slotChange } from './sheetChanges';
 import { Pips, SheetSection, StatTile } from './SheetParts';
+import { hasSpellPicks, SpellChoicesBar } from './SpellPicksCues';
+import { SpellPicksDialog, type SpellPicksTarget } from './SpellPicksForm';
 import type { SheetChange } from './useSheetActions';
 
 const SLOT_LEVELS: SpellSlotLevel[] = [1, 2, 3, 4, 5, 6, 7, 8, 9];
@@ -188,6 +192,8 @@ export function SpellsPanel({
   onEdit: (change: (c: Character) => SheetChange) => void;
 }) {
   const [open, setOpen] = useState<KnownSpell | null>(null);
+  const [choosing, setChoosing] = useState<SpellPicksTarget | null>(null);
+  const root = useRef<HTMLDivElement>(null);
   const sc = c.spellcasting;
   if (!sc) {
     return (
@@ -200,8 +206,18 @@ export function SpellsPanel({
   const attack = spellAttackBonus(c, sc.ability);
   const slotLevels = SLOT_LEVELS.filter((l) => (sc.slots[l]?.max ?? 0) > 0);
   const prepared = sc.spells.filter((s) => s.level > 0 && s.prepared && !s.alwaysPrepared).length;
+  // The banner and the Long Rest change read the class data: only a spellcasting class (or an open choice) mounts them.
+  const choices = editable && (hasSpellPicks(c) || c.classes.some((cl) => cl.casterType !== 'none'));
+  const closeChoices = () => {
+    setChoosing(null);
+    // The banner that opened the form is gone once its choices are made: focus stays on the tab, not the page.
+    requestAnimationFrame(() => {
+      if (document.activeElement === document.body) root.current?.querySelector<HTMLElement>('button, input')?.focus();
+    });
+  };
   return (
-    <div className="flex flex-col gap-4">
+    <div ref={root} className="flex flex-col gap-4">
+      {choices && <SpellChoicesBar character={c} onOpen={setChoosing} />}
       <div className="grid grid-cols-3 gap-1.5">
         <StatTile label="Ability" value={sc.ability.toUpperCase()} sub={ABILITY_NAMES[sc.ability]} />
         <StatTile label="Save DC" value={dc ?? '—'} />
@@ -248,6 +264,7 @@ export function SpellsPanel({
       ))}
       {sc.spells.length === 0 && <p className="text-sm text-muted">No spells recorded yet.</p>}
       <RulesEntryDialog spell={open} onClose={() => setOpen(null)} />
+      {choices && <SpellPicksDialog target={choosing} onClose={closeChoices} />}
     </div>
   );
 }

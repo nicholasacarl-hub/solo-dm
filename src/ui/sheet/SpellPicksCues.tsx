@@ -1,0 +1,96 @@
+/**
+ * Where the sheet says spell choices are open: a banner per class on the Spells tab ("Wizard 4: choose 1 cantrip, 6
+ * spellbook spells and 2 prepared spells", opening the choices form), "Change prepared spells" for a class whose rules
+ * allow a change after a Long Rest, a one-line note in the sheet's header and a badge on the Spells tab. Each reads the
+ * class data (useBuilderData), so the sheet mounts the note and the badge only while Spellcasting.spellPicks has
+ * entries: a sheet without them loads nothing new. What they show is live (openSpellPicks): spells the DM recorded
+ * meanwhile settle them.
+ */
+import { Sparkles } from 'lucide-react';
+import { useBuilderData } from '@/data';
+import { classSpellRules, openSpellPicks, type OpenSpellPicks } from '@/data/options/spellPicks';
+import { classOptionFor } from '@/data/options/resolve';
+import type { Character, ClassLevel } from '@/types';
+import { Button } from '@/ui/components/ui';
+import type { SpellPicksTarget } from './SpellPicksForm';
+import { openPicksText, picksNoteText } from './spellPicksText';
+
+/** The classes whose choices are open now (none until the class data loads). */
+function useOpenPicks(c: Character): OpenSpellPicks[] {
+  const { data } = useBuilderData();
+  return data ? openSpellPicks(c, data.classes) : [];
+}
+
+/** Whether the sheet should mount the note and the badge: the mark that a level's choices were left open. */
+export function hasSpellPicks(c: Character): boolean {
+  return Boolean(c.spellcasting?.spellPicks?.length);
+}
+
+/** The sheet header's line, as TransformedNote's: "Spells to choose: Wizard 4", opening the first class's choices. */
+export function SpellPicksNote({ character, onOpen }: { character: Character; onOpen: (target: SpellPicksTarget) => void }) {
+  const open = useOpenPicks(character);
+  if (!open.length) return null;
+  const text = picksNoteText(open);
+  return (
+    <button
+      type="button"
+      onClick={() => onOpen({ mode: 'level', classId: open[0].cl.classId })}
+      title="Choose spells"
+      className="mt-1 flex max-w-full min-w-0 items-center gap-1 rounded-md text-left text-xs font-medium text-arcane hover:underline pointer-coarse:min-h-11"
+    >
+      <Sparkles className="size-3.5 shrink-0" aria-hidden />
+      <span className="truncate">{text}</span>
+    </button>
+  );
+}
+
+/** The Spells tab's badge while choices are open. */
+export function SpellPicksBadge({ character }: { character: Character }) {
+  const open = useOpenPicks(character);
+  if (!open.length) return null;
+  return (
+    <>
+      <span aria-hidden className="size-2 shrink-0 rounded-full bg-arcane" />
+      <span className="sr-only">(spells to choose)</span>
+    </>
+  );
+}
+
+/** A class's change after a Long Rest that the form makes (a Wizard's prepared spells change with the checkboxes). */
+function hasRestChange(cl: ClassLevel, classes: Parameters<typeof classOptionFor>[1]): boolean {
+  const cls = classOptionFor(cl, classes);
+  if (!cls) return false;
+  const rules = classSpellRules(cls).longRest;
+  return (rules.spells !== null && !rules.fromSpellbook) || rules.cantrip;
+}
+
+/** The Spells tab's top: a banner per class with open choices, and "Change prepared spells" where a Long Rest allows. */
+export function SpellChoicesBar({ character, onOpen }: { character: Character; onOpen: (target: SpellPicksTarget) => void }) {
+  const { data } = useBuilderData();
+  if (!data) return null;
+  const open = openSpellPicks(character, data.classes);
+  const rest = character.classes.filter((cl) => hasRestChange(cl, data.classes));
+  if (!open.length && !rest.length) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      {open.map((p) => (
+        <div key={p.cl.classId} className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-arcane/40 bg-arcane-soft px-3 py-2">
+          <Sparkles className="size-4 shrink-0 text-arcane" aria-hidden />
+          <p className="min-w-0 flex-1 basis-48 text-sm">{openPicksText(p)}</p>
+          <Button size="sm" variant="arcane" onClick={() => onOpen({ mode: 'level', classId: p.cl.classId })} aria-label={`Choose spells for ${p.cl.name} ${p.cl.level}`} className="pointer-coarse:min-h-11">
+            Choose spells
+          </Button>
+        </div>
+      ))}
+      {rest.length > 0 && (
+        <div className="flex flex-wrap justify-end gap-2">
+          {rest.map((cl) => (
+            <Button key={cl.classId} size="sm" variant="ghost" onClick={() => onOpen({ mode: 'rest', classId: cl.classId })} className="pointer-coarse:min-h-11">
+              {rest.length > 1 ? `Change ${cl.name} prepared spells` : 'Change prepared spells'}
+            </Button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}

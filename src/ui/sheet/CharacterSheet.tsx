@@ -5,7 +5,7 @@
  *
  * Built with container queries so it works in a ~360 px rail and in a full-width mobile tab.
  */
-import { useId, useState, type FormEvent, type ReactNode } from 'react';
+import { useId, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { Backpack, BookOpen, NotebookPen, Sparkles, Swords, UserRound } from 'lucide-react';
 import { useGame } from '@/state/gameStore';
 import type { Character, D20TestResult } from '@/types';
@@ -19,6 +19,8 @@ import { InventoryPanel } from './InventoryPanel';
 import { LevelUpDialog } from './LevelUpDialog';
 import { NotesPanel } from './NotesPanel';
 import { SheetHeader } from './SheetHeader';
+import { hasSpellPicks, SpellPicksBadge, SpellPicksNote } from './SpellPicksCues';
+import { SpellPicksDialog, type SpellPicksTarget } from './SpellPicksForm';
 import { SpellsPanel } from './SpellsPanel';
 import { deathSaveRollChange } from './sheetChanges';
 import { manualResult, rollNow, useLogRoll, useSheetEdit, type SheetChange, type SheetRoll } from './useSheetActions';
@@ -95,6 +97,17 @@ export function CharacterSheet({ character, variant = 'full', editable = false }
   const [tab, setTab] = useState<SheetTab>('overview');
   const [manualRoll, setManualRoll] = useState<SheetRoll | null>(null);
   const [levelingUp, setLevelingUp] = useState(false);
+  const [choosing, setChoosing] = useState<SpellPicksTarget | null>(null);
+  const root = useRef<HTMLDivElement>(null);
+  // The note and the badge read the class data: mounted only while a level's spell choices are marked open.
+  const picksOpen = editable && hasSpellPicks(character);
+  const closeChoices = () => {
+    setChoosing(null);
+    // The note that opened the form is gone once its choices are made: focus stays on the sheet (its open tab), not the page.
+    requestAnimationFrame(() => {
+      if (document.activeElement === document.body) root.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], button')?.focus();
+    });
+  };
 
   const onEdit = (change: (c: Character) => SheetChange) => {
     if (editable) void edit(change);
@@ -138,6 +151,7 @@ export function CharacterSheet({ character, variant = 'full', editable = false }
       editable={editable}
       onLevelUp={editable ? () => setLevelingUp(true) : undefined}
       onShowTransformations={variant === 'full' ? () => setTab('features') : undefined}
+      note={picksOpen ? <SpellPicksNote character={character} onOpen={setChoosing} /> : undefined}
     />
   );
   const vitals = <VitalsPanel character={character} editable={editable} onEdit={onEdit} onRoll={onRoll ?? (() => undefined)} />;
@@ -145,12 +159,13 @@ export function CharacterSheet({ character, variant = 'full', editable = false }
     <>
       <ManualRollDialog roll={manualRoll} onSubmit={submitManual} onClose={() => setManualRoll(null)} />
       <LevelUpDialog open={levelingUp} onClose={() => setLevelingUp(false)} />
+      {picksOpen && <SpellPicksDialog target={choosing} onClose={closeChoices} />}
     </>
   );
 
   if (variant === 'compact') {
     return (
-      <div className="@container flex flex-col gap-3">
+      <div ref={root} className="@container flex flex-col gap-3">
         {header}
         {vitals}
         <AbilitiesGrid character={character} onRoll={onRoll} />
@@ -159,17 +174,17 @@ export function CharacterSheet({ character, variant = 'full', editable = false }
     );
   }
 
-  const tabs: { value: SheetTab; label: string; icon: ReactNode }[] = [
+  const tabs: { value: SheetTab; label: string; icon: ReactNode; badge?: ReactNode }[] = [
     { value: 'overview', label: 'Overview', icon: <UserRound className="size-4" aria-hidden /> },
     { value: 'combat', label: 'Combat', icon: <Swords className="size-4" aria-hidden /> },
-    { value: 'spells', label: 'Spells', icon: <Sparkles className="size-4" aria-hidden /> },
+    { value: 'spells', label: 'Spells', icon: <Sparkles className="size-4" aria-hidden />, ...(picksOpen ? { badge: <SpellPicksBadge character={character} /> } : {}) },
     { value: 'inventory', label: 'Inventory', icon: <Backpack className="size-4" aria-hidden /> },
     { value: 'features', label: 'Features', icon: <BookOpen className="size-4" aria-hidden /> },
     { value: 'notes', label: 'Notes', icon: <NotebookPen className="size-4" aria-hidden /> },
   ];
   const panelProps = { character, editable, onEdit };
   return (
-    <div className="@container flex flex-col gap-4">
+    <div ref={root} className="@container flex flex-col gap-4">
       {header}
       {vitals}
       <div className="flex flex-col gap-3">
