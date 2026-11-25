@@ -116,6 +116,32 @@ export function keepsBookExtra(c: Character, held: string | undefined, given: st
   return option ? classSpellRules(option).spellbook.start > 0 : false;
 }
 
+/**
+ * For the DM, after spells_add: the spells it gave its class's own name that kept a spellbook extra's source instead
+ * (keepsBookExtra), so the call's source wasn't applied. Each line says so, and how to make one of them one of a level's
+ * two: remove it and add it again.
+ */
+export function keptBookExtraLines(given: readonly { name: string; source?: string }[], after: Character): string[] {
+  const groups: { source: string; className: string; names: string[] }[] = [];
+  for (const spell of given) {
+    if (spell.source === undefined) continue;
+    const now = after.spellcasting?.spells.find((s) => nameKey(s.name) === nameKey(spell.name));
+    const source = now?.source;
+    const key = extraClassKey(source);
+    if (!now || !source || key === null || key !== nameKey(spell.source)) continue;
+    const group = groups.find((g) => nameKey(g.source) === nameKey(source));
+    if (group) {
+      if (!group.names.includes(now.name)) group.names.push(now.name);
+    } else {
+      groups.push({ source, className: after.classes.find((cl) => nameKey(cl.name) === key)?.name ?? spell.source.trim(), names: [now.name] });
+    }
+  }
+  return groups.map(({ source, className, names }) => {
+    const one = names.length === 1;
+    return `${andList(names)} ${one ? 'keeps its' : 'keep their'} source "${source}": a spell copied into the spellbook, or added to it free, stays outside the two each ${className} level adds. If ${one ? 'it is' : 'one of them is'} one of those two, spells_remove it and spells_add it again with source "${className}".`;
+  });
+}
+
 export interface SpellCount {
   /** What the class's table (and its chosen options) say the class holds at its level. */
   target: number;
@@ -408,7 +434,7 @@ export interface TurnedSpell {
   owner?: string;
   /** It stays in that class's spellbook, whose count still holds it (its source is kept): a Wizard's book spell. */
   inBook?: boolean;
-  /** It was prepared, so it counted against that class's prepared spells: its place there is free now. */
+  /** It was prepared, at a level that class has slots for, so it counted against that class's prepared spells: its place there is free now. */
   counted?: boolean;
 }
 
@@ -445,7 +471,8 @@ function spellTableRows(text: string): { level: number; spells: string[] }[] {
  * are read too, so a subclass chosen late and an older hero catch up. A name the sheet lacks is added; one it holds as an
  * ordinary level 1+ spell is turned always prepared (it stops counting against the class's list, SRD 5.2.1
  * srd:rule:gaining-spells); one already always prepared stays as it is. A turned spell names the hero's class whose list
- * it leaves, and whether it was prepared there (only then was it counted, so only then is a place free); one in a
+ * it leaves, and whether it was prepared there, at a level that class has slots for (only then was it counted, so only
+ * then is a place free); one in a
  * spellbook (a class of `classes` with one) keeps its source, so the book still holds it (srd:rule:wizard-spellcasting:
  * "The book contains the level 1+ spells you know"). A name the rules lack comes with the feature or subclass granting it.
  */
@@ -486,6 +513,12 @@ export function alwaysPreparedGained(
     }
     return null;
   };
+  // A class's spell level once this level is gained: the levelled class's is that of `classLevel` (the dialog plans on
+  // the hero before the level-up, the DM's level_up on the hero after it).
+  const capOf = (cl: ClassLevel) => {
+    const levelled = cls !== undefined && (cl.classId === cls.id || classOptionFor(cl, classes)?.id === cls.id);
+    return classSpellLevelCap(levelled ? { ...cl, level: Math.max(cl.level, classLevel) } : cl);
+  };
   const out: AlwaysPreparedGain = { add: [], flip: [], missing: [] };
   const seen = new Set<string>();
   for (const grant of grants) {
@@ -502,7 +535,10 @@ export function alwaysPreparedGained(
         source: grant.source,
         ...(owner ? { owner: owner.cl.name } : {}),
         ...(owner?.inBook ? { inBook: true } : {}),
-        ...(owner && have.prepared ? { counted: true } : {}),
+        // Only a prepared spell of a level the class has slots for is on its list (owedSpells), so only it frees a place:
+        // one above it counted nowhere (srd:rule:multiclassing-class-features-spellcasting, "as if you were a
+        // single-classed member of that class").
+        ...(owner && have.prepared && have.level <= capOf(owner.cl) ? { counted: true } : {}),
       });
       continue;
     }
@@ -649,12 +685,13 @@ export function owedSpellsLine(o: OwedSpells, entry: Pick<SpellPicksOwed, 'repla
  * How the DM records choices the player names, so the sheet counts them: "update_character spells_add, source
  * "Wizard" (prepared: false for a spell only added to the spellbook; …), and spells_remove for one they give up". A
  * spellbook's copied spells, and those a feature adds free (Evocation Savant), come on top of each level's two
- * (srd:rule:wizard-spellcasting), so they take their own source; a spell already in the book is prepared by name alone,
- * so it keeps its own.
+ * (srd:rule:wizard-spellcasting), so they take their own source, unprepared unless the player prepares them (copying
+ * prepares nothing: "Afterward you can prepare the spell"); a spell already in the book is prepared by name alone, so it
+ * keeps its own.
  */
 export function recordingClause(o: Pick<OwedSpells, 'className' | 'spellbook'>, entry: Pick<SpellPicksOwed, 'replaceSpell' | 'replaceCantrip'> = {}): string {
   const book = o.spellbook
-    ? ` (prepared: false for a spell only added to the spellbook; a spell copied into it, or one a feature adds to it free: source "${o.className} (copied)"; to prepare a spell already in it: re-add it by name with prepared true and no source)`
+    ? ` (prepared: false for a spell only added to the spellbook; a spell copied into it, or one a feature adds to it free: source "${o.className} (copied)", prepared false unless the player prepares it; to prepare a spell already in it: re-add it by name with prepared true and no source)`
     : '';
   const swap = entry.replaceSpell || entry.replaceCantrip ? ', and spells_remove for one they give up' : '';
   return `update_character spells_add, source "${o.className}"${book}${swap}`;

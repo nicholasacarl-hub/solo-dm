@@ -286,7 +286,7 @@ describe('words for the DM and the sheet', () => {
     // Copied spells and those a feature adds free (Evocation Savant: "add them to your spellbook for free") come on top of
     // each level's two; a book spell is prepared by name alone, so it keeps its own source.
     expect(recordingHint(owed)).toContain(
-      'source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it, or one a feature adds to it free: source "Wizard (copied)"; to prepare a spell already in it: re-add it by name with prepared true and no source)',
+      'source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it, or one a feature adds to it free: source "Wizard (copied)", prepared false unless the player prepares it; to prepare a spell already in it: re-add it by name with prepared true and no source)',
     );
     const bard = hero([entry('Bard', 12)], [...fill('Bard', 4, 0), ...fill('Bard', 16, 1)]);
     const bardOwed = owedSpells(bard, bard.classes[0], cls('Bard'));
@@ -385,6 +385,30 @@ describe('always-prepared spells across classes (srd:rule:gaining-spells, "Alway
     const before = owedSpells(c, c.classes[0], cls('Wizard'));
     const after = applyAlwaysPrepared(c, gain);
     expect(owedSpells(after, after.classes[0], cls('Wizard'))).toEqual(before);
+  });
+
+  it("frees no place for a turned spell above its class's spell level (srd:rule:multiclassing-class-features-spellcasting)", () => {
+    // "You determine what spells you can prepare for each class individually, as if you were a single-classed member of
+    // that class": a Cleric 3 prepares no level 3 spell, so Fear recorded under "Cleric" was on no list, and Draconic
+    // Sorcery's Sorcerer 5 row (Fear, Fly) turning it frees no Cleric place.
+    const c = hero([entry('Cleric', 3), entry('Sorcerer', 4)], [...fill('Cleric', 3, 0), spell('Fear', 3, 'Cleric'), ...fill('Cleric', 5, 1), ...fill('Sorcerer', 5, 0), ...fill('Sorcerer', 5, 1)]);
+    const draconic = sub('Sorcerer', 'Draconic Sorcery');
+    const gain = alwaysPreparedGained(c, cls('Sorcerer'), draconic, 5, findSpell, SRD_BUILDER_DATA.classes);
+    expect(gain.flip).toEqual([{ id: 'id-fear', name: 'Fear', source: 'Draconic Sorcery', owner: 'Cleric' }]);
+    const before = owedSpells(c, c.classes[0], cls('Cleric'));
+    expect(owedSpells(applyAlwaysPrepared(c, gain), c.classes[0], cls('Cleric'))).toEqual(before);
+    // A Cleric 5 has level 3 spells on its list: there Fear counted, and its place is free.
+    const five = { ...c, classes: [entry('Cleric', 5), entry('Sorcerer', 4)] };
+    expect(alwaysPreparedGained(five, cls('Sorcerer'), draconic, 5, findSpell, SRD_BUILDER_DATA.classes).flip).toEqual([
+      { id: 'id-fear', name: 'Fear', source: 'Draconic Sorcery', owner: 'Cleric', counted: true },
+    ]);
+    // The levelled class is counted at its new level, whether the hero is read before the level-up (the dialog) or after
+    // it (the DM's level_up): a Sorcerer 5 has level 3 spells on its list.
+    const own = hero([entry('Sorcerer', 4)], [...fill('Sorcerer', 5, 0), spell('Fly', 3, 'Sorcerer'), ...fill('Sorcerer', 4, 1)]);
+    const flyFlip = { id: 'id-fly', name: 'Fly', source: 'Draconic Sorcery', owner: 'Sorcerer', counted: true };
+    expect(alwaysPreparedGained(own, cls('Sorcerer'), draconic, 5, findSpell, SRD_BUILDER_DATA.classes).flip).toEqual([flyFlip]);
+    const levelled = { ...own, classes: [entry('Sorcerer', 5)] };
+    expect(alwaysPreparedGained(levelled, cls('Sorcerer'), draconic, 5, findSpell, SRD_BUILDER_DATA.classes).flip).toEqual([flyFlip]);
   });
 
   it('marks the other class open for the place its turned spell left', () => {

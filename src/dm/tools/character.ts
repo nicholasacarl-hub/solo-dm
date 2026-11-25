@@ -77,6 +77,7 @@ import { classByName, classOptionFor, multiclassPrimariesFor, optionSourceLabel,
 import {
   classSpellRules,
   keepsBookExtra,
+  keptBookExtraLines,
   levelSpellsEdit,
   owedSpellsLine,
   recordingHint,
@@ -1030,6 +1031,8 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   if (input.initiative_change && ctx.deps.store().combat?.active) {
     lines.push('The initiative already rolled for this fight stays; the new bonus counts from the next Initiative roll.');
   }
+  // For the DM only: a spellbook's extra it re-added under the class's own name kept its source, and how to change that.
+  lines.push(...keptBookExtraLines(input.spells_add ?? [], change.character));
   // For the DM only: whether the class's spell choices are done (the sheet's reminder clears) or what is left.
   for (const p of settled) lines.push(p.owed ? `Spell choices still open: ${owedSpellsLine(p.owed)}` : `Spell choices for ${p.className} ${p.level} recorded: nothing left to choose.`);
   lines.push(...keptHomebrewLines(input.conditions_add, change.character.conditions));
@@ -1152,7 +1155,7 @@ function restSpellLine(c: Character, data: BuilderData): string | null {
   if (!parts.length) return null;
   const copied = books.map((b) => `"${b} (copied)"`).join(' or ');
   const book = books.length
-    ? ` (the ${books.join(' and ')}'s spellbook spells stay in the book: re-add one by name with prepared true or false and no source, so it keeps its own; a spell newly copied into the book takes source ${copied})`
+    ? ` (the ${books.join(' and ')}'s spellbook spells stay in the book: re-add one by name with prepared true or false and no source, so it keeps its own; a spell newly copied into the book takes source ${copied}, prepared false unless the player prepares it)`
     : '';
   return `The player may now change prepared spells on their sheet: ${parts.join(', ')}. Record any they tell you with update_character spells_remove and spells_add, source the class's name${book}.`;
 }

@@ -174,7 +174,7 @@ describe('buildSystemPrompt', () => {
     // comes on top of the two each Wizard level adds ("Copying a Spell into the Book"), so it has a source of its own.
     const leveling = section(DM_INSTRUCTIONS, '## Memory and bookkeeping').split('\n').find((line) => line.startsWith('- Leveling follows')) ?? '';
     expect(leveling).toContain(
-      'The player picks new spells on their sheet; record spells they name to you with spells_add, source the class\'s name ("Wizard"; prepared: false for a spell only added to a Wizard\'s spellbook), so the sheet counts them; a spell copied into a spellbook (or added to it free) takes source "Wizard (copied)", so it isn\'t counted among the two each level adds.',
+      'The player picks new spells on their sheet; record spells they name to you with spells_add, source the class\'s name ("Wizard"; prepared: false for a spell only added to a Wizard\'s spellbook), so the sheet counts them; a spell copied into a spellbook (or added to it free) takes source "Wizard (copied)", so it isn\'t counted among the two each level adds, and prepared: false unless the player prepares it.',
     );
     // After the choices the DM already records.
     expect(leveling.indexOf('features_add for a feat or feature')).toBeLessThan(leveling.indexOf('The player picks new spells'));

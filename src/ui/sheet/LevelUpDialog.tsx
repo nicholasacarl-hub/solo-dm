@@ -10,7 +10,7 @@
  * spell choices are marked open (spellPicks.ts counts them live), with another class's whose pick was turned. The
  * Summary's "Choose spells" continues into the choices form in this same dialog.
  */
-import { useEffect, useId, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowBigUpDash, Check, Loader2, Sparkles, TriangleAlert } from 'lucide-react';
 import { XP_THRESHOLDS, abilityModifier, characterLevel, levelUp, type LevelUpOptions, type LevelUpResult } from '@/engine';
 import { getRulesIndex, useBuilderData, useRulesIndexState } from '@/data';
@@ -68,6 +68,7 @@ import {
   type SubclassOption,
 } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
+import { toast } from '@/ui/components/toast';
 import { Badge, Button, Dialog, EmptyState, Input, Segmented, Select, Spinner } from '@/ui/components/ui';
 import { BookBadge, OlderEditionBadge, OlderEditionNotes } from '@/ui/builder/BookBadges';
 import { RadioCards } from '@/ui/builder/BuilderParts';
@@ -90,9 +91,25 @@ export function LevelUpDialog({ open, onClose }: LevelUpDialogProps) {
   const chooseButton = useRef<HTMLButtonElement>(null);
   const readerBack = useRef<ReaderBack | null>(null);
   // A Level up waiting for the rules index applies even if the dialog closes meanwhile: reopened, it shows that wait
-  // rather than offering the same level again.
+  // rather than offering the same level again, and then how it ended (the form that pressed Level up may be gone).
   const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<LevelOutcome | null>(null);
+  // Whether the dialog is open (and mounted) now: a wait that ends after a close leaves no outcome to show later.
+  const shown = useRef(false);
+  useLayoutEffect(() => {
+    shown.current = open;
+    return () => {
+      shown.current = false;
+    };
+  }, [open]);
   if (!open && picking !== null) setPicking(null);
+  if (!open && outcome !== null) setOutcome(null);
+  // How a Level up ended: shown in the open dialog. Closed (or gone with its campaign), a level applied shows on the sheet,
+  // and a refusal is a toast (under an open modal it couldn't be seen or heard).
+  const report = (o: LevelOutcome) => {
+    if (shown.current) setOutcome(o);
+    else if (o.kind === 'refused') toast.info(o.message);
+  };
   const close = () => {
     setPicking(null);
     onClose();
@@ -110,7 +127,7 @@ export function LevelUpDialog({ open, onClose }: LevelUpDialogProps) {
     <Dialog open={open} onClose={close} onCancel={cancel} title={picking ? 'Choose spells' : 'Level up'} size="lg" footer={picking ? <div ref={setFooter} className="w-full" /> : undefined}>
       {/* Mounted only while open, so builder data loads on demand. */}
       <div hidden={picking !== null}>
-        <LevelUpForm onClose={close} onChooseSpells={setPicking} chooseButton={chooseButton} busy={busy} onBusy={setBusy} />
+        <LevelUpForm onClose={close} onChooseSpells={setPicking} chooseButton={chooseButton} busy={busy} onBusy={setBusy} outcome={outcome} onOutcome={report} />
       </div>
       {picking && <SpellPicksForm target={{ mode: 'level', classId: picking }} footer={footer} onCancel={back} onDone={close} focusOnOpen readerBackRef={readerBack} />}
     </Dialog>
@@ -129,6 +146,23 @@ export function meetsPrimary(cls: Pick<ClassOption, 'id' | 'primaryAbilities' | 
 }
 
 type Choice = { kind: 'existing'; index: number } | { kind: 'new'; classId: string };
+
+/** How a Level up ended: the level it applied (the Summary's), or why it couldn't. */
+type LevelOutcome =
+  | { kind: 'levelled'; level: LevelUpResult; uses: string[]; choice: string | null; classIds: string[] }
+  | { kind: 'refused'; message: string };
+
+/**
+ * Why a plan made for `hero` at character level `level` can't apply after Level up waited for the rules index, or null.
+ * The wait can outlast the campaign (left for the list or another campaign, whose hero would get this one's level) and
+ * the level (the DM's level_up meanwhile, which would make this a second level with the first one's features).
+ */
+function stalePlanReason(hero: Pick<Character, 'id' | 'name'>, campaignId: string | null, level: number, now: { campaignId: string | null; character: Character | null }): string | null {
+  if (now.campaignId !== campaignId || !now.character) return `Not applied: you left ${hero.name}'s campaign while this level-up waited. Open Level up there again.`;
+  if (now.character.id !== hero.id) return `Not applied: ${hero.name} was replaced as this campaign's hero while this level-up waited.`;
+  const reached = characterLevel(now.character);
+  return reached === level ? null : `Not applied: your character reached level ${reached} while this level-up waited. Open Level up again for the next level.`;
+}
 
 function choiceKey(choice: Choice): string {
   return choice.kind === 'existing' ? `existing:${choice.index}` : `new:${choice.classId}`;
@@ -462,6 +496,33 @@ function Summary({
   );
 }
 
+/** A Level up that waited and then couldn't apply, in place of its form (that plan is gone): why, focused, as the Summary is. */
+function Refused({ message, onClose }: { message: string; onClose: () => void }) {
+  const text = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const el = text.current;
+    if (!el) return;
+    const scroller = scrollParent(el);
+    if (scroller) scroller.scrollTop = 0;
+    el.focus({ preventScroll: true });
+  }, []);
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-start gap-3 rounded-xl border border-border bg-surface-2 px-4 py-3">
+        <TriangleAlert className="mt-0.5 size-5 shrink-0 text-gold" aria-hidden />
+        <p ref={text} tabIndex={-1} className="text-sm focus:outline-none">
+          {message}
+        </p>
+      </div>
+      <div className="flex justify-end">
+        <Button variant="primary" onClick={onClose}>
+          Done
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function ClassSection({
   character,
   classes,
@@ -662,6 +723,8 @@ function LevelUpForm({
   chooseButton,
   busy,
   onBusy,
+  outcome,
+  onOutcome,
 }: {
   onClose: () => void;
   onChooseSpells?: (classId: string) => void;
@@ -669,6 +732,9 @@ function LevelUpForm({
   /** A Level up is applying (the dialog's, so it outlives a close). */
   busy: boolean;
   onBusy: (busy: boolean) => void;
+  /** How the last Level up ended (the dialog's, so a form opened during the wait shows it). */
+  outcome: LevelOutcome | null;
+  onOutcome: (outcome: LevelOutcome) => void;
 }) {
   const character = useGame((s) => s.character);
   const campaignId = useGame((s) => s.campaignId);
@@ -685,16 +751,16 @@ function LevelUpForm({
   const [allowAnyway, setAllowAnyway] = useState(false);
   const [featChoice, setFeatChoice] = useState<FeatChoice>({ kind: 'dm' });
   const [featAllowed, setFeatAllowed] = useState(false);
-  // `classIds`: the classes whose spell choices this level-up left open, the levelled class first.
-  const [result, setResult] = useState<{ level: LevelUpResult; uses: string[]; choice: string | null; classIds: string[] } | null>(null);
   const faceId = useId();
 
-  if (result) {
-    // Those classes' spell choices, live: the choices form, or the DM's spells, settle them.
+  if (outcome?.kind === 'levelled') {
+    // The classes whose spell choices this level-up left open (the levelled class first), live: the choices form, or the
+    // DM's spells, settle them.
     const open = character && builder.data ? openSpellPicks(character, builder.data.classes) : [];
-    const picks = result.classIds.flatMap((id) => open.filter((p) => p.cl.classId === id));
-    return <Summary result={result.level} uses={result.uses} choice={result.choice} picks={picks} onChooseSpells={onChooseSpells} chooseButton={chooseButton} onClose={onClose} />;
+    const picks = outcome.classIds.flatMap((id) => open.filter((p) => p.cl.classId === id));
+    return <Summary result={outcome.level} uses={outcome.uses} choice={outcome.choice} picks={picks} onChooseSpells={onChooseSpells} chooseButton={chooseButton} onClose={onClose} />;
   }
+  if (outcome?.kind === 'refused') return <Refused message={outcome.message} onClose={onClose} />;
   if (!character) return <EmptyState title="No character loaded" />;
   const level = characterLevel(character);
   if (level >= 20) return <EmptyState title="Level 20 — the summit">There are no more levels to gain; ask the DM about Epic Boons.</EmptyState>;
@@ -755,16 +821,22 @@ function LevelUpForm({
     if (!canApply) return;
     onBusy(true);
     try {
-      await applyLevel();
+      const ended = await applyLevel();
+      if (ended) onOutcome(ended);
     } finally {
       onBusy(false);
     }
   };
 
-  const applyLevel = async () => {
+  const applyLevel = async (): Promise<LevelOutcome | null> => {
+    // The hero this plan is for, as the press found it.
+    const hero = character;
     // The always-prepared spells are looked up in the rules index, which a quick Level up can reach before it is first
     // built (Divine Smite would look missing): wait for it, and without it name what wasn't added.
     const rules = index ?? (await getRulesIndex().catch(() => null));
+    // Still this hero at this level, after the wait? Nothing awaits between this and the edit, which reads the same store.
+    const stale = stalePlanReason(hero, campaignId, level, useGame.getState());
+    if (stale) return { kind: 'refused', message: stale };
     const findRuleSpell: FindSpell = (name) => rules?.findByName(name, { kind: 'spell', campaignId });
     const base = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll', character);
     // A feat picked here joins the level-up, which counts what it brings at this level (Tough: twice the level), and
@@ -776,11 +848,6 @@ function LevelUpForm({
         : base;
     const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null; classIds: string[] } = { result: null, uses: [], choice: null, classIds: [] };
     const saved = await edit((c) => {
-      // The plan is for the level the hero had: one gained meanwhile (the DM's level_up while the rules loaded) would make
-      // this a second level with the first one's features.
-      if (characterLevel(c) !== level) {
-        return { character: c, notice: null, warning: `Not applied: your character reached level ${characterLevel(c)} while this level-up waited. Open Level up again for the next level.` };
-      }
       const r = levelUp(c, opts);
       if (r.character === c) {
         return { character: c, notice: null, warning: r.events.find((e) => e.type === 'warning')?.message ?? 'Could not level up.' };
@@ -851,7 +918,7 @@ function LevelUpForm({
         warning: warnings.join(' ') || null,
       };
     });
-    if (saved && outcome.result) setResult({ level: { ...outcome.result, character: saved }, uses: outcome.uses, choice: outcome.choice, classIds: outcome.classIds });
+    return saved && outcome.result ? { kind: 'levelled', level: { ...outcome.result, character: saved }, uses: outcome.uses, choice: outcome.choice, classIds: outcome.classIds } : null;
   };
 
   const selectChoice = (next: Choice) => {

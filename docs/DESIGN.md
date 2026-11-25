@@ -332,8 +332,9 @@ own (`classSpellLevelCap`: its single-class slots, or a Warlock's Slot Level), n
 a Mystic Arcanum recorded under "Warlock" counts nowhere. A spellbook counts the spells its levels added, always
 prepared ones too (the book still holds them); a spell copied into it or added free (Evocation Savant), recorded as
 "Wizard (copied)", comes on top of each level's two and counts only as a prepared spell. Re-added under the bare class
-name, as a DM preparing it may do, such a spell keeps its source (`keepsBookExtra`): only removing it and adding it again
-makes it one of a level's two. Each spellbook spell still owed keeps the limit of the level it belongs to (`bookCaps`:
+name, as a DM preparing it may do, such a spell keeps its source (`keepsBookExtra`), and `update_character` tells the DM
+so: only removing it and adding it again makes it one of a level's two. Copying prepares nothing, so the DM is told to
+add a copy unprepared unless the player prepares it. Each spellbook spell still owed keeps the limit of the level it belongs to (`bookCaps`:
 the book's spells take the lowest places they fit), so a choice put off across a level, or an older hero's catch-up,
 can't fill earlier levels with the newest spell level. A level-up (the dialog or the DM's
 `level_up`) leaves only a mark, `Spellcasting.spellPicks`: one entry per class, the newest level's, with that level's
@@ -342,11 +343,14 @@ or Warlock one cantrip), all read from the class's own Spellcasting text. So a h
 nothing until its next level-up, and then catches up to the table; deferring, a second level or a prepared checkbox
 never makes a count wrong. In the same edit (`levelSpellsEdit`), the always-prepared spells that a class feature, an
 SRD subclass's table or a book subclass grants up to the class level are added, or, when the sheet already holds one
-as an ordinary pick, turned always prepared, so it stops counting (an unprepared one wasn't counted, and frees
-nothing); a spellbook's keeps its source and stays in the book, and another class whose pick was turned is marked open
-(without swaps) for the place it left. The dialog's Level up waits for the rules index first; the wait outlives a close
-(a reopened dialog shows it rather than the same level again), and the edit refuses a plan for a level the hero passed
-meanwhile (the DM's `level_up`). The player
+as an ordinary pick, turned always prepared, so it stops counting (one unprepared, or above its class's spell level,
+wasn't counted, and frees nothing); a spellbook's keeps its source and stays in the book, and another class whose pick was turned is marked open
+(without swaps) for the place it left. The dialog's Level up waits for the rules index first. The wait and how it
+ended belong to the dialog, not its form: a dialog open when it ends (the one pressed, or one reopened meanwhile) shows
+the Summary, or why the plan was dropped, in place of the form, so no Level up is left under the player's finger for
+the next level; one closed meanwhile shows nothing later (the level is on the sheet). The plan is dropped when, after
+the wait, its campaign is no longer loaded or another hero is, or the hero passed that level (the DM's `level_up`);
+the reason is a toast when the dialog isn't open to show it. The player
 chooses on the sheet: the level-up dialog's summary continues into the choices in the same dialog, and while any are
 open the Spells panel shows a banner, the sheet header a note and the Spells tab a dot. A pick never takes a name the
 sheet holds (one spell per name), and a spell given up is removed by its id. A Long Rest change (Cleric and Druid any

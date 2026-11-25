@@ -796,7 +796,7 @@ describe("LevelUpDialog: the level's spells", () => {
     expect(notice).toMatch(/^Player leveled up to Wizard 4 \(character level 4\): \+5 HP \(max 22\); new features: [^;]+; spells to choose: 1 cantrip, 6 spellbook spells \(2 up to level 2 and 4 of level 1\) and 2 prepared spells; /);
     // A DM whose session began before its level_up said how still learns how to record what the player names.
     expect(notice).toContain(
-      '; spells to choose: 1 cantrip, 6 spellbook spells (2 up to level 2 and 4 of level 1) and 2 prepared spells; if the player names them to you instead: update_character spells_add, source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it, or one a feature adds to it free: source "Wizard (copied)"; to prepare a spell already in it: re-add it by name with prepared true and no source); still to choose: ',
+      '; spells to choose: 1 cantrip, 6 spellbook spells (2 up to level 2 and 4 of level 1) and 2 prepared spells; if the player names them to you instead: update_character spells_add, source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it, or one a feature adds to it free: source "Wizard (copied)", prepared false unless the player prepares it; to prepare a spell already in it: re-add it by name with prepared true and no source); still to choose: ',
     );
     expect(notice).not.toContain('Review your Wizard cantrips and prepared spells');
     expect(sheet().spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:wizard' }]);
@@ -1116,7 +1116,7 @@ describe("LevelUpDialog: the level's spells", () => {
     );
   }
 
-  it('levels the hero once when the dialog is reopened while a Level up waits for the rules index', async () => {
+  it('levels the hero once when the dialog is reopened while a Level up waits for the rules index, and shows the level there', async () => {
     const user = userEvent.setup();
     const release = holdIndex();
     resetFakeGame({ campaign: sampleCampaign(), character: paladin1() });
@@ -1132,28 +1132,122 @@ describe("LevelUpDialog: the level's spells", () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }));
     expect(screen.queryByRole('dialog')).toBeNull();
     await user.click(screen.getByRole('button', { name: 'Open level up' }));
-    const again = within(screen.getByRole('dialog', { name: 'Level up' })).getByRole('button', { name: 'Level up' });
+    const dialog = screen.getByRole('dialog', { name: 'Level up' });
+    const again = within(dialog).getByRole('button', { name: 'Level up' });
     expect(again).toHaveAttribute('aria-disabled', 'true');
     await user.click(again);
     await release();
     expect(sheet().classes[0].level).toBe(2);
     expect(sheet().features.filter((f) => f.name === "Paladin's Smite")).toHaveLength(1);
     expect(notices()).toHaveLength(1);
-    expect(screen.getByRole('button', { name: 'Level up' })).not.toHaveAttribute('aria-disabled');
+    // Then how it ended, focused: the Summary, with no Level up left to press for the next level.
+    expect(within(dialog).getByText('Level 2!')).toHaveFocus();
+    expect(within(dialog).queryByRole('button', { name: 'Level up' })).toBeNull();
+    // Done closes it; opened again, it offers the next level.
+    await user.click(within(dialog).getByRole('button', { name: 'Done' }));
+    await user.click(screen.getByRole('button', { name: 'Open level up' }));
+    expect(screen.getByRole('radio', { name: /Paladin 2 → 3/ })).toBeInTheDocument();
+    expect(screen.queryByText('Level 2!')).toBeNull();
   });
 
-  it("doesn't apply a plan for a level the hero passed while it waited (the DM's level_up)", async () => {
+  it('shows nothing of a Level up that ended while the dialog was closed, when it is opened later', async () => {
     const user = userEvent.setup();
     const release = holdIndex();
     resetFakeGame({ campaign: sampleCampaign(), character: paladin1() });
-    render(<LevelUpDialog open onClose={() => undefined} />);
+    render(<Reopenable />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    await release();
+    expect(sheet().classes[0].level).toBe(2);
+    await user.click(screen.getByRole('button', { name: 'Open level up' }));
+    expect(screen.getByRole('radio', { name: /Paladin 2 → 3/ })).toBeInTheDocument();
+    expect(screen.queryByText('Level 2!')).toBeNull();
+  });
+
+  it("doesn't apply a plan for a level the hero passed while it waited (the DM's level_up), and says so in the dialog", async () => {
+    const user = userEvent.setup();
+    const release = holdIndex();
+    resetFakeGame({ campaign: sampleCampaign(), character: paladin1() });
+    const onClose = vi.fn();
+    render(<LevelUpDialog open onClose={onClose} />);
     await user.click(screen.getByRole('button', { name: 'Level up' }));
     act(() => useGame.setState({ character: levelUp(sheet(), { className: 'Paladin', classId: 'srd:class:paladin', hpMethod: 'average' }).character }));
     const info = vi.spyOn(toast, 'info');
     await release();
     expect(sheet().classes[0].level).toBe(2);
     expect(notices()).toEqual([]);
+    // In the open dialog, where the player is looking (a toast would sit under it, hidden): in place of the plan, focused.
+    expect(screen.getByText('Not applied: your character reached level 2 while this level-up waited. Open Level up again for the next level.')).toHaveFocus();
+    expect(screen.queryByRole('button', { name: 'Level up' })).toBeNull();
+    expect(info).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onClose).toHaveBeenCalled();
+    // Closed while it waited, the dialog can't show it: a toast does.
+    const closed = holdIndex();
+    resetFakeGame({ campaign: sampleCampaign(), character: paladin1() });
+    cleanup();
+    render(<Reopenable />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    await user.click(screen.getByRole('button', { name: 'Cancel' }));
+    act(() => useGame.setState({ character: levelUp(sheet(), { className: 'Paladin', classId: 'srd:class:paladin', hpMethod: 'average' }).character }));
+    await closed();
     expect(info).toHaveBeenCalledWith('Not applied: your character reached level 2 while this level-up waited. Open Level up again for the next level.');
+    expect(sheet().classes[0].level).toBe(2);
+    expect(notices()).toEqual([]);
+  });
+
+  it("doesn't level another campaign's hero loaded while a Level up waited for the rules index", async () => {
+    const user = userEvent.setup();
+    // Left for another campaign (the table, and this dialog with it, goes): its hero, at the same level, keeps its own.
+    function Table() {
+      const [here, setHere] = useState(true);
+      return (
+        <>
+          <button type="button" onClick={() => setHere(false)}>
+            Leave
+          </button>
+          {here && <LevelUpDialog open onClose={() => undefined} />}
+        </>
+      );
+    }
+    const info = vi.spyOn(toast, 'info');
+    const error = vi.spyOn(toast, 'error');
+    const release = holdIndex();
+    resetFakeGame({ campaign: sampleCampaign(), character: paladin1() });
+    const name = sheet().name;
+    render(<Table />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    await user.click(screen.getByRole('button', { name: 'Leave' }));
+    const other = { ...paladin1(), id: 'other-hero', name: 'Wren Ashdown', campaignId: 'other-camp' };
+    act(() => useGame.setState({ campaignId: 'other-camp', campaign: { ...sampleCampaign(), id: 'other-camp' }, character: other }));
+    await release();
+    expect(sheet()).toBe(other);
+    expect(notices()).toEqual([]);
+    expect(info).toHaveBeenCalledWith(`Not applied: you left ${name}'s campaign while this level-up waited. Open Level up there again.`);
+    // Left for the campaign list: nothing is loaded, and the plan is dropped the same way (no save error).
+    cleanup();
+    info.mockClear();
+    const list = holdIndex();
+    resetFakeGame({ campaign: sampleCampaign(), character: paladin1() });
+    render(<Table />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    await user.click(screen.getByRole('button', { name: 'Leave' }));
+    act(() => useGame.setState({ campaignId: null, campaign: null, character: null }));
+    await list();
+    expect(info).toHaveBeenCalledWith(`Not applied: you left ${name}'s campaign while this level-up waited. Open Level up there again.`);
+    expect(error).not.toHaveBeenCalled();
+    expect(notices()).toEqual([]);
+    // The campaign's hero replaced meanwhile (the dialog still open): that hero keeps its own level.
+    cleanup();
+    const replaced = holdIndex();
+    resetFakeGame({ campaign: sampleCampaign(), character: paladin1() });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    const newcomer = { ...paladin1(), id: 'new-hero', name: 'Wren Ashdown' };
+    act(() => useGame.setState({ character: newcomer }));
+    await replaced();
+    expect(sheet()).toBe(newcomer);
+    expect(screen.getByText(`Not applied: ${name} was replaced as this campaign's hero while this level-up waited.`)).toHaveFocus();
   });
 
   it('tells the DM how to record a swap the player names when nothing new is owed (srd:rule:bard-spellcasting)', async () => {
