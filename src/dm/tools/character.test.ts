@@ -455,7 +455,7 @@ function caster(name: string, level: number, spells: KnownSpell[], extra: Partia
 const toolLog = (h: ReturnType<typeof setup>, tool: string) =>
   (h.s().log as { kind: string; tool?: string; summary?: string; detail?: string }[]).filter((e) => e.kind === 'tool' && e.tool === tool).at(-1);
 const RECORD_WIZARD =
-  'The player chooses these on their sheet\'s Spells tab, and you\'ll get a note. If they tell you their choices instead, record each with update_character spells_add, source "Wizard" (prepared: false for a spell only added to the spellbook).';
+  'The player chooses these on their sheet\'s Spells tab, and you\'ll get a note. If they tell you their choices instead, record each with update_character spells_add, source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it later: source "Wizard (copied)").';
 
 describe('level_up: always-prepared spells and the spell choices still open (SRD 5.2.1, each class\'s Spellcasting)', () => {
   it("Wizard 3 → 4: one line with the sheet's numbers in place of the engine's generic one, and the choices marked open (srd:rule:wizard-spellcasting)", async () => {
@@ -465,7 +465,9 @@ describe('level_up: always-prepared spells and the spell choices still open (SRD
     const h = setup({ builderData: SRD_BUILDER_DATA });
     const out = await h.run('level_up', { class_name: 'Wizard' });
     expect(out.isError).toBeUndefined();
-    const line = 'Spell choices: Wizard 4 (spells of level 1–2): up to 1 cantrip (the sheet has 3 of 4), 6 spellbook spells (6 of at least 12) and 2 prepared spells (5 of 7).';
+    // The book catches up from six: each level's two of a level its slots reached then (Wizard 2's: level 1), the book's
+    // two level 2 spells holding two of the level 2 places.
+    const line = 'Spell choices: Wizard 4 (spells of level 1–2): up to 1 cantrip (the sheet has 3 of 4), 6 spellbook spells (6 of at least 12: 2 up to level 2 and 4 of level 1) and 2 prepared spells (5 of 7).';
     expect(out.content).toContain(`${line} ${RECORD_WIZARD}`);
     expect(out.content).not.toContain('Review your Wizard cantrips');
     expect(out.content).toContain(['Choices the player still needs to make:', '- Wizard 4: Ability Score Improvement — raise one score by 2 or two scores by 1 (max 20), or take another feat you qualify for.', line].join('\n'));
@@ -622,13 +624,13 @@ describe('level_up: always-prepared spells and the spell choices still open (SRD
     await h.run('level_up', { class_name: 'Wizard' });
     const out = await h.run('level_up', { class_name: 'Wizard' });
     expect(h.sheet().spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:wizard' }]);
-    expect(out.content).toContain('Spell choices: Wizard 5 (spells of level 1–3): up to 1 cantrip (the sheet has 3 of 4), 8 spellbook spells (6 of at least 14) and 4 prepared spells (5 of 9).');
+    expect(out.content).toContain('Spell choices: Wizard 5 (spells of level 1–3): up to 1 cantrip (the sheet has 3 of 4), 8 spellbook spells (6 of at least 14: 2 up to level 3, 2 up to level 2 and 4 of level 1) and 4 prepared spells (5 of 9).');
     // A cantrip the DM recorded between the levels, as the result says to, counts at once.
     const recorded = setup({ builderData: SRD_BUILDER_DATA });
     await recorded.run('level_up', { class_name: 'Wizard' });
     expect((await recorded.run('update_character', { spells_add: [{ name: 'Ray of Frost', level: 0, source: 'Wizard' }] })).isError).toBeUndefined();
     const live = await recorded.run('level_up', { class_name: 'Wizard' });
-    expect(live.content).toContain('Spell choices: Wizard 5 (spells of level 1–3): up to 8 spellbook spells (6 of at least 14) and 4 prepared spells (5 of 9).');
+    expect(live.content).toContain('Spell choices: Wizard 5 (spells of level 1–3): up to 8 spellbook spells (6 of at least 14: 2 up to level 3, 2 up to level 2 and 4 of level 1) and 4 prepared spells (5 of 9).');
     expect(recorded.sheet().spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:wizard' }]);
   });
 });

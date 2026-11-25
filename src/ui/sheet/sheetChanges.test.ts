@@ -271,13 +271,14 @@ describe("spell choices from the sheet (SRD 5.2.1, each class's Spellcasting)", 
     // The table's count is met for cantrips and prepared spells; the record stays for the book, without swaps.
     expect(owedSpells(r.character, r.character.classes[0], cls('Wizard'))).toMatchObject({ cantrips: { owed: 0 }, prepared: { owed: 0 }, spellbook: { owed: 4 } });
     expect(openPicks(r.character)).toEqual([{ classId: 'srd:class:wizard' }]);
-    // The rest of the book closes the choices: Misty Step is in the book already (a held name is never taken again), and
-    // a fifth new spell has no place.
-    const more = ['Find Familiar', 'Mage Armor', 'Thunderwave', 'Misty Step', 'Shatter', 'Knock'].map(pick);
+    // The rest of the book closes the choices: Misty Step is in the book already (a held name is never taken again); the
+    // places left are the earlier levels', of level 1 ("Each of these spells must be of a level for which you have spell
+    // slots"), so Shatter and Knock have none; and a fifth new spell has no place.
+    const more = ['Find Familiar', 'Mage Armor', 'Thunderwave', 'Misty Step', 'Shatter', 'Grease', 'Knock', 'Feather Fall'].map(pick);
     const done = spellPicksChange(r.character, cls('Wizard'), choice('srd:class:wizard', { spellbook: more }));
-    expect(done.notice).toBe('Player chose spells for Wizard 4: spellbook Find Familiar, Mage Armor, Thunderwave, Shatter');
+    expect(done.notice).toBe('Player chose spells for Wizard 4: spellbook Find Familiar, Mage Armor, Thunderwave, Grease');
     expect(openPicks(done.character)).toEqual([]);
-    expect(named(done.character, 'Knock')).toBeUndefined();
+    for (const name of ['Shatter', 'Knock', 'Feather Fall']) expect(named(done.character, name)).toBeUndefined();
     expect(spellsOf(done.character).filter((s) => s.name === 'Misty Step')).toHaveLength(1);
   });
 
@@ -339,6 +340,36 @@ describe("spell choices from the sheet (SRD 5.2.1, each class's Spellcasting)", 
     const noSwap = spellPicksChange(closed, cls('Sorcerer'), choice('srd:class:sorcerer', { prepared: [pick('Haste'), pick('Fireball')], giveUpSpell: 'srd:spell:burning-hands' }));
     expect(noSwap.notice).toBe('Player chose spells for Sorcerer 6: prepared Haste');
     expect(named(noSwap.character, 'Burning Hands')).toBeDefined();
+  });
+
+  it('gives up only a spell on the list: an unprepared one frees no place (srd:rule:sorcerer-spellcasting)', () => {
+    // "you can replace one spell on your list with another Sorcerer spell": Burning Hands, left unprepared, isn't on the
+    // list, so it takes no swap; the class keeps to its table's 10.
+    const start = sorcerer6();
+    const unprepared = { ...start, spellcasting: { ...start.spellcasting!, spells: spellsOf(start).map((s) => (s.name === 'Burning Hands' ? { ...s, prepared: false } : s)) } };
+    const r = spellPicksChange(unprepared, cls('Sorcerer'), choice('srd:class:sorcerer', { prepared: [pick('Haste'), pick('Fireball'), pick('Counterspell')], giveUpSpell: 'srd:spell:burning-hands' }));
+    expect(r.notice).toBe('Player chose spells for Sorcerer 6: prepared Haste, Fireball');
+    expect(named(r.character, 'Burning Hands')).toMatchObject({ prepared: false });
+    expect(owedSpells(r.character, r.character.classes[0], cls('Sorcerer'))?.prepared).toEqual({ target: 10, held: 10, owed: 0 });
+  });
+
+  it("keeps each level's limit on spellbook spells chosen late, and prepares a copied spell from the book (srd:rule:wizard-spellcasting)", () => {
+    // "Whenever you gain a Wizard level after 1, add two Wizard spells … Each of these spells must be of a level for which
+    // you have spell slots": a Wizard 3 at its table taken to Wizard 5 owes Wizard 4's two (level 1–2) and Wizard 5's two.
+    const unprepared = (spells: KnownSpell[]) => spells.map((sp) => ({ ...sp, prepared: false }));
+    const copy = own('Invisibility', 'Wizard (copied)', { prepared: false });
+    const w = hero([entry('Wizard', 5)], [...fill('Wizard', 3, 0), ...fill('Wizard', 6, 1), ...unprepared(fill('Wizard', 4, 1, 'book')), copy], [{ classId: 'srd:class:wizard' }]);
+    const r = spellPicksChange(
+      w,
+      cls('Wizard'),
+      choice('srd:class:wizard', { spellbook: [pick('Fireball'), pick('Counterspell'), pick('Fly'), pick('Web'), pick('Haste')], prepare: ['srd:spell:invisibility'] }),
+    );
+    // Fly would be a third of level 3 and Haste a fifth spell: neither has a place.
+    expect(r.notice).toBe('Player chose spells for Wizard 5: spellbook Fireball, Counterspell, Web; prepared Invisibility; still to choose: 1 cantrip, 1 spellbook spell and 2 prepared spells');
+    expect(named(r.character, 'Fly')).toBeUndefined();
+    // The copy is prepared like the book's other spells and counts against the Prepared Spells column; it stays a copy.
+    expect(named(r.character, 'Invisibility')).toMatchObject({ source: 'Wizard (copied)', prepared: true });
+    expect(owedSpells(r.character, r.character.classes[0], cls('Wizard'))).toMatchObject({ spellbook: { owed: 1 }, prepared: { held: 7 }, bookCaps: [2] });
   });
 
   it("skips a class's choices: the record closes and the DM hears what wasn't chosen", () => {

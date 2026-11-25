@@ -8,13 +8,19 @@ import { cantripsKnown, preparedSpellCount } from './classFeatures';
 import {
   alwaysPreparedGained,
   applyAlwaysPrepared,
+  bookCapBlock,
+  bookCapsText,
+  bookSpellsOf,
   classSpellRules,
   closeSpellPicks,
+  fitsBookCaps,
+  levelSpellsEdit,
   openSpellPicks,
   owedSpells,
   owedSpellsLine,
   owedSpellsSummary,
   recordingHint,
+  settleSpellPicks,
   spellPicksAfterLevel,
   withoutSpellReview,
 } from './spellPicks';
@@ -272,8 +278,10 @@ describe('words for the DM and the sheet', () => {
     const owed = owedSpells(c, c.classes[0], cls('Wizard'));
     if (!owed) throw new Error('expected a count');
     expect(owedSpellsSummary(owed)).toBe('1 cantrip, 6 spellbook spells and 2 prepared spells');
-    expect(owedSpellsLine(owed)).toBe('Wizard 4 (spells of level 1–2): up to 1 cantrip (the sheet has 3 of 4), 6 spellbook spells (6 of at least 12) and 2 prepared spells (5 of 7).');
-    expect(recordingHint(owed)).toContain('source "Wizard" (prepared: false for a spell only added to the spellbook)');
+    // The book catches up from its six (srd:rule:wizard-spellcasting): its Misty Step and Scorching Ray hold two of the
+    // places of a level 2 limit (Wizard 3's or 4's), so the other two such places remain, and the rest are of level 1.
+    expect(owedSpellsLine(owed)).toBe('Wizard 4 (spells of level 1–2): up to 1 cantrip (the sheet has 3 of 4), 6 spellbook spells (6 of at least 12: 2 up to level 2 and 4 of level 1) and 2 prepared spells (5 of 7).');
+    expect(recordingHint(owed)).toContain('source "Wizard" (prepared: false for a spell only added to the spellbook; a spell copied into it later: source "Wizard (copied)")');
     const bard = hero([entry('Bard', 12)], [...fill('Bard', 4, 0), ...fill('Bard', 16, 1)]);
     const bardOwed = owedSpells(bard, bard.classes[0], cls('Bard'));
     if (!bardOwed) throw new Error('expected a count');
@@ -288,5 +296,149 @@ describe('words for the DM and the sheet', () => {
     const reminders = ['Wizard 4: choose an Ability Score Improvement or a feat.', 'Review your Wizard cantrips and prepared spells for level 4 (see the class table).'];
     expect(withoutSpellReview(reminders, 'Wizard', 4)).toEqual([reminders[0]]);
     expect(withoutSpellReview(reminders, 'Wizard', 5)).toEqual(reminders);
+  });
+});
+
+describe('what a class holds, as the SRD counts it', () => {
+  it("counts a spellbook's copied spells on top of each level's two (srd:rule:wizard-spellcasting)", () => {
+    // "Whenever you gain a Wizard level after 1, add two Wizard spells of your choice to your spellbook", and apart from
+    // those, "Copying a Spell into the Book": a Wizard 3 at its table (3 cantrips, a 10-spell book, 6 prepared) that
+    // copied two spells from scrolls still adds two at Wizard 4. A copy is prepared "like the other spells in your
+    // spellbook", so a prepared one counts against the Prepared Spells column.
+    const copies = [spell('Invisibility', 2, 'Wizard (copied)', false), spell('Hold Person', 2, 'Wizard (copied)', true)];
+    const c = hero([entry('Wizard', 4)], [...fill('Wizard', 3, 0), ...fill('Wizard', 5, 1), ...fill('Wizard', 5, 1, false, 'book'), ...copies]);
+    expect(owedSpells(c, c.classes[0], cls('Wizard'))).toMatchObject({ spellbook: { target: 12, held: 10, owed: 2 }, prepared: { target: 7, held: 6, owed: 1 } });
+    expect(bookSpellsOf(c, 'Wizard').map((s) => s.name)).toEqual(expect.arrayContaining(['Invisibility', 'Hold Person']));
+    // "Magic Initiate (Wizard)" names a feat, not the book; nor does another class's copy.
+    const other = hero([entry('Wizard', 4)], [spell('Sleep', 1, 'Magic Initiate (Wizard)'), spell('Bless', 1, 'Cleric (copied)')]);
+    expect(bookSpellsOf(other, 'Wizard')).toEqual([]);
+  });
+
+  it('counts only spells of a level the class has slots for (srd:rule:warlock-pact-magic, srd:rule:warlock-mystic-arcanum)', () => {
+    // "The chosen spells must be of a level no higher than what's shown in the table's Slot Level column": a Warlock 11's
+    // Mystic Arcanum, a level 6 spell recorded under "Warlock" ("you can cast your arcanum spell once without expending a
+    // spell slot"), isn't one of its prepared spells, nor a cantrip.
+    const warlock = cls('Warlock');
+    const c = hero([entry('Warlock', 11)], [...fill('Warlock', 4, 0), ...fill('Warlock', 10, 1), spell('Circle of Death', 6, 'Warlock')]);
+    const owed = owedSpells(c, c.classes[0], warlock);
+    expect(owed).toMatchObject({ maxLevel: 5, cantrips: { held: 4 }, prepared: { target: preparedSpellCount(warlock, 11), held: 10 } });
+    expect(owed?.prepared.owed).toBe(preparedSpellCount(warlock, 11) - 10);
+  });
+
+  it("offers a level's spell swap only with a spell on the list to give up (srd:rule:sorcerer-spellcasting)", () => {
+    // "replace one spell on your list": a Sorcerer whose only level 1+ spell is unprepared has none on it.
+    const c = hero([entry('Sorcerer', 2)], [...fill('Sorcerer', 4, 0), spell('Burning Hands', 1, 'Sorcerer', false)]);
+    expect(spellPicksAfterLevel(c, c.classes[0], cls('Sorcerer')).spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:sorcerer', replaceCantrip: true }]);
+  });
+});
+
+describe('always-prepared spells across classes (srd:rule:gaining-spells, "Always-Prepared Spells")', () => {
+  it("leaves a spell another class keeps prepared in the Wizard's spellbook (srd:rule:wizard-spellcasting)", () => {
+    // "The book contains the level 1+ spells you know": Draconic Sorcery keeps Chromatic Orb prepared now, so it stops
+    // counting among the Wizard's prepared spells ("doesn't count against the number of spells on that list"), but the
+    // book still holds it and its levels' two aren't owed again.
+    const c = hero(
+      [entry('Wizard', 3), entry('Sorcerer', 3)],
+      [...fill('Wizard', 3, 0), spell('Chromatic Orb', 1, 'Wizard'), ...fill('Wizard', 5, 1), ...fill('Wizard', 4, 1, false, 'book'), ...fill('Sorcerer', 4, 0), ...fill('Sorcerer', 4, 1)],
+    );
+    const gain = alwaysPreparedGained(c, cls('Sorcerer'), sub('Sorcerer', 'Draconic Sorcery'), 3, findSpell, SRD_BUILDER_DATA.classes);
+    expect(gain.flip).toEqual([{ id: 'id-chromatic-orb', name: 'Chromatic Orb', source: 'Draconic Sorcery', owner: 'Wizard', inBook: true }]);
+    const after = applyAlwaysPrepared(c, gain);
+    expect(after.spellcasting?.spells.find((s) => s.name === 'Chromatic Orb')).toMatchObject({ source: 'Wizard', alwaysPrepared: true, prepared: true });
+    expect(owedSpells(after, after.classes[0], cls('Wizard'))).toMatchObject({ spellbook: { target: 10, held: 10, owed: 0 }, prepared: { target: 6, held: 5, owed: 1 } });
+    // Without the class data the owner isn't known to keep a book: the spell takes the grant's name, as before.
+    expect(alwaysPreparedGained(c, cls('Sorcerer'), sub('Sorcerer', 'Draconic Sorcery'), 3, findSpell).flip).toEqual([
+      { id: 'id-chromatic-orb', name: 'Chromatic Orb', source: 'Draconic Sorcery', owner: 'Wizard' },
+    ]);
+  });
+
+  it('marks the other class open for the place its turned spell left', () => {
+    // Cleric 5 / Paladin 2 → Paladin 3, Oath of Devotion: Shield of Faith, a Cleric pick, is now always prepared, so the
+    // Cleric's list has room for another (srd:rule:cleric-spellcasting: "choose additional Cleric spells until the number
+    // of spells on your list matches the number in the Cleric Features table"). It gained no level: no swaps.
+    const c = hero(
+      [entry('Cleric', 5), entry('Paladin', 3)],
+      [...fill('Cleric', 4, 0), spell('Shield of Faith', 1, 'Cleric'), ...fill('Cleric', 8, 1), spell('Divine Smite', 1, "Paladin's Smite", true, { alwaysPrepared: true }), ...fill('Paladin', 3, 1)],
+    );
+    const r = levelSpellsEdit(c, c.classes[1], cls('Paladin'), sub('Paladin', 'Oath of Devotion'), findSpell, SRD_BUILDER_DATA.classes);
+    expect(r.gain.flip).toEqual([{ id: 'id-shield-of-faith', name: 'Shield of Faith', source: 'Oath of Devotion', owner: 'Cleric' }]);
+    expect(r.others).toEqual([{ cl: c.classes[0], owed: expect.objectContaining({ prepared: { target: preparedSpellCount(cls('Cleric'), 5), held: 8, owed: preparedSpellCount(cls('Cleric'), 5) - 8 } }), entry: { classId: 'srd:class:cleric' } }]);
+    expect(r.character.spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:paladin' }, { classId: 'srd:class:cleric' }]);
+    expect(r.entry).toEqual({ classId: 'srd:class:paladin' });
+    // A class already open keeps its entry (and its swaps) as it is.
+    const open = { ...c, spellcasting: { ...c.spellcasting!, spellPicks: [{ classId: 'srd:class:cleric', replaceCantrip: true }] } };
+    const again = levelSpellsEdit(open, open.classes[1], cls('Paladin'), sub('Paladin', 'Oath of Devotion'), findSpell, SRD_BUILDER_DATA.classes);
+    expect(again.character.spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:cleric', replaceCantrip: true }, { classId: 'srd:class:paladin' }]);
+  });
+});
+
+describe("spellbook spells chosen late keep each level's limit (srd:rule:wizard-spellcasting)", () => {
+  it('owes the newest places, each no higher than the level it belongs to allowed', () => {
+    // "Each of these spells must be of a level for which you have spell slots": a Wizard 3 at its table (a 10-spell book)
+    // taken to Wizard 5 before choosing owes Wizard 4's two (level 1–2 then) and Wizard 5's two (level 1–3).
+    const c = hero([entry('Wizard', 5)], [...fill('Wizard', 3, 0), ...fill('Wizard', 6, 1), ...fill('Wizard', 4, 1, false, 'book')]);
+    const caps = owedSpells(c, c.classes[0], cls('Wizard'))?.bookCaps ?? [];
+    expect(caps).toEqual([3, 3, 2, 2]);
+    expect(fitsBookCaps([3, 2, 3, 1], caps)).toBe(true);
+    expect(fitsBookCaps([3, 3, 3], caps)).toBe(false);
+    expect(fitsBookCaps([1, 1, 1, 1, 1], caps)).toBe(false);
+    expect(bookCapBlock(3, [3, 3], caps)).toBe('Only 2 may be of level 3 here; the others are for earlier levels.');
+    expect(bookCapBlock(2, [3, 3], caps)).toBeNull();
+    expect(bookCapBlock(1, [3, 3, 2, 2], caps)).toBeNull();
+    expect(bookCapsText(caps)).toBe('2 up to level 3 and 2 up to level 2');
+    // Part made: two of level 3 took Wizard 5's places, so Wizard 4's are left, of level 1–2; a level 2 pick would have
+    // left one of each.
+    const part = hero([entry('Wizard', 5)], [...fill('Wizard', 3, 0), ...fill('Wizard', 6, 1), ...fill('Wizard', 4, 1, false, 'book'), spell('Fireball', 3, 'Wizard', false), spell('Fly', 3, 'Wizard', false)]);
+    expect(owedSpells(part, part.classes[0], cls('Wizard'))?.bookCaps).toEqual([2, 2]);
+    const web = hero([entry('Wizard', 5)], [...fill('Wizard', 3, 0), ...fill('Wizard', 6, 1), ...fill('Wizard', 4, 1, false, 'book'), spell('Web', 2, 'Wizard', false)]);
+    expect(owedSpells(web, web.classes[0], cls('Wizard'))?.bookCaps).toEqual([3, 3, 2]);
+    // Chosen at each level: one limit, nothing more to say.
+    const onTime = hero([entry('Wizard', 5)], [...fill('Wizard', 3, 0), ...fill('Wizard', 6, 1), ...fill('Wizard', 6, 1, false, 'book')]);
+    expect(owedSpells(onTime, onTime.classes[0], cls('Wizard'))?.bookCaps).toEqual([3, 3]);
+    expect(bookCapsText([3, 3])).toBe('');
+    // An older Wizard 7 with its starting six: each level's two, back to Wizard 2's of level 1.
+    const older = hero([entry('Wizard', 7)], fill('Wizard', 6, 1, false, 'book'));
+    expect(owedSpells(older, older.classes[0], cls('Wizard'))?.bookCaps).toEqual([4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1]);
+    expect(bookCapsText([4, 4, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1])).toBe('2 up to level 4, 4 up to level 3, 4 up to level 2 and 2 of level 1');
+  });
+});
+
+describe('spells the DM records settle the open choices (update_character, as the level_up result says)', () => {
+  const picks = (c: Character, list: { classId: string; replaceSpell?: boolean; replaceCantrip?: boolean }[]): Character => ({ ...c, spellcasting: { ...c.spellcasting!, spellPicks: list } });
+  const withSpells = (c: Character, spells: KnownSpell[]): Character => ({ ...c, spellcasting: { ...c.spellcasting!, spells } });
+
+  it("closes a class once nothing is owed: the level's swaps were made through the DM (srd:rule:sorcerer-spellcasting)", () => {
+    // Sorcerer 6 owes its new spell, swaps open; the DM records the new spell and "replace one spell on your list".
+    const base = hero([entry('Sorcerer', 6)], [...fill('Sorcerer', 5, 0), spell('Burning Hands', 1, 'Sorcerer'), ...fill('Sorcerer', 8, 1)]);
+    const open = picks(base, [{ classId: 'srd:class:sorcerer', replaceSpell: true, replaceCantrip: true }]);
+    const after = withSpells(open, [...open.spellcasting!.spells.filter((s) => s.name !== 'Burning Hands'), spell('Haste', 3, 'Sorcerer'), spell('Lightning Bolt', 3, 'Sorcerer')]);
+    const r = settleSpellPicks(open, after, SRD_BUILDER_DATA.classes);
+    expect(r.character.spellcasting).not.toHaveProperty('spellPicks');
+    expect(r.settled).toEqual([{ className: 'Sorcerer', level: 6, owed: null }]);
+    // Only the new spell, no swap named: the level's choices are made, and its swaps lapse with them, as on the sheet.
+    const plain = withSpells(open, [...open.spellcasting!.spells, spell('Haste', 3, 'Sorcerer')]);
+    expect(settleSpellPicks(open, plain, SRD_BUILDER_DATA.classes).character.spellcasting).not.toHaveProperty('spellPicks');
+  });
+
+  it('keeps what is still owed open without the swaps, and leaves a class whose spells it didn\'t touch alone', () => {
+    const base = hero([entry('Bard', 6), entry('Cleric', 5)], [...fill('Bard', 3, 0), ...fill('Bard', 7, 1), ...fill('Cleric', 4, 0), ...fill('Cleric', 9, 1)]);
+    const open = picks(base, [{ classId: 'srd:class:bard', replaceSpell: true, replaceCantrip: true }, { classId: 'srd:class:cleric', replaceCantrip: true }]);
+    // One Bard spell of the two the table gained (srd:rule:bard-spellcasting); a spell of no class's, granted in play.
+    const after = withSpells(open, [...open.spellcasting!.spells, spell('Hypnotic Pattern', 3, 'Bard'), spell('Fly', 3, 'Granted in play')]);
+    const r = settleSpellPicks(open, after, SRD_BUILDER_DATA.classes);
+    expect(r.character.spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:bard' }, { classId: 'srd:class:cleric', replaceCantrip: true }]);
+    expect(r.settled).toEqual([{ className: 'Bard', level: 6, owed: expect.objectContaining({ prepared: expect.objectContaining({ owed: preparedSpellCount(cls('Bard'), 6) - 8 }) }) }]);
+    // Nothing of the class's changed: as it was.
+    expect(settleSpellPicks(open, withSpells(open, [...open.spellcasting!.spells, spell('Fly', 3, 'Granted in play')]), SRD_BUILDER_DATA.classes).character.spellcasting?.spellPicks).toEqual(open.spellcasting?.spellPicks);
+  });
+
+  it("settles a spellbook's choices when the DM records its book spells, so a later loss doesn't reopen them", () => {
+    // Wizard 4 at its table but for the level's two book spells (srd:rule:wizard-spellcasting): the DM records them.
+    const base = hero([entry('Wizard', 4)], [...fill('Wizard', 4, 0), ...fill('Wizard', 7, 1), ...fill('Wizard', 3, 1, false, 'book')]);
+    const open = picks(base, [{ classId: 'srd:class:wizard' }]);
+    const after = withSpells(open, [...open.spellcasting!.spells, spell('Web', 2, 'Wizard', false), spell('Shatter', 2, 'Wizard', false)]);
+    const settled = settleSpellPicks(open, after, SRD_BUILDER_DATA.classes).character;
+    expect(settled.spellcasting).not.toHaveProperty('spellPicks');
+    expect(openSpellPicks(withSpells(settled, settled.spellcasting!.spells.slice(2)), SRD_BUILDER_DATA.classes)).toEqual([]);
   });
 });

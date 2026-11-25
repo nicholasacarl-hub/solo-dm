@@ -26,7 +26,17 @@ import {
   spendSlot,
   type HpMaxChange,
 } from '@/engine';
-import { classSpellRules, classSpellsOf, closeSpellPicks, owedSpells, owedSpellsSummary } from '@/data/options/spellPicks';
+import {
+  bookSpellsOf,
+  classSpellRules,
+  classSpellsOf,
+  closeSpellPicks,
+  fitsBookCaps,
+  owedSpells,
+  owedSpellsSummary,
+  swappableSpells,
+  withoutSwaps,
+} from '@/data/options/spellPicks';
 import { nameKey } from '@/lib/id';
 import { safeEnd } from '@/lib/text';
 import type {
@@ -238,13 +248,6 @@ function freshPicks(c: Character) {
     });
 }
 
-/** The class's entry in the open choices, kept but without the level's swaps (they lapse with the level's choices). */
-function withoutSwaps(c: Character, classId: string): Character {
-  const sc = c.spellcasting;
-  if (!sc?.spellPicks?.some((p) => p.classId === classId)) return c;
-  return { ...c, spellcasting: { ...sc, spellPicks: sc.spellPicks.map((p) => (p.classId === classId ? { classId } : p)) } };
-}
-
 /** What the player chose in the choices form for one class's open level (sheet spells built from rules-index entries). */
 export interface SpellPicksChoice {
   classId: string;
@@ -258,7 +261,7 @@ export interface SpellPicksChoice {
   prepare: readonly string[];
   /** One of the class's cantrips given up, by id (the level allows replacing one). */
   giveUpCantrip?: string | null;
-  /** One of the class's level 1+ spells given up, by id (the level allows replacing one). */
+  /** One of the class's prepared level 1+ spells given up, by id (the level allows replacing one). */
   giveUpSpell?: string | null;
 }
 
@@ -266,10 +269,11 @@ export interface SpellPicksChoice {
  * The player's choices for a class's open level (SRD 5.2.1, each class's Spellcasting: "choose additional spells … until
  * the number of spells on your list matches the number on the table"), checked against the sheet as it is now (the
  * edit runs on the latest character): a pick whose name the sheet now holds is dropped, as is a spell given up that is
- * gone, and each list takes no more than the table still has room for. New spells have the class's name as their source
- * and are prepared; a Wizard's new spellbook spells only when also chosen to prepare. A spell given up is removed by id
- * and its replacement added in its place. The class's choices close once nothing is owed; otherwise they stay open
- * without the level's swaps.
+ * gone or isn't on the list (unprepared: giving it up frees no place), and each list takes no more than the table still
+ * has room for; a spellbook's spells each fit the limit of the level they belong to (bookCaps). New spells have the
+ * class's name as their source and are prepared; a Wizard's new spellbook spells only when also chosen to prepare. A
+ * spell given up is removed by id and its replacement added in its place. The class's choices close once nothing is
+ * owed; otherwise they stay open without the level's swaps.
  */
 export function spellPicksChange(c: Character, cls: ClassOption, choice: SpellPicksChoice): SheetChange {
   const cl = c.classes.find((x) => x.classId === choice.classId);
@@ -280,13 +284,18 @@ export function spellPicksChange(c: Character, cls: ClassOption, choice: SpellPi
   const fresh = freshPicks(c);
   const inRange = (s: KnownSpell) => s.level >= 1 && s.level <= owed.maxLevel;
   const giveUpCantrip = entry?.replaceCantrip ? own.find((s) => s.id === choice.giveUpCantrip && s.level === 0) : undefined;
-  const giveUpSpell = entry?.replaceSpell && !owed.spellbook ? own.find((s) => s.id === choice.giveUpSpell && s.level >= 1) : undefined;
+  const giveUpSpell = entry?.replaceSpell && !owed.spellbook ? swappableSpells(c, cl.name, owed.maxLevel).find((s) => s.id === choice.giveUpSpell) : undefined;
   const cantrips = owed.cantrips ? fresh(choice.cantrips, (s) => s.level === 0).slice(0, owed.cantrips.owed + (giveUpCantrip ? 1 : 0)) : [];
-  const book = owed.spellbook ? fresh(choice.spellbook, inRange).slice(0, owed.spellbook.owed) : [];
+  const book: KnownSpell[] = [];
+  if (owed.spellbook) {
+    for (const s of fresh(choice.spellbook, inRange)) {
+      if (book.length < owed.spellbook.owed && fitsBookCaps([...book, s].map((x) => x.level), owed.bookCaps)) book.push(s);
+    }
+  }
   const prepared = owed.spellbook ? [] : fresh(choice.prepared, inRange).slice(0, owed.prepared.owed + (giveUpSpell ? 1 : 0));
-  // A spellbook's spells to prepare: its unprepared entries of a level it has slots for, and the new book spells.
+  // A spellbook's spells to prepare: its unprepared entries (extras too) of a level it has slots for, and the new ones.
   const preparable = new Map<string, Pick<KnownSpell, 'name' | 'ref'>>([
-    ...own.filter((s) => inRange(s) && !s.prepared).map((s) => [s.id, s] as const),
+    ...(owed.spellbook ? bookSpellsOf(c, cl.name) : []).filter((s) => inRange(s) && !s.prepared).map((s) => [s.id, s] as const),
     ...book.map((s) => [s.id, s] as const),
   ]);
   const prepare = owed.spellbook ? [...new Set(choice.prepare)].filter((id) => preparable.has(id)).slice(0, owed.prepared.owed) : [];
@@ -357,10 +366,11 @@ export function restSpellChange(c: Character, cls: ClassOption, change: RestSpel
   const rules = classSpellRules(cls).longRest;
   const cap = classSpellLevelCap(cl);
   const own = classSpellsOf(c, cl.name);
+  const listed = swappableSpells(c, cl.name, cap);
   const fresh = freshPicks(c);
   const pairs: [KnownSpell, KnownSpell][] = [];
   if (rules.spells && !rules.fromSpellbook) {
-    const out = [...new Set(change.giveUp)].flatMap((id) => own.filter((s) => s.id === id && s.level >= 1 && s.prepared));
+    const out = [...new Set(change.giveUp)].flatMap((id) => listed.filter((s) => s.id === id));
     const ins = fresh(change.picks, (s) => s.level >= 1 && s.level <= cap);
     const count = Math.min(out.length, ins.length, rules.spells === 'one' ? 1 : Infinity);
     for (let i = 0; i < count; i++) pairs.push([out[i], ins[i]]);

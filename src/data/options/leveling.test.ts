@@ -180,7 +180,8 @@ describe('always-prepared spells of an imported subclass', () => {
     const picked = cleric(1, { spellcasting: { ability: 'wis', slots: {}, spells: [{ id: 'my-sleep', name: 'Sleep', level: 1, prepared: true, source: 'Cleric' }], concentratingOn: null } });
     const plan = alwaysPreparedGained(picked, CLERIC, DUSK, 1, find);
     expect(plan.add.map((s) => s.name)).toEqual(['Faerie Fire']);
-    expect(plan.flip).toEqual([{ id: 'my-sleep', name: 'Sleep', source: 'Dusk Domain' }]);
+    // It leaves the Cleric's list (the class its source names), which owes that place again.
+    expect(plan.flip).toEqual([{ id: 'my-sleep', name: 'Sleep', source: 'Dusk Domain', owner: 'Cleric' }]);
   });
 
   it("gives a spell the lookup finds in homebrew its entry's id as homebrewId, which the sheet tags", () => {
