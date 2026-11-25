@@ -160,7 +160,7 @@ import { DmCancelledError } from '../errors';
 import { truncate } from '../narration';
 import { refitHeroAfterSheetChange } from './map';
 import { findAllowedEntry } from './rules';
-import { cascadeLines, heroConcentrationRefusal, knownSpellId, spellTiming, withHeroCountdown } from './spellEffects';
+import { cascadeLines, heroConcentration, knownSpellId, spellTiming, withHeroCountdown } from './spellEffects';
 
 // ---------------------------------------------------------------------------
 // update_character
@@ -1176,9 +1176,9 @@ async function logSections(ctx: ToolContext, results: SectionResult[], reason?: 
 /**
  * In a fight the hero's combatant counts the sheet's Concentration (Combatant.concentrationCountdown), written after
  * the sheet (character first, then combat). A spell this call started or recast counts from its full duration in the
- * rules data (a recast restarts it; setConcentration leaves the sheet as it was); a sheet no longer concentrating on
- * the counted spell (null, another spell, 0 HP, an Incapacitating condition, the spell removed) drops it. The line says
- * what the app counts.
+ * rules data (a recast, by the name heroConcentration resolved, restarts it; setConcentration leaves the sheet as it
+ * was); a sheet no longer concentrating on the counted spell (null, another spell, 0 HP, an Incapacitating condition,
+ * the spell removed) drops it. The line says what the app counts.
  */
 async function syncHeroCountdown(ctx: ToolContext, input: ToolInput<'update_character'>, before: Character, after: Character): Promise<string | null> {
   const combat = ctx.deps.store().combat;
@@ -1228,14 +1228,17 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
       'Send ac_spells_add / ac_spells_end and armor_class in separate calls: the spells first (the app moves the AC for them), then armor_class for anything else.',
     );
   }
-  // A spell the rules data says needs no Concentration never becomes the hero's (as update_combat refuses it for NPCs).
+  // A spell the rules data says needs no Concentration never becomes the hero's (as update_combat refuses it for NPCs);
+  // one it finds is recorded by its own name, a name it doesn't know as the sheet's spell it matches (heroConcentration).
+  let concentration = input.concentration;
   if (typeof input.concentration === 'string') {
-    const refused = await heroConcentrationRefusal(ctx, ctx.deps.store().character, input.concentration);
+    const { refused, label } = await heroConcentration(ctx, ctx.deps.store().character, input.concentration);
     if (refused) throw new ToolInputError(refused);
+    concentration = label;
   }
   const links = await resolveLinks(input, ctx);
   const track: AcTrack = { kept: [] };
-  const sections = buildSections(input, links, track);
+  const sections = buildSections({ ...input, concentration }, links, track);
   let results: SectionResult[] = [];
   const checkAc = mayChangeArmorClass(input);
   // The AC spells this call records last: the AC check before them never asks for them (handSetHint).
@@ -1301,7 +1304,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   lines.push(...heroCascadeLines(ctx, input, startSheet, change.character));
   lines.push(...acSpellLines(input, startSheet, change.character, track.kept, links.catalog));
   // In a fight the hero's countdown follows the sheet: one combat write, after the character's (spec §3.3).
-  const countdown = await syncHeroCountdown(ctx, input, startSheet, change.character);
+  const countdown = await syncHeroCountdown(ctx, { ...input, concentration }, startSheet, change.character);
   if (countdown) lines.push(countdown);
   // A size change during a mapped fight re-fits the hero's space (D39).
   const mapLine = await refitHeroAfterSheetChange(ctx, before, change.character);

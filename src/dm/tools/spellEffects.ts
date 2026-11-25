@@ -111,16 +111,35 @@ export function noConcentrationText(timing: SpellTiming, spell: string): string 
  * of your next turn, you have a +5 bonus to AC"). Null when nothing is refused.
  */
 export async function heroConcentrationRefusal(ctx: ToolContext, hero: Character | null, spell: string): Promise<string | null> {
+  return (await heroConcentration(ctx, hero, spell)).refused;
+}
+
+/**
+ * The hero's Concentration as the DM names it (update_character concentration): the refusal above, and the name to
+ * record, found in the same order. The sheet's own spell of that name keeps the sheet's spelling (setConcentration);
+ * else a spell the rules data finds is recorded by its own name, as an NPC's is ("hold person" and "Hold Person (3rd
+ * level)" are Hold Person, so the end names the conditions sourced "Hold Person"); else the sheet's spell the name
+ * matches ("Faith" for its Shield of Faith, so the spell's +2 record ends with it: srd:rule:concentration, "If the
+ * effect's creator loses Concentration, the effect ends"); else the name as given.
+ */
+export async function heroConcentration(ctx: ToolContext, hero: Character | null, spell: string): Promise<{ refused: string | null; label: string }> {
+  const held = hero?.spellcasting?.spells.find((s) => nameKey(s.name) === nameKey(spell));
   let asked = spell;
-  let timing = await spellTiming(ctx, spell, knownSpellId(hero, spell));
+  let timing = await spellTiming(ctx, spell, held?.id);
+  let label = !held && timing.found && timing.name ? timing.name : spell;
   if (!timing.found) {
     const known = hero?.spellcasting ? matchByName(hero.spellcasting.spells, spell, (s) => s.name).match : undefined;
     // The sheet's spell of exactly that name was looked up already (by its id).
     if (known && nameKey(known.name) !== nameKey(spell)) {
       asked = known.name;
+      label = known.name;
       timing = await spellTiming(ctx, asked, known.id);
     }
   }
+  return { refused: heroRefusalText(hero, asked, timing), label };
+}
+
+function heroRefusalText(hero: Character | null, asked: string, timing: SpellTiming): string | null {
   const refused = noConcentrationText(timing, asked);
   if (!refused) return null;
   const name = timing.name ?? asked;

@@ -323,61 +323,76 @@ text names lasting ones too. Without records nothing is printed, so the prompt a
 are byte for byte as before. `initiative_change` adds to the Initiative bonus beyond Dexterity (a ruling, or an Alert the
 app didn't count), never sets a total, and keeps no record.
 
-**Spell effects.** The app ends what it can end exactly, in the same tool call as the trigger, and says so; what it
-can only guess at it names for the DM with the exact call, and prints nothing when nothing matches
+**Spell effects.** The app ends what it can end exactly, in the same tool call as the trigger, and says so; what it can
+only guess at it names for the DM with the exact call, and prints nothing when nothing matches
 (src/engine/spellEffects.ts; the DM's lookups and lines in src/dm/tools/spellEffects.ts). *An NPC's or monster's
-Concentration* is `Combatant.concentration` (`update_combat` action `concentrate`, `spell` null to end it): one spell
-at a time (another ends the first, SRD Concentration), refused for a defeated creature, an Incapacitated one and a
-spell the rules data says needs no Concentration ("Shield doesn't require Concentration (Duration: 1 round)."; a spell
-the data doesn't know is never refused), and the same spell again is a recast that restarts its count. For the hero,
-`concentrate` only sets the rounds of the sheet's spell: the hero's Concentration is the sheet's, started and ended
-with `update_character concentration`, which refuses a spell that needs none in the same words and says where its
-effect goes (Mage Armor and Shield of Faith to `ac_spells_add`, Shield's +5 into the dc of attacks on the hero). Damage
-to it rolls its Constitution save with the app's dice (DC 10 or half the damage, at most 30: `concentrationSaveDC`)
-before the one combat write, from the SRD stat block's save; reviewed imports and homebrew stat blocks carry no saves,
-so the DM is told to roll it with `roll_dice` and the purpose the app's own card uses, which keeps the spell out. A
-creature with Legendary Resistance (read from its stat block's text) is told a failure, never ended, since using one is
-the DM's choice. 0 HP and an Incapacitating condition end it; `defeat` and `remove` only note it (a creature that fled
-still concentrates). It is DM-only (SRD Targets: "a creature doesn't know it was targeted"): no player log line,
-tracker chip or map mark names the spell, the save card (logged as a save, whatever the creature is called) is secret
-for a hidden creature or one whose HP are hidden, and an ally's visible card says "Constitution save to keep
-concentration" without the spell. *Durations* count rounds: `durationRounds` reads the SRD duration ("Concentration,
-up to 1 minute" is 10 rounds, a round being about 6 seconds; a name with a trailing note, "Hold Person (3rd level)", is
-looked up without it, and an NPC's is recorded under the data's name), the DM's `rounds` overrides it, and the count is
-the caster's turn starts left; the spell ends at the start of the caster's turn when it reaches 0
-(`concentrationTurnStart`, run on `next_turn` and on removing the current creature: the hero's ending is written to the
-sheet first, then the one combat write, with a visible log line after the turn line). The hero's count is
-`concentrationCountdown` on the hero's combatant, for the sheet's spell only: `update_character` starts it in full when
-the call starts or recasts the spell, else it starts at the hero's next turn start, in full in round 1 (a spell running
-when the fight starts ends at the hero's round-11 turn start, whatever the initiative order) and at the duration less
-one later; outside a fight nothing counts, and a saved count reads at most 14,400 rounds (a day). `end_combat` ends
-the hero's spell with a minute or less left ("runs out after the fight") and names a longer one, and NPCs still
-concentrating, for the DM. When a spell ends in a DM tool's result, the DM is told which map areas share its name (with
-the `update_map effects_end` call, each label once; a label more than one area carries is flagged, since the call ends
-them all and any that isn't the spell's is placed again with `resolve_area`; the app never removes one), which
-conditions name it as their source (skipping those the same call added), a Shield of Faith on the hero another caster
-may have held, and an AC set by hand that may have counted it (not for a spell the hero holds a record of). For an NPC
-removed from the fight or still concentrating when it ends, the DM is told the conditions to remove, and the hero's
-Shield of Faith to end, when that spell ends. A sheet-side end (the toggle, the chip's ×, 0 HP, an Incapacitating
-condition) names the hero's own conditions that name the spell and adds one conditional `effects_end` clause, since
-the sheet can't see the fight. *AC from spells* is `Character.acSpells` (Mage Armor, Shield of Faith; `ac_spells_add` /
-`ac_spells_end`, and the sheet's chips), counted inside `computeArmorClass`: Mage Armor is one more unarmored base
-(13 + DEX, never while armor is worn, and not ended by putting armor on: the DM ends it), Shield of Faith a +2 part
-after the items'. `armorClass` stays the AC in force, so every reader and older devices read one number, and the
-formula's whole ` + ` parts ("Mage Armor: 13", "Shield of Faith 2") say which spells it counts. One rule in
-`syncArmorClass` handles every change: the spells' change in AC is worked out first, from the spells added and the
-ended ones the AC counted. A spell added that a hand-set formula already names in the DM's own words (an older save's
-"set by the DM: Shield of Faith and Haste") is taken to be in it: the AC becomes derived when the armor is known and
-the computed AC equals it, else it is kept, the spell's part is added and the DM is warned with the computed AC.
-Unknown armor or a hand-set AC moves by the change (unknown armor newly put on keeps the counted parts); otherwise the
-reworded warning. A hand-set or unknown-armor formula drops "Mage Armor: 13" once Mage Armor's record ends or armor
-goes on. `armor_class` sent with `ac_spells_add` or `ac_spells_end` is refused (the spells first, then the AC), and
-restating the AC kept for unknown armor keeps the counted parts. The hero's Shield of Faith ends with the hero's
-Concentration on every path (`afterConcentrationEnds`: 0 HP, death, an Incapacitating condition, another spell,
-removing the spell, a Long Rest, the countdown), except the sheet's spell swaps (at a level-up, after a Long Rest),
-which keep the Concentration and the record: SRD Concentration lists what ends it, and a swap isn't among them. A Long
-Rest ends both, Shield of Faith first (Mage Armor's 8 hours). The concentration chip folds in only Shield of Faith, and
-its × and the Spells tab's Stop ask twice while it carries the +2. The status line reads "AC 17 (Mage Armor, Shield of
+Concentration* is `Combatant.concentration` (`update_combat` action `concentrate`, `spell` null to end it): one spell at
+a time (another ends the first, SRD Concentration), refused for a defeated creature, an Incapacitated one and a spell
+the rules data says needs no Concentration ("Shield doesn't require Concentration (Duration: 1 round)."; a spell the
+data doesn't know is never refused), and the same spell again is a recast that restarts its count. For the hero,
+`concentrate` only sets the rounds of the sheet's spell: the hero's Concentration is the sheet's, started and ended with
+`update_character concentration`, which refuses a spell that needs none in the same words and says where its effect goes
+(Mage Armor and Shield of Faith to `ac_spells_add`, Shield's +5 into the dc of attacks on the hero). The name is looked
+up as given, so a namesake on the sheet never decides it (Invisibility beside See Invisibility isn't refused; Shield
+beside Shield of Faith is), and `update_character` records a spell the data finds by its own name, as an NPC's is ("Hold
+Person (3rd level)" is Hold Person), and a name the data doesn't know as the sheet's spell it matches ("Faith" for its
+Shield of Faith, which while held is that spell again: nothing ends, and in a fight its count restarts as for a recast).
+Damage to it rolls its Constitution save with the app's dice (DC 10 or half the damage, at most 30:
+`concentrationSaveDC`) before the one combat write, from the SRD stat block's save; reviewed imports and homebrew stat
+blocks carry no saves, so the DM is told to roll it with `roll_dice` and the purpose the app's own card uses, which
+keeps the spell out. A creature with Legendary Resistance (read from its stat block's text) is told a failure, never
+ended, since using one is the DM's choice. 0 HP and an Incapacitating condition end it; `defeat` and `remove` only note
+it (a creature that fled still concentrates). It is DM-only (SRD Targets: "a creature doesn't know it was targeted"): no
+player log line, tracker chip or map mark names the spell, the save card (logged as a save and read as one, vs DC with
+Success or Failure, whatever the creature is called; so is a `roll_dice` card whose purpose names a save) is secret for
+a hidden creature or one whose HP are hidden, and an ally's visible card says "Constitution save to keep concentration"
+without the spell. *Durations* count rounds: `durationRounds` reads the SRD duration ("Concentration, up to 1 minute" is
+10 rounds, a round being about 6 seconds; a name with a trailing note, "Hold Person (3rd level)", is looked up without
+it, and recorded under the data's name, the hero's as an NPC's), the DM's `rounds` overrides it, and the count is the
+caster's turn starts left, from round 2 (none counts down at a turn start in round 1, so a count given before the
+caster's first turn lasts that many of its turns whatever the initiative order); the spell ends at the start of the
+caster's turn when it reaches 0 (`concentrationTurnStart`, run on `next_turn` and on removing the current creature: the
+hero's ending is written to the sheet first, then the one combat write, with a visible log line after the turn line).
+The hero's count is `concentrationCountdown` on the hero's combatant, for the sheet's spell only: `update_character`
+starts it in full when the call starts or recasts the spell, else it starts at the hero's next turn start, in full in
+round 1 (a spell running when the fight starts ends at the hero's round-11 turn start, whatever the initiative order, as
+does one given 10 rounds then) and at the duration less one later; outside a fight nothing counts, and a saved count
+reads at most 14,400 rounds (a day). `start_combat` says what it counts for the sheet's spell, with the call that gives
+fewer rounds, or, for one the data says needs no Concentration (an older save's Mage Armor), the refusal and the call
+that ends it. `end_combat` ends the hero's spell with a minute or less left ("runs out after the fight") and names a
+longer one, and NPCs still concentrating, for the DM. When a spell ends in a DM tool's result, the DM is told which map
+areas share its name (with the `update_map effects_end` call, each label once; a label more than one area carries is
+flagged, since the call ends them all and any that isn't the spell's is placed again with `resolve_area` as a lasting
+area, rolling no saves for it; the app never removes one), which conditions name it in their source or duration
+(skipping those the same call added), a Shield of Faith on the hero another caster may have held, and an AC set by hand
+that may have counted it (not for a spell the hero holds a record of). For an NPC removed from the fight or still
+concentrating when it ends, the DM is told the conditions to remove, and the hero's Shield of Faith to end, when that
+spell ends. A sheet-side end (the toggle, the chip's ×, 0 HP, an Incapacitating condition, death by Exhaustion or by a
+Hit Point maximum of 0, lowered or when Aid ends) names the hero's own conditions that name the spell and adds one
+conditional `effects_end` clause, which says it ends every area of that name, since the sheet can't see the fight to
+tell the hero's area from another caster's (none for Shield of Faith). *AC from spells* is `Character.acSpells` (Mage
+Armor, Shield of Faith; `ac_spells_add` / `ac_spells_end`, and the sheet's chips), counted inside `computeArmorClass`:
+Mage Armor is one more unarmored base (13 + DEX, never while armor is worn, and not ended by putting armor on: the DM
+ends it), Shield of Faith a +2 part after the items'. `armorClass` stays the AC in force, so every reader and older
+devices read one number, and the formula's whole ` + ` parts ("Mage Armor: 13", "Shield of Faith 2") say which spells it
+counts. One rule in `syncArmorClass` handles every change: the spells' change in AC is worked out first, from the spells
+added and the ended ones the AC counted. A spell added that a hand-set formula already names in the DM's own words (an
+older save's "set by the DM: Shield of Faith and Haste") is taken to be in it while that AC is above what gear and
+features gave, or the armor is unknown (one no higher can't hold the spell, which is added as below): the AC becomes
+derived when the armor is known and the computed AC equals it, else it is kept, the spell's part is added and the DM is
+warned (with the computed AC when the armor is known). When the app takes a counted spell off a formula whose DM words
+still name it, it leaves the part "Shield of Faith ended", so those words stop counting it: the next casting adds the +2
+again and its end takes it off once. Unknown armor or a hand-set AC moves by the change (armor it can't identify, put on
+or renamed, keeps the counted parts, its own part giving the AC less their bonuses: "Elven Chain (stats unknown — AC
+kept at 16) + Shield of Faith 2" at 18); otherwise the reworded warning. A hand-set or unknown-armor formula drops "Mage
+Armor: 13" once Mage Armor's record ends or armor goes on. `armor_class` sent with `ac_spells_add` or `ac_spells_end` is
+refused (the spells first, then the AC), and restating the AC kept for unknown armor keeps the counted parts. The hero's
+Shield of Faith ends with the hero's Concentration on every path (`afterConcentrationEnds`: 0 HP, death, an
+Incapacitating condition, another spell, removing the spell, a Long Rest, the countdown), except the sheet's spell swaps
+(at a level-up, after a Long Rest), which keep the Concentration and the record: SRD Concentration lists what ends it,
+and a swap isn't among them. A Long Rest ends both, Shield of Faith first (Mage Armor's 8 hours). The concentration chip
+folds in only Shield of Faith, and its × and the Spells tab's Stop ask twice while it carries the +2 (the Stop's label
+adds "not counted" when the AC doesn't count it, as the chip does). The status line reads "AC 17 (Mage Armor, Shield of
 Faith)" and the DM's combat view "Concentrating: Hold Person (7 rounds left)" / "Bless: 7 rounds left"; the player's
 view adds nothing. Without records, prompts, `<game_state>`, summaries and the sheet text are byte for byte as before.
 

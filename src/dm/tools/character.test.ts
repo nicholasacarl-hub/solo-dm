@@ -1418,6 +1418,41 @@ describe("the hero's no-Concentration refusal reads the name as given, never a n
     );
   });
 
+  it('records a name the rules data doesn\'t know as the sheet\'s spell it matches, so "Faith" is Shield of Faith and its +2 ends with it', async () => {
+    // srd:spell:shield-of-faith: "Concentration, up to 10 minutes"; srd:rule:concentration: "If the effect's creator
+    // loses Concentration, the effect ends".
+    const h = withSrdSpells({ character: cleric(null), state: { combat: sampleCombat() } });
+    const ac = h.sheet().armorClass;
+    const out = await h.run('update_character', { concentration: 'Faith' });
+    expect(out.content).toContain('Concentrating on Shield of Faith.\nShield of Faith: about 10 minutes left.');
+    expect(h.sheet().spellcasting?.concentratingOn).toBe('Shield of Faith');
+    expect(h.s().combat?.combatants.find((c) => c.isPlayer)?.concentrationCountdown).toEqual({ spell: 'Shield of Faith', roundsLeft: 100 });
+    await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+    expect(h.sheet().armorClass).toBe(ac + 2);
+    // "Faith" again is the same spell again, a recast: nothing ends and the count restarts (as "Shield of Faith" would).
+    await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Shield of Faith', rounds: 3 });
+    await h.run('update_character', { concentration: 'Faith' });
+    expect(h.sheet()).toMatchObject({ armorClass: ac + 2, acSpells: ['Shield of Faith'] });
+    expect(h.s().combat?.combatants.find((c) => c.isPlayer)?.concentrationCountdown).toEqual({ spell: 'Shield of Faith', roundsLeft: 100 });
+    await h.run('update_character', { concentration: null });
+    expect(h.sheet().armorClass).toBe(ac);
+    expect(h.sheet().acSpells ?? []).toEqual([]);
+  });
+
+  it('records a spell the rules data finds by its own name, as an NPC\'s is (srd:spell:hold-person: "Concentration, up to 1 minute")', async () => {
+    const h = withSrdSpells({ character: wizardWith(), state: { combat: sampleCombat() } });
+    expect((await h.run('update_character', { concentration: 'hold person (3rd level)' })).content).toContain('Concentrating on Hold Person.\nHold Person: 10 rounds left.');
+    expect(h.sheet().spellcasting?.concentratingOn).toBe('Hold Person');
+    // srd:spell:invisibility: "Concentration, up to 1 hour".
+    const lower = withSrdSpells({ character: wizardWith() });
+    await lower.run('update_character', { concentration: 'invisibility' });
+    expect(lower.sheet().spellcasting?.concentratingOn).toBe('Invisibility');
+    // A name neither the rules data nor the sheet knows is recorded as given.
+    const homebrew = withSrdSpells({ character: wizardWith() });
+    await homebrew.run('update_character', { concentration: 'Veil of Thorns' });
+    expect(homebrew.sheet().spellcasting?.concentratingOn).toBe('Veil of Thorns');
+  });
+
   it("uses the sheet's link to its entry for a spell of exactly the name given (srd:spell:mage-armor: \"Duration: 8 hours\")", async () => {
     // A copy spelled "Mage Armour" on the sheet, linked to the SRD's Mage Armor (KnownSpell.id is the entry's id).
     const sc = sampleCharacter().spellcasting!;
