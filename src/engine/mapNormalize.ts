@@ -499,29 +499,32 @@ function mapFields(raw: Raw, dims: Dims | null): Partial<Combatant> {
 /** The most of a spell's name a Concentration record keeps. */
 const SPELL_NAME_MAX = 80;
 
-/** A positive whole number, or undefined. */
-function positive(value: unknown): number | undefined {
-  return isFiniteNumber(value) && Number.isInteger(value) && value > 0 ? value : undefined;
+/** The most rounds a countdown keeps: a day (14,400 rounds), the DM tools' cap on update_combat's `rounds`. */
+const ROUNDS_MAX = 14_400;
+
+/** A positive whole number of rounds, at most ROUNDS_MAX (a hand-edited 1e21 still counts down), or undefined. */
+function roundsLeftOf(value: unknown): number | undefined {
+  return isFiniteNumber(value) && Number.isInteger(value) && value > 0 ? Math.min(value, ROUNDS_MAX) : undefined;
 }
 
 /**
  * The Concentration fields of one combatant: `concentration` on NPCs and monsters only (the spell as trimmed text of
- * 1–80 characters, else no record; `roundsLeft` a positive integer, else left out), `concentrationCountdown` on the
- * hero only (isPlayer), with both its fields, else left out.
+ * 1–80 characters, else no record; `roundsLeft` a positive integer, at most 14,400, else left out),
+ * `concentrationCountdown` on the hero only (isPlayer), with both its fields, else left out.
  */
 function concentrationFields(raw: Raw): Partial<Combatant> {
   const fields: Partial<Combatant> = {};
   if (raw.isPlayer === true) {
     const countdown = isRecord(raw.concentrationCountdown) ? raw.concentrationCountdown : null;
     const spell = countdown ? text(countdown.spell, SPELL_NAME_MAX) : undefined;
-    const roundsLeft = countdown ? positive(countdown.roundsLeft) : undefined;
+    const roundsLeft = countdown ? roundsLeftOf(countdown.roundsLeft) : undefined;
     if (spell && roundsLeft !== undefined) fields.concentrationCountdown = { spell, roundsLeft };
     return fields;
   }
   const held = isRecord(raw.concentration) ? raw.concentration : null;
   const spell = held ? text(held.spell, SPELL_NAME_MAX) : undefined;
   if (held && spell) {
-    const roundsLeft = positive(held.roundsLeft);
+    const roundsLeft = roundsLeftOf(held.roundsLeft);
     fields.concentration = roundsLeft === undefined ? { spell } : { spell, roundsLeft };
   }
   return fields;

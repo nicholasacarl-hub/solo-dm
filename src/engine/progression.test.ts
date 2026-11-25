@@ -531,16 +531,51 @@ describe('applyLongRest ends the AC spells (srd:spell:mage-armor; srd:spell:shie
     expect(r.events[1].type).toBe('rest');
   });
 
-  it('every AC spell ends, each with its own step, and the Concentration on Shield of Faith with them', () => {
+  it('every AC spell ends, each with its own step, the bonus before the base, and the Concentration on Shield of Faith with them', () => {
     let c = setConcentration(mira(), 'Shield of Faith').character;
     c = addAcSpell(addAcSpell(c, 'Mage Armor').character, 'Shield of Faith').character;
     expect(c.armorClass).toBe(17);
     const r = applyLongRest(c);
     expect(r.character).toMatchObject({ armorClass: 12, spellcasting: { concentratingOn: null } });
     expect(r.character).not.toHaveProperty('acSpells');
-    expect(messages(r).slice(0, 2)).toEqual(['Mage Armor ends: AC 17 → 14', 'Shield of Faith ends: AC 14 → 12']);
+    // Shield of Faith's +2 comes off first, then Mage Armor's base 13 + DEX goes.
+    expect(messages(r).slice(0, 2)).toEqual(['Shield of Faith ends: AC 17 → 15', 'Mage Armor ends: AC 15 → 12']);
     expect(messages(r)[2]).toMatch(/^Long rest: .*Concentration on Shield of Faith ended/);
     expect(r.events).toHaveLength(3);
+  });
+
+  it("ends Shield of Faith before Mage Armor, so a hand-set AC's warning gives the numbers the rest leaves (srd:spell:shield-of-faith; srd:spell:mage-armor)", () => {
+    // Mage Armor 15 + Shield of Faith 2, then the DM sets 19 for Haste (srd:spell:haste: "+2 bonus to Armor Class"):
+    // the hand-set formula keeps both parts ("set by the DM: Haste + Mage Armor: 13 + Shield of Faith 2").
+    let c = setConcentration(mira(), 'Haste').character;
+    c = addAcSpell(addAcSpell(c, 'Mage Armor').character, 'Shield of Faith').character;
+    c = { ...c, armorClass: 19, acFormula: 'set by the DM: Haste + Mage Armor: 13 + Shield of Faith 2' };
+    const r = applyLongRest(c);
+    // The +2 comes off the hand-set AC (19 → 17); Mage Armor's end can't move a hand-set AC (a base isn't a delta), so
+    // it is kept at 17 with what gear gives once both have ended (12), and its part leaves the formula.
+    expect(r.character).toMatchObject({ armorClass: 17, acFormula: 'set by the DM: Haste' });
+    expect(messages(r)).toEqual([
+      'Shield of Faith ends: AC 19 → 17',
+      'Mage Armor ends: AC stays 17',
+      expect.stringMatching(/^Long rest: .*Concentration on Haste ended/),
+      "AC kept at 17: it differs from the 15 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 12 (10 + DEX 2); update the AC if that is right.",
+      'AC 17 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).',
+    ]);
+  });
+
+  it("gives no reminder for a Shield of Faith whose record the rest ended, even under an old save's words naming it", () => {
+    // An old save's "set by the DM: Shield of Faith and Haste" 20 on Chain Mail 16, then recorded: kept at 20 with the
+    // part counted (srd:rule:casting-spells-effects-combining-spell-effects). The rest takes the 2 off once
+    // (srd:spell:shield-of-faith: "+2 bonus to AC"), and no reminder asks for it again.
+    const old = setConcentration(
+      mira({ armorTraining: ['Heavy armor'], inventory: [mail], armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste' }),
+      'Shield of Faith',
+    ).character;
+    const recorded = addAcSpell(old, 'Shield of Faith').character;
+    expect(recorded).toMatchObject({ armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste + Shield of Faith 2' });
+    const r = applyLongRest(recorded);
+    expect(r.character).toMatchObject({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith and Haste' });
+    expect(messages(r)).toEqual(['Shield of Faith ends: AC 20 → 18', expect.stringMatching(/^Long rest: .*Concentration on Shield of Faith ended/)]);
   });
 
   it('an AC set by hand for Mage Armor or Shield of Faith with no record behind it (an old save) gets a reminder after the rest', () => {

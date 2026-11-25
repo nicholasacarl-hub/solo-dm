@@ -343,6 +343,32 @@ describe('normalizeCombatState (app convention: lenient saves)', () => {
     }
   });
 
+  it('keeps a count of rounds to a day at most, so a hand-edited one still counts down (14,400 rounds: the DM tools\' cap; srd:rule:combat-the-order-of-combat: "A round represents about 6 seconds")', () => {
+    const state = sampleCombat();
+    const [mira, bandit1] = state.combatants;
+    const read = (roundsLeft: number) =>
+      normalizeCombatState({
+        ...state,
+        combatants: [
+          { ...mira, concentrationCountdown: { spell: 'Bless', roundsLeft } },
+          { ...bandit1, concentration: { spell: 'Hold Person', roundsLeft } },
+        ],
+      }).combatants;
+    for (const [given, kept] of [
+      [1e21, 14_400],
+      [14_401, 14_400],
+      [14_400, 14_400],
+      [600, 600],
+    ] as const) {
+      const [hero, npc] = read(given);
+      expect(hero.concentrationCountdown, String(given)).toEqual({ spell: 'Bless', roundsLeft: kept });
+      expect(npc.concentration, String(given)).toEqual({ spell: 'Hold Person', roundsLeft: kept });
+    }
+    // Idempotent: the clamped state reads the same again.
+    const once = normalizeCombatState({ ...state, combatants: [{ ...bandit1, concentration: { spell: 'Hold Person', roundsLeft: 1e21 } }] });
+    expect(normalizeCombatState(once)).toEqual(once);
+  });
+
   it('keeps the rest of the combat as it was, unknown fields included', () => {
     const state = { ...sampleCombat(), futureField: { keep: true } };
     state.combatants[0] = { ...state.combatants[0], notes: 'Lucky.', futureNote: 1 } as CombatState['combatants'][number];

@@ -14,7 +14,7 @@ import { nameKey } from '@/lib/id';
 import { safeEnd } from '@/lib/text';
 import { currentCombatant, findCombatant } from './combat';
 import { INCAPACITATING_CONDITIONS, conditionKey, conditionName, matchStandardCondition } from './conditions';
-import { computeArmorClass } from './rules';
+import { computeArmorClass, handSetNames } from './rules';
 import { namesPhrase } from './util';
 
 // ---------------------------------------------------------------------------
@@ -184,8 +184,12 @@ export interface ConcentrationTurn {
  * - An NPC or monster whose Concentration is counted: one fewer; at 0 it ends (`ended`).
  * - The hero: no Concentration on the sheet drops the countdown. A countdown for the sheet's spell counts down; at 0 it
  *   is dropped and the spell comes back as `heroEnded`. Without one (or with one for another spell, stale), `rounds`
- *   starts it at rounds − 1, for the spell was cast before this turn start (on her last turn, or before the fight; 0
- *   or less ends it); without `rounds` the app doesn't count it.
+ *   starts it lazily; without `rounds` the app doesn't count it. At a turn start in round 1 it starts at the full
+ *   `rounds`: a spell already running when the fight starts lasts the hero's first `rounds` turns, whether the hero
+ *   acts first (that round-1 turn start is never counted, so the count starts at rounds − 1 at the hero's round-2 turn
+ *   start) or not (it starts here, in round 1). Later it starts at rounds − 1: the spell was cast before this turn
+ *   start, on the hero's last turn (0 or less ends it). Either way Bless running at start_combat ends as the hero's
+ *   turn starts in round 11.
  */
 export function concentrationTurnStart(before: CombatState, after: CombatState, hero: HeroConcentration): ConcentrationTurn {
   const was = currentCombatant(before);
@@ -210,7 +214,8 @@ export function concentrationTurnStart(before: CombatState, after: CombatState, 
   }
   const rounds = positiveRounds(hero.rounds);
   if (rounds === undefined) return { state: drop(), ended: [] };
-  if (rounds - 1 > 0) return { state: withField(after, now.id, 'concentrationCountdown', { spell, roundsLeft: rounds - 1 }), ended: [] };
+  const left = after.round <= 1 ? rounds : rounds - 1;
+  if (left > 0) return { state: withField(after, now.id, 'concentrationCountdown', { spell, roundsLeft: left }), ended: [] };
   return { state: drop(), ended: [], heroEnded: spell };
 }
 
@@ -279,21 +284,20 @@ export function conditionsNaming(
   return out;
 }
 
-const HAND_SET = 'set by the DM:';
-
 /**
- * The hero's AC was set by hand for `spell` (its formula is "set by the DM: …" and names the spell as whole words:
- * Haste, Slow, an old save's Shield of Faith or Mage Armor), so the app can't take the spell back out of it itself:
- * the stored AC and what armor, abilities and the recorded spells give instead. Undefined otherwise, and when the two
- * are the same (nothing to set back; armor the app can't identify keeps the stored AC).
+ * The hero's AC was set by hand for `spell` (its formula is "set by the DM: …" and the DM's words name the spell as
+ * whole words: Haste, Slow, an old save's Shield of Faith or Mage Armor; handSetNames), so the app can't take the spell
+ * back out of it itself: the stored AC and what armor, abilities and the recorded spells give instead. The app's own
+ * parts never count ("set by the DM: shrine blessing +1 + Shield of Faith 2" isn't set for Shield of Faith: the app
+ * takes that +2 off itself). Undefined otherwise, and when the two are the same (nothing to set back; armor the app
+ * can't identify keeps the stored AC).
  */
 export function handSetAcNaming(
   c: Character,
   spell: string,
   catalog: readonly EquipmentOption[] = [],
 ): { stored: number; computed: number } | undefined {
-  const formula = typeof c.acFormula === 'string' ? c.acFormula : '';
-  if (!formula.startsWith(HAND_SET) || !namesPhrase(formula.slice(HAND_SET.length), spell)) return undefined;
+  if (!handSetNames(c.acFormula, spell)) return undefined;
   const computed = computeArmorClass(c, catalog).ac;
   return computed === c.armorClass ? undefined : { stored: c.armorClass, computed };
 }

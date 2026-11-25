@@ -22,7 +22,7 @@ import { newId, nameKey, slugify } from '@/lib/id';
 import { afterConcentrationEnds, endAcSpell, endHpMaxAdjustmentsWhere, handSetAcReminder, isAlertFeat, isToughFeat } from './character';
 import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, rulesClassFor, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
-import { abilityModifier, acSpells, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
+import { AC_SPELLS, abilityModifier, acSpellNamed, acSpells, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
 import { recomputeSlots, resetSpellSlots } from './spellcasting';
 import { clamp, formatInt, gameEvent, listJoin, toInt, touch, warning } from './util';
 
@@ -684,17 +684,21 @@ export function applyLongRest(start: Character): { character: Character; events:
     ...(spellcasting ? { spellcasting } : {}),
   });
 
-  // The AC spells end, then what ends with the Concentration (its hand-set AC reminder, worked out on the AC the rest
-  // leaves), then a reminder for an AC set by hand for an AC spell that had no record.
+  // The AC spells end, the bonus ones before the base ones (Shield of Faith, then Mage Armor: an AC set by hand loses
+  // the +2 first, so the warning Mage Armor's end gives has the numbers the rest leaves); then what ends with the
+  // Concentration (its hand-set AC reminder, worked out on the AC the rest leaves; none for an AC spell whose record the
+  // rest just ended, whose +2 the app took off itself); then a reminder for an AC set by hand for an AC spell that had
+  // no record.
   const recorded = acSpells(c);
   const acEvents: GameEvent[] = [];
-  for (const name of recorded) {
+  for (const name of [...recorded.filter((n) => AC_SPELLS[n].bonus), ...recorded.filter((n) => !AC_SPELLS[n].bonus)]) {
     const ended = endAcSpell(character, name);
     character = ended.character;
     acEvents.push(...ended.events);
   }
   const concentration = sc?.concentratingOn;
-  if (concentration) {
+  const heldRecord = concentration ? acSpellNamed(concentration) : undefined;
+  if (concentration && !(heldRecord && recorded.includes(heldRecord))) {
     const ended = afterConcentrationEnds(character, concentration);
     character = ended.character;
     acEvents.push(...ended.events);

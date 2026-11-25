@@ -326,6 +326,37 @@ describe('concentrationTurnStart: a spell ends at its caster\'s turn start (srd:
       expect(t.heroEnded).toBeUndefined();
       expect(find(t.state, 'hero').concentrationCountdown).toEqual({ spell: 'Bless', roundsLeft: 5 });
     });
+
+    it("Bless already running when the fight starts lasts the hero's first 10 turns whatever the initiative order, ending as the hero's turn starts in round 11 (H6/C2/P2; srd:spell:bless: \"Concentration, up to 1 minute\"; srd:rule:combat-the-order-of-combat: \"A round represents about 6 seconds\")", () => {
+      // start_combat: "the app counts its 1 minute from <hero>'s first turn". The hero's turns with Bless, counted.
+      const until = (start: CombatState) => {
+        let state = start;
+        let heroTurns = currentCombatant(state)?.id === 'hero' ? 1 : 0; // round 1's first turn is never started (createCombat)
+        for (let i = 0; i < 60; i++) {
+          const t = advance(state, bless);
+          state = t.state;
+          if (t.heroEnded) return { round: state.round, heroTurns };
+          if (currentCombatant(state)?.id === 'hero') heroTurns++;
+        }
+        return { round: Infinity, heroTurns };
+      };
+      const heroFirst = createCombat([heroIn(17), npc('cf', 'Cultist Fanatic', 14), npc('b', 'Bandit', 9)]);
+      const heroSecond = createCombat([npc('cf', 'Cultist Fanatic', 14), heroIn(10), npc('b', 'Bandit', 9)]);
+      const heroLast = createCombat([npc('cf', 'Cultist Fanatic', 14), npc('b', 'Bandit', 9), heroIn(2)]);
+      for (const [order, start] of Object.entries({ heroFirst, heroSecond, heroLast })) {
+        expect(until(start), order).toEqual({ round: 11, heroTurns: 10 });
+      }
+      // The hero second: the round-1 turn start starts the count at the full 10 (later rounds start it at rounds − 1).
+      const firstTurn = advance(heroSecond, bless);
+      expect(firstTurn.state.round).toBe(1);
+      expect(find(firstTurn.state, 'hero').concentrationCountdown).toEqual({ spell: 'Bless', roundsLeft: 10 });
+      // A lone hero: round 1's turn isn't started, round 2's is (at rounds − 1), and it still ends in round 11.
+      expect(until(createCombat([heroIn(17)]))).toEqual({ round: 11, heroTurns: 10 });
+      // A spell lasting 1 round, running at a round-1 turn start, lasts that turn.
+      const short = advance(heroSecond, { spell: 'Readied Fire', rounds: 1 });
+      expect(short.heroEnded).toBeUndefined();
+      expect(find(short.state, 'hero').concentrationCountdown).toEqual({ spell: 'Readied Fire', roundsLeft: 1 });
+    });
   });
 });
 
@@ -411,5 +442,18 @@ describe('handSetAcNaming: an AC set by hand for a spell (srd:spell:haste: "+2 b
     // Nothing to set back: armor the app can't identify keeps the stored AC.
     const unknown = fighter({ armorClass: 18, acFormula: 'set by the DM: Haste', inventory: [{ ...mail, name: 'Elven Chain' }] });
     expect(handSetAcNaming(unknown, 'Haste')).toBeUndefined();
+  });
+
+  it("never reads the app's own parts as the DM's words: an ally's Shield of Faith the app counts isn't \"set by hand\" for it (E2; srd:rule:concentration: \"If the effect's creator loses Concentration, the effect ends\")", () => {
+    // Chain Mail 16, an ally's Shield of Faith recorded (+2), then the DM sets the AC by hand for something else.
+    const shrine = fighter({ acSpells: ['Shield of Faith'], armorClass: 19, acFormula: 'set by the DM: shrine blessing +1 + Shield of Faith 2' });
+    expect(handSetAcNaming(shrine, 'Shield of Faith')).toBeUndefined();
+    // srd:spell:slow: "it takes a -2 penalty to AC": Slow is the DM's word, Shield of Faith the app's part.
+    const slowed = fighter({ acSpells: ['Shield of Faith'], armorClass: 16, acFormula: 'set by the DM: Slow from the Stone Golem + Shield of Faith 2' });
+    expect(handSetAcNaming(slowed, 'Shield of Faith')).toBeUndefined();
+    expect(handSetAcNaming(slowed, 'Slow')).toEqual({ stored: 16, computed: 18 });
+    // An old save's words beside the app's part still name the spell.
+    const old = fighter({ acSpells: ['Shield of Faith'], armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste + Shield of Faith 2' });
+    expect(handSetAcNaming(old, 'Shield of Faith')).toEqual({ stored: 20, computed: 18 });
   });
 });

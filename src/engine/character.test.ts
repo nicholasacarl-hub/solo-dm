@@ -48,6 +48,7 @@ import {
 } from './character';
 import { applyLongRest, levelUp } from './progression';
 import { countedAcSpells } from './rules';
+import { characterStatusLine } from './summary';
 
 const mira = (overrides: Partial<Character> = {}) => sampleCharacter(overrides);
 /** Mira at 0 HP, unconscious and making death saves. */
@@ -1551,5 +1552,144 @@ describe("what ends with the hero's Concentration (srd:rule:concentration: \"If 
     const ended = setConcentration(both, null);
     expect(ended.character).toMatchObject({ armorClass: 18, acFormula: 'set by the DM: Haste' });
     expect(messages(ended)).toEqual(['No longer concentrating on Shield of Faith.', 'Shield of Faith ends: AC 20 → 18']);
+  });
+});
+
+describe('the AC rule under an AC set by hand, and what ends with the hero\'s Concentration (spell effects review)', () => {
+  const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
+  const mail: InventoryItem = { id: 'cm', name: 'Chain Mail', quantity: 1, weight: 55, category: 'armor', equipped: true };
+  /** In Chain Mail she is trained for: AC 16 worked out from it, unless `patch` says otherwise. */
+  const armored = (patch: Partial<Character> = {}) =>
+    mira({ armorTraining: ['Heavy armor'], inventory: [...mira().inventory, mail], armorClass: 16, acFormula: 'Chain Mail 16', ...patch });
+  /** A cleric's spells: no Shield, and Shield of Faith on the sheet (id "sof"). */
+  const clericSpells = (c: Character): Character => ({
+    ...c,
+    spellcasting: {
+      ...c.spellcasting!,
+      spells: [...c.spellcasting!.spells.filter((s) => s.name !== 'Shield'), { id: 'sof', name: 'Shield of Faith', level: 1, prepared: true, concentration: true }],
+    },
+  });
+  /** Concentrating on her own Shield of Faith, recorded. */
+  const faithful = (c: Character) => addAcSpell(setConcentration(c, 'Shield of Faith').character, 'Shield of Faith').character;
+
+  it('a Shield of Faith ending under a hand-set Slow takes its 2 off on every path, never turning the AC into Chain Mail 16 (E1; srd:spell:slow: "it takes a -2 penalty to AC"; srd:spell:shield-of-faith: "+2 bonus to AC")', () => {
+    // Slow first (the DM sets 14), then Shield of Faith; or Shield of Faith first (18), then the DM's 16 for Slow, which
+    // keeps the counted part (update_character armor_class). Either way 16 = Chain Mail's, by coincidence.
+    const slowFirst = () => faithful(armored({ armorClass: 14, acFormula: 'set by the DM: Slow from the Stone Golem' }));
+    const faithFirst = () => ({ ...faithful(armored()), armorClass: 16, acFormula: 'set by the DM: Slow from the Stone Golem + Shield of Faith 2' });
+    expect(slowFirst()).toMatchObject({ armorClass: 16, acFormula: 'set by the DM: Slow from the Stone Golem + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    for (const start of [slowFirst, faithFirst]) {
+      const paths = {
+        endAcSpell: endAcSpell(start(), 'Shield of Faith'),
+        'concentration null': setConcentration(start(), null),
+        '0 HP': applyDamage(start(), 12),
+        expire: expireConcentration(start(), 'Shield of Faith', 'its duration is up'),
+        'Long Rest': applyLongRest(start()),
+      };
+      for (const [path, r] of Object.entries(paths)) {
+        expect(r.character, path).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Slow from the Stone Golem' });
+        expect(r.character, path).not.toHaveProperty('acSpells');
+        expect(messages(r), path).toContain('Shield of Faith ends: AC 16 → 14');
+        expect(messages(r).filter((m) => m.includes('set by hand')), path).toEqual([]);
+      }
+    }
+  });
+
+  it("the record's end gives no hand-set reminder for Shield of Faith: the app took its 2 off once (srd:rule:concentration: \"If the effect's creator loses Concentration, the effect ends\")", () => {
+    // An old save's "set by the DM: Shield of Faith and Haste" 20 on Chain Mail 16, recorded: kept at 20, counted.
+    const old = faithful(armored({ armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste' }));
+    expect(old).toMatchObject({ armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste + Shield of Faith 2' });
+    const ended = setConcentration(old, null);
+    expect(ended.character).toMatchObject({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith and Haste' });
+    expect(messages(ended)).toEqual(['No longer concentrating on Shield of Faith.', 'Shield of Faith ends: AC 20 → 18']);
+    expect(messages(applyDamage(old, 12)).slice(1)).toEqual(['Concentration on Shield of Faith ends (Unconscious).', 'Shield of Faith ends: AC 20 → 18']);
+    // With no record, the old save's words still get the reminder (the app can't take the spell out itself).
+    const unrecorded = setConcentration(armored({ armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste' }), 'Shield of Faith').character;
+    expect(messages(setConcentration(unrecorded, null))).toEqual([
+      'No longer concentrating on Shield of Faith.',
+      'AC 20 was set by hand for Shield of Faith: if it counted Shield of Faith, set the AC back to 16 (armor and abilities).',
+    ]);
+  });
+
+  it("endAcSpell on a spell that isn't recorded reminds the DM of an AC set by hand for it (H2; srd:spell:shield-of-faith; srd:spell:mage-armor)", () => {
+    const old = armored({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith' });
+    expect(endAcSpell(old, 'shield of faith')).toEqual({
+      character: old,
+      events: [
+        { type: 'warning', message: "Shield of Faith isn't recorded." },
+        { type: 'warning', message: 'AC 18 was set by hand for Shield of Faith: if it counted Shield of Faith, set the AC back to 16 (armor and abilities).' },
+      ],
+    });
+    const robe = mira({ armorClass: 15, acFormula: 'set by the DM: Mage Armor' });
+    expect(messages(endAcSpell(robe, 'Mage Armor'))).toEqual([
+      "Mage Armor isn't recorded.",
+      'AC 15 was set by hand for Mage Armor: if it counted Mage Armor, set the AC back to 12 (armor and abilities).',
+    ]);
+    // Nothing to remind: a worked-out AC, or a hand-set one naming something else.
+    expect(messages(endAcSpell(armored({ armorClass: 18, acFormula: 'set by the DM: Haste' }), 'Shield of Faith'))).toEqual(["Shield of Faith isn't recorded."]);
+  });
+
+  it('a looser name for the spell already held is the same spell: nothing ends (H9; srd:rule:concentration)', () => {
+    const held = faithful(clericSpells(armored()));
+    expect(held).toMatchObject({ armorClass: 18, acSpells: ['Shield of Faith'], spellcasting: { concentratingOn: 'Shield of Faith' } });
+    for (const name of ['Shield', 'Faith', 'shield of faith', ' Shield-of-Faith ']) expect(setConcentration(held, name), name).toEqual({ character: held, events: [] });
+    // A name the sheet finds as another spell is another Concentration (Mira knows Shield).
+    const wizard = faithful(armored());
+    const shield = setConcentration(wizard, 'Shield');
+    expect(shield.character).toMatchObject({ armorClass: 16, spellcasting: { concentratingOn: 'Shield' } });
+    expect(messages(shield)).toEqual(['Concentration on Shield of Faith ends (started concentrating on Shield).', 'Shield of Faith ends: AC 18 → 16', 'Concentrating on Shield.']);
+    // A spell not on the sheet, restated as it was given: the same.
+    const blessed = setConcentration(mira(), 'Bless').character;
+    expect(setConcentration(blessed, 'bless')).toEqual({ character: blessed, events: [] });
+  });
+
+  it('removeSpellById keepConcentration: a spell swapped out of the prepared list goes on, with its Shield of Faith +2 (S2; srd:rule:concentration: "The following factors break Concentration" lists Another Concentration Effect, Damage, Incapacitated or Dead)', () => {
+    const held = faithful(clericSpells(armored()));
+    const kept = removeSpellById(held, 'sof', { keepConcentration: true });
+    expect(kept.events).toEqual([{ type: 'feature-used', message: 'Removed spell: Shield of Faith' }]);
+    expect(kept.character).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield of Faith 2', acSpells: ['Shield of Faith'], spellcasting: { concentratingOn: 'Shield of Faith' } });
+    expect(kept.character.spellcasting?.spells.some((s) => s.id === 'sof')).toBe(false);
+    // Without it, removing the spell still ends its Concentration (and the +2).
+    const ended = removeSpellById(held, 'sof');
+    expect(messages(ended)).toEqual(['Removed spell: Shield of Faith', 'Concentration on Shield of Faith ends.', 'Shield of Faith ends: AC 18 → 16']);
+    expect(ended.character.spellcasting?.concentratingOn).toBeNull();
+    expect(removeSpellById(held, 'sof', { keepConcentration: false }).events).toEqual(ended.events);
+  });
+
+  it("armor the app can't identify keeps a counted Shield of Faith in its formula, so the DM's AC for it and the spell's end agree (E4/S1; srd:spell:shield-of-faith; srd:magic-item:elven-chain: \"You gain a +1 bonus to Armor Class while you wear this armor\")", () => {
+    const elven: InventoryItem = { id: 'ec', name: 'Elven Chain', quantity: 1, category: 'armor', magic: true, equipped: false };
+    const start = addAcSpell(armored({ inventory: [...mira().inventory, mail, elven] }), 'Shield of Faith').character;
+    expect(start).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield of Faith 2' });
+    const on = updateItem(start, 'Elven Chain', { equipped: true }).character;
+    const swapped = updateItem(on, 'Chain Mail', { equipped: false });
+    expect(swapped.character).toMatchObject({ armorClass: 18, acFormula: 'Elven Chain (stats unknown — AC kept at 18) + Shield of Faith 2' });
+    expect(countedAcSpells(swapped.character)).toEqual(['Shield of Faith']);
+    expect(characterStatusLine(swapped.character)).toContain(' · AC 18 (Shield of Faith) · ');
+    expect(messages(swapped)).toContain("AC kept at 18: Elven Chain's armor stats are unknown, so set the AC by hand.");
+    // The DM sets 19 for it (Chain Mail 16 + 1, and the +2 still counted: the hand-set formula keeps the part).
+    const set = { ...swapped.character, armorClass: 19, acFormula: 'set by the DM: Elven Chain + Shield of Faith 2' };
+    const ended = endAcSpell(set, 'Shield of Faith');
+    expect(ended.character).toMatchObject({ armorClass: 17, acFormula: 'set by the DM: Elven Chain' });
+    expect(messages(ended)).toEqual(['Shield of Faith ends: AC 19 → 17']);
+  });
+
+  it("armor put on over a hand-set AC keeping Mage Armor's part drops it: the status line no longer counts Mage Armor (E5/H7/S7; srd:spell:mage-armor: \"a willing creature who isn't wearing armor\")", () => {
+    const leather: InventoryItem = { id: 'la', name: 'Leather Armor', quantity: 1, category: 'armor', equipped: false };
+    const robed = addAcSpell(mira({ armorTraining: ['Light armor'], inventory: [...mira().inventory, leather] }), 'Mage Armor').character;
+    // The DM sets 17 for Haste (srd:spell:haste: "+2 bonus to Armor Class"): the hand-set formula keeps the counted part.
+    const hasted = { ...robed, armorClass: 17, acFormula: 'set by the DM: Haste + Mage Armor: 13' };
+    expect(characterStatusLine(hasted)).toContain(' · AC 17 (Mage Armor) · ');
+    const donned = updateItem(hasted, 'Leather Armor', { equipped: true });
+    expect(donned.character).toMatchObject({ armorClass: 17, acFormula: 'set by the DM: Haste', acSpells: ['Mage Armor'] });
+    expect(countedAcSpells(donned.character)).toEqual([]);
+    expect(characterStatusLine(donned.character)).toContain(' · AC 17 · ');
+    expect(characterStatusLine(donned.character)).not.toContain('Mage Armor');
+    expect(messages(donned)).toContain(
+      "AC kept at 17: it differs from the 15 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 13 (Leather Armor 11 + DEX 2); update the AC if that is right.",
+    );
+    // Ending Mage Armor then moves nothing and leaves no part behind.
+    const ended = endAcSpell(donned.character, 'Mage Armor');
+    expect(ended.character).toMatchObject({ armorClass: 17, acFormula: 'set by the DM: Haste' });
+    expect(messages(ended)).toEqual(['Mage Armor ends: AC stays 17']);
   });
 });
