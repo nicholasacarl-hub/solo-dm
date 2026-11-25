@@ -21,7 +21,8 @@ vibe-coding session.
   "Action Surge (two uses)" / "Indomitable" entries in place at Fighter 13 and 17.
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
   DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
-  Signature Spells, Evocation Savant's free spells, Magic Initiate's spell change and its picks when the feat is taken
+  Signature Spells, copying a spell into a spellbook and Evocation Savant's free spells (the DM records those as
+  "Wizard (copied)", outside each level's two), Magic Initiate's spell change and its picks when the feat is taken
   at an Ability Score Improvement, the High Elf's cantrip, Blessed and Druidic Warrior cantrips, Circle of the
   Land's spells, a Divine or Primal Order chosen at a multiclass level 1, and third casters' counts (their tables
   aren't stored). Spell save DCs per class on the sheet; DM-made

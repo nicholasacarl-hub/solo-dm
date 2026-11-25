@@ -327,25 +327,33 @@ app didn't count), never sets a total, and keeps no record.
 ("choose additional spells … until the number of spells on your list matches the number on the table"): cantrips up
 to the Cantrips column plus a chosen Divine or Primal Order's extra cantrip, prepared spells up to the Prepared Spells
 column, and a Wizard's spellbook up to six plus two per level after 1. The class's spells are those whose source is
-its name and that aren't always prepared; the highest spell level is the class's own (`classSpellLevelCap`: its
-single-class slots, or a Warlock's Slot Level), never the combined multiclass slots. A level-up (the dialog or the
-DM's `level_up`) leaves only a mark, `Spellcasting.spellPicks`: one entry per class, the newest level's, with that
-level's swaps (a Bard, Sorcerer or Warlock may replace one spell; a Bard, Cleric, Druid, Sorcerer or Warlock one
-cantrip), all read from the class's own Spellcasting text. So a hero from before this feature owes nothing until its
-next level-up, and then catches up to the table; deferring, a second level, a spell the DM records under the class's
-name or a prepared checkbox never makes a count wrong, and the mark settles itself once nothing is owed. In the same
-edit, the always-prepared spells that a class feature, an SRD subclass's table or a book subclass grants up to the
-class level are added, or, when the sheet already holds one as an ordinary pick, turned always prepared, so it stops
-counting. The player chooses on the sheet: the level-up dialog's summary continues into the choices in the same
-dialog, and while any are open the Spells panel shows a banner, the sheet header a note and the Spells tab a dot. A
-pick never takes a name the sheet holds (one spell per name), and a spell given up is removed by its id. A Long Rest
-change (Cleric and Druid any prepared spell, Paladin and Ranger one, the Wizard a cantrip; the Wizard's prepared list
-changes with the checkboxes) is one-for-one, and offered rather than gated, since rests happen only through
-`take_rest`. The DM learns through result and notice text only, so `DM_TOOLS` doesn't change: `level_up` says what is
-owed with the sheet's numbers and how to record choices the player names (spells_add, source the class's name,
-prepared false for a spell only added to the spellbook), and drops the generic "Review your … cantrips and prepared
-spells" line wherever the class could be counted; `take_rest long` says which classes may change prepared spells; a
-re-added spell keeps its source and prepared flag.
+its name, that aren't always prepared and whose level the class has slots for; the highest spell level is the class's
+own (`classSpellLevelCap`: its single-class slots, or a Warlock's Slot Level), never the combined multiclass slots, so
+a Mystic Arcanum recorded under "Warlock" counts nowhere. A spellbook counts the spells its levels added, always
+prepared ones too (the book still holds them); a spell copied into it, recorded as "Wizard (copied)", comes on top of
+each level's two and counts only as a prepared spell. Each spellbook spell still owed keeps the limit of the level it
+belongs to (`bookCaps`: the book's spells take the lowest places they fit), so a choice put off across a level, or an
+older hero's catch-up, can't fill earlier levels with the newest spell level. A level-up (the dialog or the DM's
+`level_up`) leaves only a mark, `Spellcasting.spellPicks`: one entry per class, the newest level's, with that level's
+swaps (a Bard, Sorcerer or Warlock may replace one spell on its list, a prepared one; a Bard, Cleric, Druid, Sorcerer
+or Warlock one cantrip), all read from the class's own Spellcasting text. So a hero from before this feature owes
+nothing until its next level-up, and then catches up to the table; deferring, a second level or a prepared checkbox
+never makes a count wrong. In the same edit (`levelSpellsEdit`), the always-prepared spells that a class feature, an
+SRD subclass's table or a book subclass grants up to the class level are added, or, when the sheet already holds one
+as an ordinary pick, turned always prepared, so it stops counting; a spellbook's keeps its source and stays in the
+book, and another class whose pick was turned is marked open (without swaps) for the place it left. The player
+chooses on the sheet: the level-up dialog's summary continues into the choices in the same dialog, and while any are
+open the Spells panel shows a banner, the sheet header a note and the Spells tab a dot. A pick never takes a name the
+sheet holds (one spell per name), and a spell given up is removed by its id. A Long Rest change (Cleric and Druid any
+prepared spell, Paladin and Ranger one, the Wizard a cantrip; the Wizard's prepared list changes with the checkboxes)
+is one-for-one, and offered rather than gated, since rests happen only through `take_rest`. The DM learns through
+result and notice text only, so `DM_TOOLS` doesn't change: `level_up` says what is owed with the sheet's numbers (each
+class it left open, the earlier levels' book limits too) and how to record choices the player names (spells_add,
+source the class's name, prepared false for a spell only added to the spellbook, "Wizard (copied)" for a copy), and
+drops the generic "Review your … cantrips and prepared spells" line wherever the class could be counted; spells the DM
+records for a class with open choices settle them as the sheet's form does (`settleSpellPicks`: closed once nothing is
+owed, otherwise the level's swaps lapse), and `update_character` says so; `take_rest long` says which classes may
+change prepared spells; a re-added spell keeps its source and prepared flag.
 
 ### Player-side controls that talk to the DM
 
