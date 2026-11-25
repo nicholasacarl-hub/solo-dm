@@ -12,9 +12,12 @@ import {
   applyHealing,
   changeExhaustion,
   classSpellLevelCap,
+  conditionKey,
+  conditionsNaming,
   countedAcSpells,
   endAcSpell,
   endHpMaxAdjustments,
+  matchStandardCondition,
   removeSpellById,
   saveSourcesChangeText,
   syncArmorClass,
@@ -28,8 +31,10 @@ import {
   sheetCutsText,
   setTempHp,
   spendSlot,
+  type ConditionNaming,
   type HpMaxChange,
 } from '@/engine';
+import { namesPhrase } from '@/engine/util';
 import {
   bookSpellsOf,
   classSpellRules,
@@ -74,7 +79,8 @@ function quote(text: string, max = 60): string {
 
 // ---------------------------------------------------------------------------
 // What ends with the hero's Concentration (srd:rule:concentration: "If the effect's creator loses Concentration, the
-// effect ends"): the toggle or the chip's ×, damage to 0 HP, an Incapacitating condition, death by Exhaustion
+// effect ends"): the toggle or the chip's ×, damage to 0 HP, an Incapacitating condition, death by Exhaustion or by a
+// Hit Point maximum of 0
 // ---------------------------------------------------------------------------
 
 /** The engine's event that ends the hero's Concentration (setConcentration, and its end at 0 HP, death or a condition). */
@@ -85,14 +91,20 @@ function endsConcentration(e: GameEvent): boolean {
 /** What a sheet edit's engine result ended with the hero's Concentration. */
 interface ConcentrationEnded {
   spell: string;
+  /** Where the end starts among the engine's events: those before it are what the edit did first. */
+  at: number;
   /** The engine's words from the end on: "Concentration on Bless ends (Unconscious)", "Shield of Faith ends: AC 14 → 12". */
   said: string[];
   /** Its warnings from the end on (an AC set by hand for the spell): the DM's, who can set the AC; the player can't. */
   forDm: string[];
   /** A warning before the end: still the player's. */
   toast?: string;
-  /** The AC spell whose record ended with it (Shield of Faith on the hero, folded into her Concentration). */
+  /** The AC spell whose record ended with it (Shield of Faith on the hero, folded into the hero's Concentration). */
   acSpell?: string;
+  /** The hero died with it: no spell protects the hero any more. */
+  dead: boolean;
+  /** The hero's own conditions that name the spell (their source or duration): the ones it may have imposed. */
+  conditions: ConditionNaming[];
 }
 
 function concentrationEnded(before: Character, after: Character, events: readonly GameEvent[]): ConcentrationEnded | null {
@@ -104,23 +116,43 @@ function concentrationEnded(before: Character, after: Character, events: readonl
   const kept = acSpells(after);
   return {
     spell,
+    at,
     // A new Concentration (a switch's "Concentrating on Detect Magic.") is the notice's own words.
     said: from.filter((e) => e.type !== 'warning' && e.type !== 'condition-added').map((e) => e.message.trim().replace(/\.$/, '')),
     forDm: from.filter((e) => e.type === 'warning').map((e) => e.message.replace(/\s+/g, ' ').trim()),
     toast: firstWarning(events.slice(0, at)),
     acSpell: acSpells(before).find((n) => !kept.includes(n)),
+    dead: after.deathSaves.dead,
+    // The sheet sees no fight: the hero's conditions alone (the DM's tools name a combatant's).
+    conditions: conditionsNaming(spell, after, null),
   };
 }
 
 /**
+ * "Mira Voss is Invisible (source: Invisibility)": a condition that names the ended spell, and the field that names
+ * it, as the DM's tools word it (a homebrew one `has "Glowing"`), on one line.
+ */
+function conditionNamingText(n: ConditionNaming, spell: string): string {
+  const { id, source, duration } = n.condition;
+  const standard = matchStandardCondition(id);
+  const state = standard && standard.id === conditionKey(id) ? `is ${conditionName(id)}` : `has "${id.trim()}"`;
+  const detail = namesPhrase(source, spell) ? `source: ${source?.trim()}` : `duration: ${duration?.trim() ?? ''}`;
+  return `${n.who} ${state} (${detail})`.replace(/\s+/g, ' ');
+}
+
+/**
  * A notice with what ended with the hero's Concentration, on its one line: the engine's words (but the end itself when
- * the notice already says it), a hint to record a Shield of Faith that still protects the hero again (the sheet can't
- * tell her own casting from another caster's), one conditional clause for an area the spell may have left (the sheet
- * can't see the map; Shield of Faith leaves none), then the reminder about an AC set by hand for the spell.
+ * the notice already says it), a hint to record a Shield of Faith that still protects a living hero again (the sheet
+ * can't tell the hero's own casting from another caster's), each of the hero's conditions that names the spell, with
+ * the call that removes it, one conditional clause for an area the spell may have left (the sheet can't see the map;
+ * Shield of Faith leaves none), then the reminder about an AC set by hand for the spell.
  */
 function withConcentrationEnd(head: string, ended: ConcentrationEnded, { endSaid }: { endSaid: boolean }): string {
   const clauses = endSaid ? ended.said.slice(1) : [...ended.said];
-  if (ended.acSpell) clauses.push(`if ${ended.acSpell} still protects the hero, record it again with ac_spells_add`);
+  if (ended.acSpell && !ended.dead) clauses.push(`if ${ended.acSpell} still protects the hero, record it again with ac_spells_add`);
+  for (const n of ended.conditions) {
+    clauses.push(`${conditionNamingText(n, ended.spell)}: if the spell caused it, remove it with update_character conditions_remove`);
+  }
   if (!acSpellNamed(ended.spell)) clauses.push(`if it left an area on the map, end it with update_map effects_end ${JSON.stringify([ended.spell])}`);
   return `${[head, ...clauses].join('; ')}${ended.forDm.length ? ` — ${ended.forDm.join(' ')}` : ''}`;
 }
@@ -209,11 +241,20 @@ function changeText(events: readonly GameEvent[]): string {
     .join('; ');
 }
 
-/** The player's Hit Point maximum change (HpMaxDialog): an effect such as Aid or Life Drain, or a lasting change. */
+/**
+ * The player's Hit Point maximum change (HpMaxDialog): an effect such as Aid or Life Drain, or a lasting change. A
+ * maximum of 0 is death (srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death: "A creature dies if its
+ * Hit Point maximum reaches 0"), which ends the hero's Concentration: the DM hears what ended with it, the reminder
+ * about an AC set by hand included, as from the sheet's other ends.
+ */
 export function hpMaxChange(c: Character, spec: HpMaxChange): SheetChange {
   const { character, events } = adjustHpMax(c, spec);
   if (character === c) return unchanged(c, firstWarning(events));
-  return { character, notice: `Player changed their Hit Point maximum: ${changeText(events)}` };
+  const said = (shown: readonly GameEvent[]) => `Player changed their Hit Point maximum: ${changeText(shown)}`;
+  const ended = concentrationEnded(c, character, events);
+  // The death comes first: what ended with it follows, as the other paths tell it.
+  if (!ended || ended.at === 0) return { character, notice: said(events) };
+  return { character, notice: withConcentrationEnd(said(events.slice(0, ended.at)), ended, { endSaid: false }), warning: ended.toast };
 }
 
 /** The player ends an adjustment (its × on the Hit Points bar). */
@@ -376,8 +417,10 @@ export interface SpellPicksChoice {
  * gone or isn't on the list (unprepared: giving it up frees no place), and each list takes no more than the table still
  * has room for; a spellbook's spells each fit the limit of the level they belong to (bookCaps). New spells have the
  * class's name as their source and are prepared; a Wizard's new spellbook spells only when also chosen to prepare. A
- * spell given up is removed by id and its replacement added in its place. The class's choices close once nothing is
- * owed; otherwise they stay open without the level's swaps.
+ * spell given up is removed by id and its replacement added in its place; a Concentration on it goes on (with a Shield
+ * of Faith's +2), for replacing a prepared spell isn't among what breaks Concentration (srd:rule:concentration: "The
+ * following factors break Concentration": Another Concentration Effect, Damage, Incapacitated or Dead). The class's
+ * choices close once nothing is owed; otherwise they stay open without the level's swaps.
  */
 export function spellPicksChange(c: Character, cls: ClassOption, choice: SpellPicksChoice): SheetChange {
   const cl = c.classes.find((x) => x.classId === choice.classId);
@@ -411,7 +454,7 @@ export function spellPicksChange(c: Character, cls: ClassOption, choice: SpellPi
   }
 
   let next = c;
-  for (const swap of [cantripSwap, spellSwap]) if (swap) next = removeSpellById(next, swap.out.id).character;
+  for (const swap of [cantripSwap, spellSwap]) if (swap) next = removeSpellById(next, swap.out.id, { keepConcentration: true }).character;
   for (const s of cantrips) next = addSpell(next, classSpell(s, cl.name, true)).character;
   for (const s of book) next = addSpell(next, classSpell(s, cl.name, prepare.includes(s.id))).character;
   for (const s of prepared) next = addSpell(next, classSpell(s, cl.name, true)).character;
@@ -463,7 +506,8 @@ export interface RestSpellChange {
  * of its prepared spells ("replacing any of the spells there with other Cleric spells for which you have spell slots"),
  * a Paladin or Ranger one ("you can replace one spell on your list"), a Wizard one of its cantrips (its prepared spells
  * change with the sheet's checkboxes, from its spellbook). Always one for one, so the class's count never changes;
- * nothing records when the rest happened, so the DM hears of it and can object.
+ * nothing records when the rest happened, so the DM hears of it and can object. A Concentration on a spell given up
+ * goes on, as in spellPicksChange (srd:rule:concentration).
  */
 export function restSpellChange(c: Character, cls: ClassOption, change: RestSpellChange): SheetChange {
   const cl = c.classes.find((x) => x.classId === change.classId);
@@ -489,7 +533,7 @@ export function restSpellChange(c: Character, cls: ClassOption, change: RestSpel
   if (!pairs.length) return unchanged(c, 'Nothing changed: choose a spell to give up and one to take its place.');
   let next = c;
   for (const [out, replacement] of pairs) {
-    next = removeSpellById(next, out.id).character;
+    next = removeSpellById(next, out.id, { keepConcentration: true }).character;
     next = addSpell(next, classSpell(replacement, cl.name, true)).character;
   }
   const what = [spellPairs ? 'prepared spells' : '', pairs.length > spellPairs ? 'cantrips' : ''].filter(Boolean).join(' and ');

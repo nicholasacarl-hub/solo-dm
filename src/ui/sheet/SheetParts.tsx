@@ -1,11 +1,13 @@
 /**
  * Small building blocks for the character sheet: stat tiles, toggleable pips, proficiency
- * markers and the optional roll button.
+ * markers, the optional roll button, and what the panels share about the AC spells (the words for
+ * them, the one the hero's Concentration carries, the press that asks first before ending one).
  */
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Dices } from 'lucide-react';
+import { AC_SPELLS, acSpellNamed, acSpells, formatModifier } from '@/engine';
 import { cn } from '@/lib/cn';
-import type { ProficiencyLevel } from '@/types';
+import type { AcSpellName, Character, ProficiencyLevel } from '@/types';
 
 export type PipTone = 'arcane' | 'success' | 'danger' | 'gold' | 'accent' | 'info';
 
@@ -140,6 +142,46 @@ export function RollButton({ label, onRoll, className }: { label: string; onRoll
       <Dices className="size-3.5" aria-hidden />
     </button>
   );
+}
+
+/**
+ * What an AC spell does, short on its chip and in full for a control that ends it (srd:spell:mage-armor: "the target's
+ * base AC becomes 13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2 bonus to AC").
+ */
+export function acSpellWords(name: AcSpellName): { short: string; spoken: string } {
+  const { base, bonus = 0 } = AC_SPELLS[name];
+  return base !== undefined
+    ? { short: `base ${base} + DEX`, spoken: `base Armor Class ${base} plus Dexterity` }
+    : { short: formatModifier(bonus), spoken: `${formatModifier(bonus)} Armor Class` };
+}
+
+/**
+ * The AC spell the hero's Concentration carries: Shield of Faith, recorded while the hero concentrates on it, which ends
+ * with that Concentration (srd:spell:shield-of-faith, "Duration: Concentration, up to 10 minutes"), as the engine ends
+ * it. Only Shield of Faith: Mage Armor needs no Concentration (srd:spell:mage-armor, "Duration: 8 hours"), so one the
+ * DM names as the Concentration stays its own chip and outlasts it.
+ */
+export function concentrationAcSpell(c: Character): AcSpellName | undefined {
+  const spell = c.spellcasting?.concentratingOn;
+  return spell && acSpellNamed(spell) === 'Shield of Faith' && acSpells(c).includes('Shield of Faith') ? 'Shield of Faith' : undefined;
+}
+
+/**
+ * A press that asks first, as the inventory's Remove? does: `ask` makes `asking` true for 3 seconds, and a press within
+ * them acts. The question is about `subject` (what the control ends): once that changes under the same control (the DM
+ * started another Concentration), the next press asks afresh.
+ */
+export function useAskFirst(subject: string): { asking: boolean; ask: () => void } {
+  const [askedFor, setAskedFor] = useState<string | null>(null);
+  // Another subject since the question: it is forgotten at once (state adjusted while rendering, as React allows).
+  if (askedFor !== null && askedFor !== subject) setAskedFor(null);
+  const asking = askedFor === subject;
+  useEffect(() => {
+    if (!asking) return;
+    const id = window.setTimeout(() => setAskedFor(null), 3000);
+    return () => window.clearTimeout(id);
+  }, [asking]);
+  return { asking, ask: () => setAskedFor(subject) };
 }
 
 export function SheetSection({ title, action, children, className }: { title: string; action?: ReactNode; children: ReactNode; className?: string }) {

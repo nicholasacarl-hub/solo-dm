@@ -7,7 +7,6 @@ import { useEffect, useId, useRef, useState, type FormEvent, type RefObject } fr
 import { Brain, Footprints, Heart, HeartPulse, Pencil, Shield, Skull, Sparkles, Swords, X, Zap } from 'lucide-react';
 import {
   AC_SPELLS,
-  acSpellNamed,
   acSpells,
   conditionName,
   countedAcSpells,
@@ -36,7 +35,7 @@ import {
   removeConditionChange,
   tempHpChange,
 } from './sheetChanges';
-import { Pips, StatTile } from './SheetParts';
+import { acSpellWords, concentrationAcSpell, Pips, StatTile, useAskFirst } from './SheetParts';
 import type { SheetChange, SheetRoll } from './useSheetActions';
 
 export interface VitalsProps {
@@ -278,23 +277,28 @@ function Exhaustion({ character: c, editable, onEdit }: Omit<VitalsProps, 'onRol
 }
 
 /**
- * What an AC spell does, short on its chip and in full for its × (srd:spell:mage-armor: "the target's base AC becomes
- * 13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2 bonus to AC").
+ * Why the AC doesn't count a recorded spell (its formula doesn't name it), as the words after its chip's "not counted":
+ * " while you wear armor".
  */
-function acSpellWords(name: AcSpellName): { short: string; spoken: string } {
-  const { base, bonus = 0 } = AC_SPELLS[name];
-  return base !== undefined
-    ? { short: `base ${base} + DEX`, spoken: `base Armor Class ${base} plus Dexterity` }
-    : { short: formatModifier(bonus), spoken: `${formatModifier(bonus)} Armor Class` };
+function notCountedWhy(c: Character, name: AcSpellName): string {
+  const formula = c.acFormula ?? '';
+  if (/^set by the DM\b/.test(formula)) return ': your AC was set by hand';
+  if (AC_SPELLS[name].base === undefined) return ' in your AC as it stands';
+  // A base of its own: armor worn, or another base (Unarmored Defense, Draconic Resilience) as high or higher.
+  return /^(?:Unarmored Defense|Draconic Resilience):/.test(formula) ? ': another base AC is as high or higher' : ' while you wear armor';
 }
 
-/** Why the AC doesn't count a recorded spell (its formula doesn't name it): a chip's title, under its "not counted". */
-function notCountedTitle(c: Character, name: AcSpellName): string {
-  const formula = c.acFormula ?? '';
-  if (/^set by the DM\b/.test(formula)) return 'Not counted: your AC was set by hand';
-  if (AC_SPELLS[name].base === undefined) return 'Not counted in your AC as it stands';
-  // A base of its own: armor worn, or another base (Unarmored Defense, Draconic Resilience) as high or higher.
-  return /^(?:Unarmored Defense|Draconic Resilience):/.test(formula) ? 'Not counted: another base AC is as high or higher' : 'Not counted while you wear armor';
+/**
+ * A muted chip's "not counted" and why: the reason is its title for a pointer, and visually hidden text after the
+ * visible words, so a screen reader reads it in the chip ("not counted while you wear armor") without a hover.
+ */
+function NotCounted({ why }: { why: string }) {
+  return (
+    <>
+      {' · not counted'}
+      <span className="sr-only">{why}</span>
+    </>
+  );
 }
 
 /** The spell chips' ×s (EndSpellButton) under `root`, in the page's order: the panel's focus rule. */
@@ -310,7 +314,9 @@ const ENDS_WITH: Record<AcSpellName, string> = {
 /**
  * A spell chip's ×: an AC spell's, or the concentration chip's. With `confirm`, the first press asks ("End?", as the
  * inventory's Remove? does) and a second within 3 seconds ends it: the sheet has no control to record an AC spell
- * again, so a stray tap mustn't lose one. `data-spell-end` puts it in the panel's focus rule (VitalsPanel).
+ * again, so a stray tap mustn't lose one. The question is about `what`: another spell under the same × (the DM started
+ * another Concentration) starts with a fresh ×, and the × itself stays, so focus does. `data-spell-end` puts it in the
+ * panel's focus rule (VitalsPanel).
  */
 function EndSpellButton({
   what,
@@ -326,12 +332,7 @@ function EndSpellButton({
   hover: string;
   onEnd: (button: HTMLButtonElement) => void;
 }) {
-  const [asking, setAsking] = useState(false);
-  useEffect(() => {
-    if (!asking) return;
-    const id = window.setTimeout(() => setAsking(false), 3000);
-    return () => window.clearTimeout(id);
-  }, [asking]);
+  const { asking, ask } = useAskFirst(what);
   return (
     <button
       type="button"
@@ -339,7 +340,7 @@ function EndSpellButton({
       aria-label={asking ? `Confirm ending ${what}` : `End ${what}`}
       title={asking ? 'Click again to end it' : title}
       onClick={(e) => {
-        if (confirm && !asking) setAsking(true);
+        if (confirm && !asking) ask();
         else onEnd(e.currentTarget);
       }}
       className={cn(
@@ -352,18 +353,15 @@ function EndSpellButton({
   );
 }
 
+/** A spell ×'s end: the button pressed (for the panel's focus rule) and the edit it makes. */
+type EndSpell = (button: HTMLButtonElement, change: (c: Character) => SheetChange) => void;
+
 /**
  * The AC spells on the hero (Character.acSpells) in a full-width row under the stat tiles: what each does, and whether
- * the AC counts it; Shield of Faith here is another caster's (the one she concentrates on herself is her concentration
- * chip's). An × ends one on a second press; focus then follows the panel's rule (`onEnded`).
+ * the AC counts it; Shield of Faith here is another caster's (the one the hero concentrates on is the concentration
+ * chip's). An × ends one on a second press (`onEnd`, the panel's focus rule).
  */
-function AcSpellChips({
-  character: c,
-  spells,
-  editable,
-  onEdit,
-  onEnded,
-}: Omit<VitalsProps, 'onRoll'> & { spells: readonly AcSpellName[]; onEnded: (button: HTMLButtonElement) => void }) {
+function AcSpellChips({ character: c, spells, editable, onEnd }: { character: Character; spells: readonly AcSpellName[]; editable: boolean; onEnd: EndSpell }) {
   if (!spells.length) return null;
   const counted = countedAcSpells(c);
   return (
@@ -372,7 +370,7 @@ function AcSpellChips({
         const on = counted.includes(name);
         const words = acSpellWords(name);
         const base = AC_SPELLS[name].base !== undefined;
-        const details = [base ? words.short : "another caster's", ...(on ? [] : ['not counted'])];
+        const why = on ? '' : notCountedWhy(c, name);
         return (
           <li
             key={name}
@@ -382,9 +380,12 @@ function AcSpellChips({
               on ? 'bg-arcane-soft text-arcane' : 'bg-surface-2 text-muted',
             )}
           >
-            <span title={on ? ENDS_WITH[name] : notCountedTitle(c, name)}>
+            <span title={on ? ENDS_WITH[name] : `Not counted${why}`}>
               {base ? name : `${name} ${words.short}`}
-              <span className="font-normal">{details.map((d) => ` · ${d}`).join('')}</span>
+              <span className="font-normal">
+                {` · ${base ? words.short : "another caster's"}`}
+                {!on && <NotCounted why={why} />}
+              </span>
             </span>
             {editable && (
               <EndSpellButton
@@ -392,10 +393,7 @@ function AcSpellChips({
                 title={`End ${name}`}
                 confirm
                 hover={on ? 'hover:bg-arcane/20' : 'hover:bg-surface-3'}
-                onEnd={(button) => {
-                  onEnded(button);
-                  onEdit((cur) => endAcSpellChange(cur, name));
-                }}
+                onEnd={(button) => onEnd(button, (cur) => endAcSpellChange(cur, name))}
               />
             )}
           </li>
@@ -408,8 +406,8 @@ function AcSpellChips({
 /**
  * The hero's vitals. One focus rule for the spell chips' ×s (the AC spells' and the concentration chip's, in the
  * page's order): after one ends its chip, focus goes to the × now in its place, else the one before, else the
- * Inspiration toggle, never to the page. Hero-held Shield of Faith (its record while she concentrates on it) is one
- * chip, the concentration chip's, so it has one way to end.
+ * Inspiration toggle, never to the page. Hero-held Shield of Faith (its record while the hero concentrates on it) is
+ * one chip, the concentration chip's, so it has one way to end.
  */
 export function VitalsPanel(props: VitalsProps) {
   const { character: c, editable, onEdit } = props;
@@ -418,23 +416,31 @@ export function VitalsPanel(props: VitalsProps) {
   const concentration = c.spellcasting?.concentratingOn;
   const recorded = acSpells(c);
   const counted = countedAcSpells(c);
-  const held = concentration ? acSpellNamed(concentration) : undefined;
-  const folded = held && recorded.includes(held) ? held : undefined;
+  const folded = concentrationAcSpell(c);
   const root = useRef<HTMLDivElement>(null);
   const inspiration = useRef<HTMLButtonElement>(null);
-  /** The place among the spell ×s of the one just pressed, until the spells next change. */
-  const ended = useRef<number | null>(null);
-  const onEnded = (button: HTMLButtonElement) => {
-    ended.current = spellEndButtons(root.current).indexOf(button);
+  /** The spell × just pressed, by its place among the ×s, until the spells next change. */
+  const ended = useRef<{ at: number } | null>(null);
+  const endSpell: EndSpell = (button, change) => {
+    const press = { at: spellEndButtons(root.current).indexOf(button) };
+    // A press before the last one's end has shown (a quick extra press on a chip on its way out) keeps that one's place.
+    ended.current ??= press;
+    onEdit((cur) => {
+      const result = change(cur);
+      // Refused (nothing left to end): the chips stay, so a change from elsewhere later mustn't move focus.
+      if (result.character === cur && ended.current === press) ended.current = null;
+      return result;
+    });
   };
   useEffect(() => {
-    const at = ended.current;
+    const press = ended.current;
     ended.current = null;
-    if (at === null || document.activeElement !== document.body) return;
+    if (!press || document.activeElement !== document.body) return;
     const buttons = spellEndButtons(root.current);
-    (buttons[Math.min(at, buttons.length - 1)] ?? inspiration.current)?.focus();
+    (buttons[Math.min(press.at, buttons.length - 1)] ?? inspiration.current)?.focus();
   }, [c.acSpells, concentration]);
   const foldedWords = folded ? acSpellWords(folded) : null;
+  const foldedWhy = folded && !counted.includes(folded) ? notCountedWhy(c, folded) : null;
   return (
     <div ref={root} className="flex flex-col gap-3">
       <HpBlock {...props} />
@@ -461,7 +467,7 @@ export function VitalsPanel(props: VitalsProps) {
         <StatTile label="Passive" value={passivePerception(c)} sub="Perception" title="Passive Perception" />
         <StatTile label="Hit dice" value={hd.value} sub={hd.sub} />
       </div>
-      <AcSpellChips character={c} spells={recorded.filter((n) => n !== folded)} editable={editable} onEdit={onEdit} onEnded={onEnded} />
+      <AcSpellChips character={c} spells={recorded.filter((n) => n !== folded)} editable={editable} onEnd={endSpell} />
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <button
           ref={inspiration}
@@ -481,12 +487,12 @@ export function VitalsPanel(props: VitalsProps) {
         {concentration && (
           <span className={cn('inline-flex items-center gap-1 rounded-full bg-arcane-soft py-1 pl-2.5 text-xs font-medium text-arcane', editable ? 'pr-1' : 'pr-2.5')}>
             <Brain className="size-3.5" aria-hidden />
-            <span title={folded && !counted.includes(folded) ? notCountedTitle(c, folded) : undefined}>
+            <span title={foldedWhy !== null ? `Not counted${foldedWhy}` : undefined}>
               Concentrating: {concentration}
               {foldedWords && (
                 <span className="font-normal">
                   {` · ${foldedWords.short} AC`}
-                  {folded && !counted.includes(folded) ? ' · not counted' : ''}
+                  {foldedWhy !== null && <NotCounted why={foldedWhy} />}
                 </span>
               )}
             </span>
@@ -497,10 +503,7 @@ export function VitalsPanel(props: VitalsProps) {
                 title="End concentration"
                 confirm={Boolean(folded)}
                 hover="hover:bg-arcane/20"
-                onEnd={(button) => {
-                  onEnded(button);
-                  onEdit((cur) => concentrationChange(cur, null));
-                }}
+                onEnd={(button) => endSpell(button, (cur) => concentrationChange(cur, null))}
               />
             )}
           </span>

@@ -366,6 +366,62 @@ describe('Concentration ended from the sheet tells the DM what ended with it', (
     expect(r.warning).toBeUndefined();
     expect(exhaustionChange(concentrating(sampleCharacter(), 'Web'), 1)).toMatchObject({ notice: 'Player changed exhaustion 0 → 1' });
   });
+
+  // srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death: "A creature dies if its Hit Point maximum
+  // reaches 0." The DM hears what ended with the Concentration, as on the sheet's other ends (sheet note 2).
+  it('says what ended with it when a Hit Point maximum of 0 kills the hero, the reminder about an AC set by hand included', () => {
+    const drained = hpMaxChange(hasted(), { name: 'Life Drain', change: -17, ends: 'long-rest' });
+    expect(drained.character).toMatchObject({ deathSaves: { dead: true }, spellcasting: { concentratingOn: null }, armorClass: 14 });
+    expect(drained.notice).toBe(
+      'Player changed their Hit Point maximum: HP maximum 17 → 0 (Life Drain −17, until a Long Rest): a creature dies if its Hit Point maximum reaches 0; Concentration on Haste ends (death); if it left an area on the map, end it with update_map effects_end ["Haste"] — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).',
+    );
+    expect(drained.warning).toBeUndefined();
+    // Without a Concentration the notice is as it was.
+    expect(hpMaxChange(sampleCharacter(), { name: 'Life Drain', change: -17, ends: 'long-rest' }).notice).toBe(
+      'Player changed their Hit Point maximum: HP maximum 17 → 0 (Life Drain −17, until a Long Rest): a creature dies if its Hit Point maximum reaches 0',
+    );
+  });
+
+  // srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death, Massive Damage: "the character dies if the
+  // remainder equals or exceeds their Hit Point maximum"; srd:condition:exhaustion: "You die if your Exhaustion level is
+  // 6." No spell protects the dead, so the DM isn't asked to record Shield of Faith again (sheet note 4).
+  it('asks the DM to record Shield of Faith again only while the hero lives', () => {
+    const massive = damageChange(shieldOfFaith(), 40);
+    expect(massive.character).toMatchObject({ deathSaves: { dead: true }, armorClass: 12 });
+    expect(massive.notice).toBe('Player changed HP 12 → 0 (40 damage) — dropped to 0 HP; Concentration on Shield of Faith ends (death); Shield of Faith ends: AC 14 → 12');
+    expect(exhaustionChange({ ...shieldOfFaith(), exhaustion: 5 }, 6).notice).toBe(
+      'Player changed exhaustion 5 → 6; Concentration on Shield of Faith ends (death); Shield of Faith ends: AC 14 → 12',
+    );
+    expect(hpMaxChange(shieldOfFaith(), { name: 'Life Drain', change: -17, ends: 'long-rest' }).notice).toBe(
+      'Player changed their Hit Point maximum: HP maximum 17 → 0 (Life Drain −17, until a Long Rest): a creature dies if its Hit Point maximum reaches 0; Concentration on Shield of Faith ends (death); Shield of Faith ends: AC 14 → 12',
+    );
+    // Unconscious at 0 HP, alive: the hint stays.
+    expect(damageChange(shieldOfFaith(), 12).notice).toMatch(/; if Shield of Faith still protects the hero, record it again with ac_spells_add$/);
+  });
+
+  // srd:spell:invisibility: "A creature you touch has the Invisible condition until the spell ends"; srd:rule:
+  // concentration: "If the effect's creator loses Concentration, the effect ends." The sheet sees the hero's own
+  // conditions, so a sheet-side end names those that name the spell, as the DM's tools do (P7 item 1).
+  it("names the hero's own conditions that name the spell, with the call that removes them, before the area clause", () => {
+    const invisible = concentrating(sampleCharacter({ conditions: [{ id: 'invisible', source: 'Invisibility' }, { id: 'prone', source: 'Fell unconscious' }] }), 'Invisibility');
+    const call = 'if the spell caused it, remove it with update_character conditions_remove';
+    expect(concentrationChange(invisible, null).notice).toBe(
+      `Player ended concentration on Invisibility; Mira Voss is Invisible (source: Invisibility): ${call}; if it left an area on the map, end it with update_map effects_end ["Invisibility"]`,
+    );
+    expect(damageChange(invisible, 12).notice).toBe(
+      `Player changed HP 12 → 0 (12 damage) — dropped to 0 HP; Concentration on Invisibility ends (Unconscious); Mira Voss is Invisible (source: Invisibility): ${call}; if it left an area on the map, end it with update_map effects_end ["Invisibility"]`,
+    );
+    // srd:spell:faerie-fire (Concentration, up to 1 minute): a homebrew condition named by its duration, on a hero with
+    // no name, when another Concentration starts.
+    const glowing = concentrating(sampleCharacter({ name: '  ', conditions: [{ id: 'Glowing', duration: 'until\nFaerie Fire ends' }] }), 'Faerie Fire');
+    expect(concentrationChange(glowing, 'Detect Magic').notice).toBe(
+      `Player is now concentrating on Detect Magic (ending Faerie Fire); The hero has "Glowing" (duration: until Faerie Fire ends): ${call}; if it left an area on the map, end it with update_map effects_end ["Faerie Fire"]`,
+    );
+    // A condition that doesn't name the spell, or a spell no condition names, adds nothing.
+    expect(concentrationChange(concentrating(sampleCharacter({ conditions: [{ id: 'invisible', source: 'Potion of Invisibility' }] }), 'Web'), null).notice).toBe(
+      'Player ended concentration on Web; if it left an area on the map, end it with update_map effects_end ["Web"]',
+    );
+  });
 });
 
 // srd:spell:mage-armor: "The spell ends early if the target dons armor"; srd:rule:armor: Light Armor takes "1 Minute to
@@ -626,5 +682,32 @@ describe("spell choices from the sheet (SRD 5.2.1, each class's Spellcasting)", 
     // A Bard has no Long Rest change (srd:rule:bard-spellcasting: "Whenever you gain a Bard level").
     const bard = hero([entry('Bard', 3)], [own('Sleep', 'Bard')], []);
     expect(restSpellChange(bard, cls('Bard'), { classId: 'srd:class:bard', giveUp: ['srd:spell:sleep'], picks: [pick('Heroism')] }).character).toBe(bard);
+  });
+
+  // srd:rule:concentration: "The following factors break Concentration": Another Concentration Effect, Damage,
+  // Incapacitated or Dead. Replacing a prepared spell isn't among them, so the spell being cast goes on (S2).
+  it("keeps a running Concentration on a spell a level's swap gives up, and the AC set by hand for it (srd:rule:sorcerer-spellcasting)", () => {
+    // "Whenever you gain a Sorcerer level, you can replace one spell on your list with another Sorcerer spell".
+    const sorcerer = hero(
+      [entry('Sorcerer', 6)],
+      [own('Fire Bolt', 'Sorcerer'), ...fill('Sorcerer', 4, 0), own('Haste', 'Sorcerer'), ...fill('Sorcerer', 8, 1)],
+      [{ classId: 'srd:class:sorcerer', replaceSpell: true }],
+    );
+    const hasted = setConcentration({ ...sorcerer, armorClass: 14, acFormula: 'set by the DM: Haste' }, 'Haste').character;
+    const r = spellPicksChange(hasted, cls('Sorcerer'), choice('srd:class:sorcerer', { prepared: [pick('Fireball'), pick('Fly')], giveUpSpell: 'srd:spell:haste' }));
+    expect(r.notice).toBe('Player chose spells for Sorcerer 6: prepared Fireball; replaced Haste with Fly');
+    expect(named(r.character, 'Haste')).toBeUndefined();
+    expect(r.character).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Haste', spellcasting: { concentratingOn: 'Haste' } });
+  });
+
+  // srd:spell:shield-of-faith: "granting it a +2 bonus to AC for the duration" (Concentration, up to 10 minutes).
+  it("keeps the hero's own Shield of Faith, and its +2, through the change after a Long Rest (srd:rule:paladin-spellcasting)", () => {
+    const paladin = hero([entry('Paladin', 3)], [own('Bless', 'Paladin'), own('Shield of Faith', 'Paladin'), own('Cure Wounds', 'Paladin'), ...fill('Paladin', 1, 1)], []);
+    const shielded = addAcSpell(setConcentration(paladin, 'Shield of Faith').character, 'Shield of Faith').character;
+    expect(shielded).toMatchObject({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2' });
+    const r = restSpellChange(shielded, cls('Paladin'), { classId: 'srd:class:paladin', giveUp: ['srd:spell:shield-of-faith'], picks: [pick('Heroism')] });
+    expect(r.notice).toBe('Player changed their Paladin prepared spells (allowed after a Long Rest): Shield of Faith → Heroism');
+    expect(named(r.character, 'Shield of Faith')).toBeUndefined();
+    expect(r.character).toMatchObject({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'], spellcasting: { concentratingOn: 'Shield of Faith' } });
   });
 });

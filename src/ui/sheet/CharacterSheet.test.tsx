@@ -2,19 +2,21 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBuilderData } from '@/data';
-import { addAcSpell, setConcentration } from '@/engine/character';
+import { addAcSpell, endAcSpell, setConcentration } from '@/engine/character';
 import { generatePortrait } from '@/images';
 import { useGame } from '@/state/gameStore';
 import { importedPlaceholder } from '@/lib/importedContent';
 import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
 import { GLOAMWOOD_TITLE, SRD_BUILDER_DATA, importedRef } from '@/test/structuredFixtures';
-import type { BuilderData, Character, Feature, Transformation } from '@/types';
+import type { BuilderData, Character, Feature, KnownSpell, Transformation } from '@/types';
 import { builderFixture } from '@/ui/builder/testing/builderFixture';
 import { clearRolls, queueRolls } from '@/ui/builder/testing/fakeEngine';
 import { installDialogPolyfill, resetFakeGame } from '@/ui/builder/testing/fakeGameStore';
 import { PAINTED_PORTRAIT, resetImagesMock, withImages } from '@/ui/play/testing/imagesMock';
 import { CharacterSheet } from './CharacterSheet';
 import { LevelUpDialog } from './LevelUpDialog';
+import type { SheetChange } from './useSheetActions';
+import { VitalsPanel } from './VitalsPanel';
 
 vi.mock('@/engine', async () => (await import('@/ui/builder/testing/fakeEngine')).fakeEngine);
 vi.mock('@/images', () => import('@/ui/play/testing/imagesMock'));
@@ -571,6 +573,122 @@ describe('CharacterSheet — AC from spells and Concentration', () => {
     expect(screen.getByText(/^Concentrating:/)).toHaveTextContent('Concentrating: Shield of Faith · +2 AC');
     expect(screen.queryByRole('button', { name: /^End / })).toBeNull();
     expect(screen.getByTitle('Mage Armor: 13 + DEX 2 + Shield of Faith 2')).toHaveTextContent('AC17with spells');
+  });
+
+  // Sheet note 6: a title reaches a mouse alone; the reason is also visually hidden text, read in the chip.
+  it("says why a muted chip isn't counted in visually hidden text too, not only its title", () => {
+    const leather = { id: 'leather', name: 'Leather Armor', quantity: 1, category: 'armor' as const, equipped: true };
+    const cases: [Partial<Character>, string][] = [
+      [{ inventory: [leather], armorClass: 13, acFormula: 'Leather Armor 11 + DEX 2' }, ' while you wear armor'],
+      [{ armorClass: 15, acFormula: 'Unarmored Defense: 10 + DEX 2 + CON 3' }, ': another base AC is as high or higher'],
+      [{ armorClass: 18, acFormula: 'set by the DM: Haste' }, ': your AC was set by hand'],
+    ];
+    for (const [overrides, why] of cases) {
+      seed(sampleCharacter({ ...overrides, acSpells: ['Mage Armor'] }));
+      render(<Harness />);
+      const chip = within(chips()).getByRole('listitem');
+      expect(chip.textContent, why).toBe(`Mage Armor · base 13 + DEX · not counted${why}`);
+      expect(within(chip).getByText(why, { normalizer: (t) => t })).toHaveClass('sr-only');
+      expect(within(chip).getByTitle(`Not counted${why}`)).toBeInTheDocument();
+      cleanup();
+    }
+    // The folded Shield of Faith under an AC set by hand that doesn't count it (an older app version's save).
+    const base = sampleCharacter();
+    seed(sampleCharacter({ armorClass: 18, acFormula: 'set by the DM: Haste', acSpells: ['Shield of Faith'], spellcasting: { ...base.spellcasting!, concentratingOn: 'Shield of Faith' } }));
+    render(<Harness />);
+    const held = screen.getByText(/^Concentrating:/);
+    expect(held.textContent).toBe('Concentrating: Shield of Faith · +2 AC · not counted: your AC was set by hand');
+    expect(within(held).getByText(': your AC was set by hand')).toHaveClass('sr-only');
+    // A counted chip has nothing hidden: what it shows is all there is.
+    cleanup();
+    seed(hero({ spells: ['Mage Armor'] }));
+    render(<Harness />);
+    expect(chips().querySelector('.sr-only')).toBeNull();
+  });
+
+  // srd:spell:mage-armor: "Duration: 8 hours", no Concentration; srd:spell:shield-of-faith: "Duration: Concentration, up
+  // to 10 minutes". Only Shield of Faith ends with the hero's Concentration, so only it folds into its chip (sheet note 3).
+  it('folds only Shield of Faith into the concentration chip: a Concentration the DM names Mage Armor leaves its chip', async () => {
+    seed(hero({ concentrating: 'Mage Armor', spells: ['Mage Armor'] }));
+    const user = userEvent.setup();
+    render(<Harness />);
+    expect(within(chips()).getByRole('listitem')).toHaveTextContent(/^Mage Armor · base 13 \+ DEX$/);
+    expect(screen.getByText(/^Concentrating:/)).toHaveTextContent(/^Concentrating: Mage Armor$/);
+    // One press ends the Concentration; Mage Armor and its AC outlast it.
+    await user.click(button('End concentration on Mage Armor'));
+    expect(useGame.getState().character).toMatchObject({ armorClass: 15, acSpells: ['Mage Armor'], spellcasting: { concentratingOn: null } });
+    expect(within(chips()).getByRole('listitem')).toHaveTextContent(/^Mage Armor · base 13 \+ DEX$/);
+    expect(notices()).toEqual(['Player ended concentration on Mage Armor']);
+  });
+
+  // S5: the "End?" a press left on the folded Shield of Faith is about that spell, not the next one under the same ×.
+  it('gives a new Concentration a fresh ×: a first press is forgotten when the DM changes the spell, and focus stays', async () => {
+    seed(hero({ concentrating: 'Shield of Faith', spells: ['Shield of Faith'] }));
+    const user = userEvent.setup();
+    render(<Harness />);
+    const end = button('End concentration on Shield of Faith (+2 Armor Class)');
+    await user.click(end);
+    expect(end).toHaveTextContent('End?');
+    // Within 3 seconds the DM's update_character concentration starts Detect Magic (the record ends with Shield of Faith).
+    act(() => useGame.setState({ character: setConcentration(useGame.getState().character!, 'Detect Magic').character }));
+    expect(end).toHaveAccessibleName('End concentration on Detect Magic');
+    expect(end).not.toHaveTextContent('End?');
+    expect(document.activeElement).toBe(end);
+    // And back to the hero's own Shield of Faith, recorded again: two presses again.
+    act(() => useGame.setState({ character: addAcSpell(setConcentration(useGame.getState().character!, 'Shield of Faith').character, 'Shield of Faith').character }));
+    expect(end).toHaveAccessibleName('End concentration on Shield of Faith (+2 Armor Class)');
+    await user.click(end);
+    expect(end).toHaveTextContent('End?');
+    expect(useGame.getState().character?.spellcasting?.concentratingOn).toBe('Shield of Faith');
+    expect(notices()).toEqual([]);
+  });
+
+  // S4: the Spells tab's toggle is the other way to end the hero's Concentration, so it guards the +2 as the chip does.
+  it("asks twice on the Spells tab's Stop toggle while the Concentration carries Shield of Faith's +2, and says so", async () => {
+    const shieldOfFaith: KnownSpell = { id: 'srd:spell:shield-of-faith', name: 'Shield of Faith', level: 1, prepared: true, source: 'Wizard', concentration: true };
+    const base = sampleCharacter();
+    const spellcasting = { ...base.spellcasting!, spells: [...base.spellcasting!.spells, shieldOfFaith] };
+    seed(hero({ concentrating: 'Shield of Faith', spells: ['Shield of Faith'], overrides: { spellcasting } }));
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    const stop = button('Stop concentrating on Shield of Faith (+2 Armor Class)');
+    expect(stop).toHaveAttribute('aria-pressed', 'true');
+    await user.click(stop);
+    expect(stop).toHaveTextContent('End?');
+    expect(stop).toHaveAccessibleName('Confirm ending concentration on Shield of Faith (+2 Armor Class)');
+    expect(useGame.getState().updateCharacter).not.toHaveBeenCalled();
+    await user.click(stop);
+    expect(useGame.getState().character).toMatchObject({ armorClass: 12, spellcasting: { concentratingOn: null } });
+    expect(useGame.getState().character).not.toHaveProperty('acSpells');
+    expect(notices()).toEqual([
+      'Player ended concentration on Shield of Faith; Shield of Faith ends: AC 14 → 12; if Shield of Faith still protects the hero, record it again with ac_spells_add',
+    ]);
+    cleanup();
+    // Cast on an ally (no record on the hero): one press, as any Concentration.
+    seed(hero({ concentrating: 'Shield of Faith', overrides: { spellcasting } }));
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    await user.click(button('Stop concentrating on Shield of Faith'));
+    expect(useGame.getState().character?.spellcasting?.concentratingOn).toBeNull();
+  });
+
+  // Sheet note 5: a press whose edit is refused ends nothing, so it mustn't steer focus when the spells change later.
+  it('forgets an × press whose edit is refused: a later change from elsewhere leaves focus where it is', async () => {
+    const shown = hero({ concentrating: 'Detect Magic', spells: ['Mage Armor', 'Shield of Faith'] });
+    // The DM ended Mage Armor before the press reached the sheet: the edit runs on that character, and is refused.
+    const latest = endAcSpell(shown, 'Mage Armor').character;
+    const results: SheetChange[] = [];
+    const onEdit = (change: (c: Character) => SheetChange) => void results.push(change(latest));
+    const user = userEvent.setup();
+    const { rerender } = render(<VitalsPanel character={shown} editable onEdit={onEdit} onRoll={() => undefined} />);
+    await user.click(button(MAGE_ARMOR));
+    await user.click(button('Confirm ending Mage Armor (base Armor Class 13 plus Dexterity)'));
+    expect(results).toEqual([{ character: latest, notice: null, warning: "Mage Armor isn't recorded." }]);
+    // The player taps outside the controls; then the DM's change comes in (Shield of Faith ends too).
+    (document.activeElement as HTMLElement).blur();
+    rerender(<VitalsPanel character={endAcSpell(latest, 'Shield of Faith').character} editable onEdit={onEdit} onRoll={() => undefined} />);
+    expect(document.activeElement).toBe(document.body);
   });
 });
 
