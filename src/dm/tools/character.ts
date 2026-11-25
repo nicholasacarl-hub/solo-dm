@@ -66,7 +66,7 @@ import { withAdaptationNotes } from '@/data/options/adaptationNotes';
 import { entryRef, inventoryFromEntry } from '@/data/options/inventory';
 import { inlineFightingStyles, inlineOptionRef } from '@/data/options/classFeatures';
 import { gainedFeatures, keptRulings } from '@/data/options/leveling';
-import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef } from '@/data/options/levelUpChoices';
+import { addSubclassSpells, classRefOf, subclassCastingOf, subclassRefOf, subclassSpellsToAdd, spellEntryRef, spellHomebrewId } from '@/data/options/levelUpChoices';
 import { subclassesOf } from '@/data/options/replaced';
 import { classByName, classOptionFor, multiclassPrimariesFor, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
 import { matchByName } from '@/engine/util';
@@ -590,8 +590,10 @@ function itemUpdatePatch(c: Character, name: string, patch: ItemPatch, copy: Imp
 
 /**
  * A spells_add spell. When its exact name resolves to a spell the DM may consult, it takes that entry's
- * id (so the sheet's text and the map's area presets find it), its ritual and concentration flags, and
- * for a book's spell a ref (nothing copied). Otherwise it is added as given, as before. Notes that repeat a
+ * id (so the sheet's text and the map's area presets find it), its ritual and concentration flags, for
+ * a book's spell a ref (nothing copied), and for a homebrew spell (this campaign's or shared homebrew:
+ * findAllowedEntry links no other campaign's) its id as homebrewId, so the sheet tags it "homebrew" as it
+ * does the builder's. Otherwise it is added as given, as before. Notes that repeat a
  * book entry's words (`copy`: its own spell's, or another spell's or an item's, from bookCopy) mark the ref copied —
  * that entry's ref when the spell has none — so exports leave them out; the DM's own notes stay its own.
  */
@@ -608,6 +610,7 @@ function addedSpell(
   const flag = (value: unknown, given: boolean | undefined) => (typeof value === 'boolean' ? value : given);
   const ritual = flag(entry.data?.ritual, spell.ritual);
   const concentration = flag(entry.data?.concentration, spell.concentration);
+  const homebrewId = spellHomebrewId(entry);
   return {
     id: entry.id,
     ...base,
@@ -615,6 +618,7 @@ function addedSpell(
     ...(concentration ? { concentration } : {}),
     ...defined({ notes: spell.notes }),
     ...(ref ? { ref } : {}),
+    ...(homebrewId ? { homebrewId } : {}),
   };
 }
 
@@ -635,9 +639,11 @@ function spellSteps(input: ToolInput<'update_character'>, links: Links): ((c: Ch
     const add = addedSpell(spell, links.spells[i] ?? null, links.spellCopies[i] ?? null);
     steps.push((c) => {
       // addSpell merges into a spell already on the sheet: re-added without notes (to change prepared or level), it keeps
-      // its notes, so it keeps their copy mark too.
-      const had = c.spellcasting?.spells.find((s) => nameKey(s.name) === nameKey(spell.name))?.ref;
-      return addSpell(c, !spell.notes && had?.textCopied ? { ...add, ref: had } : add);
+      // its notes, so it keeps their copy mark too. It keeps its id as well, so it stays the entry that id names: a
+      // homebrew id joins it only when it is that id (a book's spell re-added once homebrew holds its name stays the book's).
+      const had = c.spellcasting?.spells.find((s) => nameKey(s.name) === nameKey(spell.name));
+      const { homebrewId, ...rest } = !spell.notes && had?.ref?.textCopied ? { ...add, ref: had.ref } : add;
+      return addSpell(c, homebrewId && (!had || had.id === homebrewId) ? { ...rest, homebrewId } : rest);
     });
   });
   return steps;

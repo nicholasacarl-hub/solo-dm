@@ -16,7 +16,7 @@ vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 import { characterSheetText, levelUp, weaponCritRange } from '@/engine';
 import { sampleCharacter, sampleCombat } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
-import type { BuilderData, Character, ClassFeatureDef, ClassLevel, ClassOption, CompendiumEntry, FeatOption, OptionSource, SubclassOption, TranscriptMessage } from '@/types';
+import { HOMEBREW_SOURCE_ID, type BuilderData, type Character, type ClassFeatureDef, type ClassLevel, type ClassOption, type CompendiumEntry, type FeatOption, type HomebrewEntry, type OptionSource, type SubclassOption, type TranscriptMessage } from '@/types';
 import { redactImportedDeep } from '@/storage/backup';
 import { redactCopiedImports } from '@/storage/redact';
 import { campaignGraph } from '@/storage/testData';
@@ -504,6 +504,72 @@ describe('update_character links names to the rules index and builder data', () 
     expect(by('Fireball')?.ref).toBeUndefined();
     expect(by('Glimmer Song')).toMatchObject({ level: 1, ritual: false });
     expect(by('Glimmer Song')?.id).not.toMatch(/^(srd|lib):/);
+  });
+
+  /** A homebrew spell saved for a campaign (null: shared), as create_homebrew or the Library saves one. */
+  const homebrewSpell = (id: string, name: string, campaignId: string | null): HomebrewEntry => ({
+    ...entry(id, name, 'spell', { level: 1 }),
+    sourceId: HOMEBREW_SOURCE_ID,
+    sourceName: 'Homebrew',
+    campaignId,
+    origin: 'dm',
+    status: 'active',
+    createdAt: 1,
+    updatedAt: 1,
+  });
+
+  it("tags a spells_add spell homebrew when its name is this campaign's or shared homebrew, and links no other campaign's", async () => {
+    const h = setup({
+      rules: [...RULES, homebrewSpell('hb:cinder-veil', 'Cinder Veil', 'camp-1'), homebrewSpell('hb:lantern-ward', 'Lantern Ward', null), homebrewSpell('hb:ember-lance', 'Ember Lance', 'camp-2')],
+    });
+    await h.run('update_character', {
+      spells_add: [
+        { name: 'Cinder Veil', level: 1 },
+        { name: 'Lantern Ward', level: 1 },
+        { name: 'Ember Lance', level: 1 },
+        { name: 'Ashen Choir', level: 2 },
+        { name: 'Fireball', level: 3 },
+      ],
+    });
+    const by = (name: string) => h.sheet().spellcasting?.spells.find((s) => s.name === name);
+    expect(by('Cinder Veil')).toMatchObject({ id: 'hb:cinder-veil', homebrewId: 'hb:cinder-veil' });
+    expect(by('Lantern Ward')).toMatchObject({ id: 'hb:lantern-ward', homebrewId: 'hb:lantern-ward' });
+    // Another campaign's homebrew is no spell this DM may consult (its rules search hides it): added as given, as before.
+    expect(by('Ember Lance')?.id).not.toMatch(/^hb:/);
+    // Neither it, the book's spell nor the SRD's takes a homebrewId.
+    for (const name of ['Ember Lance', 'Ashen Choir', 'Fireball']) expect(by(name)).not.toHaveProperty('homebrewId');
+
+    const sheet = (await h.run('get_character_sheet', {})).content;
+    expect(sheet).toContain('Cinder Veil (Granted in play, homebrew)');
+    expect(sheet).toContain('Lantern Ward (Granted in play, homebrew)');
+    expect(sheet).toMatch(/Ember Lance \(Granted in play\)[,\n]/);
+    expect(sheet).toMatch(/Ashen Choir \(Granted in play\)[,\n]/);
+    expect(sheet).toMatch(/Fireball \(Granted in play\)[,\n]/);
+  });
+
+  it('keeps a re-added spell the entry its id names: it takes the homebrewId of that homebrew only', async () => {
+    const choirId = gloamwoodEntryId('Ashen Choir');
+    const choirRef = { sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: choirId, kind: 'spell' as const, entryName: 'Ashen Choir', textHash: '', textCopied: false };
+    const mira = sampleCharacter();
+    const spells = [
+      ...mira.spellcasting!.spells,
+      // The book's spell, linked before the campaign had homebrew of its name.
+      { id: choirId, name: 'Ashen Choir', level: 2, prepared: true, source: 'Granted in play', ref: choirRef },
+      // A homebrew spell linked by an earlier version, which didn't record its homebrewId.
+      { id: 'hb:cinder-veil', name: 'Cinder Veil', level: 1, prepared: true, source: 'Granted in play' },
+    ];
+    const h = setup({
+      character: { ...mira, spellcasting: { ...mira.spellcasting!, spells } },
+      rules: [...RULES, homebrewSpell('hb:ashen-choir', 'Ashen Choir', 'camp-1'), homebrewSpell('hb:cinder-veil', 'Cinder Veil', 'camp-1')],
+    });
+    // Both names now resolve to this campaign's homebrew, which outranks a book's spell of its name.
+    await h.run('update_character', { spells_add: [{ name: 'Ashen Choir', level: 2, prepared: false }, { name: 'Cinder Veil', level: 1, prepared: false }] });
+    const by = (name: string) => h.sheet().spellcasting?.spells.find((s) => s.name === name);
+    // Still the book's spell (addSpell keeps its id and ref), so not homebrew.
+    expect(by('Ashen Choir')).toMatchObject({ id: choirId, prepared: false, ref: choirRef });
+    expect(by('Ashen Choir')).not.toHaveProperty('homebrewId');
+    // Its id is that homebrew's: it takes the homebrewId it lacked.
+    expect(by('Cinder Veil')).toMatchObject({ id: 'hb:cinder-veil', homebrewId: 'hb:cinder-veil', prepared: false });
   });
 
   it('gives features_add a ref when the name is one imported feat', async () => {
