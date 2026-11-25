@@ -850,7 +850,9 @@ interface AcTrack {
  * formula saying the DM set it, so the sheet never shows the old formula's items and armor under a number they don't
  * add up to (the DM's "Bonuses" rule reads the formula); an AC they do give gets their formula back. An AC set by hand
  * while AC spells are counted is taken to include them: their parts stay in its formula ("set by the DM: Haste +
- * Shield of Faith 2"), so they still read as counted and Shield of Faith's end takes its 2 off (syncArmorClass).
+ * Shield of Faith 2"), so they still read as counted and Shield of Faith's end takes its 2 off (syncArmorClass). Armor
+ * the app can't identify gives no number of its own (computeArmorClass echoes the stored AC), so while spells are
+ * counted the AC restated there is the DM's too, and keeps their parts.
  */
 function statSteps(input: ToolInput<'update_character'>, catalog: readonly EquipmentOption[] = [], track?: AcTrack): ((c: Character) => EngineResult)[] {
   const steps: ((c: Character) => EngineResult)[] = [];
@@ -858,9 +860,11 @@ function statSteps(input: ToolInput<'update_character'>, catalog: readonly Equip
     const ac = input.armor_class;
     steps.push((c) => {
       const gear = computeArmorClass(c, catalog);
-      const kept = gear.ac === ac ? [] : countedAcSpells(c);
+      const counted = countedAcSpells(c);
+      const geared = gear.ac === ac && !(counted.length && unknownWornArmor(c, catalog));
+      const kept = geared ? [] : counted;
       if (track) track.kept = kept;
-      const acFormula = gear.ac === ac ? gear.formula : [handSetFormula(input.reason), ...kept.map(acSpellPart)].join(' + ');
+      const acFormula = geared ? gear.formula : [handSetFormula(input.reason), ...kept.map(acSpellPart)].join(' + ');
       return { character: { ...c, armorClass: ac, acFormula }, events: [statEvent(`AC ${c.armorClass} → ${ac}`)] };
     });
   }

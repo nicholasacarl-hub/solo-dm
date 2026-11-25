@@ -2351,6 +2351,25 @@ describe('AC from spells: ac_spells_add and ac_spells_end, the call\'s last step
     expect((await derived.run('update_character', { armor_class: 14 })).content).not.toContain('stays recorded');
   });
 
+  it("keeps a counted spell's part when the DM restates the AC kept for armor the app can't identify (srd:spell:shield-of-faith)", async () => {
+    // srd:spell:shield-of-faith: "a +2 bonus to AC for the duration", whatever armor is worn; Elven Chain has no stats here.
+    const h = setup({ character: sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] }) });
+    await h.run('update_character', { inventory_add: [{ name: 'Elven Chain', quantity: 1, category: 'armor' }] });
+    await h.run('update_character', { inventory_update: [{ name: 'Elven Chain', equipped: true }] });
+    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'Elven Chain (stats unknown — AC kept at 14) + Shield of Faith 2' });
+    const restated = await h.run('update_character', { armor_class: 14, reason: 'Elven Chain' });
+    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Elven Chain + Shield of Faith 2' });
+    expect(statusAc(restated.content)).toBe('AC 14 (Shield of Faith)');
+    expect(restated.content).toContain('Shield of Faith stays recorded, and this AC is taken to include it (ending it takes 2 off). If it has ended, use ac_spells_end.');
+    expect((await h.run('update_character', { ac_spells_end: ['Shield of Faith'] })).content).toContain('Shield of Faith ends: AC 14 → 12');
+    // With no spell counted, the AC restated there keeps the armor's formula, as before.
+    const plain = setup();
+    await plain.run('update_character', { inventory_add: [{ name: 'Elven Chain', quantity: 1, category: 'armor' }] });
+    await plain.run('update_character', { inventory_update: [{ name: 'Elven Chain', equipped: true }] });
+    await plain.run('update_character', { armor_class: 12, reason: 'Elven Chain' });
+    expect(plain.sheet()).toMatchObject({ armorClass: 12, acFormula: 'Elven Chain (stats unknown — AC kept at 12)' });
+  });
+
   it("tells the DM when armor goes on over Mage Armor, which the app doesn't end (srd:rule:armor: donning takes minutes)", async () => {
     const leather = { id: 'la', name: 'Leather Armor', quantity: 1, category: 'armor' as const, weight: 10 };
     const h = setup({ character: mageArmored({ inventory: [...sampleCharacter().inventory, leather] }) });
