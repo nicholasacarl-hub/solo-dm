@@ -159,10 +159,24 @@ function useReader() {
 // The form
 // ---------------------------------------------------------------------------
 
+/** The element that scrolls the form (the dialog's body). */
+function scrollParent(el: HTMLElement): HTMLElement | null {
+  for (let node = el.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node);
+    if (overflowY === 'auto' || overflowY === 'scroll') return node;
+  }
+  return null;
+}
+
 export function SpellPicksForm({ target, footer, onCancel, onDone, focusOnOpen = false }: SpellPicksFormProps) {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (focusOnOpen) root.current?.focus();
+    const el = root.current;
+    if (!focusOnOpen || !el) return;
+    // The level-up dialog's body was scrolled down to its Summary's button: the form starts at its top.
+    const scroller = scrollParent(el);
+    if (scroller) scroller.scrollTop = 0;
+    el.focus({ preventScroll: true });
   }, [focusOnOpen]);
   return (
     // One wrapper whatever the form shows (loading, the lists), so focus moved into it stays.

@@ -68,7 +68,7 @@ export function SpellChoiceList({ label, options, selected, max, onChange, onInf
       <li
         key={spell.id}
         className={cn(
-          'flex items-center gap-2 rounded-lg border px-2.5 py-1.5 transition-colors pointer-coarse:min-h-11',
+          'flex items-center gap-2 rounded-lg border px-2.5 py-1.5 transition-colors pointer-coarse:min-h-11 pointer-coarse:py-0',
           checked ? 'border-arcane bg-arcane-soft' : 'border-border bg-surface',
           disabled && 'opacity-55',
         )}
