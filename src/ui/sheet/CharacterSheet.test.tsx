@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { useBuilderData } from '@/data';
+import { addAcSpell, setConcentration } from '@/engine/character';
 import { generatePortrait } from '@/images';
 import { useGame } from '@/state/gameStore';
 import { importedPlaceholder } from '@/lib/importedContent';
@@ -415,6 +416,161 @@ describe('CharacterSheet — Hit Point maximum', () => {
     cleanup();
     render(<Harness />);
     expect(within(screen.getByRole('list', { name: 'Hit point maximum adjustments' })).getAllByRole('button')).toHaveLength(1);
+  });
+});
+
+// srd:spell:mage-armor: "the target's base AC becomes 13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2
+// bonus to AC for the duration" (Duration: Concentration, up to 10 minutes). The AC follows the real engine.
+describe('CharacterSheet — AC from spells and Concentration', () => {
+  /** Mira Voss (DEX 14, AC 12) with spells recorded as the DM records them, concentrating first when asked. */
+  const hero = (opts: { spells?: string[]; concentrating?: string; overrides?: Partial<Character> } = {}) => {
+    let c = sampleCharacter(opts.overrides);
+    if (opts.concentrating) c = setConcentration(c, opts.concentrating).character;
+    for (const name of opts.spells ?? []) c = addAcSpell(c, name).character;
+    return c;
+  };
+  const seed = (c: Character) => resetFakeGame({ campaign: sampleCampaign(), character: c });
+  const chips = () => screen.getByRole('list', { name: 'Armor Class from spells' });
+  const button = (name: string) => screen.getByRole('button', { name });
+  const MAGE_ARMOR = 'End Mage Armor (base Armor Class 13 plus Dexterity)';
+  const SHIELD_OF_FAITH = 'End Shield of Faith (+2 Armor Class)';
+
+  it('lists the AC spells in a row under the stat tiles, and the AC tile says spells are in it, as a changed Speed does', () => {
+    seed(hero({ spells: ['Mage Armor', 'Shield of Faith'] }));
+    render(<Harness />);
+    expect(within(chips()).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Mage Armor · base 13 + DEX', "Shield of Faith +2 · another caster's"]);
+    // What each does and whose it is are shown, not only told to a mouse's tooltip.
+    expect(chips().querySelector('.sr-only')).toBeNull();
+    const tile = screen.getByTitle('Mage Armor: 13 + DEX 2 + Shield of Faith 2');
+    expect(tile).toHaveTextContent('AC17with spells');
+    // In place of the plain border, not beside it (two colour classes leave the winner to the stylesheet's order).
+    expect(tile).toHaveClass('border-arcane/50');
+    expect(tile).not.toHaveClass('border-border');
+    cleanup();
+    seed(sampleCharacter());
+    render(<Harness />);
+    expect(screen.queryByRole('list', { name: 'Armor Class from spells' })).toBeNull();
+    expect(screen.getByTitle('10 + DEX')).not.toHaveTextContent('with spells');
+    expect(screen.getByTitle('10 + DEX')).toHaveClass('border-border');
+    expect(screen.getByTitle('10 + DEX')).not.toHaveClass('border-arcane/50');
+  });
+
+  // srd:rule:armor-class: "If a rule gives you another base AC calculation, you choose which calculation to use; you
+  // can't use more than one."
+  it('mutes a spell the AC does not count, saying why in its title (armor worn, a higher base, an AC set by hand)', () => {
+    const leather = { id: 'leather', name: 'Leather Armor', quantity: 1, category: 'armor' as const, equipped: true };
+    const cases: [Partial<Character> & { acFormula: string }, string][] = [
+      [{ inventory: [leather], armorClass: 13, acFormula: 'Leather Armor 11 + DEX 2' }, 'Not counted while you wear armor'],
+      [{ armorClass: 15, acFormula: 'Unarmored Defense: 10 + DEX 2 + CON 3' }, 'Not counted: another base AC is as high or higher'],
+      [{ armorClass: 18, acFormula: 'set by the DM: Haste' }, 'Not counted: your AC was set by hand'],
+    ];
+    for (const [overrides, why] of cases) {
+      seed(sampleCharacter({ ...overrides, acSpells: ['Mage Armor'] }));
+      render(<Harness />);
+      const chip = within(chips()).getByRole('listitem');
+      expect(chip, why).toHaveTextContent('Mage Armor · base 13 + DEX · not counted');
+      expect(chip).toHaveClass('text-muted');
+      expect(within(chip).getByTitle(why)).toBeInTheDocument();
+      expect(screen.getByTitle(overrides.acFormula)).not.toHaveTextContent('with spells');
+      cleanup();
+    }
+  });
+
+  it('ends an AC spell on a second press of its × ("End?", as Remove? does), and tells the DM', async () => {
+    seed(hero({ spells: ['Mage Armor'] }));
+    const user = userEvent.setup();
+    render(<Harness />);
+    const end = within(chips()).getByRole('button', { name: MAGE_ARMOR });
+    await user.click(end);
+    expect(end).toHaveTextContent('End?');
+    expect(end).toHaveAccessibleName('Confirm ending Mage Armor (base Armor Class 13 plus Dexterity)');
+    expect(useGame.getState().updateCharacter).not.toHaveBeenCalled();
+    await user.click(end);
+    expect(screen.queryByRole('list', { name: 'Armor Class from spells' })).toBeNull();
+    expect(useGame.getState().character).toMatchObject({ armorClass: 12, acFormula: '10 + DEX 2' });
+    expect(notices()).toEqual(['Player ended Mage Armor (AC 15 → 12)']);
+  });
+
+  it('forgets a first press after 3 seconds: the next press asks again', () => {
+    vi.useFakeTimers();
+    try {
+      seed(hero({ spells: ['Mage Armor'] }));
+      render(<Harness />);
+      const end = button(MAGE_ARMOR);
+      fireEvent.click(end);
+      expect(end).toHaveTextContent('End?');
+      act(() => vi.advanceTimersByTime(3000));
+      expect(end).toHaveAccessibleName(MAGE_ARMOR);
+      fireEvent.click(end);
+      expect(end).toHaveTextContent('End?');
+      expect(useGame.getState().updateCharacter).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('after an × ends its chip, focus goes to the × now in its place, else the one before, else the Inspiration toggle', async () => {
+    seed(hero({ concentrating: 'Detect Magic', spells: ['Mage Armor', 'Shield of Faith'] }));
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(button(MAGE_ARMOR));
+    await user.click(button('Confirm ending Mage Armor (base Armor Class 13 plus Dexterity)'));
+    // In its place: another caster's Shield of Faith.
+    expect(document.activeElement).toBe(button(SHIELD_OF_FAITH));
+    // The concentration chip's × (one press: it carries no AC spell), last: the one before.
+    await user.click(button('End concentration on Detect Magic'));
+    expect(useGame.getState().character?.spellcasting?.concentratingOn).toBeNull();
+    expect(document.activeElement).toBe(button(SHIELD_OF_FAITH));
+    // The last one: the Inspiration toggle, never the page.
+    await user.keyboard('{Enter}');
+    await user.keyboard('{Enter}');
+    expect(screen.queryByRole('list', { name: 'Armor Class from spells' })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Inspiration' }));
+    expect(useGame.getState().character?.armorClass).toBe(12);
+    expect(notices()).toEqual([
+      'Player ended Mage Armor (AC 17 → 14)',
+      'Player ended concentration on Detect Magic; if it left an area on the map, end it with update_map effects_end ["Detect Magic"]',
+      'Player ended Shield of Faith (AC 14 → 12)',
+    ]);
+  });
+
+  it('folds the Shield of Faith the hero concentrates on into her concentration chip: one ×, two presses, one notice', async () => {
+    seed(hero({ concentrating: 'Shield of Faith', spells: ['Shield of Faith'] }));
+    const user = userEvent.setup();
+    render(<Harness />);
+    expect(screen.queryByRole('list', { name: 'Armor Class from spells' })).toBeNull();
+    expect(screen.getByText(/^Concentrating: Shield of Faith/)).toHaveTextContent('Concentrating: Shield of Faith · +2 AC');
+    expect(screen.getByTitle('10 + DEX 2 + Shield of Faith 2')).toHaveTextContent('AC14with spells');
+    const end = button('End concentration on Shield of Faith (+2 Armor Class)');
+    await user.click(end);
+    expect(end).toHaveTextContent('End?');
+    expect(end).toHaveAccessibleName('Confirm ending concentration on Shield of Faith (+2 Armor Class)');
+    expect(notices()).toEqual([]);
+    await user.click(end);
+    expect(screen.queryByText(/^Concentrating:/)).toBeNull();
+    expect(useGame.getState().character).toMatchObject({ armorClass: 12, spellcasting: { concentratingOn: null } });
+    expect(useGame.getState().character).not.toHaveProperty('acSpells');
+    expect(notices()).toEqual([
+      'Player ended concentration on Shield of Faith; Shield of Faith ends: AC 14 → 12; if Shield of Faith still protects the hero, record it again with ac_spells_add',
+    ]);
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Inspiration' }));
+  });
+
+  it("shows another caster's Shield of Faith as an AC chip while the hero concentrates on something else", () => {
+    seed(hero({ concentrating: 'Detect Magic', spells: ['Shield of Faith'] }));
+    render(<Harness />);
+    expect(within(chips()).getByRole('listitem')).toHaveTextContent("Shield of Faith +2 · another caster's");
+    expect(screen.getByText(/^Concentrating:/)).toHaveTextContent(/^Concentrating: Detect Magic$/);
+  });
+
+  it('shows the chips on a read-only sheet, with no × on them or on the concentration chip', () => {
+    seed(hero({ concentrating: 'Shield of Faith', spells: ['Mage Armor', 'Shield of Faith'] }));
+    render(<Harness editable={false} />);
+    expect(within(chips()).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Mage Armor · base 13 + DEX']);
+    expect(within(chips()).queryByRole('button')).toBeNull();
+    expect(screen.getByText(/^Concentrating:/)).toHaveTextContent('Concentrating: Shield of Faith · +2 AC');
+    expect(screen.queryByRole('button', { name: /^End / })).toBeNull();
+    expect(screen.getByTitle('Mage Armor: 13 + DEX 2 + Shield of Faith 2')).toHaveTextContent('AC17with spells');
   });
 });
 

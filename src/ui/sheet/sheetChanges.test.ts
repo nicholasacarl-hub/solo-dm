@@ -5,12 +5,17 @@ import { owedSpells } from '@/data/options/spellPicks';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { GLOAMWOOD_TITLE, SRD_BUILDER_DATA } from '@/test/structuredFixtures';
-import { SHEET_TEXT_MAX } from '@/engine';
+import { addAcSpell, SHEET_TEXT_MAX, setConcentration } from '@/engine';
 import type { Character, ClassLevel, ClassOption, CompendiumEntry, InventoryItem, KnownSpell, SpellPicksOwed } from '@/types';
 import {
+  addConditionChange,
+  concentrationChange,
+  damageChange,
   deathSaveMarkChange,
   dmSheetLengthHint,
+  endAcSpellChange,
   endHpMaxChange,
+  exhaustionChange,
   hpMaxChange,
   itemAttuneChange,
   itemEquipChange,
@@ -59,9 +64,9 @@ describe('sheet gear changes keep AC in step', () => {
 describe('sheet gear changes pass on what syncArmorClass warns', () => {
   const shield: InventoryItem = { id: 'shield', name: 'Shield', quantity: 1, category: 'shield' };
 
-  // SRD 5.2.1 Spells: Mage Armor (base AC 13 + Dexterity modifier) isn't counted by the app, so the DM set the AC by hand;
-  // Equipment: a Shield adds 2.
-  it('keeps an AC set by hand (Mage Armor) when a Shield goes on, and says what gear now gives', () => {
+  // SRD 5.2.1 Spells: Haste ("it gains a +2 bonus to Armor Class") isn't counted by the app, so the DM set the AC by
+  // hand; Equipment: a Shield adds 2.
+  it("keeps an AC set by hand (an effect the app doesn't count, such as Haste) when a Shield goes on, and says what gear now gives", () => {
     const c = sampleCharacter({ armorClass: 15, armorTraining: ['Shields'], inventory: [shield] });
     const r = itemEquipChange(c, 'shield', true, null);
     expect(r.character.armorClass).toBe(15);
@@ -194,6 +199,198 @@ describe('Hit Point maximum changes from the sheet', () => {
     expect(refused.warning).toBe("Your hero's Hit Point maximum is 0: end what lowered it first (its × on the Hit Points bar).");
     const restored = endHpMaxChange(dead, 'Life Drain').character;
     expect(deathSaveMarkChange(restored, 'failures', 2).character.deathSaves.dead).toBe(false);
+  });
+});
+
+/** Spells the app counts in the AC, recorded as the DM records them (the real engine's addAcSpell). */
+const withAcSpells = (c: Character, ...names: string[]): Character => names.reduce((hero, name) => addAcSpell(hero, name).character, c);
+const concentrating = (c: Character, spell: string): Character => setConcentration(c, spell).character;
+/** Mira Voss (DEX 14, AC 12) concentrating on the Shield of Faith she cast on herself: AC 14 (srd:spell:shield-of-faith). */
+const shieldOfFaith = () => withAcSpells(concentrating(sampleCharacter(), 'Shield of Faith'), 'Shield of Faith');
+/** Concentration on a spell the DM set the AC by hand for (srd:spell:haste: "it gains a +2 bonus to Armor Class"). */
+const hasted = () => concentrating(sampleCharacter({ armorClass: 14, acFormula: 'set by the DM: Haste' }), 'Haste');
+
+// The AC chips' × (Mage Armor, another caster's Shield of Faith), on the real engine.
+describe('AC spells ended from the sheet', () => {
+  // srd:spell:mage-armor: "the target's base AC becomes 13 plus its Dexterity modifier".
+  it('ends Mage Armor: the AC goes back to what armor and abilities give, and the DM hears it', () => {
+    const armored = withAcSpells(sampleCharacter(), 'Mage Armor');
+    expect(armored).toMatchObject({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'] });
+    const r = endAcSpellChange(armored, 'Mage Armor');
+    expect(r.character).toMatchObject({ armorClass: 12, acFormula: '10 + DEX 2' });
+    expect(r.character).not.toHaveProperty('acSpells');
+    expect(r.notice).toBe('Player ended Mage Armor (AC 15 → 12)');
+    expect(r.warning).toBeUndefined();
+  });
+
+  // srd:spell:shield-of-faith: "A shimmering field surrounds a creature of your choice within range, granting it a +2
+  // bonus to AC for the duration": another caster's, as the hero isn't concentrating on it.
+  it("ends another caster's Shield of Faith, its +2 coming off", () => {
+    const r = endAcSpellChange(withAcSpells(sampleCharacter(), 'Shield of Faith'), 'shield of faith');
+    expect(r.character.armorClass).toBe(12);
+    expect(r.notice).toBe('Player ended Shield of Faith (AC 14 → 12)');
+  });
+
+  // srd:rule:armor-class: "you choose which calculation to use; you can't use more than one".
+  it('says the AC stays when the spell it ends was not counted (armor worn)', () => {
+    const leather: InventoryItem = { id: 'leather', name: 'Leather Armor', quantity: 1, category: 'armor' };
+    const mira = withAcSpells(sampleCharacter({ armorTraining: ['Light armor'], inventory: [leather] }), 'Mage Armor');
+    const armored = itemEquipChange(mira, 'leather', true, null).character;
+    expect(armored).toMatchObject({ armorClass: 13, acFormula: 'Leather Armor 11 + DEX 2', acSpells: ['Mage Armor'] });
+    expect(endAcSpellChange(armored, 'Mage Armor')).toMatchObject({ notice: 'Player ended Mage Armor (AC stays 13)', character: { armorClass: 13 } });
+  });
+
+  it("keeps an AC set by hand the app can't settle alone: the engine's words go to the DM, a plain toast to the player", () => {
+    // The DM's 17: Mage Armor's 15 and Haste's +2 (srd:spell:haste), which the app doesn't count.
+    const c = sampleCharacter({ armorClass: 17, acFormula: 'set by the DM: Haste', acSpells: ['Mage Armor'] });
+    const r = endAcSpellChange(c, 'Mage Armor');
+    expect(r.character.armorClass).toBe(17);
+    expect(r.character).not.toHaveProperty('acSpells');
+    expect(r.notice).toBe(
+      "Player ended Mage Armor (AC stays 17) — AC kept at 17: it differs from the 15 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 12 (10 + DEX 2); update the AC if that is right.",
+    );
+    expect(r.warning).toBe("Your AC stays 17: the app can't settle it on its own, so your DM will be told with your next message.");
+  });
+
+  it('changes nothing for a spell that is not recorded, or one the app does not count, and tells only the player', () => {
+    const c = sampleCharacter();
+    expect(endAcSpellChange(c, 'Mage Armor')).toEqual({ character: c, notice: null, warning: "Mage Armor isn't recorded." });
+    expect(endAcSpellChange(c, 'Barkskin')).toEqual({ character: c, notice: null, warning: 'The app counts AC only for Mage Armor and Shield of Faith, not Barkskin.' });
+  });
+});
+
+// The sheet's three ways to end the hero's Concentration (the toggle or the chip's ×, damage to 0 HP, an Incapacitating
+// condition): the DM hears what ended with it. srd:rule:concentration: "If the effect's creator loses Concentration,
+// the effect ends."
+describe('Concentration ended from the sheet tells the DM what ended with it', () => {
+  // srd:rule:concentration: "Your Concentration ends if you have the Incapacitated condition or you die";
+  // srd:condition:paralyzed: "You have the Incapacitated condition".
+  it("honours the engine's refusal: nothing changes, the DM hears nothing, and the player reads why", () => {
+    const paralyzed = sampleCharacter({ conditions: [{ id: 'paralyzed' }] });
+    expect(concentrationChange(paralyzed, 'Detect Magic')).toEqual({ character: paralyzed, notice: null, warning: "Can't concentrate while Paralyzed." });
+    const dead = sampleCharacter({ deathSaves: { successes: 0, failures: 3, stable: false, dead: true } });
+    expect(concentrationChange(dead, 'Detect Magic')).toMatchObject({ character: dead, notice: null, warning: "The dead can't concentrate." });
+  });
+
+  it('starts and ends a Concentration as before; the end adds one conditional clause for an area it may have left', () => {
+    const started = concentrationChange(sampleCharacter(), 'Detect Magic');
+    expect(started.notice).toBe('Player is now concentrating on Detect Magic');
+    const webbed = concentrating(sampleCharacter(), 'Web');
+    const ended = concentrationChange(webbed, null);
+    expect(ended.character.spellcasting?.concentratingOn).toBeNull();
+    expect(ended.notice).toBe('Player ended concentration on Web; if it left an area on the map, end it with update_map effects_end ["Web"]');
+    expect(ended.warning).toBeFalsy();
+    // The same spell under another spelling is no change at all.
+    expect(concentrationChange(webbed, 'web')).toEqual({ character: webbed, notice: null, warning: null });
+  });
+
+  // srd:spell:shield-of-faith: "Duration: Concentration, up to 10 minutes".
+  it('ends the Shield of Faith the hero concentrates on with its +2, and asks the DM to record it again if it still protects her', () => {
+    const r = concentrationChange(shieldOfFaith(), null);
+    expect(r.character).toMatchObject({ armorClass: 12, spellcasting: { concentratingOn: null } });
+    expect(r.character).not.toHaveProperty('acSpells');
+    expect(r.notice).toBe(
+      'Player ended concentration on Shield of Faith; Shield of Faith ends: AC 14 → 12; if Shield of Faith still protects the hero, record it again with ac_spells_add',
+    );
+    expect(r.warning).toBeFalsy();
+  });
+
+  // srd:rule:concentration, Another Concentration Effect: "You lose Concentration on an effect the moment you start
+  // casting a spell that requires Concentration".
+  it('names what ended when another Concentration starts', () => {
+    const r = concentrationChange(shieldOfFaith(), 'Detect Magic');
+    expect(r.character).toMatchObject({ armorClass: 12, spellcasting: { concentratingOn: 'Detect Magic' } });
+    expect(r.notice).toBe(
+      'Player is now concentrating on Detect Magic (ending Shield of Faith); Shield of Faith ends: AC 14 → 12; if Shield of Faith still protects the hero, record it again with ac_spells_add',
+    );
+    const fromWeb = concentrationChange(concentrating(sampleCharacter(), 'Web'), 'Detect Magic');
+    expect(fromWeb.notice).toBe('Player is now concentrating on Detect Magic (ending Web); if it left an area on the map, end it with update_map effects_end ["Web"]');
+  });
+
+  it('puts the reminder about an AC set by hand for the spell in the DM notice, not in a toast the player cannot act on', () => {
+    const r = concentrationChange(hasted(), null);
+    expect(r.character.armorClass).toBe(14);
+    expect(r.notice).toBe(
+      'Player ended concentration on Haste; if it left an area on the map, end it with update_map effects_end ["Haste"] — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).',
+    );
+    expect(r.warning).toBeFalsy();
+  });
+
+  // srd:condition:unconscious: "You have the Incapacitated and Prone conditions".
+  it('says what ended with it when damage drops the hero to 0 HP; damage she stays up through is told as before', () => {
+    const webbed = concentrating(sampleCharacter(), 'Web');
+    const down = damageChange(webbed, 12);
+    expect(down.character).toMatchObject({ hp: { current: 0 }, spellcasting: { concentratingOn: null } });
+    expect(down.notice).toBe(
+      'Player changed HP 12 → 0 (12 damage) — dropped to 0 HP; Concentration on Web ends (Unconscious); if it left an area on the map, end it with update_map effects_end ["Web"]',
+    );
+    expect(down.warning).toBeUndefined();
+    const sof = damageChange(shieldOfFaith(), 20);
+    expect(sof.character.armorClass).toBe(12);
+    expect(sof.notice).toBe(
+      'Player changed HP 12 → 0 (20 damage) — dropped to 0 HP; Concentration on Shield of Faith ends (Unconscious); Shield of Faith ends: AC 14 → 12; if Shield of Faith still protects the hero, record it again with ac_spells_add',
+    );
+    const haste = damageChange(hasted(), 12);
+    expect(haste.notice).toMatch(/; Concentration on Haste ends \(Unconscious\); .* — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 \(armor and abilities\)\.$/);
+    expect(haste.warning).toBeUndefined();
+    // srd:rule:concentration, Damage: "The DC equals 10 or half the damage taken (round down), whichever number is higher".
+    const hit = damageChange(webbed, 5);
+    expect(hit).toMatchObject({ notice: 'Player changed HP 12 → 7 (5 damage)', warning: 'Concentration check: DC 10 Constitution saving throw to keep Web.' });
+  });
+
+  // srd:condition:paralyzed: "You have the Incapacitated condition"; srd:condition:incapacitated: "Your Concentration is broken".
+  it('says what ended with it when an Incapacitating condition goes on; another condition is told as before', () => {
+    const webbed = concentrating(sampleCharacter(), 'Web');
+    const paralyzed = addConditionChange(webbed, 'paralyzed');
+    expect(paralyzed.character.spellcasting?.concentratingOn).toBeNull();
+    expect(paralyzed.notice).toBe(
+      'Player added the Paralyzed condition; Concentration on Web ends (Paralyzed); if it left an area on the map, end it with update_map effects_end ["Web"]',
+    );
+    expect(addConditionChange(shieldOfFaith(), 'stunned').notice).toBe(
+      'Player added the Stunned condition; Concentration on Shield of Faith ends (Stunned); Shield of Faith ends: AC 14 → 12; if Shield of Faith still protects the hero, record it again with ac_spells_add',
+    );
+    const prone = addConditionChange(webbed, 'prone');
+    expect(prone).toMatchObject({ notice: 'Player added the Prone condition', character: { spellcasting: { concentratingOn: 'Web' } } });
+    // The engine's refusal reaches the player alone.
+    const dead = sampleCharacter({ deathSaves: { successes: 0, failures: 3, stable: false, dead: true } });
+    expect(addConditionChange(dead, 'prone')).toEqual({ character: dead, notice: null, warning: "The dead don't gain conditions." });
+  });
+
+  // srd:condition:exhaustion: "You die if your Exhaustion level is 6."
+  it('says what ended with it when Exhaustion 6 kills the hero, the reminder for the DM alone', () => {
+    const r = exhaustionChange({ ...hasted(), exhaustion: 5 }, 6);
+    expect(r.character.deathSaves.dead).toBe(true);
+    expect(r.notice).toBe(
+      'Player changed exhaustion 5 → 6; Concentration on Haste ends (death); if it left an area on the map, end it with update_map effects_end ["Haste"] — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).',
+    );
+    expect(r.warning).toBeUndefined();
+    expect(exhaustionChange(concentrating(sampleCharacter(), 'Web'), 1)).toMatchObject({ notice: 'Player changed exhaustion 0 → 1' });
+  });
+});
+
+// srd:spell:mage-armor: "The spell ends early if the target dons armor"; srd:rule:armor: Light Armor takes "1 Minute to
+// Don or Doff". The sheet's equip toggle is bookkeeping, not donning, so the spell stays recorded and the DM decides.
+describe('armor put on while Mage Armor is recorded', () => {
+  const leather: InventoryItem = { id: 'leather', name: 'Leather Armor', quantity: 1, category: 'armor' };
+  const shield: InventoryItem = { id: 'shield', name: 'Shield', quantity: 1, category: 'shield' };
+  const mira = () => withAcSpells(sampleCharacter({ armorTraining: ['Light armor', 'Shields'], inventory: [leather, shield] }), 'Mage Armor');
+
+  it("keeps Mage Armor, which stops counting, and tells the DM how to end it if the armor really went on", () => {
+    const r = itemEquipChange(mira(), 'leather', true, null);
+    expect(r.character).toMatchObject({ armorClass: 13, acSpells: ['Mage Armor'] });
+    expect(r.notice).toBe(
+      'Player equipped Leather Armor (AC 15 → 13) — Mage Armor isn\'t counted while Mira Voss wears armor: if Mira Voss really put it on, end it with ac_spells_end ["Mage Armor"].',
+    );
+    expect(r.warning).toBeUndefined();
+    // Taken off again, Mage Armor counts again.
+    const off = itemEquipChange(r.character, 'leather', false, null);
+    expect(off).toMatchObject({ notice: 'Player unequipped Leather Armor (AC 13 → 15)', character: { armorClass: 15 } });
+  });
+
+  it('says nothing more for a Shield (Mage Armor still counts) or without the record', () => {
+    expect(itemEquipChange(mira(), 'shield', true, null).notice).toBe('Player equipped Shield (AC 15 → 17)');
+    const plain = sampleCharacter({ armorTraining: ['Light armor'], inventory: [leather] });
+    expect(itemEquipChange(plain, 'leather', true, null).notice).toBe('Player equipped Leather Armor (AC 12 → 13)');
   });
 });
 

@@ -3,6 +3,8 @@
  * ("Player changed HP 12 → 15"). Rules changes go through '@/engine'.
  */
 import {
+  acSpellNamed,
+  acSpells,
   addCondition,
   addSpell,
   adjustHpMax,
@@ -10,6 +12,8 @@ import {
   applyHealing,
   changeExhaustion,
   classSpellLevelCap,
+  countedAcSpells,
+  endAcSpell,
   endHpMaxAdjustments,
   removeSpellById,
   saveSourcesChangeText,
@@ -55,7 +59,7 @@ import type { SheetChange } from './useSheetActions';
 
 const unchanged = (c: Character, warning?: string): SheetChange => ({ character: c, notice: null, warning: warning ?? null });
 
-function firstWarning(events: GameEvent[]): string | undefined {
+function firstWarning(events: readonly GameEvent[]): string | undefined {
   return events.find((e) => e.type === 'warning')?.message;
 }
 
@@ -69,6 +73,59 @@ function quote(text: string, max = 60): string {
 }
 
 // ---------------------------------------------------------------------------
+// What ends with the hero's Concentration (srd:rule:concentration: "If the effect's creator loses Concentration, the
+// effect ends"): the toggle or the chip's ×, damage to 0 HP, an Incapacitating condition, death by Exhaustion
+// ---------------------------------------------------------------------------
+
+/** The engine's event that ends the hero's Concentration (setConcentration, and its end at 0 HP, death or a condition). */
+function endsConcentration(e: GameEvent): boolean {
+  return e.type === 'condition-removed' && /^(?:Concentration on |No longer concentrating on )/.test(e.message);
+}
+
+/** What a sheet edit's engine result ended with the hero's Concentration. */
+interface ConcentrationEnded {
+  spell: string;
+  /** The engine's words from the end on: "Concentration on Bless ends (Unconscious)", "Shield of Faith ends: AC 14 → 12". */
+  said: string[];
+  /** Its warnings from the end on (an AC set by hand for the spell): the DM's, who can set the AC; the player can't. */
+  forDm: string[];
+  /** A warning before the end: still the player's. */
+  toast?: string;
+  /** The AC spell whose record ended with it (Shield of Faith on the hero, folded into her Concentration). */
+  acSpell?: string;
+}
+
+function concentrationEnded(before: Character, after: Character, events: readonly GameEvent[]): ConcentrationEnded | null {
+  const spell = before.spellcasting?.concentratingOn?.trim();
+  const now = after.spellcasting?.concentratingOn?.trim();
+  if (!spell || (now && nameKey(now) === nameKey(spell))) return null;
+  const at = Math.max(0, events.findIndex(endsConcentration));
+  const from = events.slice(at);
+  const kept = acSpells(after);
+  return {
+    spell,
+    // A new Concentration (a switch's "Concentrating on Detect Magic.") is the notice's own words.
+    said: from.filter((e) => e.type !== 'warning' && e.type !== 'condition-added').map((e) => e.message.trim().replace(/\.$/, '')),
+    forDm: from.filter((e) => e.type === 'warning').map((e) => e.message.replace(/\s+/g, ' ').trim()),
+    toast: firstWarning(events.slice(0, at)),
+    acSpell: acSpells(before).find((n) => !kept.includes(n)),
+  };
+}
+
+/**
+ * A notice with what ended with the hero's Concentration, on its one line: the engine's words (but the end itself when
+ * the notice already says it), a hint to record a Shield of Faith that still protects the hero again (the sheet can't
+ * tell her own casting from another caster's), one conditional clause for an area the spell may have left (the sheet
+ * can't see the map; Shield of Faith leaves none), then the reminder about an AC set by hand for the spell.
+ */
+function withConcentrationEnd(head: string, ended: ConcentrationEnded, { endSaid }: { endSaid: boolean }): string {
+  const clauses = endSaid ? ended.said.slice(1) : [...ended.said];
+  if (ended.acSpell) clauses.push(`if ${ended.acSpell} still protects the hero, record it again with ac_spells_add`);
+  if (!acSpellNamed(ended.spell)) clauses.push(`if it left an area on the map, end it with update_map effects_end ${JSON.stringify([ended.spell])}`);
+  return `${[head, ...clauses].join('; ')}${ended.forDm.length ? ` — ${ended.forDm.join(' ')}` : ''}`;
+}
+
+// ---------------------------------------------------------------------------
 // Hit points, death saves, exhaustion, inspiration, concentration
 // ---------------------------------------------------------------------------
 
@@ -76,13 +133,20 @@ function hpText(c: Character): string {
   return `${c.hp.current}${c.hp.temp ? ` (+${c.hp.temp} temp)` : ''}`;
 }
 
+/**
+ * Damage from the sheet. Dropping to 0 HP (or dying) ends the hero's Concentration (srd:rule:concentration: "Your
+ * Concentration ends if you have the Incapacitated condition or you die"), and the DM hears what ended with it.
+ */
 export function damageChange(c: Character, amount: number): SheetChange {
   if (!(amount > 0)) return unchanged(c);
   const { character, events } = applyDamage(c, amount);
   const warn = firstWarning(events);
   if (character === c) return unchanged(c, warn);
   const down = character.hp.current === 0 && c.hp.current > 0 ? ' — dropped to 0 HP' : '';
-  return { character, notice: `Player changed HP ${hpText(c)} → ${hpText(character)} (${amount} damage)${down}`, warning: warn };
+  const notice = `Player changed HP ${hpText(c)} → ${hpText(character)} (${amount} damage)${down}`;
+  const ended = concentrationEnded(c, character, events);
+  if (!ended) return { character, notice, warning: warn };
+  return { character, notice: withConcentrationEnd(notice, ended, { endSaid: false }), warning: ended.toast };
 }
 
 export function healChange(c: Character, amount: number): SheetChange {
@@ -104,11 +168,15 @@ export function tempHpChange(c: Character, amount: number): SheetChange {
   return { character, notice: `Player set temporary HP ${c.hp.temp} → ${character.hp.temp}` };
 }
 
+/** Exhaustion from the sheet. Level 6 is death (srd:condition:exhaustion), which ends Concentration as damage can. */
 export function exhaustionChange(c: Character, level: number): SheetChange {
   const target = Math.max(0, Math.min(6, level));
   if (target === c.exhaustion) return unchanged(c);
   const { character, events } = changeExhaustion(c, target - c.exhaustion);
-  return { character, notice: `Player changed exhaustion ${c.exhaustion} → ${character.exhaustion}`, warning: firstWarning(events) };
+  const notice = `Player changed exhaustion ${c.exhaustion} → ${character.exhaustion}`;
+  const ended = concentrationEnded(c, character, events);
+  if (!ended) return { character, notice, warning: firstWarning(events) };
+  return { character, notice: withConcentrationEnd(notice, ended, { endSaid: false }), warning: ended.toast };
 }
 
 export function inspirationChange(c: Character, value: boolean): SheetChange {
@@ -116,12 +184,21 @@ export function inspirationChange(c: Character, value: boolean): SheetChange {
   return { character: { ...c, heroicInspiration: value }, notice: value ? 'Player gained Heroic Inspiration' : 'Player spent Heroic Inspiration' };
 }
 
+/**
+ * Start (a spell's name) or end (null) the hero's Concentration: the Spells tab's toggle, the chip's ×. The engine's
+ * refusal (the dead, an Incapacitated hero) changes nothing, so the DM hears nothing and its words are the player's;
+ * an end tells the DM what ended with it (srd:rule:concentration).
+ */
 export function concentrationChange(c: Character, spellName: string | null): SheetChange {
   const current = c.spellcasting?.concentratingOn ?? null;
   if (current === spellName) return unchanged(c);
-  const { character } = setConcentration(c, spellName);
-  if (spellName === null) return { character, notice: `Player ended concentration on ${current}` };
-  return { character, notice: `Player is now concentrating on ${spellName}${current ? ` (ending ${current})` : ''}` };
+  const { character, events } = setConcentration(c, spellName);
+  // A refusal, or the same spell under another spelling.
+  if (character === c) return unchanged(c, firstWarning(events));
+  const now = character.spellcasting?.concentratingOn ?? null;
+  const notice = now === null ? `Player ended concentration on ${current}` : `Player is now concentrating on ${now}${current ? ` (ending ${current})` : ''}`;
+  const ended = concentrationEnded(c, character, events);
+  return { character, notice: ended ? withConcentrationEnd(notice, ended, { endSaid: true }) : notice };
 }
 
 /** The engine's messages on one line, warnings left out. */
@@ -144,6 +221,24 @@ export function endHpMaxChange(c: Character, name: string, ends?: HpMaxEnds): Sh
   const { character, events } = endHpMaxAdjustments(c, name, ends);
   if (character === c) return unchanged(c, firstWarning(events));
   return { character, notice: `Player ended a Hit Point maximum adjustment: ${changeText(events)}`, warning: firstWarning(events) };
+}
+
+/**
+ * The player ends an AC spell (its chip's × under the stat tiles): Mage Armor, or another caster's Shield of Faith; the
+ * AC follows (the engine's endAcSpell). An AC the app can't settle alone (one set by hand that may count the spell) is
+ * kept: the DM, whose call it is, reads the engine's words on the notice's line, and the player, who can't set the AC
+ * on the sheet, gets a plain toast.
+ */
+export function endAcSpellChange(c: Character, name: string, catalog: EquipmentOption[] | null = null): SheetChange {
+  const { character, events } = endAcSpell(c, name, catalog ?? []);
+  const warning = firstWarning(events);
+  if (character === c) return unchanged(c, warning);
+  const ac = character.armorClass === c.armorClass ? `AC stays ${c.armorClass}` : `AC ${c.armorClass} → ${character.armorClass}`;
+  return {
+    character,
+    notice: `Player ended ${acSpellNamed(name) ?? name} (${ac})${warning ? ` — ${warning.replace(/\s+/g, ' ')}` : ''}`,
+    warning: warning ? `Your AC stays ${character.armorClass}: the app can't settle it on its own, so your DM will be told with your next message.` : undefined,
+  };
 }
 
 export function deathSaveMarkChange(c: Character, kind: 'successes' | 'failures', count: number): SheetChange {
@@ -181,10 +276,19 @@ export function deathSaveRollChange(c: Character, natural: number, total: number
 // Conditions
 // ---------------------------------------------------------------------------
 
+/**
+ * A condition from the sheet. An Incapacitating one ends the hero's Concentration (srd:condition:incapacitated: "Your
+ * Concentration is broken"), and the DM hears what ended with it. The engine's refusal (the dead, an immunity) changes
+ * nothing: its words are the player's, and the DM hears nothing.
+ */
 export function addConditionChange(c: Character, conditionId: string): SheetChange {
   if (c.conditions.some((x) => x.id === conditionId)) return unchanged(c);
-  const { character } = addCondition(c, { id: conditionId, source: 'Player' });
-  return { character, notice: `Player added the ${conditionName(conditionId)} condition` };
+  const { character, events } = addCondition(c, { id: conditionId, source: 'Player' });
+  if (character === c) return unchanged(c, firstWarning(events));
+  const notice = `Player added the ${conditionName(conditionId)} condition`;
+  const ended = concentrationEnded(c, character, events);
+  if (!ended) return { character, notice };
+  return { character, notice: withConcentrationEnd(notice, ended, { endSaid: false }), warning: ended.toast };
 }
 
 export function removeConditionChange(c: Character, conditionId: string): SheetChange {
@@ -413,23 +517,44 @@ export function featureUseChange(c: Character, featureId: string, spend: boolean
 
 /**
  * Keep AC in step with gear: armor and shields, and also items such as a Ring or Cloak of Protection
- * or Bracers of Defense. syncArmorClass keeps an AC set by hand (Mage Armor...) and falls back to the
+ * or Bracers of Defense. syncArmorClass keeps an AC set by hand (Haste...) and falls back to the
  * SRD armor table when the catalog hasn't loaded. Its warning (an AC set by hand kept while gear now gives
  * another, or armor whose stats are unknown) is the player's toast and ends the DM's notice: nothing else
  * tells either of them the AC may now be wrong, and the ruling is the DM's.
  */
-function withAc(before: Character, after: Character, catalog: EquipmentOption[] | null): { character: Character; acNote: string; warning?: string } {
+function withAc(
+  before: Character,
+  after: Character,
+  catalog: EquipmentOption[] | null,
+  also: (synced: Character) => string | null = () => null,
+): { character: Character; acNote: string; warning?: string } {
   const { character, events } = syncArmorClass(before, after, catalog ?? []);
   // And what every save includes (a Cloak of Protection, an item's bonus the app read), when that changed too.
   const saves = saveSourcesChangeText(before, character);
   const notes = [character.armorClass === before.armorClass ? '' : `AC ${before.armorClass} → ${character.armorClass}`, saves ? saves.replace(/^S/, 's') : ''].filter(Boolean);
   const warning = firstWarning(events);
   // The DM, whose call it is, reads the engine's words on the notice's one line (notices are parsed back line by line;
-  // the AC formula it quotes names other items too). The player can't set the AC on the sheet, so their toast only says
-  // what happened and who decides.
-  const kept = warning ? ` — ${warning.replace(/\s+/g, ' ')}` : '';
+  // the AC formula it quotes names other items too), and then anything else it should know (`also`). The player can't
+  // set the AC on the sheet, so their toast only says what happened and who decides.
+  const said = [warning?.replace(/\s+/g, ' '), also(character)].filter(Boolean);
+  const kept = said.length ? ` — ${said.join(' ')}` : '';
   const toast = warning ? `Your AC stays ${character.armorClass}: your gear alone can't settle it, so your DM will be told with your next message.` : undefined;
   return { character, acNote: `${notes.length ? ` (${notes.join('; ')})` : ''}${kept}`, warning: toast };
+}
+
+/**
+ * Armor put on while Mage Armor is recorded (srd:spell:mage-armor: "The spell ends early if the target dons armor"):
+ * the sheet's toggle is bookkeeping, not donning (srd:rule:armor: even Light Armor takes a minute to don), so the spell
+ * isn't ended; it just isn't counted while armor is worn, and the DM, who knows, can end it. Armor is the item's
+ * category or numbers, or Mage Armor no longer counted (armor known only by its name).
+ */
+function mageArmorWhileArmored(before: Character, after: Character, item: InventoryItem): string | null {
+  if (!acSpells(after).includes('Mage Armor')) return null;
+  const armor = item.armor ? item.armor.kind === 'armor' : item.category === 'armor';
+  const displaced = countedAcSpells(before).includes('Mage Armor') && !countedAcSpells(after).includes('Mage Armor');
+  if (!armor && !displaced) return null;
+  const who = after.name.trim() || 'the hero';
+  return `Mage Armor isn't counted while ${who} wears armor: if ${who} really put it on, end it with ac_spells_end ["Mage Armor"].`;
 }
 
 function mapItem(c: Character, itemId: string, patch: Partial<InventoryItem>): Character {
@@ -457,7 +582,7 @@ export function itemEquipChange(c: Character, itemId: string, equipped: boolean,
   if (equipped && (item.category === 'armor' || item.category === 'shield')) {
     next = { ...next, inventory: next.inventory.map((i) => (i.id !== itemId && i.category === item.category && i.equipped ? { ...i, equipped: false } : i)) };
   }
-  const { character, acNote, warning } = withAc(c, next, catalog);
+  const { character, acNote, warning } = withAc(c, next, catalog, (synced) => (equipped ? mageArmorWhileArmored(c, synced, item) : null));
   return { character, notice: `Player ${equipped ? 'equipped' : 'unequipped'} ${item.name}${acNote}`, warning };
 }
 

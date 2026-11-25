@@ -80,6 +80,7 @@ export function StatTile({
   icon,
   className,
   title,
+  border = 'border-border',
 }: {
   label: string;
   value: ReactNode;
@@ -87,9 +88,14 @@ export function StatTile({
   icon?: ReactNode;
   className?: string;
   title?: string;
+  /**
+   * The border's colour class, in place of the plain one: a tile whose number something changed ("border-danger/50",
+   * "border-arcane/50"). In place, not added: two colour classes on one element leave the winner to the stylesheet's order.
+   */
+  border?: string;
 }) {
   return (
-    <div title={title} className={cn('flex min-w-0 flex-col items-center rounded-xl border border-border bg-surface-2 px-1.5 py-1.5 text-center', className)}>
+    <div title={title} className={cn('flex min-w-0 flex-col items-center rounded-xl border bg-surface-2 px-1.5 py-1.5 text-center', border, className)}>
       <span className="flex items-center gap-1 text-[10px] font-semibold tracking-wider text-muted uppercase">
         {icon}
         {label}

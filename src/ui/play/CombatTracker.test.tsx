@@ -258,6 +258,55 @@ describe('CombatTracker on a battle map', () => {
   });
 });
 
+// srd:rule:casting-spells-effects-targets: "Unless a spell has a perceptible effect, a creature doesn't know it was
+// targeted by the spell". A creature's Concentration is the DM's record, never shown to the player; the hero's countdown
+// isn't shown on the tracker either.
+describe("CombatTracker keeps the fight's Concentration records off the player's screen", () => {
+  const SECRET = /Zephyrine|Murmur|Quillon|Hush|Concentrat|rounds? left|minutes? left/i;
+
+  /** Every place the words could show: text, accessible names, titles, descriptions and the status text. */
+  function expectNoConcentration(container: HTMLElement) {
+    expect(container.textContent).not.toMatch(SECRET);
+    for (const el of container.querySelectorAll('*')) {
+      for (const attr of ['aria-label', 'title', 'aria-description']) expect(el.getAttribute(attr) ?? '').not.toMatch(SECRET);
+    }
+    for (const status of screen.queryAllByRole('status')) expect(status.textContent).not.toMatch(SECRET);
+  }
+
+  const concentrating = (state: CombatState): CombatState => ({
+    ...state,
+    combatants: state.combatants.map((c) =>
+      c.isPlayer
+        ? { ...c, concentrationCountdown: { spell: 'Quillon Hush', roundsLeft: 4 } }
+        : c.name === 'Bandit 1'
+          ? { ...c, concentration: { spell: 'Zephyrine Murmur', roundsLeft: 7 } }
+          : { ...c, concentration: { spell: 'Quillon Hush' } },
+    ),
+  });
+
+  it("shows no creature's spell or count, whether its numbers show (an ally) or not (an enemy)", () => {
+    seedGame({ combat: concentrating(sampleCombat()) });
+    const { container } = render(<CombatTracker />);
+    expect(initiativeRows()).toHaveLength(4);
+    // The rows still say what they did.
+    expect(initiativeRows()[3]).toHaveTextContent('9/9');
+    expectNoConcentration(container);
+  });
+
+  it('shows none on a battle map either, hidden creature included, even with "Show DM secrets"', () => {
+    seedGame({ combat: concentrating(sampleMappedCombat()) });
+    usePlayView.setState({ showSpoilers: true });
+    const { container } = render(
+      <>
+        <CombatTracker />
+        <BattleBar onExpand={() => {}} />
+      </>,
+    );
+    expect(screen.getByText('Cutthroat')).toBeInTheDocument();
+    expectNoConcentration(container);
+  });
+});
+
 describe('CombatTracker with a hidden creature (D41, D42; no leaks unless "Show DM secrets")', () => {
   /** The warehouse fight on the Cutthroat's (hidden) turn, or another turn. */
   const fight = (turnIndex = 2): CombatState => ({ ...sampleMappedCombat(), turnIndex });
