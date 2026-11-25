@@ -916,7 +916,14 @@ byte-identical. The second, with Hit Point maximum adjustments: `update_characte
 with every request, so sessions whose frozen prompt never mentions them learn them too; the DM instructions are
 unchanged). Its schema grows to about 8,300 characters, so `update_character` alone may reach 8,500
 (`definitions.test.ts`). The cost is the first one's: each session in progress rewrites its cached prefix once and
-drops its earlier thinking blocks, never a 400.
+drops its earlier thinking blocks, never a 400. The third, with spell effects: `update_combat` gains the `concentrate`
+action with `spell` and `rounds` (an NPC's or monster's Concentration, which the app counts down, saves for and ends),
+`update_character` gains `ac_spells_add` and `ac_spells_end` (Mage Armor and Shield of Faith), the `armor_class`,
+`concentration` and condition `source` describes change, and the `update_combat` and `update_character` descriptions
+say how both work (sessions whose frozen prompt never mentions them learn them there; new sessions' DM instructions
+also gain a Concentration and a Bonuses line). `update_character`'s schema grows to about 8,660 characters, so it alone
+may reach 8,750 (`definitions.test.ts`). The cost is the first one's: each session in progress rewrites its cached
+prefix once and drops its earlier thinking blocks, never a 400.
 
 **Provenance, export redaction, restore.** Every copy of book text onto a character (features, traits,
 lineages, feats, a background's feature; the DM's words about an imported entry) carries an
@@ -980,8 +987,9 @@ Invariants, checked in CI (the definition of done):
   and said aloud, and the Dying line's stabilization by another creature (`update_character` conditions_add "Stable",
   then 1 HP after 1d4 hours); and the Saving throws line names what every save includes (a Ring or Cloak of Protection, Aura of
   Protection), so those sheets and the prompt differ.
-- **Deliberate `DM_TOOLS` changes** only (above: this release's, and the Hit Point maximum adjustments' since), each
-  reviewed with its cost; otherwise `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
+- **Deliberate `DM_TOOLS` changes** only (above: this release's, and the Hit Point maximum adjustments' and spell
+  effects' since), each reviewed with its cost; otherwise `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json`
+  (25 tools, same order).
 - **Privacy.** No marker sentence of the test book appears in any exported bundle (the e2e test). Every
   copy of book text onto a character carries an `ImportedRef`; exports replace that text with a
   placeholder, and a device that has the book fills it back in.

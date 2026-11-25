@@ -1,11 +1,14 @@
 /**
  * DM_TOOLS is sent with every DM request (request.ts): any change to its bytes rewrites the cache prefix
  * of every session in progress and drops their earlier thinking blocks (CLAUDE.md rule 1). This pins
- * today's array. It has changed twice, each a deliberate change reviewed with its one-time cost:
+ * today's array. It has changed three times, each a deliberate change reviewed with its one-time cost:
  * - the structured-imports batch, E1 (spec §6.5: optional ac / hp_max / initiative_bonus on start_combat
  *   combatants, three description edits);
  * - Hit Point maximum adjustments (update_character hp_max, hp_max_end, hp.drain and initiative_change, with
- *   the update_character and take_rest descriptions).
+ *   the update_character and take_rest descriptions);
+ * - spell effects (update_combat's concentrate action with spell and rounds; update_character ac_spells_add and
+ *   ac_spells_end; the armor_class, concentration and condition source describes; the update_combat and
+ *   update_character descriptions).
  * Each was regenerated once with
  *   npx vitest run src/dm/tools/definitions.snapshot.test.ts -u
  * Nothing else may update this snapshot.

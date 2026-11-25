@@ -17,7 +17,7 @@ import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import { knownSpellFromEntry } from '@/data/options/levelUpChoices';
 import { owedSpells } from '@/data/options/spellPicks';
 import { characterSheetText, levelUp, recomputeSlots, weaponCritRange } from '@/engine';
-import { sampleCharacter, sampleCombat } from '@/test/fixtures';
+import { sampleCharacter, sampleCombat, sampleMappedCombat } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
 import {
   HOMEBREW_SOURCE_ID,
@@ -26,10 +26,12 @@ import {
   type ClassFeatureDef,
   type ClassLevel,
   type ClassOption,
+  type CombatState,
   type CompendiumEntry,
   type FeatOption,
   type HomebrewEntry,
   type KnownSpell,
+  type MapEffect,
   type OptionSource,
   type SubclassOption,
   type TranscriptMessage,
@@ -2052,5 +2054,217 @@ describe('Hit Point maximum adjustments (update_character hp_max, hp.drain, hp_m
     const fight = setup({ character: fighter4(), state: { combat: sampleCombat() } });
     const during = await fight.run('update_character', { initiative_change: 1 });
     expect(during.content).toContain('The initiative already rolled for this fight stays; the new bonus counts from the next Initiative roll.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spell effects (SPEC §3.3, §3.5): the hero's countdown in a fight, what ends with her Concentration, AC from spells
+// ---------------------------------------------------------------------------
+
+describe("update_character in a fight: the hero's countdown follows the sheet (srd:rule:casting-spells-duration)", () => {
+  const heroCombatant = (h: ReturnType<typeof setup>) => h.s().combat?.combatants.find((c) => c.isPlayer);
+  const concentrating = (spell: string, extra: Partial<Character> = {}) =>
+    sampleCharacter({ ...extra, spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: spell } });
+  const counting = (spell: string, roundsLeft: number) => ({
+    ...sampleCombat(),
+    combatants: sampleCombat().combatants.map((c) => (c.isPlayer ? { ...c, concentrationCountdown: { spell, roundsLeft } } : c)),
+  });
+
+  it('counts a spell the call starts from its full duration (srd:spell:bless: up to 1 minute), and says so', async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    const out = await h.run('update_character', { spell_slots_spend: [{ level: 1 }], concentration: 'Bless' });
+    expect(out.content).toContain('Concentrating on Bless.\nBless: 10 rounds left.\nStatus: ');
+    expect(heroCombatant(h)?.concentrationCountdown).toEqual({ spell: 'Bless', roundsLeft: 10 });
+  });
+
+  it('restarts the count on a recast, though the sheet stays as it was (srd:rule:casting-spells-effects-combining-spell-effects)', async () => {
+    const h = setup({ character: concentrating('Bless'), state: { combat: counting('Bless', 3) } });
+    const out = await h.run('update_character', { concentration: 'Bless' });
+    expect(out.content).toContain('Bless: 10 rounds left.');
+    expect(heroCombatant(h)?.concentrationCountdown).toEqual({ spell: 'Bless', roundsLeft: 10 });
+  });
+
+  it("drops the count when the sheet's Concentration ends: null, another spell, 0 HP", async () => {
+    const h = setup({ character: concentrating('Bless'), state: { combat: counting('Bless', 6) } });
+    const out = await h.run('update_character', { concentration: null });
+    expect(heroCombatant(h)).not.toHaveProperty('concentrationCountdown');
+    expect(out.content).not.toContain('rounds left');
+    const other = setup({ character: concentrating('Bless'), state: { combat: counting('Bless', 6) } });
+    expect((await other.run('update_character', { concentration: 'Web' })).content).toContain('Web: about 60 minutes left.');
+    expect(heroCombatant(other)?.concentrationCountdown).toEqual({ spell: 'Web', roundsLeft: 600 });
+    // srd:rule:concentration: "Your Concentration ends if you have the Incapacitated condition or you die" (0 HP: Unconscious).
+    const felled = setup({ character: concentrating('Bless'), state: { combat: counting('Bless', 6) } });
+    await felled.run('update_character', { hp: { amount: 30, kind: 'damage' } });
+    expect(felled.sheet().spellcasting?.concentratingOn).toBeNull();
+    expect(heroCombatant(felled)).not.toHaveProperty('concentrationCountdown');
+  });
+
+  it("says when it can't count a spell, and gives the call that does", async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    const out = await h.run('update_character', { concentration: 'Shadow Lash' });
+    expect(out.content).toContain('No countdown for Shadow Lash: give rounds with update_combat concentrate target "Mira Voss" spell "Shadow Lash".');
+    expect(heroCombatant(h)).not.toHaveProperty('concentrationCountdown');
+  });
+
+  it('writes nothing to a fight that is not there, and leaves the count alone when the call keeps the spell', async () => {
+    const idle = setup();
+    expect((await idle.run('update_character', { concentration: 'Bless' })).content).not.toContain('rounds left');
+    const h = setup({ character: concentrating('Bless'), state: { combat: counting('Bless', 6) } });
+    const combat = h.s().combat;
+    await h.run('update_character', { hp: { amount: 2, kind: 'damage' } });
+    expect(h.s().combat).toBe(combat);
+  });
+});
+
+describe("what may end with the hero's Concentration (§3.5), named for the DM and never removed", () => {
+  it('names the conditions its spell may hold, except those the call itself added', async () => {
+    // Mira Voss holds Bandit 1 with Hold Person; an enemy's Hold Person paralyzes her in turn (srd:spell:hold-person).
+    const combat = sampleCombat();
+    combat.combatants[1] = { ...combat.combatants[1], conditions: [{ id: 'paralyzed', source: 'Hold Person' }] };
+    const holder = sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Hold Person' } });
+    const h = setup({ character: holder, state: { combat } });
+    const out = await h.run('update_character', { conditions_add: [{ condition: 'Paralyzed', source: 'Hold Person' }] });
+    expect(out.content).toContain('Concentration on Hold Person ends (Paralyzed).');
+    expect(out.content).toContain('Bandit 1 is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_combat conditions.');
+    expect(out.content).not.toContain('Mira Voss is Paralyzed (source: Hold Person)');
+    expect(h.s().combat?.combatants[1].conditions).toEqual([{ id: 'paralyzed', source: 'Hold Person' }]);
+  });
+
+  it("names the hero's own area on the map with the exact call (srd:spell:spirit-guardians)", async () => {
+    const base = sampleMappedCombat({ heroTurn: true });
+    const guardians: MapEffect = {
+      id: 'e20',
+      label: 'Spirit Guardians',
+      spec: { shape: 'emanation', sizeFt: 15, fromId: 'c-1' },
+      rects: [],
+      terrain: ['difficult'],
+      duration: 'lasting',
+      round: 2,
+      turnOfId: 'c-1',
+    };
+    const map = base.map as NonNullable<CombatState['map']>;
+    const holder = sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Spirit Guardians' } });
+    const h = setup({ character: holder, state: { combat: { ...base, map: { ...map, effects: [guardians] } } } });
+    const out = await h.run('update_character', { concentration: null });
+    expect(out.content).toContain(
+      'Still on the map: Spirit Guardians (15-ft Emanation around Mira Voss) — if it was this spell\'s, end it with update_map effects_end ["Spirit Guardians"].',
+    );
+    expect(h.s().combat?.map?.effects).toHaveLength(1);
+  });
+});
+
+describe('AC from spells: ac_spells_add and ac_spells_end, the call\'s last step', () => {
+  const mail = { id: 'cm', name: 'Chain Mail', quantity: 1, equipped: true, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'heavy' as const, baseAc: 16, dexCap: 0 } };
+  const fighter = (extra: Partial<Character> = {}) => hero({ classId: FIGHTER.id, name: 'Fighter', level: 4, hitDie: 10 }, extra);
+  const mageArmored = (extra: Partial<Character> = {}) => sampleCharacter({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'], ...extra });
+  const statusAc = (text: string) => /· (AC \d+(?: \([^)]*\))?)/.exec(text.split('Status: ')[1] ?? '')?.[1];
+
+  it("Mage Armor: base AC 13 + Dexterity (srd:spell:mage-armor), its term for the DM only, and repeats that change nothing", async () => {
+    const h = setup();
+    const out = await h.run('update_character', { ac_spells_add: ['Mage Armor'] });
+    expect(out.isError).toBeUndefined();
+    expect(h.sheet()).toMatchObject({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'] });
+    expect(out.content).toContain('Mage Armor: AC 12 → 15\nMage Armor counts until a Long Rest (8 hours; no game clock) or ac_spells_end; not while armor is worn.');
+    expect(statusAc(out.content)).toBe('AC 15 (Mage Armor)');
+    const logged = JSON.stringify(h.s().log);
+    expect(logged).toContain('Mage Armor: AC 12 → 15');
+    expect(logged).not.toContain('ac_spells');
+    const again = await h.run('update_character', { ac_spells_add: ['mage armor'] });
+    expect(again.content).toContain('Warning: Mage Armor is already recorded.');
+    expect(h.sheet().armorClass).toBe(15);
+    const ended = await h.run('update_character', { ac_spells_end: ['Mage Armor'] });
+    expect(ended.content).toContain('Mage Armor ends: AC 15 → 12');
+    expect(h.sheet()).not.toHaveProperty('acSpells');
+    expect((await h.run('update_character', { ac_spells_end: ['Mage Armor'] })).content).toContain("Warning: Mage Armor isn't recorded.");
+  });
+
+  it("Shield of Faith: +2 (srd:spell:shield-of-faith), with a nudge when the hero isn't concentrating on it", async () => {
+    const h = setup();
+    const out = await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+    expect(out.content).toContain('Shield of Faith: AC 12 → 14');
+    expect(out.content).toContain(
+      'Mira Voss isn\'t concentrating on Shield of Faith: if Mira Voss cast it, set concentration: "Shield of Faith" so it ends with Mira Voss\'s Concentration; if another caster did, end it with ac_spells_end when that caster\'s Concentration ends.',
+    );
+    const own = setup();
+    const cast = await own.run('update_character', { spell_slots_spend: [{ level: 1 }], concentration: 'Shield of Faith', ac_spells_add: ['Shield of Faith'] });
+    expect(cast.content).not.toContain("isn't concentrating on Shield of Faith");
+    expect(statusAc(cast.content)).toBe('AC 14 (Shield of Faith)');
+    // Its Concentration ends: so does the +2, and the record this call ended isn't "not recorded".
+    const ended = await own.run('update_character', { concentration: null, ac_spells_end: ['Shield of Faith'] });
+    expect(ended.content).toContain('No longer concentrating on Shield of Faith.\nShield of Faith ends: AC 14 → 12');
+    expect(ended.content).not.toContain("isn't recorded");
+    expect(own.sheet().armorClass).toBe(12);
+  });
+
+  it("never fails the call for a name the app doesn't count, and tells the DM how to count it (srd:spell:shield)", async () => {
+    const h = setup();
+    const out = await h.run('update_character', { spell_slots_spend: [{ level: 1 }], ac_spells_add: ['Shield'] });
+    expect(out.isError).toBeUndefined();
+    expect(h.sheet().spellcasting?.slots[1]?.used).toBe(2);
+    expect(h.sheet()).not.toHaveProperty('acSpells');
+    expect(out.content).toContain(
+      "Warning: The app counts AC only for Mage Armor and Shield of Faith, not Shield.\n",
+    );
+    expect(out.content).toContain(
+      "Count Shield yourself: fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn; for another lasting effect (Haste, Barkskin) set armor_class and set it back when it ends.",
+    );
+  });
+
+  it("refuses Mage Armor over armor, and says why it adds nothing under a higher base AC (srd:rule:armor-class)", async () => {
+    const armored = setup({ character: fighter({ inventory: [mail], armorClass: 16, acFormula: 'Chain Mail 16' }) });
+    const refused = await armored.run('update_character', { ac_spells_add: ['Mage Armor'] });
+    expect(refused.content).toContain("Warning: Mage Armor needs a target who isn't wearing armor: Mira Voss wears Chain Mail.");
+    expect(armored.sheet()).not.toHaveProperty('acSpells');
+    // A Barbarian's Unarmored Defense: 10 + DEX 2 + CON 4 = 16 beats Mage Armor's 15.
+    const barbarian = hero(
+      { classId: 'srd:class:barbarian', name: 'Barbarian', level: 2, hitDie: 12 },
+      { abilityScores: { str: 16, dex: 14, con: 18, int: 8, wis: 12, cha: 8 }, armorClass: 16, acFormula: 'Unarmored Defense: 10 + DEX 2 + CON 4' },
+    );
+    const h = setup({ character: barbarian });
+    const out = await h.run('update_character', { ac_spells_add: ['Mage Armor'] });
+    expect(out.content).toContain("Mage Armor gives 15, less than Unarmored Defense's 16: AC stays 16.");
+    expect(h.sheet()).toMatchObject({ armorClass: 16, acSpells: ['Mage Armor'] });
+    expect(statusAc(out.content)).toBe('AC 16');
+  });
+
+  it("pins an old save's hand-set Shield of Faith: 18 on gear that gives 16 turns counted at 18, with no set-armor_class line", async () => {
+    const h = setup({ character: fighter({ inventory: [mail], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }) });
+    const out = await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+    expect(h.sheet()).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    expect(statusAc(out.content)).toBe('AC 18 (Shield of Faith)');
+    expect(out.content).toContain('Shield of Faith: AC stays 18');
+    expect(out.content).not.toContain('set armor_class');
+    expect(out.content).not.toContain('stays as set by hand');
+  });
+
+  it('keeps counted spells in an AC set by hand, so their end takes their bonus off', async () => {
+    const h = setup({ character: sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] }) });
+    // srd:spell:haste: "a +2 bonus to Armor Class", set by hand.
+    const out = await h.run('update_character', { armor_class: 16, reason: 'Haste' });
+    expect(h.sheet()).toMatchObject({ armorClass: 16, acFormula: 'set by the DM: Haste + Shield of Faith 2' });
+    expect(statusAc(out.content)).toBe('AC 16 (Shield of Faith)');
+    expect(out.content).toContain('Shield of Faith stays recorded, and this AC is taken to include it (ending it takes 2 off). If it has ended, use ac_spells_end.');
+    const ended = await h.run('update_character', { ac_spells_end: ['Shield of Faith'] });
+    expect(ended.content).toContain('Shield of Faith ends: AC 16 → 14');
+    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Haste' });
+    // An AC the gear gives takes the gear's formula, spells and all: nothing to say.
+    const derived = setup({ character: sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] }) });
+    expect((await derived.run('update_character', { armor_class: 14 })).content).not.toContain('stays recorded');
+  });
+
+  it("tells the DM when armor goes on over Mage Armor, which the app doesn't end (srd:rule:armor: donning takes minutes)", async () => {
+    const leather = { id: 'la', name: 'Leather Armor', quantity: 1, category: 'armor' as const, weight: 10 };
+    const h = setup({ character: mageArmored({ inventory: [...sampleCharacter().inventory, leather] }) });
+    const out = await h.run('update_character', { inventory_update: [{ name: 'Leather Armor', equipped: true }] });
+    expect(out.content).toContain('Mage Armor isn\'t counted while Mira Voss wears armor: if Mira Voss really put it on, end it with ac_spells_end ["Mage Armor"].');
+    expect(h.sheet().acSpells).toEqual(['Mage Armor']);
+  });
+
+  it('a Long Rest ends them, and the result says so (srd:spell:mage-armor: Duration 8 hours)', async () => {
+    const h = setup({ character: mageArmored() });
+    const out = await h.run('take_rest', { kind: 'long' });
+    expect(out.content).toContain('Mage Armor ends: AC 15 → 12');
+    expect(h.sheet()).toMatchObject({ armorClass: 12 });
+    expect(h.sheet()).not.toHaveProperty('acSpells');
   });
 });

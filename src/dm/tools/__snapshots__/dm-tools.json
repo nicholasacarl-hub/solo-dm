@@ -172,7 +172,7 @@
   },
   {
     "name": "update_character",
-    "description": "Change the hero's character sheet: HP (damage, healing, temporary HP), the HP maximum, conditions, exhaustion, spell slots, concentration, limited-use features, inventory, money, XP, Heroic Inspiration, spells, ability scores (Ability Score Improvements, feats), skill / saving throw / tool proficiencies, languages, AC, speed and the Initiative bonus. Batch several sections in one call (hp applies first, then hp_max_end, then hp_max). Amounts must come from rolls (roll_dice / request_player_roll results) or fixed rules values — never invented. Returns what changed, warnings (no slot left, not enough gold, item not found) and the hero's new status. For the HP maximum (never temporary HP in its place), hp_max changes it by `change` under a short `name` (a spell by its name alone: \"Aid\") and says when it `ends`: \"long-rest\" (a reduction, which returns to normal when a Long Rest finishes; Aid, whose 8 hours are over by then), \"when-ended\" (Heroes' Feast's 24 hours; a reduction a curse or poison keeps through Long Rests) or \"never\" (a lasting ruling or boon the campaign allows, or Hit Points the app counted too few for a feature the sheet already holds). A raise adds as much to current HP (Aid wakes a hero at 0 HP); the same spell again doesn't add, only a stronger casting replaces it; reductions add up and lower current HP only to fit; a maximum of 0 kills (Harm stops at 1). For damage that lowers the maximum by the damage taken (Life Drain, Harm), name the effect in hp.drain: the app lowers it by the damage after the Defenses line, once the damage lands (inside Aura of Life the maximum can't be reduced: send plain damage). When only one part of a hit of two types drains (a Vampire's Bite: its Necrotic), give that part, after any resistance, as a negative hp_max change in the same call instead. hp_max_end ends adjustments by name, giving back exactly what each changed (its time ran out; Greater Restoration ends every reduction in effect, so list each, though not a lasting one; a lasting one is taken back); in one call reductions end before raises, so end a raise that ran out first alone. Constitution changes go through ability_scores, and level_up counts its own Hit Points. initiative_change adds to the Initiative bonus beyond Dexterity, never the total (an Alert the app didn't count: its Proficiency Bonus); it counts from the next Initiative roll. Don't use it for NPCs or monsters (update_combat), rests (take_rest), leveling up (level_up) or transformations (transform_character).",
+    "description": "Change the hero's character sheet: HP (damage, healing, temporary HP), the HP maximum, conditions, exhaustion, spell slots, concentration, limited-use features, inventory, money, XP, Heroic Inspiration, spells, ability scores (Ability Score Improvements, feats), skill / saving throw / tool proficiencies, languages, AC, speed and the Initiative bonus. Batch several sections in one call (hp applies first, then hp_max_end, then hp_max). Amounts must come from rolls (roll_dice / request_player_roll results) or fixed rules values — never invented. Returns what changed, warnings (no slot left, not enough gold, item not found) and the hero's new status. For the HP maximum (never temporary HP in its place), hp_max changes it by `change` under a short `name` (a spell by its name alone: \"Aid\") and says when it `ends`: \"long-rest\" (a reduction, which returns to normal when a Long Rest finishes; Aid, whose 8 hours are over by then), \"when-ended\" (Heroes' Feast's 24 hours; a reduction a curse or poison keeps through Long Rests) or \"never\" (a lasting ruling or boon the campaign allows, or Hit Points the app counted too few for a feature the sheet already holds). A raise adds as much to current HP (Aid wakes a hero at 0 HP); the same spell again doesn't add, only a stronger casting replaces it; reductions add up and lower current HP only to fit; a maximum of 0 kills (Harm stops at 1). For damage that lowers the maximum by the damage taken (Life Drain, Harm), name the effect in hp.drain: the app lowers it by the damage after the Defenses line, once the damage lands (inside Aura of Life the maximum can't be reduced: send plain damage). When only one part of a hit of two types drains (a Vampire's Bite: its Necrotic), give that part, after any resistance, as a negative hp_max change in the same call instead. hp_max_end ends adjustments by name, giving back exactly what each changed (its time ran out; Greater Restoration ends every reduction in effect, so list each, though not a lasting one; a lasting one is taken back); in one call reductions end before raises, so end a raise that ran out first alone. Constitution changes go through ability_scores, and level_up counts its own Hit Points. initiative_change adds to the Initiative bonus beyond Dexterity, never the total (an Alert the app didn't count: its Proficiency Bonus); it counts from the next Initiative roll. AC from spells: ac_spells_add records Mage Armor (base AC 13 + Dexterity while no armor is worn, until a Long Rest) or Shield of Faith (+2, ending with the hero's Concentration on it) and ac_spells_end ends one; the app applies and removes the AC. Other AC spells are yours: fold Shield's +5 into the dc of attacks on the hero; for a lasting one (Haste, Barkskin) set armor_class, and set it back when it ends. Don't use it for NPCs or monsters (update_combat), rests (take_rest), leveling up (level_up) or transformations (transform_character).",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -264,7 +264,7 @@
                 "description": "A condition such as \"poisoned\", \"prone\", \"frightened\", or a homebrew condition name."
               },
               "source": {
-                "description": "What caused it, e.g. \"Giant spider venom\".",
+                "description": "What caused it: \"Giant spider venom\", a spell by its name (\"Hold Person\").",
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 120
@@ -341,7 +341,7 @@
           }
         },
         "concentration": {
-          "description": "Spell the hero starts concentrating on, or null when concentration ends.",
+          "description": "Spell the hero starts (or recasts) concentrating on, or null when it ends; in a fight the app counts its duration.",
           "anyOf": [
             {
               "type": "string",
@@ -779,10 +779,28 @@
           }
         },
         "armor_class": {
-          "description": "New Armor Class (e.g. after donning armor or a spell like Shield of Faith ends).",
+          "description": "AC set by hand (a homebrew effect, armor the app can't identify); not for Mage Armor or Shield of Faith (ac_spells_add).",
           "type": "integer",
           "minimum": 1,
           "maximum": 40
+        },
+        "ac_spells_add": {
+          "maxItems": 2,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          }
+        },
+        "ac_spells_end": {
+          "maxItems": 2,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 40
+          }
         },
         "speed": {
           "description": "New walking speed in feet.",
@@ -1476,7 +1494,7 @@
   },
   {
     "name": "update_combat",
-    "description": "Change the active combat. `next_turn` when the current turn ends (on a battle map the result says where the next creature stands and how far it can move); `damage` / `heal` an NPC or monster by `amount` (from a roll); `conditions` to add or remove conditions on an NPC; `defeat` when a combatant falls, flees or surrenders; `remove` to take one out of the order (and off the map); `add` reinforcements via `combatant` (with `position` on a battle map); `reveal` a hidden creature once the hero notices it (it attacks, is found, steps into view) and `hide` one that slips out of sight — hidden creatures stay off the player's tracker, map and log, with or without a map; `note` to record a private DM note about a combatant (never shown to the player). Targets are names (\"Goblin 2\") or ids. The hero's HP and conditions are NOT changed here — use update_character.",
+    "description": "Change the active combat. `next_turn` when the current turn ends (on a battle map the result says where the next creature stands and how far it can move); `damage` / `heal` an NPC or monster by `amount` (from a roll); `conditions` to add or remove conditions on an NPC; `defeat` when a combatant falls, flees or surrenders; `remove` to take one out of the order (and off the map); `add` reinforcements via `combatant` (with `position` on a battle map); `reveal` a hidden creature once the hero notices it (it attacks, is found, steps into view) and `hide` one that slips out of sight — hidden creatures stay off the player's tracker, map and log, with or without a map; `note` to record a private DM note about a combatant (never shown to the player). `concentrate` records an NPC's or monster's Concentration on `spell` (a spell or another Concentration effect) on the caster's turn, before next_turn; spell null ends it, and the same spell again is a recast. The app counts its time from the rules data or `rounds` (1 minute = 10 rounds; one round more for a spell cast between the caster's turns; rounds for a longer \"(level N version)\"); rolls a plain Constitution save from its stat block when it takes damage (one damage call per hit; Magic Resistance doesn't apply; a creature with Legendary Resistance decides first; without saves in its stat block you roll it; a bonus the app can't see, like Bless, is put right with concentrate and rounds); and ends the spell at 0 HP, on an Incapacitating condition, a failed save or when its time is up — not on defeat or remove — naming what to end with it (areas, conditions). Don't record a spell a stat block casts without Concentration. For the hero's own spell, concentrate only sets `rounds` (update_character starts and ends it). Targets are names (\"Goblin 2\") or ids. The hero's HP and conditions are NOT changed here — use update_character.",
     "input_schema": {
       "type": "object",
       "properties": {
@@ -1492,7 +1510,8 @@
             "defeat",
             "note",
             "reveal",
-            "hide"
+            "hide",
+            "concentrate"
           ]
         },
         "target": {
@@ -1520,7 +1539,7 @@
                 "description": "A condition such as \"poisoned\", \"prone\", \"frightened\", or a homebrew condition name."
               },
               "source": {
-                "description": "What caused it, e.g. \"Giant spider venom\".",
+                "description": "What caused it: \"Giant spider venom\", a spell by its name (\"Hold Person\").",
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 120
@@ -1690,6 +1709,25 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 400
+        },
+        "spell": {
+          "description": "For action \"concentrate\": the spell or effect it concentrates on, or null when that ends.",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rounds": {
+          "description": "For action \"concentrate\": rounds left (1 minute = 10); default: the spell's duration.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 14400
         }
       },
       "required": [
