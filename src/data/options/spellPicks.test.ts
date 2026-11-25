@@ -15,6 +15,7 @@ import {
   closeSpellPicks,
   fitsBookCaps,
   keepsBookExtra,
+  keptBookExtraLines,
   levelSpellsEdit,
   openSpellPicks,
   owedSpells,
@@ -333,6 +334,28 @@ describe('what a class holds, as the SRD counts it', () => {
     expect(keepsBookExtra(c, 'Cleric (Dusk Domain)', 'Cleric', classes)).toBe(false);
     expect(keepsBookExtra(c, 'Magic Initiate (Wizard)', 'Magic Initiate', classes)).toBe(false);
     expect(keepsBookExtra(c, 'Wizard (copied)', 'Wizard', [])).toBe(false);
+  });
+
+  it("tells the DM the number of spells a spellbook class's own levels add, read from its text (srd:rule:wizard-spellcasting)", () => {
+    // "Whenever you gain a Wizard level after 1, add two Wizard spells of your choice to your spellbook": a book's class
+    // with a spellbook may add another number, read from its own text as its counts are (an invented Archivist here).
+    const wizard = cls('Wizard');
+    const bookClass = (per: string): ClassOption => ({
+      ...wizard,
+      id: `lib:test:class:archivist-${per}`,
+      name: 'Archivist',
+      features: wizard.features.map((f) => ({ ...f, description: f.description.replaceAll('Wizard', 'Archivist').replace('add two Archivist spells', `add ${per} Archivist spell${per === 'one' ? '' : 's'}`) })),
+    });
+    const lineFor = (option: ClassOption) =>
+      keptBookExtraLines([{ name: 'Fly', source: 'Archivist' }], hero([entry('Wizard', 5, { classId: option.id, name: 'Archivist' })], [spell('Fly', 3, 'Archivist (copied)', false)]), [option]);
+    expect(lineFor(bookClass('one'))).toEqual([
+      'Fly keeps its source "Archivist (copied)": a spell copied into the spellbook, or added to it free, stays outside the one spell each Archivist level adds to it. If it is that one, spells_remove it and spells_add it again with source "Archivist" and prepared false.',
+    ]);
+    expect(lineFor(bookClass('three'))[0]).toContain('stays outside the three spells each Archivist level adds to it. If it is one of those three, spells_remove it');
+    // Without its class's data the number isn't known: the line only says the source stays.
+    expect(keptBookExtraLines([{ name: 'Fly', source: 'Archivist' }], hero([entry('Wizard', 5, { classId: 'lib:test:class:gone', name: 'Archivist' })], [spell('Fly', 3, 'Archivist (copied)', false)]), [])).toEqual([
+      'Fly keeps its source "Archivist (copied)": a spell copied into the spellbook, or added to it free, keeps that source.',
+    ]);
   });
 
   it('counts only spells of a level the class has slots for (srd:rule:warlock-pact-magic, srd:rule:warlock-mystic-arcanum)', () => {

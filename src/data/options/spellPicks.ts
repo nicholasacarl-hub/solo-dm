@@ -116,29 +116,45 @@ export function keepsBookExtra(c: Character, held: string | undefined, given: st
   return option ? classSpellRules(option).spellbook.start > 0 : false;
 }
 
+const COUNT_WORDS = ['no', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+
 /**
  * For the DM, after spells_add: the spells it gave its class's own name that kept a spellbook extra's source instead
- * (keepsBookExtra), so the call's source wasn't applied. Each line says so, and how to make one of them one of a level's
- * two: remove it and add it again.
+ * (keepsBookExtra), so the call's source wasn't applied. Only a spell's last entry with a source counts (one call may
+ * name a spell twice): its final source answers that entry. Each line says so, with the number of spells the class's
+ * levels add to its book (its own text, from `classes`), and how to make one of them one of those: remove it and add it
+ * again, prepared as it is now (spells_add prepares a new spell unless told), Concentration on it set again after. An
+ * always-prepared one gets no such advice: added again, it would lose that.
  */
-export function keptBookExtraLines(given: readonly { name: string; source?: string }[], after: Character): string[] {
-  const groups: { source: string; className: string; names: string[] }[] = [];
-  for (const spell of given) {
-    if (spell.source === undefined) continue;
-    const now = after.spellcasting?.spells.find((s) => nameKey(s.name) === nameKey(spell.name));
+export function keptBookExtraLines(given: readonly { name: string; source?: string }[], after: Character, classes: readonly ClassOption[]): string[] {
+  const last = new Map<string, string>();
+  for (const spell of given) if (spell.source !== undefined) last.set(nameKey(spell.name), spell.source);
+  const groups: { source: string; className: string; prepared: boolean; always: boolean; names: string[] }[] = [];
+  for (const [name, named] of last) {
+    const now = after.spellcasting?.spells.find((s) => nameKey(s.name) === name);
     const source = now?.source;
     const key = extraClassKey(source);
-    if (!now || !source || key === null || key !== nameKey(spell.source)) continue;
-    const group = groups.find((g) => nameKey(g.source) === nameKey(source));
-    if (group) {
-      if (!group.names.includes(now.name)) group.names.push(now.name);
-    } else {
-      groups.push({ source, className: after.classes.find((cl) => nameKey(cl.name) === key)?.name ?? spell.source.trim(), names: [now.name] });
-    }
+    if (!now || !source || key === null || key !== nameKey(named)) continue;
+    const prepared = now.prepared;
+    const always = now.alwaysPrepared === true;
+    const group = groups.find((g) => nameKey(g.source) === nameKey(source) && g.prepared === prepared && g.always === always);
+    if (group) group.names.push(now.name);
+    else groups.push({ source, className: after.classes.find((cl) => nameKey(cl.name) === key)?.name ?? named.trim(), prepared, always, names: [now.name] });
   }
-  return groups.map(({ source, className, names }) => {
+  const concentrating = nameKey(after.spellcasting?.concentratingOn ?? '');
+  return groups.map(({ source, className, prepared, always, names }) => {
     const one = names.length === 1;
-    return `${andList(names)} ${one ? 'keeps its' : 'keep their'} source "${source}": a spell copied into the spellbook, or added to it free, stays outside the two each ${className} level adds. If ${one ? 'it is' : 'one of them is'} one of those two, spells_remove it and spells_add it again with source "${className}".`;
+    const head = `${andList(names)} ${one ? 'keeps its' : 'keep their'} source "${source}"`;
+    const cl = after.classes.find((x) => nameKey(x.name) === nameKey(className));
+    const option = cl ? classOptionFor(cl, classes) : undefined;
+    const per = option ? classSpellRules(option).spellbook.perLevel : 0;
+    const word = COUNT_WORDS[per] ?? String(per);
+    if (per < 1) return `${head}: a spell copied into the spellbook, or added to it free, keeps that source.`;
+    const outside = `${head}: a spell copied into the spellbook, or added to it free, stays outside the ${per === 1 ? 'one spell' : `${word} spells`} each ${className} level adds to it.`;
+    if (always) return `${outside} Leave ${one ? 'it' : 'them'} so: removed and added again, a spell would lose its always-prepared mark.`;
+    const held = names.find((n) => nameKey(n) === concentrating);
+    const concentration = held ? ` Removing ${held} ends Concentration on it: set concentration again in a later call.` : '';
+    return `${outside} If ${one ? 'it is' : 'one of them is'} ${per === 1 ? 'that one' : `one of those ${word}`}, spells_remove it and spells_add it again with source "${className}" and prepared ${prepared}.${concentration}`;
   });
 }
 

@@ -333,7 +333,9 @@ a Mystic Arcanum recorded under "Warlock" counts nowhere. A spellbook counts the
 prepared ones too (the book still holds them); a spell copied into it or added free (Evocation Savant), recorded as
 "Wizard (copied)", comes on top of each level's two and counts only as a prepared spell. Re-added under the bare class
 name, as a DM preparing it may do, such a spell keeps its source (`keepsBookExtra`), and `update_character` tells the DM
-so: only removing it and adding it again makes it one of a level's two. Copying prepares nothing, so the DM is told to
+so (from each spell's last entry with a source, with the number its class's levels add): only removing it and adding it
+again, prepared as it was, makes it one of a level's spells (an always-prepared one is left alone: added again, it would
+lose that). Copying prepares nothing, so the DM is told to
 add a copy unprepared unless the player prepares it. Each spellbook spell still owed keeps the limit of the level it belongs to (`bookCaps`:
 the book's spells take the lowest places they fit), so a choice put off across a level, or an older hero's catch-up,
 can't fill earlier levels with the newest spell level. A level-up (the dialog or the DM's

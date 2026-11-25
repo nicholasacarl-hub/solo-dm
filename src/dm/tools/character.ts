@@ -1032,7 +1032,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
     lines.push('The initiative already rolled for this fight stays; the new bonus counts from the next Initiative roll.');
   }
   // For the DM only: a spellbook's extra it re-added under the class's own name kept its source, and how to change that.
-  lines.push(...keptBookExtraLines(input.spells_add ?? [], change.character));
+  lines.push(...keptBookExtraLines(input.spells_add ?? [], change.character, links.classes));
   // For the DM only: whether the class's spell choices are done (the sheet's reminder clears) or what is left.
   for (const p of settled) lines.push(p.owed ? `Spell choices still open: ${owedSpellsLine(p.owed)}` : `Spell choices for ${p.className} ${p.level} recorded: nothing left to choose.`);
   lines.push(...keptHomebrewLines(input.conditions_add, change.character.conditions));
