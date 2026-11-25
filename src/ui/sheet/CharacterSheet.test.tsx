@@ -531,7 +531,7 @@ describe('CharacterSheet — AC from spells and Concentration', () => {
     expect(useGame.getState().character?.armorClass).toBe(12);
     expect(notices()).toEqual([
       'Player ended Mage Armor (AC 17 → 14)',
-      'Player ended concentration on Detect Magic; if it left an area on the map, end it with update_map effects_end ["Detect Magic"]',
+      'Player ended concentration on Detect Magic; if it left an area on the map, end it with update_map effects_end ["Detect Magic"] (it ends every area of that name)',
       'Player ended Shield of Faith (AC 14 → 12)',
     ]);
   });
@@ -671,6 +671,32 @@ describe('CharacterSheet — AC from spells and Concentration', () => {
     await user.click(screen.getByRole('tab', { name: /Spells/ }));
     await user.click(button('Stop concentrating on Shield of Faith'));
     expect(useGame.getState().character?.spellcasting?.concentratingOn).toBeNull();
+  });
+
+  // Docs-lens note (U4): srd:spell:shield-of-faith ("a +2 bonus to AC for the duration") under an AC set by hand that
+  // doesn't count it (an older app version's save). The Stop toggle says "not counted", as the chip does, and still asks
+  // twice: the record ends with the Concentration either way.
+  it("says on the Spells tab's Stop toggle when the carried Shield of Faith isn't counted, and still asks twice", async () => {
+    const shieldOfFaith: KnownSpell = { id: 'srd:spell:shield-of-faith', name: 'Shield of Faith', level: 1, prepared: true, source: 'Wizard', concentration: true };
+    const base = sampleCharacter();
+    const spellcasting = { ...base.spellcasting!, spells: [...base.spellcasting!.spells, shieldOfFaith], concentratingOn: 'Shield of Faith' };
+    seed(sampleCharacter({ armorClass: 18, acFormula: 'set by the DM: Haste', acSpells: ['Shield of Faith'], spellcasting }));
+    const user = userEvent.setup();
+    render(<Harness />);
+    expect(screen.getByText(/^Concentrating:/).textContent).toBe('Concentrating: Shield of Faith · +2 AC · not counted: your AC was set by hand');
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    const stop = button('Stop concentrating on Shield of Faith (+2 Armor Class, not counted)');
+    expect(stop).toHaveAttribute('aria-pressed', 'true');
+    await user.click(stop);
+    expect(stop).toHaveTextContent('End?');
+    expect(stop).toHaveAccessibleName('Confirm ending concentration on Shield of Faith (+2 Armor Class, not counted)');
+    expect(useGame.getState().updateCharacter).not.toHaveBeenCalled();
+    await user.click(stop);
+    expect(useGame.getState().character).toMatchObject({ armorClass: 18, acFormula: 'set by the DM: Haste', spellcasting: { concentratingOn: null } });
+    expect(useGame.getState().character).not.toHaveProperty('acSpells');
+    expect(notices()).toEqual([
+      "Player ended concentration on Shield of Faith; Shield of Faith ends: AC stays 18; if Shield of Faith still protects the hero, record it again with ac_spells_add — AC kept at 18: it differs from the 14 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 12 (10 + DEX 2); update the AC if that is right.",
+    ]);
   });
 
   // Sheet note 5: a press whose edit is refused ends nothing, so it mustn't steer focus when the spells change later.

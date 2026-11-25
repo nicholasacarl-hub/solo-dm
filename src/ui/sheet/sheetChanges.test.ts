@@ -3,10 +3,10 @@ import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import { knownSpellFromEntry } from '@/data/options/levelUpChoices';
 import { owedSpells } from '@/data/options/spellPicks';
 import { nameKey } from '@/lib/id';
-import { sampleCharacter } from '@/test/fixtures';
+import { sampleCharacter, sampleMappedCombat } from '@/test/fixtures';
 import { GLOAMWOOD_TITLE, SRD_BUILDER_DATA } from '@/test/structuredFixtures';
-import { addAcSpell, SHEET_TEXT_MAX, setConcentration } from '@/engine';
-import type { Character, ClassLevel, ClassOption, CompendiumEntry, InventoryItem, KnownSpell, SpellPicksOwed } from '@/types';
+import { addAcSpell, editMap, SHEET_TEXT_MAX, setConcentration } from '@/engine';
+import type { Character, ClassLevel, ClassOption, CompendiumEntry, InventoryItem, KnownSpell, MapEffect, SpellPicksOwed } from '@/types';
 import {
   addConditionChange,
   concentrationChange,
@@ -209,6 +209,9 @@ const concentrating = (c: Character, spell: string): Character => setConcentrati
 const shieldOfFaith = () => withAcSpells(concentrating(sampleCharacter(), 'Shield of Faith'), 'Shield of Faith');
 /** Concentration on a spell the DM set the AC by hand for (srd:spell:haste: "it gains a +2 bonus to Armor Class"). */
 const hasted = () => concentrating(sampleCharacter({ armorClass: 14, acFormula: 'set by the DM: Haste' }), 'Haste');
+/** Aid +5 (srd:spell:aid), then a Life Drain of 20: a Hit Point maximum of 2, which Aid's end takes to 0. */
+const aidedAndDrained = (c: Character): Character =>
+  hpMaxChange(hpMaxChange(c, { name: 'Aid', change: 5, ends: 'long-rest' }).character, { name: 'Life Drain', change: -20, ends: 'long-rest' }).character;
 
 // The AC chips' × (Mage Armor, another caster's Shield of Faith), on the real engine.
 describe('AC spells ended from the sheet', () => {
@@ -259,9 +262,9 @@ describe('AC spells ended from the sheet', () => {
   });
 });
 
-// The sheet's three ways to end the hero's Concentration (the toggle or the chip's ×, damage to 0 HP, an Incapacitating
-// condition): the DM hears what ended with it. srd:rule:concentration: "If the effect's creator loses Concentration,
-// the effect ends."
+// The sheet's ways to end the hero's Concentration (the toggle or the chip's ×, damage to 0 HP, an Incapacitating
+// condition, death by Exhaustion or by a Hit Point maximum of 0): the DM hears what ended with it.
+// srd:rule:concentration: "If the effect's creator loses Concentration, the effect ends."
 describe('Concentration ended from the sheet tells the DM what ended with it', () => {
   // srd:rule:concentration: "Your Concentration ends if you have the Incapacitated condition or you die";
   // srd:condition:paralyzed: "You have the Incapacitated condition".
@@ -278,7 +281,9 @@ describe('Concentration ended from the sheet tells the DM what ended with it', (
     const webbed = concentrating(sampleCharacter(), 'Web');
     const ended = concentrationChange(webbed, null);
     expect(ended.character.spellcasting?.concentratingOn).toBeNull();
-    expect(ended.notice).toBe('Player ended concentration on Web; if it left an area on the map, end it with update_map effects_end ["Web"]');
+    expect(ended.notice).toBe(
+      'Player ended concentration on Web; if it left an area on the map, end it with update_map effects_end ["Web"] (it ends every area of that name)',
+    );
     expect(ended.warning).toBeFalsy();
     // The same spell under another spelling is no change at all.
     expect(concentrationChange(webbed, 'web')).toEqual({ character: webbed, notice: null, warning: null });
@@ -304,14 +309,41 @@ describe('Concentration ended from the sheet tells the DM what ended with it', (
       'Player is now concentrating on Detect Magic (ending Shield of Faith); Shield of Faith ends: AC 14 → 12; if Shield of Faith still protects the hero, record it again with ac_spells_add',
     );
     const fromWeb = concentrationChange(concentrating(sampleCharacter(), 'Web'), 'Detect Magic');
-    expect(fromWeb.notice).toBe('Player is now concentrating on Detect Magic (ending Web); if it left an area on the map, end it with update_map effects_end ["Web"]');
+    expect(fromWeb.notice).toBe(
+      'Player is now concentrating on Detect Magic (ending Web); if it left an area on the map, end it with update_map effects_end ["Web"] (it ends every area of that name)',
+    );
+  });
+
+  // RX4: the sheet can't see the map, so the hero's Spirit Guardians and another creature's area of the same name look
+  // alike to it (srd:spell:spirit-guardians: "Protective spirits flit around you in a 15-foot Emanation for the
+  // duration"). The clause says what its call does, and on the map the call does just that.
+  it('says the call in its area clause ends every area of that name, as it does on the map', () => {
+    const r = concentrationChange(concentrating(sampleCharacter(), 'Spirit Guardians'), null);
+    expect(r.notice).toBe(
+      'Player ended concentration on Spirit Guardians; if it left an area on the map, end it with update_map effects_end ["Spirit Guardians"] (it ends every area of that name)',
+    );
+    const combat = sampleMappedCombat();
+    const [hero, bandit] = combat.combatants;
+    const guardians = (id: string, fromId: string): MapEffect => ({
+      id,
+      label: 'Spirit Guardians',
+      spec: { shape: 'emanation', sizeFt: 15, fromId },
+      rects: [],
+      terrain: ['difficult'],
+      duration: 'lasting',
+      round: 1,
+      turnOfId: fromId,
+    });
+    const mapped = { ...combat, map: { ...combat.map!, effects: [guardians('e1', hero.id), guardians('e2', bandit.id)] } };
+    const done = editMap(mapped, r.character, { effectsEnd: ['Spirit Guardians'] });
+    expect(done.ok && done.state.map?.effects).toEqual([]);
   });
 
   it('puts the reminder about an AC set by hand for the spell in the DM notice, not in a toast the player cannot act on', () => {
     const r = concentrationChange(hasted(), null);
     expect(r.character.armorClass).toBe(14);
     expect(r.notice).toBe(
-      'Player ended concentration on Haste; if it left an area on the map, end it with update_map effects_end ["Haste"] — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).',
+      'Player ended concentration on Haste; if it left an area on the map, end it with update_map effects_end ["Haste"] (it ends every area of that name) — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).',
     );
     expect(r.warning).toBeFalsy();
   });
@@ -322,7 +354,7 @@ describe('Concentration ended from the sheet tells the DM what ended with it', (
     const down = damageChange(webbed, 12);
     expect(down.character).toMatchObject({ hp: { current: 0 }, spellcasting: { concentratingOn: null } });
     expect(down.notice).toBe(
-      'Player changed HP 12 → 0 (12 damage) — dropped to 0 HP; Concentration on Web ends (Unconscious); if it left an area on the map, end it with update_map effects_end ["Web"]',
+      'Player changed HP 12 → 0 (12 damage) — dropped to 0 HP; Concentration on Web ends (Unconscious); if it left an area on the map, end it with update_map effects_end ["Web"] (it ends every area of that name)',
     );
     expect(down.warning).toBeUndefined();
     const sof = damageChange(shieldOfFaith(), 20);
@@ -344,7 +376,7 @@ describe('Concentration ended from the sheet tells the DM what ended with it', (
     const paralyzed = addConditionChange(webbed, 'paralyzed');
     expect(paralyzed.character.spellcasting?.concentratingOn).toBeNull();
     expect(paralyzed.notice).toBe(
-      'Player added the Paralyzed condition; Concentration on Web ends (Paralyzed); if it left an area on the map, end it with update_map effects_end ["Web"]',
+      'Player added the Paralyzed condition; Concentration on Web ends (Paralyzed); if it left an area on the map, end it with update_map effects_end ["Web"] (it ends every area of that name)',
     );
     expect(addConditionChange(shieldOfFaith(), 'stunned').notice).toBe(
       'Player added the Stunned condition; Concentration on Shield of Faith ends (Stunned); Shield of Faith ends: AC 14 → 12; if Shield of Faith still protects the hero, record it again with ac_spells_add',
@@ -361,7 +393,7 @@ describe('Concentration ended from the sheet tells the DM what ended with it', (
     const r = exhaustionChange({ ...hasted(), exhaustion: 5 }, 6);
     expect(r.character.deathSaves.dead).toBe(true);
     expect(r.notice).toBe(
-      'Player changed exhaustion 5 → 6; Concentration on Haste ends (death); if it left an area on the map, end it with update_map effects_end ["Haste"] — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).',
+      'Player changed exhaustion 5 → 6; Concentration on Haste ends (death); if it left an area on the map, end it with update_map effects_end ["Haste"] (it ends every area of that name) — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).',
     );
     expect(r.warning).toBeUndefined();
     expect(exhaustionChange(concentrating(sampleCharacter(), 'Web'), 1)).toMatchObject({ notice: 'Player changed exhaustion 0 → 1' });
@@ -373,13 +405,41 @@ describe('Concentration ended from the sheet tells the DM what ended with it', (
     const drained = hpMaxChange(hasted(), { name: 'Life Drain', change: -17, ends: 'long-rest' });
     expect(drained.character).toMatchObject({ deathSaves: { dead: true }, spellcasting: { concentratingOn: null }, armorClass: 14 });
     expect(drained.notice).toBe(
-      'Player changed their Hit Point maximum: HP maximum 17 → 0 (Life Drain −17, until a Long Rest): a creature dies if its Hit Point maximum reaches 0; Concentration on Haste ends (death); if it left an area on the map, end it with update_map effects_end ["Haste"] — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).',
+      'Player changed their Hit Point maximum: HP maximum 17 → 0 (Life Drain −17, until a Long Rest): a creature dies if its Hit Point maximum reaches 0; Concentration on Haste ends (death); if it left an area on the map, end it with update_map effects_end ["Haste"] (it ends every area of that name) — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).',
     );
     expect(drained.warning).toBeUndefined();
     // Without a Concentration the notice is as it was.
     expect(hpMaxChange(sampleCharacter(), { name: 'Life Drain', change: -17, ends: 'long-rest' }).notice).toBe(
       'Player changed their Hit Point maximum: HP maximum 17 → 0 (Life Drain −17, until a Long Rest): a creature dies if its Hit Point maximum reaches 0',
     );
+  });
+
+  // srd:spell:aid: "Each target's Hit Point maximum and current Hit Points increase by 5 for the duration", so its end
+  // takes the 5 back; srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death: "A creature dies if its Hit
+  // Point maximum reaches 0." Ending Aid (its chip's ×) under a bigger drain is that death, told as the other ends tell
+  // it (RS1).
+  it('says what ended with it when ending Aid takes the maximum to 0, the reminder for the DM alone', () => {
+    const died = 'Player ended a Hit Point maximum adjustment: Aid +5 ends: HP maximum 2 → 0 — a creature dies if its Hit Point maximum reaches 0';
+    const haste = endHpMaxChange(aidedAndDrained(hasted()), 'Aid', 'long-rest');
+    expect(haste.character).toMatchObject({ hp: { max: 0 }, deathSaves: { dead: true }, spellcasting: { concentratingOn: null }, armorClass: 14 });
+    expect(haste.notice).toBe(
+      `${died}; Concentration on Haste ends (death); if it left an area on the map, end it with update_map effects_end ["Haste"] (it ends every area of that name) — AC 14 was set by hand for Haste: if it counted Haste, set the AC back to 12 (armor and abilities).`,
+    );
+    expect(haste.warning).toBeUndefined();
+    // srd:spell:invisibility: "A creature you touch has the Invisible condition until the spell ends".
+    const invisible = endHpMaxChange(aidedAndDrained(concentrating(sampleCharacter({ conditions: [{ id: 'invisible', source: 'Invisibility' }] }), 'Invisibility')), 'Aid', 'long-rest');
+    expect(invisible.notice).toBe(
+      `${died}; Concentration on Invisibility ends (death); Mira Voss is Invisible (source: Invisibility): if the spell caused it, remove it with update_character conditions_remove; if it left an area on the map, end it with update_map effects_end ["Invisibility"] (it ends every area of that name)`,
+    );
+    expect(invisible.warning).toBeUndefined();
+    // srd:spell:web: "The webs fill a 20-foot Cube there for the duration."
+    expect(endHpMaxChange(aidedAndDrained(concentrating(sampleCharacter(), 'Web')), 'Aid', 'long-rest').notice).toBe(
+      `${died}; Concentration on Web ends (death); if it left an area on the map, end it with update_map effects_end ["Web"] (it ends every area of that name)`,
+    );
+    // Without a Concentration the notice and its toast are as they were.
+    const plain = endHpMaxChange(aidedAndDrained(sampleCharacter()), 'Aid', 'long-rest');
+    expect(plain.notice).toBe(died);
+    expect(plain.warning).toBeUndefined();
   });
 
   // srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death, Massive Damage: "the character dies if the
@@ -395,6 +455,10 @@ describe('Concentration ended from the sheet tells the DM what ended with it', (
     expect(hpMaxChange(shieldOfFaith(), { name: 'Life Drain', change: -17, ends: 'long-rest' }).notice).toBe(
       'Player changed their Hit Point maximum: HP maximum 17 → 0 (Life Drain −17, until a Long Rest): a creature dies if its Hit Point maximum reaches 0; Concentration on Shield of Faith ends (death); Shield of Faith ends: AC 14 → 12',
     );
+    // srd:spell:aid: the same death when ending Aid takes the maximum to 0 (RS1).
+    expect(endHpMaxChange(aidedAndDrained(shieldOfFaith()), 'Aid', 'long-rest').notice).toBe(
+      'Player ended a Hit Point maximum adjustment: Aid +5 ends: HP maximum 2 → 0 — a creature dies if its Hit Point maximum reaches 0; Concentration on Shield of Faith ends (death); Shield of Faith ends: AC 14 → 12',
+    );
     // Unconscious at 0 HP, alive: the hint stays.
     expect(damageChange(shieldOfFaith(), 12).notice).toMatch(/; if Shield of Faith still protects the hero, record it again with ac_spells_add$/);
   });
@@ -406,20 +470,20 @@ describe('Concentration ended from the sheet tells the DM what ended with it', (
     const invisible = concentrating(sampleCharacter({ conditions: [{ id: 'invisible', source: 'Invisibility' }, { id: 'prone', source: 'Fell unconscious' }] }), 'Invisibility');
     const call = 'if the spell caused it, remove it with update_character conditions_remove';
     expect(concentrationChange(invisible, null).notice).toBe(
-      `Player ended concentration on Invisibility; Mira Voss is Invisible (source: Invisibility): ${call}; if it left an area on the map, end it with update_map effects_end ["Invisibility"]`,
+      `Player ended concentration on Invisibility; Mira Voss is Invisible (source: Invisibility): ${call}; if it left an area on the map, end it with update_map effects_end ["Invisibility"] (it ends every area of that name)`,
     );
     expect(damageChange(invisible, 12).notice).toBe(
-      `Player changed HP 12 → 0 (12 damage) — dropped to 0 HP; Concentration on Invisibility ends (Unconscious); Mira Voss is Invisible (source: Invisibility): ${call}; if it left an area on the map, end it with update_map effects_end ["Invisibility"]`,
+      `Player changed HP 12 → 0 (12 damage) — dropped to 0 HP; Concentration on Invisibility ends (Unconscious); Mira Voss is Invisible (source: Invisibility): ${call}; if it left an area on the map, end it with update_map effects_end ["Invisibility"] (it ends every area of that name)`,
     );
     // srd:spell:faerie-fire (Concentration, up to 1 minute): a homebrew condition named by its duration, on a hero with
     // no name, when another Concentration starts.
     const glowing = concentrating(sampleCharacter({ name: '  ', conditions: [{ id: 'Glowing', duration: 'until\nFaerie Fire ends' }] }), 'Faerie Fire');
     expect(concentrationChange(glowing, 'Detect Magic').notice).toBe(
-      `Player is now concentrating on Detect Magic (ending Faerie Fire); The hero has "Glowing" (duration: until Faerie Fire ends): ${call}; if it left an area on the map, end it with update_map effects_end ["Faerie Fire"]`,
+      `Player is now concentrating on Detect Magic (ending Faerie Fire); The hero has "Glowing" (duration: until Faerie Fire ends): ${call}; if it left an area on the map, end it with update_map effects_end ["Faerie Fire"] (it ends every area of that name)`,
     );
     // A condition that doesn't name the spell, or a spell no condition names, adds nothing.
     expect(concentrationChange(concentrating(sampleCharacter({ conditions: [{ id: 'invisible', source: 'Potion of Invisibility' }] }), 'Web'), null).notice).toBe(
-      'Player ended concentration on Web; if it left an area on the map, end it with update_map effects_end ["Web"]',
+      'Player ended concentration on Web; if it left an area on the map, end it with update_map effects_end ["Web"] (it ends every area of that name)',
     );
   });
 });

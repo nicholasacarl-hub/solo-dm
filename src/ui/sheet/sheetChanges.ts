@@ -144,8 +144,9 @@ function conditionNamingText(n: ConditionNaming, spell: string): string {
  * A notice with what ended with the hero's Concentration, on its one line: the engine's words (but the end itself when
  * the notice already says it), a hint to record a Shield of Faith that still protects a living hero again (the sheet
  * can't tell the hero's own casting from another caster's), each of the hero's conditions that names the spell, with
- * the call that removes it, one conditional clause for an area the spell may have left (the sheet can't see the map;
- * Shield of Faith leaves none), then the reminder about an AC set by hand for the spell.
+ * the call that removes it, one conditional clause for an area the spell may have left (Shield of Faith leaves none),
+ * then the reminder about an AC set by hand for the spell. The sheet can't see the map, so it can't tell the hero's
+ * area from another caster's of the same name: the clause says the call ends every area of that name (RX4).
  */
 function withConcentrationEnd(head: string, ended: ConcentrationEnded, { endSaid }: { endSaid: boolean }): string {
   const clauses = endSaid ? ended.said.slice(1) : [...ended.said];
@@ -153,7 +154,9 @@ function withConcentrationEnd(head: string, ended: ConcentrationEnded, { endSaid
   for (const n of ended.conditions) {
     clauses.push(`${conditionNamingText(n, ended.spell)}: if the spell caused it, remove it with update_character conditions_remove`);
   }
-  if (!acSpellNamed(ended.spell)) clauses.push(`if it left an area on the map, end it with update_map effects_end ${JSON.stringify([ended.spell])}`);
+  if (!acSpellNamed(ended.spell)) {
+    clauses.push(`if it left an area on the map, end it with update_map effects_end ${JSON.stringify([ended.spell])} (it ends every area of that name)`);
+  }
   return `${[head, ...clauses].join('; ')}${ended.forDm.length ? ` — ${ended.forDm.join(' ')}` : ''}`;
 }
 
@@ -257,11 +260,20 @@ export function hpMaxChange(c: Character, spec: HpMaxChange): SheetChange {
   return { character, notice: withConcentrationEnd(said(events.slice(0, ended.at)), ended, { endSaid: false }), warning: ended.toast };
 }
 
-/** The player ends an adjustment (its × on the Hit Points bar). */
+/**
+ * The player ends an adjustment (its × on the Hit Points bar). Ending a raise (Aid) can leave a maximum of 0, which is
+ * death as in hpMaxChange (srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death: "A creature dies if its
+ * Hit Point maximum reaches 0") and ends the hero's Concentration: the DM hears what ended with it in the same words,
+ * the reminder about an AC set by hand included, and the player gets no toast of the DM's.
+ */
 export function endHpMaxChange(c: Character, name: string, ends?: HpMaxEnds): SheetChange {
   const { character, events } = endHpMaxAdjustments(c, name, ends);
   if (character === c) return unchanged(c, firstWarning(events));
-  return { character, notice: `Player ended a Hit Point maximum adjustment: ${changeText(events)}`, warning: firstWarning(events) };
+  const said = (shown: readonly GameEvent[]) => `Player ended a Hit Point maximum adjustment: ${changeText(shown)}`;
+  const ended = concentrationEnded(c, character, events);
+  // The death comes first: what ended with it follows, as the other paths tell it.
+  if (!ended || ended.at === 0) return { character, notice: said(events), warning: firstWarning(events) };
+  return { character, notice: withConcentrationEnd(said(events.slice(0, ended.at)), ended, { endSaid: false }), warning: ended.toast };
 }
 
 /**

@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Brain, BookOpen } from 'lucide-react';
-import { formatModifier, ordinal, spellAttackBonus, spellSaveDC } from '@/engine';
+import { countedAcSpells, formatModifier, ordinal, spellAttackBonus, spellSaveDC } from '@/engine';
 import { getRulesIndex } from '@/data';
 import { cn } from '@/lib/cn';
 import { isImportedPlaceholder } from '@/lib/importedContent';
@@ -133,9 +133,9 @@ function SpellRow({
 }) {
   const concentrating = c.spellcasting?.concentratingOn === spell.name;
   // A Concentration that carries an AC spell (Shield of Faith's +2 on the hero) ends on a second press, as its chip's ×
-  // does: the sheet can't record the spell again.
+  // does: the sheet can't record the spell again. One the AC doesn't count says so, as its chip does.
   const carried = concentrating ? concentrationAcSpell(c) : undefined;
-  const ac = carried ? ` (${acSpellWords(carried).spoken})` : '';
+  const ac = carried ? ` (${acSpellWords(carried).spoken}${countedAcSpells(c).includes(carried) ? '' : ', not counted'})` : '';
   const stop = useAskFirst(`${spell.name}${ac}`);
   const asking = Boolean(carried) && stop.asking;
   const canToggle = editable && spell.level > 0 && !spell.alwaysPrepared;
