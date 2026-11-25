@@ -11,7 +11,7 @@ import { findSrdClass } from '@/engine/classData';
 import { normalizeCombatState } from '@/engine/mapNormalize';
 import { slugify } from '@/lib/id';
 import { hasImported, redactImported } from '@/lib/importedContent';
-import { HP_MAX_ENDS, type Campaign, type CombatState, type HitDiceEntry, type HitDie } from '@/types';
+import { AC_SPELL_NAMES, HP_MAX_ENDS, type Campaign, type CombatState, type HitDiceEntry, type HitDie } from '@/types';
 import { campaignAndImageTables, db } from './db';
 import { deleteCampaignData, normalizeCampaignData, readCampaignData, writeCampaignData } from './campaignData';
 import { isCampaignOpenElsewhere, OPEN_ELSEWHERE_ERROR } from './campaignLock';
@@ -270,6 +270,13 @@ const hpMaxAdjustmentSchema = z.looseObject({
   ends: z.enum(HP_MAX_ENDS).catch('when-ended'),
 });
 
+/**
+ * The spells whose AC the app counts (Character.acSpells), in their stored form: each once, in AC_SPELL_NAMES order. A
+ * name the app doesn't count (a later version's, a hand edit) is left out; the AC already holds what it gave, as the
+ * engine's own reader of stored rows treats it.
+ */
+const acSpellsSchema = keepReadable(z.enum(AC_SPELL_NAMES)).transform((names) => AC_SPELL_NAMES.filter((n) => names.includes(n)));
+
 /** A class level's open spell choices (Spellcasting.spellPicks): what is owed is worked out live, so only these are kept. */
 const spellPicksSchema = z.looseObject({
   classId: z.string(),
@@ -303,6 +310,7 @@ const characterSchema = z
     weaponProficiencies: strings,
     armorTraining: strings,
     armorClass: z.number().default(10),
+    acSpells: acSpellsSchema.optional().catch(undefined),
     speed: z.number().default(30),
     size: z.enum(SAVE_CREATURE_SIZES).catch('Medium'),
     deathSaves: z
@@ -338,8 +346,10 @@ const characterSchema = z
     createdAt: timestamp.default(0),
     updatedAt: timestamp.default(0),
   })
-  .transform(({ hitDice, spellcasting, ...character }) => ({
+  .transform(({ hitDice, spellcasting, acSpells, ...character }) => ({
     ...character,
+    // Absent when empty, as the engine writes it.
+    ...(acSpells?.length ? { acSpells } : {}),
     hitDice: hitDice ?? hitDiceFromClasses(character.classes),
     ...(spellcasting && {
       spellcasting: {
