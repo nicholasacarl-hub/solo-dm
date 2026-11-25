@@ -1,14 +1,14 @@
 /**
  * Level-up choices from the merged builder data (spec §5.4, D31), pure: a subclass's spellcasting
- * (third casters), the always-prepared spells of an imported subclass, catch-up of earlier subclass
- * features, and the one Feat choice panel — Ability Score Improvement, Epic Boon or Fighting Style (the
+ * (third casters), a rules-index spell as a sheet spell (the always-prepared spells and the spell picks
+ * themselves are in spellPicks.ts), catch-up of earlier subclass features, and the one Feat choice panel — Ability Score Improvement, Epic Boon or Fighting Style (the
  * Champion's Additional Fighting Style too) — whose default, "Decide with my DM", leaves the level-up exactly as it was before this panel existed.
  *
  * Owner: E4. Shared by the level-up dialog and, for spells and spellcasting, the DM's level_up tool.
  * Of a feat's prerequisites only "Level N+" is checked, and its category's (featChoices); everything else is shown
  * for the DM to rule on.
  */
-import { addFeature, addSpell, changeAbilityScore, characterLevel, featOrTrait, isFightingStyle, proficiencyBonus, syncArmorClass } from '@/engine';
+import { addFeature, changeAbilityScore, characterLevel, featOrTrait, isFightingStyle, proficiencyBonus, syncArmorClass } from '@/engine';
 import { nameKey, newId } from '@/lib/id';
 import {
   ABILITY_NAMES,
@@ -117,48 +117,6 @@ export function knownSpellFromEntry(entry: CompendiumEntry, extra: Partial<Known
     ...(homebrewId ? { homebrewId } : {}),
     ...extra,
   };
-}
-
-export interface SubclassSpells {
-  /** Always prepared from now on: index ids, levels and refs from the rules index. */
-  spells: KnownSpell[];
-  /** Names the rules index doesn't have (a book's spell that isn't accepted yet): the DM adds them. */
-  missing: string[];
-}
-
-/**
- * The always-prepared spells an imported subclass grants up to `classLevel` that the sheet doesn't
- * have yet (spec §5.4). `find` looks a spell up by name in the rules index; SRD subclasses list none.
- */
-export function subclassSpellsToAdd(
-  sub: SubclassOption | undefined,
-  classLevel: number,
-  have: readonly Pick<KnownSpell, 'name'>[],
-  find: (name: string) => CompendiumEntry | undefined,
-): SubclassSpells {
-  const out: SubclassSpells = { spells: [], missing: [] };
-  if (!sub?.source || !sub.alwaysPreparedSpells?.length) return out;
-  const known = new Set(have.map((s) => nameKey(s.name)));
-  for (const row of sub.alwaysPreparedSpells) {
-    if (row.level > classLevel) continue;
-    for (const name of row.spells) {
-      const key = nameKey(name);
-      if (!key || known.has(key)) continue;
-      known.add(key);
-      const entry = find(name);
-      const spell = entry?.kind === 'spell' ? knownSpellFromEntry(entry, { alwaysPrepared: true, source: sub.name }) : null;
-      if (spell) out.spells.push(spell);
-      else out.missing.push(name.trim());
-    }
-  }
-  return out;
-}
-
-/** Add the subclass's always-prepared spells to the sheet (engine addSpell keeps the index ids). */
-export function addSubclassSpells(c: Character, spells: readonly KnownSpell[]): Character {
-  let next = c;
-  for (const spell of spells) next = addSpell(next, spell).character;
-  return next;
 }
 
 // ---------------------------------------------------------------------------
