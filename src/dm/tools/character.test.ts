@@ -14,6 +14,7 @@ vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
+import { createRulesIndex } from '@/data/search';
 import { knownSpellFromEntry } from '@/data/options/levelUpChoices';
 import { owedSpells } from '@/data/options/spellPicks';
 import { characterSheetText, levelUp, recomputeSlots, weaponCritRange } from '@/engine';
@@ -1258,6 +1259,25 @@ describe('a hand-set AC the new gear only matches: what it may have counted (H1/
     expect(h.sheet()).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield 2' });
   });
 
+  it('never asks for an ac_spells_add the same call makes: the Shield donned and the spell recorded at once (RD2; srd:spell:shield-of-faith "a +2 bonus to AC")', async () => {
+    const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith', ...concentratingOn('Shield of Faith') }) });
+    const out = await h.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }], ac_spells_add: ['Shield of Faith'] });
+    expect(out.content).not.toContain('record it with ac_spells_add');
+    // Nothing else is left to name (the Haste example), and the record the call makes moves the AC next.
+    expect(out.content).toContain(
+      'Warning: AC 18 stays as set by hand; armor and features now give 18 too (Chain Mail 16 + Shield 2). If the hand-set AC counted an effect that still applies (such as Haste), set armor_class to include it.\nShield of Faith: AC 18 → 20',
+    );
+    // The hand-set 18 is what the gear alone gives now, so it held no +2 (E2): the app adds it and ends it.
+    expect(h.sheet()).toMatchObject({ armorClass: 20, acFormula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    expect((await h.run('update_character', { concentration: null })).content).toContain('Shield of Faith ends: AC 20 → 18');
+    expect(h.sheet()).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield 2' });
+    // Only what the call records is left out (its names read as the AC spells they name): Mage Armor is still asked for.
+    const both = setup({ character: sampleCharacter({ abilityScores: { ...sampleCharacter().abilityScores, cha: 20 }, armorClass: 17, acFormula: 'set by the DM: Mage Armor and Shield of Faith' }) });
+    const one = await both.run('update_character', { features_add: [dragonBlooded], ac_spells_add: ['shield of faith'] });
+    expect(one.content).toContain('If it counted Mage Armor, record it with ac_spells_add ["Mage Armor"] (the app adds and ends it).');
+    expect(one.content).not.toContain('"Mage Armor", "Shield of Faith"');
+  });
+
   it('never takes the app\'s own "Shield of Faith 2" part for the DM naming it: a recorded spell gets the Haste example', async () => {
     // srd:spell:haste: "a +2 bonus to Armor Class", set by hand while Shield of Faith was recorded and counted.
     const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 20, acFormula: 'set by the DM: Haste + Shield of Faith 2', acSpells: ['Shield of Faith'] }) });
@@ -1324,6 +1344,88 @@ describe("a spell that needs no Concentration never becomes the hero's (D5)", ()
     expect((await unflagged.run('update_character', { concentration: 'Fireball' })).content).toContain('Concentrating on Fireball.');
     const faith = setup();
     expect((await faith.run('update_character', { concentration: 'Shield of Faith' })).content).toContain('Concentrating on Shield of Faith.');
+  });
+});
+
+describe("the hero's no-Concentration refusal reads the name as given, never a namesake on the sheet (RD1, on SRD 5.2.1's own entries)", () => {
+  /** The real rules index over the SRD 5.2.1 spells (its own name lookup), in place of the test's few entries. */
+  function withSrdSpells(opts: HarnessOptions = {}) {
+    const h = setup(opts);
+    const index = createRulesIndex(SRD_SPELLS);
+    setDmDeps({ rulesIndex: async () => index });
+    const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+    return { ...h, run: (name: string, input: unknown) => runTool(name, input, ctx) };
+  }
+  /** Mira Voss's Wizard spells and these SRD spells, as the builder records them. */
+  const wizardWith = (...names: string[]) => {
+    const sc = sampleCharacter().spellcasting!;
+    return sampleCharacter({ spellcasting: { ...sc, spells: [...sc.spells, ...names.map((n) => held(n, 'Wizard'))] } });
+  };
+  /** A Cleric's spells: Shield of Faith and Bless, and no Shield. */
+  const cleric = (concentratingOn: string | null) =>
+    sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, ability: 'wis', spells: [held('Shield of Faith', 'Cleric'), held('Bless', 'Cleric')], concentratingOn } });
+
+  it('records Invisibility beside the sheet\'s See Invisibility, counted by its own hour (srd:spell:invisibility: "Concentration, up to 1 hour")', async () => {
+    const h = withSrdSpells({ character: wizardWith('See Invisibility'), state: { combat: sampleCombat() } });
+    const out = await h.run('update_character', { concentration: 'Invisibility' });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain('Concentrating on Invisibility.\nInvisibility: about 60 minutes left.');
+    expect(out.content).not.toContain('See Invisibility');
+    expect(h.sheet().spellcasting?.concentratingOn).toBe('Invisibility');
+    expect(h.s().combat?.combatants.find((c) => c.isPlayer)?.concentrationCountdown).toEqual({ spell: 'Invisibility', roundsLeft: 600 });
+    // With the spell recorded in the same call (cast from a Spell Scroll), too.
+    const scroll = withSrdSpells({ character: wizardWith('See Invisibility') });
+    expect((await scroll.run('update_character', { spells_add: [{ name: 'Invisibility', level: 2 }], concentration: 'Invisibility' })).content).toContain(
+      'Concentrating on Invisibility.',
+    );
+    // srd:spell:see-invisibility: "Duration: 1 hour": by its own name it is refused.
+    const see = withSrdSpells({ character: wizardWith('See Invisibility') });
+    expect((await see.run('update_character', { concentration: 'See Invisibility' })).content).toBe("See Invisibility doesn't require Concentration (Duration: 1 hour).");
+  });
+
+  it('refuses Shield beside the sheet\'s Shield of Faith, before anything is written (srd:spell:shield: "Duration: 1 round")', async () => {
+    const h = withSrdSpells({ character: cleric('Bless') });
+    const start = h.sheet();
+    expect(await h.run('update_character', { concentration: 'Shield' })).toEqual({
+      isError: true,
+      content: "Shield doesn't require Concentration (Duration: 1 round). Fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn.",
+    });
+    // Bless goes on.
+    expect(h.sheet()).toBe(start);
+    expect(h.s().log).toHaveLength(0);
+    // While the hero holds Shield of Faith, "Shield" is refused the same way, so it ends nothing (H9) and its +2 stays.
+    const held = withSrdSpells({ character: { ...cleric('Shield of Faith'), armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] } });
+    const holding = held.sheet();
+    expect((await held.run('update_character', { concentration: 'Shield' })).content).toBe(
+      "Shield doesn't require Concentration (Duration: 1 round). Fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn.",
+    );
+    expect(held.sheet()).toBe(holding);
+  });
+
+  it('reads a name the rules data doesn\'t know as the sheet\'s spell it matches: "Faith" for a held Shield of Faith changes nothing (H9)', async () => {
+    // srd:spell:shield-of-faith: "Concentration, up to 10 minutes".
+    const h = withSrdSpells({ character: cleric('Shield of Faith') });
+    const start = h.sheet();
+    const out = await h.run('update_character', { concentration: 'Faith' });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toMatch(/^Status: [^\n]* · Concentrating: Shield of Faith · [^\n]*$/);
+    expect({ ...h.sheet(), updatedAt: start.updatedAt }).toEqual(start);
+    expect(h.s().log).toHaveLength(0);
+    // "Armor" for a held Mage Armor is refused as Mage Armor (srd:spell:mage-armor: "Duration: 8 hours").
+    const armored = withSrdSpells({ character: wizardWith('Mage Armor') });
+    expect((await armored.run('update_character', { concentration: 'Armor' })).content).toBe(
+      'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"].',
+    );
+  });
+
+  it("uses the sheet's link to its entry for a spell of exactly the name given (srd:spell:mage-armor: \"Duration: 8 hours\")", async () => {
+    // A copy spelled "Mage Armour" on the sheet, linked to the SRD's Mage Armor (KnownSpell.id is the entry's id).
+    const sc = sampleCharacter().spellcasting!;
+    const armour = { ...held('Mage Armor', 'Wizard'), name: 'Mage Armour' };
+    const h = withSrdSpells({ character: sampleCharacter({ spellcasting: { ...sc, spells: [...sc.spells, armour] } }) });
+    expect((await h.run('update_character', { concentration: 'Mage Armour' })).content).toBe(
+      'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"].',
+    );
   });
 });
 

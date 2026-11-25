@@ -4,11 +4,12 @@ vi.mock('@/engine', () => import('../testing/fakeEngine'));
 vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
+import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import { createRulesIndex } from '@/data/search';
 import { materializeEntries } from '@/data/structured/materialize';
 import { sampleCharacter, sampleCombat, sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
 import { gloamwoodEntries, gloamwoodEntryId, gloamwoodRecords, gloamwoodSource, GLOAMWOOD_TITLE } from '@/test/structuredFixtures';
-import type { Character, Combatant, CombatState, CompendiumEntry, LogEntry, MapEffect, RollLogEntry, ToolLogEntry } from '@/types';
+import type { Character, Combatant, CombatState, CompendiumEntry, KnownSpell, LogEntry, MapEffect, RollLogEntry, ToolLogEntry } from '@/types';
 import { deps, resetDmDeps, setDmDeps } from '../deps';
 import { createFakeRulesIndex, SAMPLE_RULES } from '../testing/fakeData';
 import { fakeDice } from '../testing/fakeEngine';
@@ -27,6 +28,25 @@ function setup(opts: HarnessOptions = {}): Harness & { run: (name: string, input
 
 const toolLines = (log: LogEntry[]) => log.filter((e): e is ToolLogEntry => e.kind === 'tool');
 const named = (state: CombatState | null, name: string) => state?.combatants.find((c) => c.name === name);
+
+const SRD_SPELLS = (JSON.parse(compendiumRaw) as CompendiumEntry[]).filter((e) => e.kind === 'spell');
+/** The setup with the real rules index over the SRD 5.2.1 spells (its own name lookup) in place of the few test entries. */
+function withSrdSpells(opts: HarnessOptions = {}) {
+  const h = setup(opts);
+  const index = createRulesIndex(SRD_SPELLS);
+  setDmDeps({ rulesIndex: async () => index });
+  const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+  return { ...h, run: (name: string, input: unknown) => runTool(name, input, ctx) };
+}
+/** A sheet spell as the builder links it to its SRD entry (KnownSpell.id is the entry's id). */
+const srdKnown = (id: string, name: string, level: number, source: string, concentration?: boolean): KnownSpell => ({
+  id,
+  name,
+  level,
+  prepared: true,
+  source,
+  ...(concentration ? { concentration } : {}),
+});
 
 /** The warehouse of spec §4.5 (its loading door is A5:B7, as in the fixture). */
 const WAREHOUSE = {
@@ -697,6 +717,51 @@ describe("update_combat concentrate on the hero: only the countdown of the sheet
     const counted = await lash.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Shadow Lash', rounds: 3 });
     expect(firstLine(counted.content)).toBe("Mira Voss's Shadow Lash: 3 rounds left.");
   });
+
+  it("reads the name as given, never a namesake on the sheet (RD1, on SRD 5.2.1's own entries)", async () => {
+    const sc = sampleCharacter().spellcasting!;
+    // A Wizard's sheet with See Invisibility and not Invisibility (srd:spell:invisibility: "Concentration, up to 1 hour").
+    const seeing = (concentratingOn: string | null) =>
+      sampleCharacter({ spellcasting: { ...sc, spells: [...sc.spells, srdKnown('srd:spell:see-invisibility', 'See Invisibility', 2, 'Wizard')], concentratingOn } });
+    const h = withSrdSpells({ character: seeing('Invisibility'), state: { combat: sampleCombat() } });
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Invisibility', rounds: 300 });
+    expect(firstLine(out.content)).toBe("Mira Voss's Invisibility: 300 rounds left.");
+    expect(named(h.s().combat, 'Mira Voss')?.concentrationCountdown).toEqual({ spell: 'Invisibility', roundsLeft: 300 });
+    // Not concentrating yet: the call that starts it, never See Invisibility's refusal.
+    const idle = withSrdSpells({ character: seeing(null), state: { combat: sampleCombat() } });
+    expect((await idle.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Invisibility', rounds: 300 })).content).toBe(
+      'Mira Voss isn\'t concentrating on anything: start it with update_character concentration "Invisibility".',
+    );
+    // A Cleric's sheet with Shield of Faith and not Shield: Shield is refused, before anything is written (srd:spell:shield:
+    // "Duration: 1 round").
+    const cleric = (concentratingOn: string) =>
+      sampleCharacter({
+        spellcasting: {
+          ...sc,
+          ability: 'wis',
+          spells: [srdKnown('srd:spell:shield-of-faith', 'Shield of Faith', 1, 'Cleric', true), srdKnown('srd:spell:bless', 'Bless', 1, 'Cleric', true)],
+          concentratingOn,
+        },
+      });
+    const blessing = withSrdSpells({ character: cleric('Bless'), state: { combat: sampleCombat() } });
+    const combat = blessing.s().combat;
+    const character = blessing.s().character;
+    expect(await blessing.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Shield', rounds: 1 })).toEqual({
+      isError: true,
+      content: "Shield doesn't require Concentration (Duration: 1 round). Fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn.",
+    });
+    expect(blessing.s().combat).toBe(combat);
+    expect(blessing.s().character).toBe(character);
+    expect(blessing.s().log).toHaveLength(0);
+    // "Faith" for a held Shield of Faith isn't refused (the rules data has no "Faith"; the sheet's spell needs Concentration)
+    // and changes nothing (H9): concentrate gives rounds to the sheet's spell by its name.
+    const faithful = withSrdSpells({ character: cleric('Shield of Faith'), state: { combat: sampleCombat() } });
+    const before = faithful.s().combat;
+    expect((await faithful.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Faith', rounds: 5 })).content).toBe(
+      'Mira Voss is concentrating on Shield of Faith, not Faith: for the hero, concentrate only sets rounds (spell "Shield of Faith" with rounds); update_character concentration starts or ends the hero\'s Concentration.',
+    );
+    expect(faithful.s().combat).toBe(before);
+  });
 });
 
 describe('update_combat damage: the Constitution save the app rolls (srd:rule:concentration, Damage)', () => {
@@ -998,11 +1063,17 @@ describe("what the app names with a spell's end (§3.5), never removing it", () 
       expect((await h.run('resolve_area', { label: 'Spirit Guardians', shape: 'emanation', size_ft: 15, from, lasting: true })).isError).toBeUndefined();
     }
     const out = await h.run('update_combat', { action: 'concentrate', target: 'Zealot', spell: null });
-    // Only the Zealot's emanation is named, and the line says its call ends the hero's too.
+    // Only the Zealot's emanation is named, and the line says its call ends the hero's too. The hero's spell goes on, so
+    // its area is only placed again (lasting), with no saves rolled for it (D5: resolve_area's own result asks for saves).
     expect(out.content).toContain(
-      'Still on the map: Spirit Guardians (15-ft Emanation around Zealot) — if it was this spell\'s, end it with update_map effects_end ["Spirit Guardians"] — effects_end ends every area named "Spirit Guardians" (2 on the map): place again with resolve_area any that isn\'t this spell\'s.',
+      'Still on the map: Spirit Guardians (15-ft Emanation around Zealot) — if it was this spell\'s, end it with update_map effects_end ["Spirit Guardians"] — effects_end ends every area named "Spirit Guardians" (2 on the map): place again with resolve_area (lasting) any that isn\'t this spell\'s, rolling no saves for it.',
     );
     expect(h.s().combat?.map?.effects).toHaveLength(2);
+    // Followed: both go, and the hero's is placed again as a lasting area, around the hero as before.
+    expect((await h.run('update_map', { effects_end: ['Spirit Guardians'] })).isError).toBeUndefined();
+    expect((await h.run('resolve_area', { label: 'Spirit Guardians', shape: 'emanation', size_ft: 15, from: 'Mira Voss', lasting: true })).isError).toBeUndefined();
+    const left = h.s().combat?.map?.effects ?? [];
+    expect(left.map((e) => [e.label, e.duration, e.spec.fromId])).toEqual([['Spirit Guardians', 'lasting', named(h.s().combat, 'Mira Voss')?.id]]);
   });
 
   it('names a repeated label once, so the named call is never refused, and says it ends every area of that name (srd:spell:darkness)', async () => {
@@ -1017,7 +1088,7 @@ describe("what the app names with a spell's end (§3.5), never removing it", () 
     const line = out.content.split('\n').find((l) => l.startsWith('Still on the map: Darkness (')) ?? '';
     expect(line).toMatch(/\) · Darkness \(/);
     expect(line).toContain(
-      ' — if they were this spell\'s, end them with update_map effects_end ["Darkness"] — effects_end ends every area named "Darkness" (2 on the map): place again with resolve_area any that isn\'t this spell\'s.',
+      ' — if they were this spell\'s, end them with update_map effects_end ["Darkness"] — effects_end ends every area named "Darkness" (2 on the map): place again with resolve_area (lasting) any that isn\'t this spell\'s, rolling no saves for it.',
     );
     // The named call does what the line says: it isn't refused, and both areas go.
     const call = JSON.parse(/effects_end (\[[^\]]*\])/.exec(line)?.[1] ?? 'null') as string[];
@@ -1097,6 +1168,24 @@ describe('start_combat and end_combat with Concentration running (SPEC §3.4)', 
     );
     const blank = setup({ character: { ...concentrating('Bless'), name: '   ' } });
     expect((await blank.run('start_combat', { combatants: [OLD_TAM] })).content).toContain("The hero is concentrating on Bless: the app counts its 1 minute from The hero's first turn");
+  });
+
+  it('names the end of a sheet Concentration on a spell that needs none, never a concentrate call it would refuse (RD3)', async () => {
+    // An older save's Mage Armor (srd:spell:mage-armor: "Duration: 8 hours"), on SRD 5.2.1's own entry.
+    const h = withSrdSpells({ character: concentrating('Mage Armor') });
+    const out = await h.run('start_combat', { combatants: [OLD_TAM] });
+    expect(out.content).toContain(
+      'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"]. End it with update_character concentration: null.',
+    );
+    expect(out.content).not.toContain('update_combat concentrate');
+    // The call it names is accepted.
+    expect((await h.run('update_character', { concentration: null })).isError).toBeUndefined();
+    expect(h.s().character?.spellcasting?.concentratingOn).toBeNull();
+    // A mis-flagged Shield (srd:spell:shield: "Duration: 1 round"): its refusal names the hero, "The hero" when blank (D7).
+    const blank = withSrdSpells({ character: { ...concentrating('Shield'), name: '   ' } });
+    expect((await blank.run('start_combat', { combatants: [OLD_TAM] })).content).toContain(
+      "Shield doesn't require Concentration (Duration: 1 round). Fold its +5 into the dc of attacks on The hero until the start of The hero's next turn. End it with update_character concentration: null.",
+    );
   });
 
   it("ends the hero's spell with a minute or less left: it runs out after the fight", async () => {

@@ -102,15 +102,25 @@ export function noConcentrationText(timing: SpellTiming, spell: string): string 
 
 /**
  * The hero's Concentration started on a spell the rules data says needs none (update_combat concentrate on the hero,
- * update_character concentration): the refusal, with where its effect goes instead. The name is read as
- * setConcentration reads it: the sheet's spell it matches, else the name as given. Mage Armor's and Shield of Faith's AC
- * the app records (srd:spell:mage-armor: "Duration: 8 hours"); Shield's +5 the DM folds in (srd:spell:shield: "Until the
- * start of your next turn, you have a +5 bonus to AC"). Null when nothing is refused.
+ * update_character concentration): the refusal, with where its effect goes instead. The name is looked up as given (by
+ * the sheet's id only for a spell of exactly that name), so a namesake on the sheet never decides it: Invisibility isn't
+ * refused beside the sheet's See Invisibility (srd:spell:invisibility: "Concentration, up to 1 hour"), and Shield is
+ * refused beside its Shield of Faith (srd:spell:shield: "Duration: 1 round"). Only a name the rules data doesn't know is
+ * read as the sheet's spell it matches ("Faith" for Shield of Faith). Mage Armor's and Shield of Faith's AC the app
+ * records (srd:spell:mage-armor: "Duration: 8 hours"); Shield's +5 the DM folds in (srd:spell:shield: "Until the start
+ * of your next turn, you have a +5 bonus to AC"). Null when nothing is refused.
  */
 export async function heroConcentrationRefusal(ctx: ToolContext, hero: Character | null, spell: string): Promise<string | null> {
-  const known = hero?.spellcasting ? matchByName(hero.spellcasting.spells, spell, (s) => s.name).match : undefined;
-  const asked = known?.name ?? spell;
-  const timing = await spellTiming(ctx, asked, known?.id);
+  let asked = spell;
+  let timing = await spellTiming(ctx, spell, knownSpellId(hero, spell));
+  if (!timing.found) {
+    const known = hero?.spellcasting ? matchByName(hero.spellcasting.spells, spell, (s) => s.name).match : undefined;
+    // The sheet's spell of exactly that name was looked up already (by its id).
+    if (known && nameKey(known.name) !== nameKey(spell)) {
+      asked = known.name;
+      timing = await spellTiming(ctx, asked, known.id);
+    }
+  }
   const refused = noConcentrationText(timing, asked);
   if (!refused) return null;
   const name = timing.name ?? asked;
@@ -232,7 +242,8 @@ function mayBeOthersShieldOfFaith(spell: string, hero: Character): boolean {
 /**
  * The areas line: each label once, as the exact call ends every effect its label names (update_map effects_end, by
  * sameText), so a repeated label would be refused. A label that names more than one effect on the map, this spell's or
- * not (two casters of Spirit Guardians, two Darkness spells placed at a point), says so: the call ends them all.
+ * not (two casters of Spirit Guardians, two Darkness spells placed at a point), says so: the call ends them all, and one
+ * that isn't this spell's is placed again as a lasting area with no saves rolled for it (its spell didn't end).
  */
 function areasLine(combat: CombatState, map: NonNullable<CombatState['map']>, areas: readonly MapEffect[], hidden: boolean): string {
   const one = areas.length === 1;
@@ -242,7 +253,10 @@ function areasLine(combat: CombatState, map: NonNullable<CombatState['map']>, ar
     .map((label) => ({ label, n: map.effects.filter((e) => labelKey(e.label) === labelKey(label)).length }))
     .filter((s) => s.n > 1)
     .map((s) => `every area named "${s.label}" (${s.n} on the map)`);
-  const also = shared.length ? ` — effects_end ends ${shared.join(' and ')}: place again with resolve_area any that isn't this spell's` : '';
+  // Placed again only (lasting), never resolved again: resolve_area's own result asks for saves.
+  const also = shared.length
+    ? ` — effects_end ends ${shared.join(' and ')}: place again with resolve_area (lasting) any that isn't this spell's, rolling no saves for it`
+    : '';
   return `Still on the map: ${areas.map((e) => `${e.label} (${areaPlace(combat, e)})`).join(' · ')} — if ${one ? 'it was' : 'they were'} this spell's, end ${one ? 'it' : 'them'} with update_map effects_end ${labelArray(labels)}${when}${also}.`;
 }
 

@@ -394,11 +394,15 @@ export async function startCombatTool(input: StartInput, ctx: ToolContext): Prom
 /**
  * For the DM when a fight starts while the hero concentrates: the app counts the spell from the hero's first turn (a
  * spell already running lasts the hero's first N turns whatever the initiative order: concentrationTurnStart), so a
- * spell with less left needs its rounds given. The hero by name, or "The hero" when the sheet's name is blank.
+ * spell with less left needs its rounds given. The hero by name, or "The hero" when the sheet's name is blank. A sheet
+ * Concentration on a spell the rules data says needs none (an older save's Mage Armor, srd:spell:mage-armor: "Duration:
+ * 8 hours"; a mis-flagged import) gets the refusal update_combat concentrate would give, and the call that ends it.
  */
 async function heroConcentrationNote(ctx: ToolContext, character: Character): Promise<string | null> {
   const spell = character.spellcasting?.concentratingOn?.trim();
   if (!spell) return null;
+  const refused = await heroConcentrationRefusal(ctx, character, spell);
+  if (refused) return `${refused} End it with update_character concentration: null.`;
   const name = character.name.trim() || 'The hero';
   const call = `update_combat concentrate target "${name}" spell "${spell}"`;
   const { rounds } = await spellTiming(ctx, spell, knownSpellId(character, spell));

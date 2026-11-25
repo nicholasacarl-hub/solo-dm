@@ -951,12 +951,14 @@ function mayChangeArmorClass(input: ToolInput<'update_character'>): boolean {
  * DM's own words (handSetNames: an older save's "set by the DM: Shield of Faith") and that isn't recorded is recorded
  * with ac_spells_add, so the app adds and ends it, never folded into armor_class; Mage Armor only while no armor is worn
  * (srd:spell:mage-armor: "The spell ends early if the target dons armor"). Anything else still in effect (Haste) the DM
- * folds into armor_class.
+ * folds into armor_class. A spell this same call records (its ac_spells_add, the call's last step) isn't asked for.
  */
-function handSetHint(c: Character, catalog: readonly EquipmentOption[]): string {
+function handSetHint(c: Character, catalog: readonly EquipmentOption[], adding: readonly AcSpellName[]): string {
   const recorded = acSpells(c);
   const armored = armorWorn(c, catalog) !== null;
-  const spells = AC_SPELL_NAMES.filter((n) => handSetNames(c.acFormula, n) && !recorded.includes(n) && !(armored && AC_SPELLS[n].base !== undefined));
+  const spells = AC_SPELL_NAMES.filter(
+    (n) => handSetNames(c.acFormula, n) && !recorded.includes(n) && !adding.includes(n) && !(armored && AC_SPELLS[n].base !== undefined),
+  );
   if (!spells.length) return 'If the hand-set AC counted an effect that still applies (such as Haste), set armor_class to include it.';
   const many = spells.length > 1;
   return `If it counted ${spells.join(' and ')}, record ${many ? 'them' : 'it'} with ac_spells_add [${spells.map((n) => `"${n}"`).join(', ')}] (the app adds and ends ${many ? 'them' : 'it'}).`;
@@ -965,9 +967,16 @@ function handSetHint(c: Character, catalog: readonly EquipmentOption[]): string 
 /**
  * Recompute AC after a change that may affect it (engine computeArmorClass). The sheet's AC is
  * replaced only when it matched the computed value before (no hand-set AC like Haste's);
- * otherwise it stays, with a note of what the armor and scores now give.
+ * otherwise it stays, with a note of what the armor and scores now give. `adding`: the AC spells
+ * the same call's ac_spells_add records after this (acSpellNamed), never asked for again.
  */
-export function refreshArmorClass(before: Character, after: Character, catalog: readonly EquipmentOption[] = [], acGiven = false): EngineResult {
+export function refreshArmorClass(
+  before: Character,
+  after: Character,
+  catalog: readonly EquipmentOption[] = [],
+  acGiven = false,
+  adding: readonly AcSpellName[] = [],
+): EngineResult {
   // An AC the call set (armor_class, the same value restated too) is the DM's final word.
   if (acGiven || after.armorClass !== before.armorClass) return { character: after, events: [] };
   const was = computeArmorClass(before, catalog);
@@ -981,7 +990,7 @@ export function refreshArmorClass(before: Character, after: Character, catalog: 
     const message = unknown
       ? `AC stays ${after.armorClass} (set by hand): ${unknown.name}'s armor stats are unknown, so set armor_class by hand.`
       : now.ac === after.armorClass
-        ? `AC ${after.armorClass} stays as set by hand; armor and features now give ${now.ac} too (${now.formula}). ${handSetHint(after, catalog)}`
+        ? `AC ${after.armorClass} stays as set by hand; armor and features now give ${now.ac} too (${now.formula}). ${handSetHint(after, catalog, adding)}`
         : `AC stays ${after.armorClass} (set by hand); by armor and ability scores it would now be ${now.ac} (${now.formula}). Set armor_class if that is right.`;
     return { character: after, events: [{ type: 'warning', message }] };
   }
@@ -1229,6 +1238,8 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   const sections = buildSections(input, links, track);
   let results: SectionResult[] = [];
   const checkAc = mayChangeArmorClass(input);
+  // The AC spells this call records last: the AC check before them never asks for them (handSetHint).
+  const adding = (input.ac_spells_add ?? []).map(acSpellNamed).filter((n): n is AcSpellName => n !== undefined);
   const before = requireCharacter(ctx.deps.store());
   // Spells recorded for a class whose spell choices are open settle them, as the level_up result says (the class data
   // counts what is still owed; without it the choices stay as they are).
@@ -1248,7 +1259,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
       current = r.character;
     }
     if (checkAc) {
-      const r = refreshArmorClass(start, current, links.catalog, input.armor_class !== undefined);
+      const r = refreshArmorClass(start, current, links.catalog, input.armor_class !== undefined, adding);
       if (r.events.length) results.push({ section: { icon: 'info', apply: () => r }, before: current, after: r.character, events: r.events });
       current = r.character;
     }
