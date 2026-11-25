@@ -975,7 +975,7 @@ describe("LevelUpDialog: the level's spells", () => {
     );
     await user.click(screen.getByRole('button', { name: 'Level up' }));
     expect(notices()[0]).toContain(
-      '; now always prepared: Shield of Faith; spells to choose: 1 prepared spell; if the player names them to you instead: update_character spells_add, source "Paladin"; Cleric 1 spells to choose: 1 prepared spell',
+      '; now always prepared: Shield of Faith; spells to choose: 1 prepared spell; if the player names them to you instead: update_character spells_add, source "Paladin"; Cleric 1 spells to choose: 1 prepared spell; if the player names them to you instead: update_character spells_add, source "Cleric"',
     );
     expect(sheet().spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:paladin' }, { classId: 'srd:class:cleric' }]);
     // The Summary lists both; Choose spells opens the levelled class's choices first.

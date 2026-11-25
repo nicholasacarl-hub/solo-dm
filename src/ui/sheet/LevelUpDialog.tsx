@@ -802,8 +802,8 @@ function LevelUpForm({
             // A granted spell the rules here lack (a book that isn't on this device): the DM can add it.
             ...(gain.missing.length ? [`not added (not in the rules here): ${gain.missing.join(', ')}`] : []),
             ...(owed && spells?.entry ? [spellsToChooseNotice(owed, spells.entry)] : []),
-            // Another class whose pick was turned always prepared has that place to fill again.
-            ...others.map((o) => `${o.cl.name} ${o.cl.level} spells to choose: ${owedSpellsSummary(o.owed)}`),
+            // Another class whose pick was turned always prepared has that place to fill again, recorded under its name.
+            ...others.map((o) => `${o.cl.name} ${o.cl.level} ${spellsToChooseNotice(o.owed, o.entry)}`),
           ],
           uses,
           rulings: keptRulings(final),
