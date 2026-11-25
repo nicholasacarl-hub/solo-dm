@@ -10,13 +10,15 @@
  * sheet holds is shown but not offered ("already known"), and one picked in a list is not offered in another. The
  * footer holds the one live status and the actions (HpMaxDialog's pattern). It renders into `footer`, the dialog's footer
  * slot, so the form serves both the level-up dialog's next step and a dialog of its own (no dialog on a dialog). A
- * spell's text opens in the form itself. Changes go through sheetChanges.ts, checked against the latest sheet.
+ * spell's text opens in the form itself, and a close request while reading it (Escape, Android Back) goes back to the
+ * lists through `readerBackRef`. Changes go through sheetChanges.ts, checked against the latest sheet; the form keeps
+ * showing the sheet as it was for a change it made until its owner closes it.
  */
-import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useBuilderData } from '@/data';
-import { classSpellRules, classSpellsOf, openSpellPicks, spellLevelsText, type OpenSpellPicks } from '@/data/options/spellPicks';
+import { bookCapBlock, bookSpellsOf, classSpellRules, classSpellsOf, openSpellPicks, spellLevelsText, swappableSpells, type OpenSpellPicks } from '@/data/options/spellPicks';
 import { classOptionFor } from '@/data/options/resolve';
 import { classSpellLevelCap } from '@/engine';
 import { cn } from '@/lib/cn';
@@ -25,13 +27,12 @@ import { useGame } from '@/state/gameStore';
 import { SRD_SOURCE_ID, type Character, type ClassLevel, type ClassOption, type CompendiumEntry, type KnownSpell } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
 import { Button, Dialog, Field, Select, Spinner } from '@/ui/components/ui';
-import { SubHeading } from '@/ui/builder/BuilderParts';
 import { SpellChoiceList } from '@/ui/builder/SpellChoiceList';
 import { knownSpell, spellsForClassOption, type SpellInfo } from '@/ui/builder/spells';
 import { visibleSpells } from '@/ui/builder/sources';
 import { useSpellOptions } from '@/ui/builder/useSpellOptions';
 import { restSpellChange, skipSpellPicksChange, spellPicksChange, type SpellPicksChoice } from './sheetChanges';
-import { magicalSecretsText, membersOf, multiclassCapText, picksStatus, restStatus, type PickSection } from './spellPicksText';
+import { bookCapsNote, magicalSecretsText, membersOf, multiclassCapText, picksStatus, restChangeKind, restStatus, restTitle, type PickSection } from './spellPicksText';
 import { useSheetEdit } from './useSheetActions';
 
 export type SpellPicksMode = 'level' | 'rest';
@@ -41,6 +42,9 @@ export interface SpellPicksTarget {
   mode: SpellPicksMode;
   classId: string;
 }
+
+/** The step back from a spell being read to the lists: true when the form took it (a spell was open). */
+export type ReaderBack = () => boolean;
 
 export interface SpellPicksFormProps {
   target: SpellPicksTarget;
@@ -52,16 +56,38 @@ export interface SpellPicksFormProps {
   onDone: () => void;
   /** Move focus into the form when it opens (the level-up dialog's next step, whose button it replaces). */
   focusOnOpen?: boolean;
+  /**
+   * While a spell's text is open, the form puts its step back to the lists here (null otherwise, and once unmounted):
+   * the dialog's onCancel (Escape, Android Back) calls it first and closes only when it returns false, so a close
+   * request while reading keeps the picks.
+   */
+  readerBackRef?: RefObject<ReaderBack | null>;
 }
 
-/** The form in a dialog of its own (the Spells tab's banner, the sheet header's note). */
+/** The form in a dialog of its own (the Spells tab's banner and Long Rest button, the sheet header's note). */
 export function SpellPicksDialog({ target, onClose }: { target: SpellPicksTarget | null; onClose: () => void }) {
   const [footer, setFooter] = useState<HTMLDivElement | null>(null);
+  const readerBack = useRef<ReaderBack | null>(null);
+  const title = useFormTitle(target);
+  // Escape or Android Back while a spell is read goes back to the lists; otherwise it closes, as Close does.
+  const cancel = () => {
+    if (!readerBack.current?.()) onClose();
+  };
   return (
-    <Dialog open={target !== null} onClose={onClose} size="lg" title={target?.mode === 'rest' ? 'Change prepared spells' : 'Choose spells'} footer={<div ref={setFooter} className="w-full" />}>
-      {target && <SpellPicksForm key={`${target.mode}:${target.classId}`} target={target} footer={footer} onCancel={onClose} onDone={onClose} />}
+    <Dialog open={target !== null} onClose={onClose} onCancel={cancel} size="lg" title={title} footer={<div ref={setFooter} className="w-full" />}>
+      {target && <SpellPicksForm key={`${target.mode}:${target.classId}`} target={target} footer={footer} onCancel={onClose} onDone={onClose} readerBackRef={readerBack} />}
     </Dialog>
   );
+}
+
+/** "Choose spells"; for a Long Rest, "Change prepared spells", or "Replace a cantrip" where that is all it changes (a Wizard's). */
+function useFormTitle(target: SpellPicksTarget | null): string {
+  const character = useGame((s) => s.character);
+  const { data } = useBuilderData();
+  if (target?.mode !== 'rest') return 'Choose spells';
+  const cl = character?.classes.find((x) => x.classId === target.classId);
+  const cls = cl && data ? classOptionFor(cl, data.classes) : undefined;
+  return restTitle(cls ? restChangeKind(cls) : null);
 }
 
 // ---------------------------------------------------------------------------
@@ -137,21 +163,39 @@ function takenIn(pool: readonly SpellInfo[], names: ReadonlySet<string>): Set<st
   return new Set(pool.filter((s) => names.has(nameKey(s.name))).map((s) => s.id));
 }
 
-/** A spell read in the form, and where focus goes back to. */
-function useReader() {
+/**
+ * A spell read in the form, and where focus goes back to (its About button). While one is read, `backRef` holds the step
+ * back to the lists for the dialog's close request; it is cleared when reading ends and when the form unmounts.
+ */
+function useReader(backRef?: RefObject<ReaderBack | null>) {
   const [reading, setReading] = useState<SpellInfo | null>(null);
   const opener = useRef<HTMLElement | null>(null);
-  const open = (spell: SpellInfo) => {
-    opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  const returning = useRef(false);
+  const open = (spell: SpellInfo, from?: HTMLElement) => {
+    opener.current = from ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     setReading(spell);
   };
-  const close = () => {
+  const close = useCallback(() => {
+    returning.current = true;
     setReading(null);
-    const el = opener.current;
-    requestAnimationFrame(() => {
-      if (el?.isConnected) el.focus();
-    });
-  };
+  }, []);
+  // Back on the lists, focus returns to the About button in the same commit, not a frame later: after a close request
+  // the browser can't cancel, the dialog shows again with the control focused last.
+  useLayoutEffect(() => {
+    if (reading || !returning.current) return;
+    returning.current = false;
+    if (opener.current?.isConnected) opener.current.focus();
+  }, [reading]);
+  useLayoutEffect(() => {
+    if (!backRef || !reading) return;
+    backRef.current = () => {
+      close();
+      return true;
+    };
+    return () => {
+      backRef.current = null;
+    };
+  }, [backRef, reading, close]);
   return { reading, open, close };
 }
 
@@ -168,7 +212,7 @@ function scrollParent(el: HTMLElement): HTMLElement | null {
   return null;
 }
 
-export function SpellPicksForm({ target, footer, onCancel, onDone, focusOnOpen = false }: SpellPicksFormProps) {
+export function SpellPicksForm({ target, footer, onCancel, onDone, focusOnOpen = false, readerBackRef }: SpellPicksFormProps) {
   const root = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = root.current;
@@ -181,13 +225,17 @@ export function SpellPicksForm({ target, footer, onCancel, onDone, focusOnOpen =
   return (
     // One wrapper whatever the form shows (loading, the lists), so focus moved into it stays; named when it takes focus.
     <div ref={root} tabIndex={-1} className="flex flex-col gap-5 outline-none" {...(focusOnOpen ? { role: 'region', 'aria-label': 'Spell choices' } : {})}>
-      <FormBody target={target} footer={footer} onCancel={onCancel} onDone={onDone} />
+      <FormBody target={target} footer={footer} onCancel={onCancel} onDone={onDone} readerBackRef={readerBackRef} />
     </div>
   );
 }
 
-function FormBody({ target, footer, onCancel, onDone }: Omit<SpellPicksFormProps, 'focusOnOpen'>) {
-  const character = useGame((s) => s.character);
+function FormBody({ target, footer, onCancel, onDone, readerBackRef }: Omit<SpellPicksFormProps, 'focusOnOpen'>) {
+  const live = useGame((s) => s.character);
+  // The sheet as it was when this form made its own change (Apply, Skip): shown until onDone closes the form, so the
+  // button just pressed stays and nothing flashes ("Nothing left to choose" after a Skip is wrong).
+  const [held, setHeld] = useState<Character | null>(null);
+  const character = held ?? live;
   const campaignId = useGame((s) => s.campaignId);
   const builder = useBuilderData();
   const options = useSpellOptions(campaignId);
@@ -231,7 +279,7 @@ function FormBody({ target, footer, onCancel, onDone }: Omit<SpellPicksFormProps
   if (!options.spells.length) {
     return only(<Notice>The spell lists aren't available right now{options.error ? ` (${options.error})` : ''}. Your DM can add spells; your choices stay open.</Notice>);
   }
-  const shared = { character, cl, cls, spells: options.spells, footer, onCancel, onDone };
+  const shared = { character, cl, cls, spells: options.spells, footer, onCancel, onDone, hold: setHeld, readerBackRef };
   if (target.mode === 'rest') return <RestPicks {...shared} />;
   const open = openSpellPicks(character, classes).find((p) => p.cl.classId === cl.classId);
   if (!open) return only(<Notice>Nothing left to choose for {cl.name} {cl.level}: your sheet has the spells its table gives.</Notice>, 'Nothing left to choose');
@@ -246,15 +294,18 @@ interface PicksProps {
   footer: HTMLElement | null;
   onCancel: () => void;
   onDone: () => void;
+  /** Keep showing this sheet while the form's own change is saved (null: the live sheet again, after a failed save). */
+  hold: (character: Character | null) => void;
+  readerBackRef?: RefObject<ReaderBack | null>;
 }
 
 // ---------------------------------------------------------------------------
 // A level's choices
 // ---------------------------------------------------------------------------
 
-function LevelPicks({ character, cl, cls, spells, footer, onCancel, onDone, open }: PicksProps & { open: OpenSpellPicks }) {
+function LevelPicks({ character, cl, cls, spells, footer, onCancel, onDone, hold, readerBackRef, open }: PicksProps & { open: OpenSpellPicks }) {
   const edit = useSheetEdit();
-  const reader = useReader();
+  const reader = useReader(readerBackRef);
   const [cantrips, setCantrips] = useState<string[]>([]);
   const [book, setBook] = useState<string[]>([]);
   // A class list's new prepared spells, or a spellbook's spells to prepare (its entries' ids and the new book spells').
@@ -265,9 +316,9 @@ function LevelPicks({ character, cl, cls, spells, footer, onCancel, onDone, open
 
   const { owed, entry } = open;
   const hasBook = owed.spellbook !== null;
-  const own = classSpellsOf(character, cl.name);
-  const ownCantrips = own.filter((s) => s.level === 0);
-  const ownSpells = own.filter((s) => s.level >= 1);
+  const ownCantrips = classSpellsOf(character, cl.name).filter((s) => s.level === 0);
+  // A level's swap gives up a spell on the class's list: one of its prepared spells of a level it has slots for.
+  const swappable = swappableSpells(character, cl.name, owed.maxLevel);
   const held = new Set((character.spellcasting?.spells ?? []).map((s) => nameKey(s.name)));
   const classList = spellsForClassOption(spells, cls);
   const chosen = new Set([...cantrips, ...book, ...prepared]);
@@ -277,21 +328,29 @@ function LevelPicks({ character, cl, cls, spells, footer, onCancel, onDone, open
   const namesOf = (ids: readonly string[]) => new Set(ids.flatMap((id) => (byId.has(id) ? [nameKey(byId.get(id)!.name)] : [])));
   const without = (...lists: (readonly string[])[]) => new Set([...held, ...lists.flatMap((l) => [...namesOf(l)])]);
 
-  const giveUpCantripSpell = entry.replaceCantrip ? ownCantrips.find((s) => s.id === giveUpCantrip) : undefined;
-  const giveUpSpellSpell = entry.replaceSpell && !hasBook ? ownSpells.find((s) => s.id === giveUpSpell) : undefined;
+  const canSwapCantrip = entry.replaceCantrip === true && ownCantrips.length > 0;
+  const canSwapSpell = !hasBook && entry.replaceSpell === true && swappable.length > 0;
+  const giveUpCantripSpell = canSwapCantrip ? ownCantrips.find((s) => s.id === giveUpCantrip) : undefined;
+  const giveUpSpellSpell = canSwapSpell ? swappable.find((s) => s.id === giveUpSpell) : undefined;
   const cantripOwed = owed.cantrips?.owed ?? 0;
   const cantripMax = cantripOwed + (giveUpCantripSpell ? 1 : 0);
   const bookOwed = owed.spellbook?.owed ?? 0;
   const preparedMax = owed.prepared.owed + (giveUpSpellSpell ? 1 : 0);
-  const showCantrips = Boolean(owed.cantrips) && (cantripOwed > 0 || (entry.replaceCantrip === true && ownCantrips.length > 0));
+  const showCantrips = Boolean(owed.cantrips) && (cantripOwed > 0 || canSwapCantrip);
   const showBook = hasBook && bookOwed > 0;
-  const showPrepared = owed.prepared.owed > 0 || (!hasBook && entry.replaceSpell === true && ownSpells.length > 0);
+  const showPrepared = owed.prepared.owed > 0 || canSwapSpell;
 
   const valid = (ids: readonly string[], pool: readonly SpellInfo[]) => ids.filter((id) => pool.some((s) => s.id === id));
   const validCantrips = valid(cantrips, cantripPool);
   const validBook = valid(book, spellPool);
-  // A spellbook's spells to prepare: its unprepared entries of a level it has slots for, and the new book spells.
-  const unprepared = ownSpells.filter((s) => !s.prepared && s.level <= owed.maxLevel);
+  // Each spellbook place still owed is of a level the class's slots allowed at the level that gave it (bookCaps): a
+  // spell of a level the places left can't take is blocked, worked out again from the picks as they change.
+  const bookLevels = validBook.map((id) => byId.get(id)!.level);
+  const bookBlocked = (spell: SpellInfo) => bookCapBlock(spell.level, bookLevels, owed.bookCaps);
+  const capsNote = bookCapsNote(cl.name, owed.bookCaps, owed.maxLevel);
+  // A spellbook's spells to prepare: its unprepared spells of a level it has slots for (those copied into it too), and
+  // the new book spells.
+  const unprepared = hasBook ? bookSpellsOf(character, cl.name).filter((s) => !s.prepared && s.level <= owed.maxLevel) : [];
   const prepareOptions = [...validBook.map((id) => byId.get(id)!), ...unprepared.map((s) => sheetSpellInfo(s, spells))].sort(byLevelThenName);
   const validPrepared = valid(prepared, hasBook ? prepareOptions : spellPool);
 
@@ -316,21 +375,26 @@ function LevelPicks({ character, cl, cls, spells, footer, onCancel, onDone, open
       giveUpCantrip: giveUpCantripSpell?.id ?? null,
       giveUpSpell: giveUpSpellSpell?.id ?? null,
     };
+    hold(character);
     const saved = await edit((c) => spellPicksChange(c, cls, choice));
     setBusy(false);
     if (saved) onDone();
+    else hold(null);
   };
   const skip = async () => {
     setBusy(true);
+    hold(character);
     const saved = await edit((c) => skipSpellPicksChange(c, cls, cl.classId));
     setBusy(false);
     if (saved) onDone();
+    else hold(null);
   };
 
   const cap = multiclassCapText(character, cl, owed.maxLevel);
   const levels = spellLevelsText(owed.maxLevel);
   const secrets = magicalSecretsText(cl, cls);
   const common = { onInfo: reader.open, countInLegend: true };
+  const waiting = <p className="text-xs text-muted">Choose one to give up, and its replacement is chosen here.</p>;
 
   return (
     <>
@@ -347,38 +411,28 @@ function LevelPicks({ character, cl, cls, spells, footer, onCancel, onDone, open
           )}
         </div>
 
-        {showCantrips &&
-          (cantripMax > 0 ? (
-            <SpellChoiceList
-              {...common}
-              label="Cantrips"
-              options={cantripPool}
-              selected={cantrips}
-              max={cantripMax}
-              onChange={setCantrips}
-              taken={takenIn(cantripPool, without(book, prepared))}
-              note={
-                entry.replaceCantrip && ownCantrips.length > 0 ? (
-                  <GiveUpSelect
-                    label="Give up one cantrip (optional)"
-                    none="Keep all my cantrips"
-                    spells={ownCantrips}
-                    value={giveUpCantrip}
-                    onChange={(id) => {
-                      setGiveUpCantrip(id);
-                      if (!id) setCantrips((list) => list.slice(0, cantripOwed));
-                    }}
-                  />
-                ) : undefined
-              }
-            />
-          ) : (
-            <section aria-label="Cantrips" className="flex flex-col gap-2">
-              <SubHeading>Cantrips</SubHeading>
-              <GiveUpSelect label="Give up one cantrip (optional)" none="Keep all my cantrips" spells={ownCantrips} value={giveUpCantrip} onChange={setGiveUpCantrip} />
-              <p className="text-xs text-muted">Choose one to give up, and its replacement is chosen here.</p>
-            </section>
-          ))}
+        {/* Each give-up select keeps its place whether its list shows or waits for one given up, so choosing one keeps focus on it. */}
+        {showCantrips && (
+          <div className="flex flex-col gap-3">
+            {canSwapCantrip && (
+              <GiveUpSelect
+                label="Give up one cantrip (optional)"
+                none="Keep all my cantrips"
+                spells={ownCantrips}
+                value={giveUpCantrip}
+                onChange={(id) => {
+                  setGiveUpCantrip(id);
+                  if (!id) setCantrips((list) => list.slice(0, cantripOwed));
+                }}
+              />
+            )}
+            {cantripMax > 0 ? (
+              <SpellChoiceList {...common} label="Cantrips" options={cantripPool} selected={cantrips} max={cantripMax} onChange={setCantrips} taken={takenIn(cantripPool, without(book, prepared))} />
+            ) : (
+              waiting
+            )}
+          </div>
+        )}
 
         {showBook && (
           <SpellChoiceList
@@ -394,7 +448,8 @@ function LevelPicks({ character, cl, cls, spells, footer, onCancel, onDone, open
               setPrepared((list) => list.filter((id) => next.includes(id) || unprepared.some((s) => s.id === id)));
             }}
             taken={takenIn(spellPool, without(cantrips))}
-            note={<p className="text-xs text-muted">{`${cl.name} spells of a level you have slots for; those already in your book show as known.`}</p>}
+            blocked={bookBlocked}
+            note={<p className="text-xs text-muted">{`${cl.name} spells of a level you have slots for; those already in your book show as known.${capsNote ? ` ${capsNote}` : ''}`}</p>}
           />
         )}
 
@@ -410,40 +465,36 @@ function LevelPicks({ character, cl, cls, spells, footer, onCancel, onDone, open
               onChange={setPrepared}
               note={<p className="text-xs text-muted">Your book's unprepared spells{showBook ? ', and the ones you add above' : ''}.</p>}
             />
-          ) : preparedMax > 0 ? (
-            <SpellChoiceList
-              {...common}
-              byLevel
-              label="Prepared spells"
-              options={spellPool}
-              selected={prepared}
-              max={preparedMax}
-              onChange={setPrepared}
-              taken={takenIn(spellPool, without(cantrips, book))}
-              note={
-                <>
-                  {secrets && <p className="text-xs text-muted">{secrets}.</p>}
-                  {entry.replaceSpell && ownSpells.length > 0 && (
-                    <GiveUpSelect
-                      label="Give up one spell (optional)"
-                      none="Keep all my spells"
-                      spells={ownSpells}
-                      value={giveUpSpell}
-                      onChange={(id) => {
-                        setGiveUpSpell(id);
-                        if (!id) setPrepared((list) => list.slice(0, owed.prepared.owed));
-                      }}
-                    />
-                  )}
-                </>
-              }
-            />
           ) : (
-            <section aria-label="Prepared spells" className="flex flex-col gap-2">
-              <SubHeading>Prepared spells</SubHeading>
-              <GiveUpSelect label="Give up one spell (optional)" none="Keep all my spells" spells={ownSpells} value={giveUpSpell} onChange={setGiveUpSpell} />
-              <p className="text-xs text-muted">Choose one to give up, and its replacement is chosen here.</p>
-            </section>
+            <div className="flex flex-col gap-3">
+              {canSwapSpell && (
+                <GiveUpSelect
+                  label="Give up one spell (optional)"
+                  none="Keep all my spells"
+                  spells={swappable}
+                  value={giveUpSpell}
+                  onChange={(id) => {
+                    setGiveUpSpell(id);
+                    if (!id) setPrepared((list) => list.slice(0, owed.prepared.owed));
+                  }}
+                />
+              )}
+              {preparedMax > 0 ? (
+                <SpellChoiceList
+                  {...common}
+                  byLevel
+                  label="Prepared spells"
+                  options={spellPool}
+                  selected={prepared}
+                  max={preparedMax}
+                  onChange={setPrepared}
+                  taken={takenIn(spellPool, without(cantrips, book))}
+                  note={secrets ? <p className="text-xs text-muted">{secrets}.</p> : undefined}
+                />
+              ) : (
+                waiting
+              )}
+            </div>
           ))}
       </div>
 
@@ -466,9 +517,9 @@ function LevelPicks({ character, cl, cls, spells, footer, onCancel, onDone, open
 // A Long Rest's change
 // ---------------------------------------------------------------------------
 
-function RestPicks({ character, cl, cls, spells, footer, onCancel, onDone }: PicksProps) {
+function RestPicks({ character, cl, cls, spells, footer, onCancel, onDone, hold, readerBackRef }: PicksProps) {
   const edit = useSheetEdit();
-  const reader = useReader();
+  const reader = useReader(readerBackRef);
   const [giveUp, setGiveUp] = useState<string[]>([]);
   const [picks, setPicks] = useState<string[]>([]);
   const [giveUpCantrip, setGiveUpCantrip] = useState('');
@@ -480,9 +531,9 @@ function RestPicks({ character, cl, cls, spells, footer, onCancel, onDone }: Pic
   const spellsPart = rules.spells !== null && !rules.fromSpellbook;
   const one = rules.spells === 'one';
   const cap = classSpellLevelCap(cl);
-  const own = classSpellsOf(character, cl.name);
-  const ownPrepared = own.filter((s) => s.level >= 1 && s.prepared);
-  const ownCantrips = own.filter((s) => s.level === 0);
+  const ownCantrips = classSpellsOf(character, cl.name).filter((s) => s.level === 0);
+  // Only a spell on the class's list can be given up: one of its prepared spells of a level it has slots for.
+  const ownPrepared = swappableSpells(character, cl.name, cap);
   const held = new Set((character.spellcasting?.spells ?? []).map((s) => nameKey(s.name)));
   const classList = spellsForClassOption(spells, cls);
   const chosen = new Set([...picks, ...cantrip]);
@@ -511,9 +562,11 @@ function RestPicks({ character, cl, cls, spells, footer, onCancel, onDone }: Pic
       giveUpCantrip: cantripOut?.id ?? null,
       cantrip: cantripIn[0] ? toKnown(cantripIn[0]) : null,
     };
+    hold(character);
     const saved = await edit((c) => restSpellChange(c, cls, change));
     setBusy(false);
     if (saved) onDone();
+    else hold(null);
   };
 
   const members = membersOf(cl.name);

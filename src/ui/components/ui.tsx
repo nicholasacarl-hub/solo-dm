@@ -364,6 +364,7 @@ export function Tabs<T extends string>({
 export function Dialog({
   open,
   onClose,
+  onCancel,
   title,
   description,
   children,
@@ -373,6 +374,12 @@ export function Dialog({
 }: {
   open: boolean;
   onClose: () => void;
+  /**
+   * A close request from the keyboard or the system (Escape, Android Back: the dialog's `cancel` event), for an owner
+   * that answers it otherwise than the Close button and a backdrop click (onClose), such as a step back inside the
+   * dialog. Without it, a close request calls onClose.
+   */
+  onCancel?: () => void;
   title: ReactNode;
   description?: ReactNode;
   children?: ReactNode;
@@ -428,6 +435,8 @@ export function Dialog({
     if (!el || el.open || !el.isConnected || !openRef.current) return;
     // Owners that accept the close re-render with open=false, which closes it again.
     if (dismissible && !reported) onClose();
+    // An owner that closed it there and then (flushSync) no longer wants it shown.
+    if (!openRef.current) return;
     const focusTarget = lastFocusRef.current;
     try {
       el.showModal();
@@ -446,9 +455,10 @@ export function Dialog({
       onCancel={(e) => {
         e.preventDefault();
         if (!dismissible) return;
-        // Not cancelable: the browser closes it regardless; the close handler shouldn't report it twice.
+        // Not cancelable: the browser closes it regardless; the close handler shouldn't report it twice, and shows it
+        // again if the owner keeps it open (onCancel stepped back inside it).
         if (!e.nativeEvent.cancelable) reportedRef.current = true;
-        onClose();
+        (onCancel ?? onClose)();
       }}
       onClose={handleNativeClose}
       onFocus={(e) => {

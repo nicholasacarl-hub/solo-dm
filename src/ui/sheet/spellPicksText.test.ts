@@ -3,7 +3,19 @@ import { owedSpells } from '@/data/options/spellPicks';
 import { sampleCharacter } from '@/test/fixtures';
 import { SRD_BUILDER_DATA } from '@/test/structuredFixtures';
 import type { Character, ClassLevel, ClassOption, KnownSpell } from '@/types';
-import { magicalSecretsText, membersOf, multiclassCapText, openPicksText, picksNoteText, picksStatus, restStatus } from './spellPicksText';
+import {
+  bookCapsNote,
+  magicalSecretsText,
+  membersOf,
+  multiclassCapText,
+  openPicksText,
+  picksNoteText,
+  picksStatus,
+  restButtonText,
+  restChangeKind,
+  restStatus,
+  restTitle,
+} from './spellPicksText';
 
 const cls = (name: string): ClassOption => {
   const found = SRD_BUILDER_DATA.classes.find((c) => c.name === name);
@@ -71,5 +83,32 @@ describe('words for the sheet’s spell choices', () => {
     expect(restStatus([{ givenUp: 2, picked: 1 }])).toBe('Still to choose: 1 replacement');
     expect(restStatus([{ givenUp: 1, picked: 1 }, { givenUp: 0, picked: 0 }])).toBe('Nothing left to choose');
     expect([membersOf('Cleric'), membersOf('Druids')]).toEqual(['Clerics', 'Druids']);
+  });
+
+  it("names a Long Rest's change by what the form changes: a Wizard only replaces a cantrip (srd:rule:wizard-spellcasting, srd:rule:cleric-spellcasting, srd:rule:paladin-spellcasting)", () => {
+    // The Wizard's prepared spells change "with spells from your spellbook" (the sheet's checkboxes); in the form it
+    // only replaces "one of your cantrips". A Cleric changes "any" prepared spell, a Paladin "one spell on your list".
+    expect(restChangeKind(cls('Wizard'))).toBe('cantrip');
+    expect(restChangeKind(cls('Cleric'))).toBe('spells');
+    expect(restChangeKind(cls('Paladin'))).toBe('spells');
+    expect(restChangeKind(cls('Sorcerer'))).toBeNull();
+    expect(restChangeKind(cls('Fighter'))).toBeNull();
+    expect(restButtonText('cantrip', 'Wizard', false)).toBe('Replace a cantrip');
+    expect(restButtonText('cantrip', 'Wizard', true)).toBe('Replace a Wizard cantrip');
+    expect(restButtonText('cantrip', 'Artificer', true)).toBe('Replace an Artificer cantrip');
+    expect(restButtonText('spells', 'Cleric', false)).toBe('Change prepared spells');
+    expect(restButtonText('spells', 'Cleric', true)).toBe('Change Cleric prepared spells');
+    expect([restTitle('cantrip'), restTitle('spells'), restTitle(null)]).toEqual(['Replace a cantrip', 'Change prepared spells', 'Change prepared spells']);
+  });
+
+  it("says each spellbook place's limit when they differ, or share one below the class's spell level (srd:rule:wizard-spellcasting)", () => {
+    // "Each of these spells must be of a level for which you have spell slots": a Wizard 5 owing places from its levels
+    // 3 to 5 takes 2 up to level 3, 2 up to level 2 and 4 of level 1.
+    expect(bookCapsNote('Wizard', [3, 3, 2, 2, 1, 1, 1, 1], 3)).toBe('Each Wizard level adds spells of a level its slots allowed then: 2 up to level 3, 2 up to level 2 and 4 of level 1.');
+    expect(bookCapsNote('Wizard', [1, 1], 2)).toBe('Each Wizard level adds spells of a level its slots allowed then: 2 of level 1.');
+    expect(bookCapsNote('Wizard', [2, 2], 3)).toBe('Each Wizard level adds spells of a level its slots allowed then: 2 up to level 2.');
+    // One limit, the class's own: the list's levels already say it.
+    expect(bookCapsNote('Wizard', [2, 2], 2)).toBe('');
+    expect(bookCapsNote('Wizard', [], 2)).toBe('');
   });
 });

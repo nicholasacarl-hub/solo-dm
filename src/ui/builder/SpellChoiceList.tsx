@@ -3,8 +3,9 @@
  * filter past 12 options, where a book's or homebrew spell comes from, an "already known" spell shown but not
  * selectable, and an About button. For the sheet it can also name its count in a fieldset legend ("Choose up to 2"),
  * the form's one live status being in its footer, and group a pool of several spell levels by level, the highest open
- * and the others collapsible. A box disabled because the list is full says why; rows and the About button are 44px
- * tall on touch screens. The builder's look is unchanged.
+ * and the others collapsible. A box disabled because the list is full, or because the caller blocks that spell for now
+ * (a spellbook place's level), says why; rows and the About button are 44px tall on touch screens. The builder's look is
+ * unchanged.
  */
 import { useId, useState, type ReactNode } from 'react';
 import { ChevronRight, Info } from 'lucide-react';
@@ -25,9 +26,15 @@ export interface SpellChoiceListProps {
   selected: string[];
   max: number;
   onChange: (next: string[]) => void;
-  onInfo: (spell: SpellInfo) => void;
+  /** The spell's About button was pressed (`opener`: that button, where focus can go back to). */
+  onInfo: (spell: SpellInfo, opener: HTMLElement) => void;
   /** Spells known by name from a choice in any list (shown, but not selectable unless checked here). */
   taken?: Set<string>;
+  /**
+   * Why an unchecked spell can't join the picks as they are now (null when it can): its box is disabled and names the
+   * reason for screen readers, as a full list's boxes do. Read on every render, so it follows the picks.
+   */
+  blocked?: (spell: SpellInfo) => string | null;
   /**
    * The sheet's form: a fieldset whose legend names the list and its count ("Choose up to 2"), read with the group.
    * Without it the builder's heading shows "n/max".
@@ -46,7 +53,7 @@ function levelName(level: number): string {
   return level === 0 ? 'Cantrips' : `Level ${level}`;
 }
 
-export function SpellChoiceList({ label, options, selected, max, onChange, onInfo, taken, countInLegend = false, byLevel = false, note }: SpellChoiceListProps) {
+export function SpellChoiceList({ label, options, selected, max, onChange, onInfo, taken, blocked, countInLegend = false, byLevel = false, note }: SpellChoiceListProps) {
   const [filter, setFilter] = useState('');
   const [openLevels, setOpenLevels] = useState<number[] | null>(null);
   const filterId = useId();
@@ -58,12 +65,19 @@ export function SpellChoiceList({ label, options, selected, max, onChange, onInf
   const levels = [...new Set(options.map((o) => o.level))].sort((a, b) => b - a);
   const mixed = byLevel && levels.length > 1;
   const grouped = mixed && options.length > LONG_LIST;
+  // Each reason the caller gives, once: the boxes it disables point to it.
+  const reasons = new Map<string, string>();
+  const reasonId = (reason: string) => {
+    if (!reasons.has(reason)) reasons.set(reason, `${limitId}-${reasons.size + 1}`);
+    return reasons.get(reason)!;
+  };
 
   const row = (spell: SpellInfo) => {
     const checked = valid.includes(spell.id);
     const known = !checked && Boolean(taken?.has(spell.id));
     const limited = !checked && !known && full;
-    const disabled = known || limited;
+    const reason = !checked && !known && !limited && blocked ? blocked(spell) : null;
+    const disabled = known || limited || reason !== null;
     return (
       <li
         key={spell.id}
@@ -79,7 +93,7 @@ export function SpellChoiceList({ label, options, selected, max, onChange, onInf
             checked={checked}
             disabled={disabled}
             onChange={() => onChange(toggleInList(valid, spell.id, max))}
-            aria-describedby={limited ? limitId : undefined}
+            aria-describedby={limited ? limitId : reason !== null ? reasonId(reason) : undefined}
             className="size-4 shrink-0 accent-[var(--arcane)]"
           />
           {/* The name keeps its width; the source's label and the school give way first. */}
@@ -108,7 +122,7 @@ export function SpellChoiceList({ label, options, selected, max, onChange, onInf
           type="button"
           aria-label={`About ${spell.name}`}
           title="Read the spell"
-          onClick={() => onInfo(spell)}
+          onClick={(e) => onInfo(spell, e.currentTarget)}
           className="grid size-7 shrink-0 place-items-center rounded-lg text-faint hover:bg-surface-2 hover:text-arcane pointer-coarse:size-11"
         >
           <Info className="size-4" aria-hidden />
@@ -184,12 +198,17 @@ export function SpellChoiceList({ label, options, selected, max, onChange, onInf
         </div>
       )}
       {body}
-      {/* Why a box is disabled once the list is full; each such box names it (aria-describedby). */}
+      {/* Why a box is disabled once the list is full, or blocked for now; each such box names it (aria-describedby). */}
       {full && (
         <span id={limitId} className="sr-only">
           {LIMIT_REACHED}
         </span>
       )}
+      {[...reasons].map(([reason, id]) => (
+        <span key={id} id={id} className="sr-only">
+          {reason}
+        </span>
+      ))}
     </>
   );
 

@@ -87,6 +87,57 @@ describe('SpellChoiceList', () => {
     expect(screen.getByRole('checkbox', { name: /^Sleep/ })).toHaveAccessibleName(/Level 1/);
   });
 
+  it('disables a spell the caller blocks for now and says why; a checked one stays free, and the full list says its own reason', async () => {
+    const user = userEvent.setup();
+    const short = wizardSpells.filter((s) => ['Sleep', 'Shield', 'Web', 'Hold Person'].includes(s.name));
+    const ONLY_ONE = 'Only 1 may be of level 2 here; the others are for earlier levels.';
+    // At most one level 2 spell among the picks (a spellbook place's limit, worked out from the picks).
+    function Capped() {
+      const [selected, setSelected] = useState<string[]>([]);
+      const level2 = selected.filter((id) => short.find((s) => s.id === id)?.level === 2).length;
+      return (
+        <SpellChoiceList
+          label="Spellbook"
+          options={short}
+          selected={selected}
+          max={3}
+          onChange={setSelected}
+          onInfo={() => undefined}
+          blocked={(spell) => (spell.level === 2 && level2 >= 1 ? ONLY_ONE : null)}
+          countInLegend
+          byLevel
+        />
+      );
+    }
+    render(<Capped />);
+    const box = (name: string) => screen.getByRole('checkbox', { name: new RegExp(`^${name}`) });
+    expect(box('Hold Person')).toBeEnabled();
+    await user.click(box('Web'));
+    expect(box('Hold Person')).toBeDisabled();
+    expect(box('Hold Person')).toHaveAccessibleDescription(ONLY_ONE);
+    expect(box('Web')).toBeEnabled();
+    expect(box('Web')).not.toHaveAccessibleDescription();
+    expect(box('Sleep')).toBeEnabled();
+    // Unchecking Web frees the level again: worked out from the picks on every render.
+    await user.click(box('Web'));
+    expect(box('Hold Person')).toBeEnabled();
+    expect(box('Hold Person')).not.toHaveAccessibleDescription();
+    // Full: the limit's reason, not the caller's.
+    await user.click(box('Web'));
+    await user.click(box('Sleep'));
+    await user.click(box('Shield'));
+    expect(box('Hold Person')).toHaveAccessibleDescription('Limit reached: uncheck one to change.');
+  });
+
+  it('gives onInfo the About button that was pressed, so focus can go back to it', async () => {
+    const user = userEvent.setup();
+    const onInfo = vi.fn();
+    render(<SpellChoiceList label="Cantrips" options={wizardCantrips.slice(0, 2)} selected={[]} max={1} onChange={() => undefined} onInfo={onInfo} />);
+    const about = screen.getByRole('button', { name: `About ${wizardCantrips[1].name}` });
+    await user.click(about);
+    expect(onInfo).toHaveBeenCalledWith(wizardCantrips[1], about);
+  });
+
   it('makes rows and the About button 44px tall on touch screens (pointer: coarse)', () => {
     const onInfo = vi.fn();
     render(<SpellChoiceList label="Cantrips" options={wizardCantrips.slice(0, 2)} selected={[]} max={1} onChange={() => undefined} onInfo={onInfo} />);

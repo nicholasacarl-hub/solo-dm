@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { useState } from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { flushSync } from 'react-dom';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { Button, Dialog, Input, Select, Textarea } from './ui';
 
 /**
@@ -106,6 +107,64 @@ describe('Dialog', () => {
     forceNativeClose(dialog);
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(dialog).not.toHaveAttribute('open');
+  });
+
+  it('sends a close request (Escape, Android Back) to onCancel when given; Close and the backdrop still call onClose', () => {
+    const onClose = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <Dialog open onClose={onClose} onCancel={onCancel} title="Choose spells">
+        <Button>Back to the spells</Button>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Choose spells' });
+    // What a browser's Escape (or Android Back, with no key press) fires at a modal <dialog>.
+    const cancel = new Event('cancel', { cancelable: true });
+    fireEvent(dialog, cancel);
+    expect(cancel.defaultPrevented).toBe(true);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.pointerDown(dialog);
+    fireEvent.click(dialog);
+    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the dialog again, focus back in it, when the browser closes it anyway after an onCancel that kept it open', () => {
+    const onClose = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <Dialog open onClose={onClose} onCancel={onCancel} title="Choose spells">
+        <Button>About Web</Button>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Choose spells' });
+    const about = screen.getByRole('button', { name: 'About Web' });
+    about.focus();
+    forceNativeClose(dialog);
+    expect(onCancel).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    expect(dialog).toHaveAttribute('open');
+    expect(about).toHaveFocus();
+  });
+
+  it('stays closed when its owner closes it there and then (flushSync) as the browser closes it', () => {
+    const showModal = vi.spyOn(HTMLDialogElement.prototype, 'showModal');
+    function Notes() {
+      const [open, setOpen] = useState(true);
+      return <Dialog open={open} onClose={() => flushSync(() => setOpen(false))} title="Notes" />;
+    }
+    render(<Notes />);
+    const dialog = screen.getByRole('dialog', { name: 'Notes' });
+    expect(showModal).toHaveBeenCalledTimes(1);
+    // A close with no cancel event first (the browser's own): the owner is told, and closes it at once.
+    act(() => {
+      dialog.removeAttribute('open');
+      dialog.dispatchEvent(new Event('close'));
+    });
+    expect(dialog).not.toHaveAttribute('open');
+    expect(showModal).toHaveBeenCalledTimes(1);
   });
 
   it('closes a dialog before it is removed while open, so focus can return to the opener', () => {
