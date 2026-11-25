@@ -29,6 +29,7 @@ import {
   computeArmorClass,
   countedAcSpells,
   endAcSpell,
+  handSetNames,
   roundsLeftText,
   addCondition,
   addFeature,
@@ -106,6 +107,7 @@ import { nameKey } from '@/lib/id';
 import { textFingerprint } from '@/lib/importedContent';
 import {
   ABILITY_NAMES,
+  AC_SPELL_NAMES,
   SKILL_NAMES,
   SRD_SOURCE_ID,
   type AcSpellName,
@@ -158,7 +160,7 @@ import { DmCancelledError } from '../errors';
 import { truncate } from '../narration';
 import { refitHeroAfterSheetChange } from './map';
 import { findAllowedEntry } from './rules';
-import { cascadeLines, knownSpellId, spellTiming, withHeroCountdown } from './spellEffects';
+import { cascadeLines, heroConcentrationRefusal, knownSpellId, spellTiming, withHeroCountdown } from './spellEffects';
 
 // ---------------------------------------------------------------------------
 // update_character
@@ -941,6 +943,22 @@ function mayChangeArmorClass(input: ToolInput<'update_character'>): boolean {
 }
 
 /**
+ * What a hand-set AC that the new gear only matches may still have counted. Mage Armor or Shield of Faith it names in the
+ * DM's own words (handSetNames: an older save's "set by the DM: Shield of Faith") and that isn't recorded is recorded
+ * with ac_spells_add, so the app adds and ends it, never folded into armor_class; Mage Armor only while no armor is worn
+ * (srd:spell:mage-armor: "The spell ends early if the target dons armor"). Anything else still in effect (Haste) the DM
+ * folds into armor_class.
+ */
+function handSetHint(c: Character, catalog: readonly EquipmentOption[]): string {
+  const recorded = acSpells(c);
+  const armored = armorWorn(c, catalog) !== null;
+  const spells = AC_SPELL_NAMES.filter((n) => handSetNames(c.acFormula, n) && !recorded.includes(n) && !(armored && AC_SPELLS[n].base !== undefined));
+  if (!spells.length) return 'If the hand-set AC counted an effect that still applies (such as Haste), set armor_class to include it.';
+  const many = spells.length > 1;
+  return `If it counted ${spells.join(' and ')}, record ${many ? 'them' : 'it'} with ac_spells_add [${spells.map((n) => `"${n}"`).join(', ')}] (the app adds and ends ${many ? 'them' : 'it'}).`;
+}
+
+/**
  * Recompute AC after a change that may affect it (engine computeArmorClass). The sheet's AC is
  * replaced only when it matched the computed value before (no hand-set AC like Haste's);
  * otherwise it stays, with a note of what the armor and scores now give.
@@ -959,7 +977,7 @@ export function refreshArmorClass(before: Character, after: Character, catalog: 
     const message = unknown
       ? `AC stays ${after.armorClass} (set by hand): ${unknown.name}'s armor stats are unknown, so set armor_class by hand.`
       : now.ac === after.armorClass
-        ? `AC ${after.armorClass} stays as set by hand; armor and features now give ${now.ac} too (${now.formula}). If the hand-set AC counted a bonus that still applies (a spell such as Shield of Faith), set armor_class to include it.`
+        ? `AC ${after.armorClass} stays as set by hand; armor and features now give ${now.ac} too (${now.formula}). ${handSetHint(after, catalog)}`
         : `AC stays ${after.armorClass} (set by hand); by armor and ability scores it would now be ${now.ac} (${now.formula}). Set armor_class if that is right.`;
     return { character: after, events: [{ type: 'warning', message }] };
   }
@@ -1053,26 +1071,43 @@ function baseInForce(formula: string): { name: string; ac: number } | null {
 
 /**
  * For the DM only (the player's log keeps the engine's plain events): what the AC spells this call named mean now. A
- * name the app doesn't count, with how to count Shield and the lasting ones; Shield of Faith recorded while the hero
- * isn't concentrating on it; Mage Armor's term, and why it adds nothing when another base AC is as high; an AC set by
- * hand that is taken to include the counted spells; armor put on while Mage Armor is recorded.
+ * name the app doesn't count, with how to count it (Shield's +5 in the dc, a lasting one in armor_class); Shield of
+ * Faith recorded while the hero is concentrating on it (taken to be that casting) or isn't; Mage Armor's term, and why
+ * it adds nothing when another base AC is as high; an AC set by hand that is taken to include the counted spells still
+ * recorded; armor put on while Mage Armor is recorded.
  */
-function acSpellLines(input: ToolInput<'update_character'>, before: Character, after: Character, kept: readonly AcSpellName[], catalog: readonly EquipmentOption[]): string[] {
+export function acSpellLines(
+  input: ToolInput<'update_character'>,
+  before: Character,
+  after: Character,
+  kept: readonly AcSpellName[],
+  catalog: readonly EquipmentOption[],
+): string[] {
   const lines: string[] = [];
   const name = after.name.trim() || 'The hero';
-  const named = [...(input.ac_spells_add ?? []), ...(input.ac_spells_end ?? [])];
-  if (named.some((n) => !acSpellNamed(n))) {
-    // srd:spell:shield: "Until the start of your next turn, you have a +5 bonus to AC".
+  const uncounted = new Map<string, string>();
+  for (const raw of [...(input.ac_spells_add ?? []), ...(input.ac_spells_end ?? [])]) {
+    const given = raw.replace(/\s+/g, ' ').trim();
+    if (given && !acSpellNamed(given) && !uncounted.has(nameKey(given))) uncounted.set(nameKey(given), given);
+  }
+  for (const [key, given] of uncounted) {
     lines.push(
-      `Count Shield yourself: fold its +5 into the dc of attacks on ${name} until the start of ${name}'s next turn; for another lasting effect (Haste, Barkskin) set armor_class and set it back when it ends.`,
+      key === 'shield'
+        ? // srd:spell:shield: "Until the start of your next turn, you have a +5 bonus to AC".
+          `Count Shield yourself: fold its +5 into the dc of attacks on ${name} until the start of ${name}'s next turn; for another lasting effect (Haste, Barkskin) set armor_class and set it back when it ends.`
+        : `Count ${given} yourself: for a lasting effect set armor_class and set it back when it ends.`,
     );
   }
   const added = (input.ac_spells_add ?? []).map(acSpellNamed);
   const recorded = acSpells(after);
   const concentrating = after.spellcasting?.concentratingOn;
-  if (added.includes('Shield of Faith') && recorded.includes('Shield of Faith') && !(concentrating && acSpellNamed(concentrating) === 'Shield of Faith')) {
+  if (added.includes('Shield of Faith') && recorded.includes('Shield of Faith')) {
+    // One record: while the hero concentrates on Shield of Faith, it is taken to be the hero's own casting
+    // (srd:rule:concentration: "If the effect's creator loses Concentration, the effect ends").
     lines.push(
-      `${name} isn't concentrating on Shield of Faith: if ${name} cast it, set concentration: "Shield of Faith" so it ends with ${name}'s Concentration; if another caster did, end it with ac_spells_end when that caster's Concentration ends.`,
+      concentrating && acSpellNamed(concentrating) === 'Shield of Faith'
+        ? `${name} is concentrating on Shield of Faith, so the app takes this +2 to be that casting: it ends with ${name}'s Concentration.`
+        : `${name} isn't concentrating on Shield of Faith: if ${name} cast it, set concentration: "Shield of Faith" so it ends with ${name}'s Concentration; if another caster did, end it with ac_spells_end when that caster's Concentration ends.`,
     );
   }
   if (added.includes('Mage Armor') && recorded.includes('Mage Armor')) {
@@ -1087,11 +1122,13 @@ function acSpellLines(input: ToolInput<'update_character'>, before: Character, a
       lines.push(`Mage Armor gives ${gives}, ${gives < base.ac ? 'less than' : 'no more than'} ${base.name}'s ${base.ac}: AC stays ${after.armorClass}.`);
     }
   }
-  if (kept.length) {
-    const many = kept.length > 1;
-    const faith = kept.includes('Shield of Faith') ? ` (ending ${many ? 'Shield of Faith' : 'it'} takes 2 off)` : '';
+  // Only the kept spells still recorded after the call: one this call ended doesn't "stay recorded".
+  const stays = kept.filter((n) => recorded.includes(n));
+  if (stays.length) {
+    const many = stays.length > 1;
+    const faith = stays.includes('Shield of Faith') ? ` (ending ${many ? 'Shield of Faith' : 'it'} takes 2 off)` : '';
     lines.push(
-      `${kept.join(' and ')} ${many ? 'stay' : 'stays'} recorded, and this AC is taken to include ${many ? 'them' : 'it'}${faith}. If ${many ? 'one has' : 'it has'} ended, use ac_spells_end.`,
+      `${stays.join(' and ')} ${many ? 'stay' : 'stays'} recorded, and this AC is taken to include ${many ? 'them' : 'it'}${faith}. If ${many ? 'one has' : 'it has'} ended, use ac_spells_end.`,
     );
   }
   if (recorded.includes('Mage Armor')) {
@@ -1171,6 +1208,17 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   if (input.hp?.drain && input.hp.kind !== 'damage') throw new ToolInputError('hp.drain lowers the HP maximum by the damage taken, so it needs kind "damage".');
   if (buildSections(input).length === 0 && !hasAcSpells(input)) {
     throw new ToolInputError('Nothing to change: include at least one section (hp, hp_max, conditions_add, inventory_add, …).');
+  }
+  // The AC spells run last and move the AC themselves, so an armor_class beside them wouldn't be the DM's final word.
+  if (input.armor_class !== undefined && hasAcSpells(input)) {
+    throw new ToolInputError(
+      'Send ac_spells_add / ac_spells_end and armor_class in separate calls: the spells first (the app moves the AC for them), then armor_class for anything else.',
+    );
+  }
+  // A spell the rules data says needs no Concentration never becomes the hero's (as update_combat refuses it for NPCs).
+  if (typeof input.concentration === 'string') {
+    const refused = await heroConcentrationRefusal(ctx, ctx.deps.store().character, input.concentration);
+    if (refused) throw new ToolInputError(refused);
   }
   const links = await resolveLinks(input, ctx);
   const track: AcTrack = { kept: [] };

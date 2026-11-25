@@ -133,7 +133,9 @@ describe('buildSystemPrompt', () => {
       "or a monster's against the hero's spell",
       'roll a die the hero adds (Bless) first, with request_player_roll roll_type "custom", and lower the dc by it',
       // srd:spell:mage-armor and srd:spell:shield-of-faith are counted by the app; srd:spell:shield's +5 stays the DM's.
-      "Mage Armor and Shield of Faith: record them with update_character ac_spells_add (the app applies and ends them); fold Shield's +5 into the dc; set armor_class for other lasting changes.",
+      // D13: exact about what the app ends (srd:spell:shield-of-faith "Concentration, up to 10 minutes"; srd:spell:mage-armor
+      // "Duration: 8 hours", over by a Long Rest's end) and what the DM ends (another caster's Shield of Faith).
+      "Mage Armor and Shield of Faith: record them with update_character ac_spells_add (the app applies them, and ends the hero's own Shield of Faith with the hero's Concentration and Mage Armor at a Long Rest; end another caster's Shield of Faith with ac_spells_end); fold Shield's +5 into the dc; set armor_class for other lasting changes.",
       'without giving away a hidden DC or AC',
       'get_entry',
     ]) {
@@ -141,6 +143,7 @@ describe('buildSystemPrompt', () => {
     }
     expect(DM_INSTRUCTIONS).not.toContain('- Magic items:');
     expect(bonuses).not.toContain('set armor_class for a lasting change (Mage Armor)');
+    expect(bonuses).not.toContain('the app applies and ends them');
     // The order of truth and table talk leave a number the app worked out to the text it came from.
     expect(DM_INSTRUCTIONS).toContain("When sources disagree, the earlier one wins, except that a rule's, feature's or item's own text, or a ruling you recorded, beats a number the app worked out from it (see Bonuses).");
     expect(section(DM_INSTRUCTIONS, '## Table talk')).toContain('A number the app worked out is different: if they point to a condition it missed');

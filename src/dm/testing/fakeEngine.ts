@@ -74,7 +74,7 @@ export {
   setNpcConcentration,
 } from '@/engine/spellEffects';
 export { addAcSpell, concentrationSaveDC, endAcSpell, expireConcentration } from '@/engine/character';
-export { AC_SPELLS, acSpellNamed, acSpells, countedAcSpells } from '@/engine/rules';
+export { AC_SPELLS, acSpellNamed, acSpells, countedAcSpells, handSetNames } from '@/engine/rules';
 import { roundsLeftText } from '@/engine/spellEffects';
 // get_entry's budget is the sheet's real field limit.
 export { SHEET_TEXT_MAX } from '@/engine/summary';

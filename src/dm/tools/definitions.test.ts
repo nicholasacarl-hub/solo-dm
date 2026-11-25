@@ -96,7 +96,9 @@ describe('spell effects explain themselves to sessions whose frozen prompt never
       "Magic Resistance doesn't apply",
       'a creature with Legendary Resistance decides first',
       'without saves in its stat block you roll it',
-      "a bonus the app can't see, like Bless, is put right with concentrate and rounds",
+      // D13: srd:spell:bless adds 1d4 to a save, srd:spell:bane takes 1d4 off: a kept save that should have failed is
+      // put right with spell null, a failed one with the spell and its rounds again.
+      "a bonus or penalty the app can't see (Bless, Bane) is put right with concentrate: the spell and its rounds again, or spell null",
       'ends the spell at 0 HP, on an Incapacitating condition, a failed save or when its time is up — not on defeat or remove',
       'naming what to end with it (areas, conditions)',
       "Don't record a spell a stat block casts without Concentration.",
@@ -104,6 +106,7 @@ describe('spell effects explain themselves to sessions whose frozen prompt never
     ]) {
       expect(TOOL_DESCRIPTIONS.update_combat, phrase).toContain(phrase);
     }
+    expect(TOOL_DESCRIPTIONS.update_combat).not.toContain('is put right with concentrate and rounds');
     const update = schemaOf('update_combat').properties;
     expect(update.action.enum).toContain('concentrate');
     expect(update.spell.description).toBe('For action "concentrate": the spell or effect it concentrates on, or null when that ends.');

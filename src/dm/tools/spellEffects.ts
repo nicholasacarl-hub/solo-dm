@@ -22,7 +22,7 @@ import {
   type AddedCondition,
   type ConditionNaming,
 } from '@/engine';
-import { namesPhrase } from '@/engine/util';
+import { matchByName, namesPhrase } from '@/engine/util';
 import { isReviewedImport } from '@/data/structured/materialize';
 import { nameKey } from '@/lib/id';
 import { SRD_SOURCE_ID, type Character, type Combatant, type CombatState, type CompendiumEntry, type MapEffect } from '@/types';
@@ -56,16 +56,23 @@ async function indexOrNull(ctx: ToolContext) {
   }
 }
 
+/** A name's trailing qualifier, as stat blocks and DMs write a casting: "Hold Person (3rd level)" is Hold Person. */
+const QUALIFIED = /^(.*\S)\s*\([^()]*\)\s*$/;
+
 /**
  * A spell's Concentration flag and duration from the rules data the DM may consult (findAllowedEntry, kind 'spell'): by
- * the hero's own copy's id when given (KnownSpell.id is the entry's id when the sheet linked it), else by name.
+ * the hero's own copy's id when given (KnownSpell.id is the entry's id when the sheet linked it), else by name. A name
+ * that finds nothing and ends in a parenthetical ("Hold Person (3rd level)", "Mind Spike (level 4 version)") is looked
+ * up without it, so the spell found is recorded by its own name and the cascade matches conditions sourced "Hold Person".
  */
 export async function spellTiming(ctx: ToolContext, name: string, id?: string): Promise<SpellTiming> {
   const campaign = ctx.deps.store().campaign;
   const index = await indexOrNull(ctx);
   if (!index || !campaign) return { found: false };
   const byId = id ? index.get(id) : undefined;
-  const entry: CompendiumEntry | undefined = byId?.kind === 'spell' ? byId : findAllowedEntry(index, name, { kind: 'spell', campaign });
+  const find = (n: string) => findAllowedEntry(index, n, { kind: 'spell', campaign });
+  const bare = QUALIFIED.exec(name)?.[1];
+  const entry: CompendiumEntry | undefined = byId?.kind === 'spell' ? byId : (find(name) ?? (bare ? find(bare) : undefined));
   if (!entry || entry.kind !== 'spell') return { found: false };
   const data = entry.data ?? {};
   const duration = typeof data.duration === 'string' && data.duration.trim() ? data.duration.trim() : undefined;
@@ -82,6 +89,36 @@ export async function spellTiming(ctx: ToolContext, name: string, id?: string): 
 /** The id of the hero's own copy of a spell (for spellTiming), when the sheet holds it. */
 export function knownSpellId(c: Character | null | undefined, spell: string): string | undefined {
   return c?.spellcasting?.spells.find((s) => nameKey(s.name) === nameKey(spell))?.id;
+}
+
+/**
+ * "Shield doesn't require Concentration (Duration: 1 round).": a spell the rules data says needs no Concentration, or null
+ * when the data doesn't know it or doesn't say (those are never refused).
+ */
+export function noConcentrationText(timing: SpellTiming, spell: string): string | null {
+  if (!timing.found || timing.concentration !== false) return null;
+  return `${timing.name ?? spell} doesn't require Concentration${timing.duration ? ` (Duration: ${timing.duration})` : ''}.`;
+}
+
+/**
+ * The hero's Concentration started on a spell the rules data says needs none (update_combat concentrate on the hero,
+ * update_character concentration): the refusal, with where its effect goes instead. The name is read as
+ * setConcentration reads it: the sheet's spell it matches, else the name as given. Mage Armor's and Shield of Faith's AC
+ * the app records (srd:spell:mage-armor: "Duration: 8 hours"); Shield's +5 the DM folds in (srd:spell:shield: "Until the
+ * start of your next turn, you have a +5 bonus to AC"). Null when nothing is refused.
+ */
+export async function heroConcentrationRefusal(ctx: ToolContext, hero: Character | null, spell: string): Promise<string | null> {
+  const known = hero?.spellcasting ? matchByName(hero.spellcasting.spells, spell, (s) => s.name).match : undefined;
+  const asked = known?.name ?? spell;
+  const timing = await spellTiming(ctx, asked, known?.id);
+  const refused = noConcentrationText(timing, asked);
+  if (!refused) return null;
+  const name = timing.name ?? asked;
+  const heroName = hero?.name.trim() || 'The hero';
+  const ac = acSpellNamed(name);
+  if (ac) return `${refused} Record its AC with update_character ac_spells_add ["${ac}"].`;
+  if (nameKey(name) === 'shield') return `${refused} Fold its +5 into the dc of attacks on ${heroName} until the start of ${heroName}'s next turn.`;
+  return refused;
 }
 
 /** A creature's Constitution saving throw bonus from its stat block, and whether the block has Legendary Resistance. */
@@ -139,6 +176,14 @@ function labelArray(labels: readonly string[]): string {
   return `[${labels.map((l) => JSON.stringify(l)).join(', ')}]`;
 }
 
+/** A label as update_map effects_end compares it (battleMap's endEffects, sameText): spaces collapsed, case aside. */
+const labelKey = (label: string) => label.replace(/\s+/g, ' ').trim().toLowerCase();
+
+/** "Cultist Fanatic's Constitution save to keep concentration": a Concentration save's purpose, never naming the spell. */
+export function concentrationSavePurpose(name: string): string {
+  return `${name}'s Constitution save to keep concentration`;
+}
+
 /** "is Paralyzed" for a standard condition, `has "Hexed"` for a homebrew one. */
 function conditionState(id: string): string {
   const standard = matchStandardCondition(id);
@@ -176,14 +221,42 @@ export interface EndingCaster {
 }
 
 /**
+ * An NPC's `spell` is Shield of Faith and the hero holds a Shield of Faith record the hero isn't concentrating on: the
+ * +2 may be that NPC's (the app takes a record the hero concentrates on to be the hero's own casting).
+ */
+function mayBeOthersShieldOfFaith(spell: string, hero: Character): boolean {
+  const concentrating = hero.spellcasting?.concentratingOn;
+  return acSpellNamed(spell) === 'Shield of Faith' && acSpells(hero).includes('Shield of Faith') && !(concentrating && acSpellNamed(concentrating) === 'Shield of Faith');
+}
+
+/**
+ * The areas line: each label once, as the exact call ends every effect its label names (update_map effects_end, by
+ * sameText), so a repeated label would be refused. A label that names more than one effect on the map, this spell's or
+ * not (two casters of Spirit Guardians, two Darkness spells placed at a point), says so: the call ends them all.
+ */
+function areasLine(combat: CombatState, map: NonNullable<CombatState['map']>, areas: readonly MapEffect[], hidden: boolean): string {
+  const one = areas.length === 1;
+  const when = hidden ? ` once the player can see ${one ? 'it' : 'them'} go (not during a hidden creature's turn)` : '';
+  const labels = areas.map((e) => e.label).filter((label, i, all) => all.findIndex((l) => labelKey(l) === labelKey(label)) === i);
+  const shared = labels
+    .map((label) => ({ label, n: map.effects.filter((e) => labelKey(e.label) === labelKey(label)).length }))
+    .filter((s) => s.n > 1)
+    .map((s) => `every area named "${s.label}" (${s.n} on the map)`);
+  const also = shared.length ? ` — effects_end ends ${shared.join(' and ')}: place again with resolve_area any that isn't this spell's` : '';
+  return `Still on the map: ${areas.map((e) => `${e.label} (${areaPlace(combat, e)})`).join(' · ')} — if ${one ? 'it was' : 'they were'} this spell's, end ${one ? 'it' : 'them'} with update_map effects_end ${labelArray(labels)}${when}${also}.`;
+}
+
+/**
  * What the DM may need to end with `spell` now that `caster`'s Concentration on it ended (srd:rule:concentration: "If
  * the effect's creator loses Concentration, the effect ends"), as DM-only lines with the exact call. Nothing when
  * nothing matches.
- * 1. Lasting areas on the map that may be the spell's (concentrationAreas): named, never removed.
+ * 1. Lasting areas on the map that may be the spell's (concentrationAreas): named, never removed (areasLine).
  * 2. Conditions whose source or duration names it (conditionsNaming), except those the triggering call just added.
- * 3. An NPC's Shield of Faith ending while the hero holds a record she isn't concentrating on: maybe it was the NPC's.
- * 4. An NPC's spell the hero's AC was set by hand for (a Stone Golem's Slow). For the hero's own spells the engine's
- *    end cascade says it (afterConcentrationEnds).
+ * 3. An NPC's Shield of Faith ending while the hero holds a record the hero isn't concentrating on: maybe it was the
+ *    NPC's.
+ * 4. An NPC's spell the hero's AC was set by hand for (a Stone Golem's Slow). Not for a spell the hero holds a record of
+ *    (step 3, or the record's own end, takes its bonus off). For the hero's own spells the engine's end cascade says it
+ *    (afterConcentrationEnds).
  */
 export function cascadeLines(
   spell: string,
@@ -197,24 +270,18 @@ export function cascadeLines(
   const map = combat?.map;
   if (combat && map && caster.id) {
     const areas = concentrationAreas(map, caster.id, spell);
-    if (areas.length) {
-      const one = areas.length === 1;
-      const when = caster.hidden ? ` once the player can see ${one ? 'it' : 'them'} go (not during a hidden creature's turn)` : '';
-      lines.push(
-        `Still on the map: ${areas.map((e) => `${e.label} (${areaPlace(combat, e)})`).join(' · ')} — if ${one ? 'it was' : 'they were'} this spell's, end ${one ? 'it' : 'them'} with update_map effects_end ${labelArray(areas.map((e) => e.label))}${when}.`,
-      );
-    }
+    if (areas.length) lines.push(areasLine(combat, map, areas, caster.hidden));
   }
   for (const n of conditionsNaming(spell, hero, combat, skip)) {
     const call = n.isHero ? 'update_character conditions_remove' : 'update_combat conditions';
     lines.push(`${conditionPhrase(n, spell)}: if the spell caused it, remove it with ${call}.`);
   }
   if (!caster.isHero && hero) {
-    const concentrating = hero.spellcasting?.concentratingOn;
-    if (acSpellNamed(spell) === 'Shield of Faith' && acSpells(hero).includes('Shield of Faith') && !(concentrating && acSpellNamed(concentrating) === 'Shield of Faith')) {
+    if (mayBeOthersShieldOfFaith(spell, hero)) {
       lines.push(`${heroName}'s Shield of Faith +2: if it was ${caster.name}'s, end it with update_character ac_spells_end ["Shield of Faith"].`);
     }
-    const handSet = handSetAcNaming(hero, spell);
+    const recorded = acSpellNamed(spell);
+    const handSet = recorded && acSpells(hero).includes(recorded) ? undefined : handSetAcNaming(hero, spell);
     if (handSet) {
       lines.push(`${heroName}'s AC ${handSet.stored} was set by hand for ${spell}: if it counted ${spell}, set armor_class back to ${handSet.computed} (armor and abilities).`);
     }
@@ -224,11 +291,16 @@ export function cascadeLines(
 
 /**
  * For a caster the app stops tracking while its spell may go on (removed from the fight, or still concentrating when
- * the fight ends): each condition that names the spell, to remove when it ends. "Mira Voss is Paralyzed (source: Hold
- * Person): remove it when that spell ends."
+ * the fight ends): each condition that names the spell, to remove when it ends ("Mira Voss is Paralyzed (source: Hold
+ * Person): remove it when that spell ends."), and the hero's Shield of Faith record the caster's own Shield of Faith may
+ * be (srd:spell:shield-of-faith: "Duration: Concentration, up to 10 minutes"), to end when that spell ends.
  */
-export function untilSpellEndsLines(spell: string, hero: Character | null, combat: CombatState | null): string[] {
-  return conditionsNaming(spell, hero, combat).map((n) => `${conditionPhrase(n, spell)}: remove it when that spell ends.`);
+export function untilSpellEndsLines(spell: string, caster: string, hero: Character | null, combat: CombatState | null): string[] {
+  const lines = conditionsNaming(spell, hero, combat).map((n) => `${conditionPhrase(n, spell)}: remove it when that spell ends.`);
+  if (hero && mayBeOthersShieldOfFaith(spell, hero)) {
+    lines.push(`${hero.name.trim() || 'The hero'}'s Shield of Faith +2: if it is ${caster}'s, end it with update_character ac_spells_end ["Shield of Faith"] when that spell ends.`);
+  }
+  return lines;
 }
 
 /** The hero's combatant with its countdown set to `countdown`, or without one (the field removed). */
