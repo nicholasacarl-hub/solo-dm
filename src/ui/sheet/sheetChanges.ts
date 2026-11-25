@@ -4,11 +4,14 @@
  */
 import {
   addCondition,
+  addSpell,
   adjustHpMax,
   applyDamage,
   applyHealing,
   changeExhaustion,
+  classSpellLevelCap,
   endHpMaxAdjustments,
+  removeSpellById,
   saveSourcesChangeText,
   syncArmorClass,
   conditionName,
@@ -23,14 +26,18 @@ import {
   spendSlot,
   type HpMaxChange,
 } from '@/engine';
+import { classSpellRules, classSpellsOf, closeSpellPicks, owedSpells, owedSpellsSummary } from '@/data/options/spellPicks';
+import { nameKey } from '@/lib/id';
 import { safeEnd } from '@/lib/text';
 import type {
   Character,
+  ClassOption,
   Currency,
   EquipmentOption,
   GameEvent,
   HpMaxEnds,
   InventoryItem,
+  KnownSpell,
   Personality,
   SpellSlotLevel,
 } from '@/types';
@@ -197,6 +204,182 @@ export function preparedChange(c: Character, spellId: string, prepared: boolean)
   if (!sc || !spell || spell.prepared === prepared || spell.alwaysPrepared) return unchanged(c);
   const spells = sc.spells.map((s) => (s.id === spellId ? { ...s, prepared } : s));
   return { character: { ...c, spellcasting: { ...sc, spells } }, notice: `Player ${prepared ? 'prepared' : 'unprepared'} ${spell.name}` };
+}
+
+// ---------------------------------------------------------------------------
+// Spell choices: a level's picks, skipping them, a Long Rest's change (SRD 5.2.1, each class's Spellcasting)
+// ---------------------------------------------------------------------------
+
+/** A spell's name for the DM, a book's followed by its title as feats' are: "Ashen Choir (The Gloamwood Almanac)". */
+function spellNoticeName(spell: Pick<KnownSpell, 'name' | 'ref'>): string {
+  return spell.ref ? `${spell.name} (${spell.ref.sourceTitle})` : spell.name;
+}
+
+const spellNames = (spells: readonly Pick<KnownSpell, 'name' | 'ref'>[]) => spells.map(spellNoticeName).join(', ');
+
+/** The sheet spell for a class's pick: the class's name as its source (so its count sees it), never always prepared. */
+function classSpell(spell: KnownSpell, source: string, prepared: boolean): KnownSpell {
+  const { alwaysPrepared: _always, ...rest } = spell;
+  return { ...rest, source, prepared };
+}
+
+/**
+ * The picks a sheet can still take, in order: a name it holds is left out (adding it would merge into that entry, a
+ * species' cantrip or the DM's grant), as is a second pick of one name; `ok` checks each pick's level.
+ */
+function freshPicks(c: Character) {
+  const held = new Set((c.spellcasting?.spells ?? []).map((s) => nameKey(s.name)));
+  return (spells: readonly KnownSpell[], ok: (s: KnownSpell) => boolean): KnownSpell[] =>
+    spells.filter((s) => {
+      const key = nameKey(s.name);
+      if (!key || held.has(key) || !ok(s)) return false;
+      held.add(key);
+      return true;
+    });
+}
+
+/** The class's entry in the open choices, kept but without the level's swaps (they lapse with the level's choices). */
+function withoutSwaps(c: Character, classId: string): Character {
+  const sc = c.spellcasting;
+  if (!sc?.spellPicks?.some((p) => p.classId === classId)) return c;
+  return { ...c, spellcasting: { ...sc, spellPicks: sc.spellPicks.map((p) => (p.classId === classId ? { classId } : p)) } };
+}
+
+/** What the player chose in the choices form for one class's open level (sheet spells built from rules-index entries). */
+export interface SpellPicksChoice {
+  classId: string;
+  /** New cantrips from the class's list. With `giveUpCantrip`, the last of them replaces it. */
+  cantrips: readonly KnownSpell[];
+  /** A spellbook's new spells (a Wizard's): prepared only when `prepare` names them too. */
+  spellbook: readonly KnownSpell[];
+  /** New prepared spells from the class's list (a class without a spellbook). With `giveUpSpell`, the last replaces it. */
+  prepared: readonly KnownSpell[];
+  /** A spellbook's spells to prepare, by id: its unprepared entries on the sheet and this choice's new book spells. */
+  prepare: readonly string[];
+  /** One of the class's cantrips given up, by id (the level allows replacing one). */
+  giveUpCantrip?: string | null;
+  /** One of the class's level 1+ spells given up, by id (the level allows replacing one). */
+  giveUpSpell?: string | null;
+}
+
+/**
+ * The player's choices for a class's open level (SRD 5.2.1, each class's Spellcasting: "choose additional spells … until
+ * the number of spells on your list matches the number on the table"), checked against the sheet as it is now (the
+ * edit runs on the latest character): a pick whose name the sheet now holds is dropped, as is a spell given up that is
+ * gone, and each list takes no more than the table still has room for. New spells have the class's name as their source
+ * and are prepared; a Wizard's new spellbook spells only when also chosen to prepare. A spell given up is removed by id
+ * and its replacement added in its place. The class's choices close once nothing is owed; otherwise they stay open
+ * without the level's swaps.
+ */
+export function spellPicksChange(c: Character, cls: ClassOption, choice: SpellPicksChoice): SheetChange {
+  const cl = c.classes.find((x) => x.classId === choice.classId);
+  const owed = cl ? owedSpells(c, cl, cls) : null;
+  if (!cl || !owed) return unchanged(c, "That class's spells can't be chosen on the sheet.");
+  const entry = c.spellcasting?.spellPicks?.find((p) => p.classId === cl.classId);
+  const own = classSpellsOf(c, cl.name);
+  const fresh = freshPicks(c);
+  const inRange = (s: KnownSpell) => s.level >= 1 && s.level <= owed.maxLevel;
+  const giveUpCantrip = entry?.replaceCantrip ? own.find((s) => s.id === choice.giveUpCantrip && s.level === 0) : undefined;
+  const giveUpSpell = entry?.replaceSpell && !owed.spellbook ? own.find((s) => s.id === choice.giveUpSpell && s.level >= 1) : undefined;
+  const cantrips = owed.cantrips ? fresh(choice.cantrips, (s) => s.level === 0).slice(0, owed.cantrips.owed + (giveUpCantrip ? 1 : 0)) : [];
+  const book = owed.spellbook ? fresh(choice.spellbook, inRange).slice(0, owed.spellbook.owed) : [];
+  const prepared = owed.spellbook ? [] : fresh(choice.prepared, inRange).slice(0, owed.prepared.owed + (giveUpSpell ? 1 : 0));
+  // A spellbook's spells to prepare: its unprepared entries of a level it has slots for, and the new book spells.
+  const preparable = new Map<string, Pick<KnownSpell, 'name' | 'ref'>>([
+    ...own.filter((s) => inRange(s) && !s.prepared).map((s) => [s.id, s] as const),
+    ...book.map((s) => [s.id, s] as const),
+  ]);
+  const prepare = owed.spellbook ? [...new Set(choice.prepare)].filter((id) => preparable.has(id)).slice(0, owed.prepared.owed) : [];
+  // A swap needs its replacement: the last pick of its list.
+  const cantripSwap = giveUpCantrip && cantrips.length ? { out: giveUpCantrip, in: cantrips[cantrips.length - 1] } : null;
+  const spellSwap = giveUpSpell && prepared.length ? { out: giveUpSpell, in: prepared[prepared.length - 1] } : null;
+  if (!cantrips.length && !book.length && !prepared.length && !prepare.length) {
+    return unchanged(c, 'Nothing changed: those spells are on your sheet already, or no longer yours to choose.');
+  }
+
+  let next = c;
+  for (const swap of [cantripSwap, spellSwap]) if (swap) next = removeSpellById(next, swap.out.id).character;
+  for (const s of cantrips) next = addSpell(next, classSpell(s, cl.name, true)).character;
+  for (const s of book) next = addSpell(next, classSpell(s, cl.name, prepare.includes(s.id))).character;
+  for (const s of prepared) next = addSpell(next, classSpell(s, cl.name, true)).character;
+  const fromBook = new Set(prepare.filter((id) => !book.some((s) => s.id === id)));
+  if (fromBook.size && next.spellcasting) {
+    next = { ...next, spellcasting: { ...next.spellcasting, spells: next.spellcasting.spells.map((s) => (fromBook.has(s.id) ? { ...s, prepared: true } : s)) } };
+  }
+  const levelled = next.classes.find((x) => x.classId === cl.classId) ?? cl;
+  const after = owedSpells(next, levelled, cls);
+  const remaining = after ? owedSpellsSummary(after) : '';
+  next = remaining ? withoutSwaps(next, cl.classId) : closeSpellPicks(next, cl.classId);
+
+  const parts: string[] = [];
+  const newCantrips = cantripSwap ? cantrips.slice(0, -1) : cantrips;
+  if (newCantrips.length) parts.push(`${newCantrips.length === 1 ? 'cantrip' : 'cantrips'} ${spellNames(newCantrips)}`);
+  if (book.length) parts.push(`spellbook ${spellNames(book)}`);
+  const preparedNow = owed.spellbook ? prepare.map((id) => preparable.get(id)!) : spellSwap ? prepared.slice(0, -1) : prepared;
+  if (preparedNow.length) parts.push(`prepared ${spellNames(preparedNow)}`);
+  for (const swap of [cantripSwap, spellSwap]) if (swap) parts.push(`replaced ${spellNoticeName(swap.out)} with ${spellNoticeName(swap.in)}`);
+  if (remaining) parts.push(`still to choose: ${remaining}`);
+  return { character: next, notice: `Player chose spells for ${cl.name} ${cl.level}: ${parts.join('; ')}` };
+}
+
+/** The player leaves a class's open choices: they close, and the DM hears what wasn't chosen. */
+export function skipSpellPicksChange(c: Character, cls: ClassOption | undefined, classId: string): SheetChange {
+  const cl = c.classes.find((x) => x.classId === classId);
+  const next = closeSpellPicks(c, classId);
+  if (!cl || next === c) return unchanged(c);
+  const owed = cls ? owedSpells(c, cl, cls) : null;
+  const summary = owed ? owedSpellsSummary(owed) : '';
+  return { character: next, notice: `Player skipped their spell choices for ${cl.name} ${cl.level} (${summary ? `not chosen: ${summary}` : 'kept their spells'})` };
+}
+
+/** What the player changes after a Long Rest, for one class: each spell given up is replaced by the pick at its place. */
+export interface RestSpellChange {
+  classId: string;
+  /** The class's prepared level 1+ spells given up, by id. */
+  giveUp: readonly string[];
+  /** Their replacements from the class's list, in the same order. */
+  picks: readonly KnownSpell[];
+  /** One of the class's cantrips given up, by id (the Wizard's), and its replacement. */
+  giveUpCantrip?: string | null;
+  cantrip?: KnownSpell | null;
+}
+
+/**
+ * The changes a Long Rest allows the class (its own Spellcasting text, classSpellRules): a Cleric or Druid replaces any
+ * of its prepared spells ("replacing any of the spells there with other Cleric spells for which you have spell slots"),
+ * a Paladin or Ranger one ("you can replace one spell on your list"), a Wizard one of its cantrips (its prepared spells
+ * change with the sheet's checkboxes, from its spellbook). Always one for one, so the class's count never changes;
+ * nothing records when the rest happened, so the DM hears of it and can object.
+ */
+export function restSpellChange(c: Character, cls: ClassOption, change: RestSpellChange): SheetChange {
+  const cl = c.classes.find((x) => x.classId === change.classId);
+  if (!cl) return unchanged(c);
+  const rules = classSpellRules(cls).longRest;
+  const cap = classSpellLevelCap(cl);
+  const own = classSpellsOf(c, cl.name);
+  const fresh = freshPicks(c);
+  const pairs: [KnownSpell, KnownSpell][] = [];
+  if (rules.spells && !rules.fromSpellbook) {
+    const out = [...new Set(change.giveUp)].flatMap((id) => own.filter((s) => s.id === id && s.level >= 1 && s.prepared));
+    const ins = fresh(change.picks, (s) => s.level >= 1 && s.level <= cap);
+    const count = Math.min(out.length, ins.length, rules.spells === 'one' ? 1 : Infinity);
+    for (let i = 0; i < count; i++) pairs.push([out[i], ins[i]]);
+  }
+  const spellPairs = pairs.length;
+  if (rules.cantrip) {
+    const out = own.find((s) => s.id === change.giveUpCantrip && s.level === 0);
+    const [replacement] = change.cantrip ? fresh([change.cantrip], (s) => s.level === 0) : [];
+    if (out && replacement) pairs.push([out, replacement]);
+  }
+  if (!pairs.length) return unchanged(c, 'Nothing changed: choose a spell to give up and one to take its place.');
+  let next = c;
+  for (const [out, replacement] of pairs) {
+    next = removeSpellById(next, out.id).character;
+    next = addSpell(next, classSpell(replacement, cl.name, true)).character;
+  }
+  const what = [spellPairs ? 'prepared spells' : '', pairs.length > spellPairs ? 'cantrips' : ''].filter(Boolean).join(' and ');
+  const text = pairs.map(([out, replacement]) => `${spellNoticeName(out)} → ${spellNoticeName(replacement)}`).join(', ');
+  return { character: next, notice: `Player changed their ${cl.name} ${what} (allowed after a Long Rest): ${text}` };
 }
 
 export function featureUseChange(c: Character, featureId: string, spend: boolean): SheetChange {

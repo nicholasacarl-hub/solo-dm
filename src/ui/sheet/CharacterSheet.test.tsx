@@ -1,12 +1,13 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { useBuilderData } from '@/data';
 import { generatePortrait } from '@/images';
 import { useGame } from '@/state/gameStore';
 import { importedPlaceholder } from '@/lib/importedContent';
 import { sampleCampaign, sampleCharacter } from '@/test/fixtures';
-import { GLOAMWOOD_TITLE, importedRef } from '@/test/structuredFixtures';
-import type { Feature, Transformation } from '@/types';
+import { GLOAMWOOD_TITLE, SRD_BUILDER_DATA, importedRef } from '@/test/structuredFixtures';
+import type { BuilderData, Character, Feature, Transformation } from '@/types';
 import { builderFixture } from '@/ui/builder/testing/builderFixture';
 import { clearRolls, queueRolls } from '@/ui/builder/testing/fakeEngine';
 import { installDialogPolyfill, resetFakeGame } from '@/ui/builder/testing/fakeGameStore';
@@ -17,18 +18,23 @@ import { LevelUpDialog } from './LevelUpDialog';
 vi.mock('@/engine', async () => (await import('@/ui/builder/testing/fakeEngine')).fakeEngine);
 vi.mock('@/images', () => import('@/ui/play/testing/imagesMock'));
 vi.mock('@/state/gameStore', async () => (await import('@/ui/builder/testing/fakeGameStore')).fakeGameStoreModule());
+const mocks = vi.hoisted(() => ({ builder: null as BuilderData | null }));
 vi.mock('@/data', async () => {
   const { builderFixture, spellFixture } = await import('@/ui/builder/testing/builderFixture');
   const spells = spellFixture();
   const index = {
     get: (id: string) => spells.find((s) => s.id === id),
     findByName: (name: string) => spells.find((s) => s.name === name),
+    // The spell choices' lists (useSpellOptions).
+    list: (q: { kind?: string }) => spells.filter((s) => !q.kind || s.kind === q.kind),
   };
   return {
     loadBuilderData: async () => builderFixture(),
-    useBuilderData: () => ({ data: builderFixture(), error: null, loading: false }),
+    // Counted: a sheet without open spell choices loads no class data.
+    useBuilderData: vi.fn(() => ({ data: mocks.builder ?? builderFixture(), error: null, loading: false })),
     getRulesIndex: async () => index,
     useRulesIndex: () => index,
+    useRulesIndexState: () => ({ index, loading: false, error: null }),
   };
 });
 
@@ -45,6 +51,7 @@ afterEach(cleanup);
 beforeEach(() => {
   clearRolls();
   resetImagesMock();
+  mocks.builder = null;
   resetFakeGame({ campaign: sampleCampaign(), character: sampleCharacter() });
 });
 
@@ -669,5 +676,94 @@ describe('LevelUpDialog', () => {
     expect(screen.getByRole('button', { name: 'Level up' })).toBeDisabled();
     await user.click(screen.getByLabelText('My DM allows it anyway'));
     expect(screen.getByRole('button', { name: 'Level up' })).toBeEnabled();
+  });
+});
+
+// The builder fixture's Wizard: 3 cantrips (4 from level 4), 4/5/6/7 prepared and a book of six (its abridged text has no
+// "add two Wizard spells" per level), so the sample Wizard at Wizard 4 owes 1 cantrip and 2 prepared spells.
+describe('spell choices on the sheet', () => {
+  const wizard4 = (): Character => {
+    const base = sampleCharacter();
+    return { ...base, classes: base.classes.map((cl) => ({ ...cl, level: 4 })), spellcasting: { ...base.spellcasting!, spellPicks: [{ classId: 'srd:class:wizard' }] } };
+  };
+
+  it('notes open choices in the header and on the Spells tab, and opens the form from the note', async () => {
+    const user = userEvent.setup();
+    resetFakeGame({ campaign: sampleCampaign(), character: wizard4() });
+    render(<Harness />);
+    expect(screen.getByRole('tab', { name: /Spells/ })).toHaveAccessibleName(/spells to choose/);
+    await user.click(screen.getByRole('button', { name: 'Spells to choose: Wizard 4' }));
+    const dialog = screen.getByRole('dialog', { name: 'Choose spells' });
+    await user.click(within(within(dialog).getByRole('group', { name: /^Cantrips/ })).getByRole('checkbox', { name: /^Ray of Frost/ }));
+    await user.click(within(within(dialog).getByRole('group', { name: /^Prepare from your spellbook/ })).getByRole('checkbox', { name: /^Sleep/ }));
+    expect(within(dialog).getByText('Still to choose: 1 to prepare')).toBeInTheDocument();
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    expect(notices()).toEqual(['Player chose spells for Wizard 4: cantrip Ray of Frost; prepared Sleep; still to choose: 1 prepared spell']);
+    // Still one to prepare: the note stays, live.
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Spells to choose: Wizard 4' })).toBeInTheDocument();
+  });
+
+  it("shows a banner per open class on the Spells tab; skipping ends the note and the badge", async () => {
+    const user = userEvent.setup();
+    resetFakeGame({ campaign: sampleCampaign(), character: wizard4() });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    expect(screen.getByText('Wizard 4: choose 1 cantrip and 2 prepared spells')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Choose spells for Wizard 4' }));
+    await user.click(within(screen.getByRole('dialog', { name: 'Choose spells' })).getByRole('button', { name: 'Skip these choices' }));
+    expect(notices()).toEqual(['Player skipped their spell choices for Wizard 4 (not chosen: 1 cantrip and 2 prepared spells)']);
+    expect(screen.queryByText(/Wizard 4: choose/)).toBeNull();
+    expect(screen.queryByRole('button', { name: /Spells to choose/ })).toBeNull();
+    expect(screen.getByRole('tab', { name: /Spells/ })).not.toHaveAccessibleName(/spells to choose/);
+  });
+
+  it('settles on its own when the sheet catches up (the DM recorded the spells), and shows nothing on a read-only sheet', () => {
+    const caughtUp = wizard4();
+    const spells = [...caughtUp.spellcasting!.spells, { id: 'dm-1', name: 'Ray of Frost', level: 0, prepared: true, source: 'Wizard' }];
+    const prepared = spells.map((s) => (s.name === 'Sleep' ? { ...s, prepared: true } : s));
+    const settled: Character = { ...caughtUp, spellcasting: { ...caughtUp.spellcasting!, spells: [...prepared, { id: 'dm-2', name: 'Feather Fall', level: 1, prepared: true, source: 'Wizard' }] } };
+    resetFakeGame({ campaign: sampleCampaign(), character: settled });
+    render(<Harness />);
+    expect(screen.queryByRole('button', { name: /Spells to choose/ })).toBeNull();
+    cleanup();
+    resetFakeGame({ campaign: sampleCampaign(), character: wizard4() });
+    render(<Harness editable={false} />);
+    expect(screen.queryByRole('button', { name: /Spells to choose/ })).toBeNull();
+  });
+
+  it("says on the Spells tab when a class marked open has no details on this device; the choices stay open", async () => {
+    const user = userEvent.setup();
+    const fixture = builderFixture();
+    mocks.builder = { ...fixture, classes: fixture.classes.filter((c) => c.name !== 'Wizard') };
+    resetFakeGame({ campaign: sampleCampaign(), character: wizard4() });
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    expect(screen.getByText("Wizard 4: its spell choices are open, but its details aren't on this device. Your DM can add spells.")).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Choose spells/ })).toBeNull();
+    expect(useGame.getState().character?.spellcasting?.spellPicks).toEqual([{ classId: 'srd:class:wizard' }]);
+  });
+
+  it('loads no class data for a sheet without open choices', () => {
+    const calls = vi.mocked(useBuilderData).mock.calls.length;
+    render(<Harness />);
+    expect(vi.mocked(useBuilderData).mock.calls.length).toBe(calls);
+    expect(screen.queryByRole('button', { name: /Spells to choose/ })).toBeNull();
+  });
+
+  it("offers a Long Rest's change on the Spells tab where the class's rules allow it (srd:rule:wizard-spellcasting)", async () => {
+    const user = userEvent.setup();
+    // The SRD's own Wizard: "Whenever you finish a Long Rest, you can replace one of your cantrips from this feature with
+    // another Wizard cantrip of your choice."
+    mocks.builder = SRD_BUILDER_DATA;
+    render(<Harness />);
+    await user.click(screen.getByRole('tab', { name: /Spells/ }));
+    await user.click(screen.getByRole('button', { name: 'Change prepared spells' }));
+    const dialog = screen.getByRole('dialog', { name: 'Change prepared spells' });
+    expect(within(dialog).getByText('Wizards replace one cantrip after a Long Rest. Your DM is told.')).toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText('Cantrip to replace'), 'Light');
+    await user.click(within(within(dialog).getByRole('group', { name: /^Replacement cantrip/ })).getByRole('checkbox', { name: /^Ray of Frost/ }));
+    await user.click(within(dialog).getByRole('button', { name: 'Apply' }));
+    expect(notices()).toEqual(['Player changed their Wizard cantrips (allowed after a Long Rest): Light → Ray of Frost']);
   });
 });

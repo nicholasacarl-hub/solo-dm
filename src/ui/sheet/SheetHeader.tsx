@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ArrowBigUpDash, Dna, Paintbrush } from 'lucide-react';
 import { XP_THRESHOLDS, characterLevel } from '@/engine';
 import { useGame } from '@/state/gameStore';
@@ -105,12 +105,15 @@ export function SheetHeader({
   editable,
   onLevelUp,
   onShowTransformations,
+  note,
 }: {
   character: Character;
   editable?: boolean;
   onLevelUp?: () => void;
   /** Open the sheet where transformations are listed (the Features tab). */
   onShowTransformations?: () => void;
+  /** A one-line note under the transformations' (the spell choices still open). */
+  note?: ReactNode;
 }) {
   const milestone = useGame((s) => s.campaign?.settings.milestoneLeveling ?? true);
   const level = characterLevel(c);
@@ -124,6 +127,7 @@ export function SheetHeader({
         <h2 className="truncate font-display text-lg leading-tight font-semibold">{c.name || 'Unnamed hero'}</h2>
         <p className="mt-0.5 line-clamp-2 text-xs text-muted">{subtitle}</p>
         <TransformedNote character={c} onShow={onShowTransformations} />
+        {note}
         <div className="mt-1.5 flex items-center gap-2">
           <Badge tone="accent">Level {level}</Badge>
           {milestone ? <Badge tone="gold">Milestone</Badge> : <XpProgress c={c} />}
