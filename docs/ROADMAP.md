@@ -15,8 +15,6 @@ vibe-coding session.
 
 ## Rules depth
 
-- **Spell effects**: concentration tracking on combatants, durations that tick down by round, and
-  spell-based AC (Mage Armor, Shield of Faith).
 - **Class extras**: Unarmored Movement, lineage spells gained at levels 3 and 5, and replacing
   "Action Surge (two uses)" / "Indomitable" entries in place at Fighter 13 and 17.
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
@@ -37,6 +35,20 @@ vibe-coding session.
   that grow with level (a Berserker Axe) and a transformation's own change to the maximum are entered and ended by
   hand. The Long Rest's "Ability Scores Restored" isn't applied, so a reduced Constitution is raised back by hand. The
   player has no control for the Initiative bonus (the DM's `initiative_change` only).
+- **Spell effects the app doesn't time or apply**: only Concentration is counted down, so spells without it (Mirror
+  Image, Grease, Shield's +5) and Mage Armor's 8 hours (no game clock: it ends at a Long Rest or by hand) are the DM's
+  to end. Repeated saves at the end of a target's turns (Hold Person) are the DM's. A spell cast between the caster's
+  turns (a Reaction, a Legendary Action, a readied spell) can end up to a round early unless the DM gives `rounds`. An
+  NPC's Concentration save is a plain Constitution save: Bless, Bane, Exhaustion, Advantage and War Caster aren't
+  counted, and imported or homebrew stat blocks carry no saves, so the DM rolls those. Conditions a spell imposed,
+  creatures it summoned and its map areas are named for the DM, never removed by the app; Flesh to Stone's permanence
+  at full duration, Haste's lethargy and Fly's fall are the DM's. A Short Rest ends nothing. Only Mage Armor and
+  Shield of Faith change the AC (the DM folds Shield into an attack's DC and sets Barkskin, Haste, Slow and Warding
+  Bond by hand); another caster's Shield of Faith on the hero ends with `ac_spells_end`, two overlapping castings are
+  one record, and putting on armor doesn't end Mage Armor (it stops counting; the DM ends it). An NPC's Concentration
+  isn't shown to the player, and NPC AC from spells isn't tracked. Changing gear and an ability score in one
+  `update_character` call leaves the ability's change out of the AC (refreshArmorClass stops once the gear has moved
+  it), a separate fix.
 
 ## Memory and cost
 
