@@ -788,11 +788,24 @@ describe('spell choices on the sheet', () => {
     resetFakeGame({ campaign: sampleCampaign(), character: wizard4() });
     render(<Harness />);
     await user.click(screen.getByRole('button', { name: 'Spells to choose: Wizard 4' }));
-    await user.click(within(screen.getByRole('dialog', { name: 'Choose spells' })).getByRole('button', { name: 'Skip these choices' }));
+    // A browser keeps focus out of a page behind an open modal: the tab must be focused once the dialog is closed.
+    const tab = screen.getByRole('tab', { name: /Overview/ });
+    const focus = HTMLElement.prototype.focus;
+    let behindOpenDialog: boolean | null = null;
+    const spy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (this: HTMLElement, options?: FocusOptions) {
+      if (this === tab) behindOpenDialog = document.querySelector('dialog[open]') !== null;
+      focus.call(this, options);
+    });
+    try {
+      await user.click(within(screen.getByRole('dialog', { name: 'Choose spells' })).getByRole('button', { name: 'Skip these choices' }));
+    } finally {
+      spy.mockRestore();
+    }
     // Closed by then, not a frame later, and the note that opened it is gone.
     expect(screen.queryByRole('dialog')).toBeNull();
     expect(screen.queryByRole('button', { name: /Spells to choose/ })).toBeNull();
-    expect(screen.getByRole('tab', { name: /Overview/ })).toHaveFocus();
+    expect(tab).toHaveFocus();
+    expect(behindOpenDialog).toBe(false);
   });
 
   it("keeps focus on the Spells tab's controls once a Skip from its banner closes the form", async () => {
