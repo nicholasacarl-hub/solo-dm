@@ -574,7 +574,8 @@ describe('applyLongRest ends the AC spells (srd:spell:mage-armor; srd:spell:shie
     const recorded = addAcSpell(old, 'Shield of Faith').character;
     expect(recorded).toMatchObject({ armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste + Shield of Faith 2' });
     const r = applyLongRest(recorded);
-    expect(r.character).toMatchObject({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith and Haste' });
+    // The DM's words stay, marked as no longer counting it (E1: "Shield of Faith ended").
+    expect(r.character).toMatchObject({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith and Haste + Shield of Faith ended' });
     expect(messages(r)).toEqual(['Shield of Faith ends: AC 20 → 18', expect.stringMatching(/^Long rest: .*Concentration on Shield of Faith ended/)]);
   });
 

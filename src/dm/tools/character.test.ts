@@ -1247,14 +1247,12 @@ describe('a hand-set AC the new gear only matches: what it may have counted (H1/
     const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith', ...concentratingOn('Shield of Faith') }) });
     const donned = await h.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }] });
     expect(donned.content).toContain('If it counted Shield of Faith, record it with ac_spells_add ["Shield of Faith"] (the app adds and ends it).');
-    // Following it: the hand-set 18 already holds the +2, so it is kept and now counted, with what the gear gives.
+    // Following it takes one call (D4): the hand-set 18 is what the gear alone gives now, so it can't hold the +2
+    // whatever its words say (E2), and the app adds it.
     const recorded = await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
-    expect(recorded.content).toContain(
-      'Warning: AC 18 was set by hand naming Shield of Faith: kept, and Shield of Faith is now counted in it (ending Shield of Faith takes 2 off). Gear, features and spells give 20 (Chain Mail 16 + Shield 2 + Shield of Faith 2); update the AC if that is right.',
-    );
-    expect(h.sheet()).toMatchObject({ armorClass: 18, acSpells: ['Shield of Faith'] });
-    await h.run('update_character', { armor_class: 20 });
-    expect(h.sheet()).toMatchObject({ armorClass: 20, acFormula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2' });
+    expect(recorded.content).toContain('Shield of Faith: AC 18 → 20');
+    expect(recorded.content).not.toContain('was set by hand naming');
+    expect(h.sheet()).toMatchObject({ armorClass: 20, acFormula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
     const ended = await h.run('update_character', { concentration: null });
     expect(ended.content).toContain('No longer concentrating on Shield of Faith.\nShield of Faith ends: AC 20 → 18');
     expect(h.sheet()).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield 2' });
@@ -2356,7 +2354,8 @@ describe('AC from spells: ac_spells_add and ac_spells_end, the call\'s last step
     const h = setup({ character: sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] }) });
     await h.run('update_character', { inventory_add: [{ name: 'Elven Chain', quantity: 1, category: 'armor' }] });
     await h.run('update_character', { inventory_update: [{ name: 'Elven Chain', equipped: true }] });
-    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'Elven Chain (stats unknown — AC kept at 14) + Shield of Faith 2' });
+    // The armor's part keeps the AC less the counted +2 (E3): 12 + 2 reads as the 14 stored.
+    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'Elven Chain (stats unknown — AC kept at 12) + Shield of Faith 2' });
     const restated = await h.run('update_character', { armor_class: 14, reason: 'Elven Chain' });
     expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Elven Chain + Shield of Faith 2' });
     expect(statusAc(restated.content)).toBe('AC 14 (Shield of Faith)');

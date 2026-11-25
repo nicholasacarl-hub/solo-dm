@@ -1545,7 +1545,9 @@ function withoutSpell(c: Character, sc: Spellcasting, spell: KnownSpell, keepCon
 /**
  * Start (name) or end (null) concentration. Starting a new one ends the previous (srd:rule:concentration, Another
  * Concentration Effect); what ended with it ends too (afterConcentrationEnds). The same spell again changes nothing:
- * the name as given, or the sheet's spell it finds ("Faith" for a Shield of Faith on the sheet is that spell).
+ * the name as given, or the sheet's spell it finds ("Faith" for a Shield of Faith on the sheet is that spell). A new one
+ * is recorded in the sheet's spelling only of that very name ("hold person" is Hold Person), else as given
+ * ("Invisibility" with only See Invisibility on the sheet is Invisibility; "Fireball" isn't Delayed Blast Fireball).
  */
 export function setConcentration(c: Character, spellName: string | null): EngineResult {
   const current = c.spellcasting?.concentratingOn ?? null;
@@ -1555,9 +1557,10 @@ export function setConcentration(c: Character, spellName: string | null): Engine
     const ended = afterConcentrationEnds({ ...c, spellcasting: { ...c.spellcasting, concentratingOn: null } }, current);
     return { character: touch(ended.character), events: [gameEvent('condition-removed', `No longer concentrating on ${current}.`), ...ended.events] };
   }
-  const known = c.spellcasting ? matchByName(c.spellcasting.spells, name, knownSpellName).match : undefined;
-  const label = known?.name ?? name;
-  if (current && (nameKey(current) === nameKey(name) || nameKey(current) === nameKey(label))) return { character: c, events: [] };
+  const spells = c.spellcasting?.spells ?? [];
+  const found = matchByName(spells, name, knownSpellName).match;
+  if (current && (nameKey(current) === nameKey(name) || (found && nameKey(current) === nameKey(found.name)))) return { character: c, events: [] };
+  const label = spells.find((s) => nameKey(s.name) === nameKey(name))?.name ?? name;
   if (c.deathSaves.dead) return unchanged(c, "The dead can't concentrate.");
   const incapacitated = c.conditions.map((x) => conditionKey(x.id)).find((k) => INCAPACITATING_CONDITIONS.has(k));
   if (incapacitated) return unchanged(c, `Can't concentrate while ${conditionName(incapacitated)}.`);

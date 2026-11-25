@@ -274,6 +274,36 @@ describe('concentrationTurnStart: a spell ends at its caster\'s turn start (srd:
     expect(find(state, 'cf').concentration?.roundsLeft).toBe(10);
   });
 
+  it("nothing is counted down at a turn start in round 1: Hold Person given 10 rounds at the fight's start lasts 10 of its caster's turns, ending as that turn starts in round 11, whatever the order (E4; srd:spell:hold-person: \"Concentration, up to 1 minute\"; srd:rule:combat-the-order-of-combat: \"A round represents about 6 seconds\")", () => {
+    /** The Cultist Fanatic's turns with the spell, and the round whose turn start ended it. */
+    const until = (start: CombatState) => {
+      let state = start;
+      let turns = currentCombatant(state)?.id === 'cf' ? 1 : 0; // round 1's first turn is never started (createCombat)
+      for (let i = 0; i < 60; i++) {
+        const t = advance(state);
+        state = t.state;
+        if (t.ended.length) return { round: state.round, turns, ended: t.ended.map((e) => e.spell) };
+        if (currentCombatant(state)?.id === 'cf') turns++;
+      }
+      return { round: Infinity, turns, ended: [] };
+    };
+    const fanaticFirst = createCombat([npc('cf', 'Cultist Fanatic', 14), heroIn(10), npc('b', 'Bandit', 9)]);
+    const fanaticSecond = createCombat([heroIn(17), npc('cf', 'Cultist Fanatic', 14), npc('b', 'Bandit', 9)]);
+    for (const [order, start] of Object.entries({ fanaticFirst, fanaticSecond })) {
+      expect(until(setNpcConcentration(start, 'cf', 'Hold Person', 10).state), order).toEqual({ round: 11, turns: 10, ended: ['Hold Person'] });
+    }
+    // Acting second, its round-1 turn start leaves the count as given.
+    const firstTurn = advance(setNpcConcentration(fanaticSecond, 'cf', 'Hold Person', 10).state);
+    expect(currentCombatant(firstTurn.state)?.id).toBe('cf');
+    expect(find(firstTurn.state, 'cf').concentration).toEqual({ spell: 'Hold Person', roundsLeft: 10 });
+    // Cast on its own round-1 turn, once that turn has started: it still ends as its turn starts in round 11.
+    expect(until(setNpcConcentration(nextTurn(fanaticSecond), 'cf', 'Hold Person', 10).state)).toEqual({ round: 11, turns: 10, ended: ['Hold Person'] });
+    // Later rounds count as before: given 2 in round 2 before its turn, that turn start counts one, and the next ends it.
+    const later = setNpcConcentration(advance(advance(advance(fanaticSecond).state).state).state, 'cf', 'Hold Person', 2).state;
+    expect(later.round).toBe(2);
+    expect(until(later)).toEqual({ round: 3, turns: 1, ended: ['Hold Person'] });
+  });
+
   describe("the hero's countdown (Combatant.concentrationCountdown; the sheet's Spellcasting.concentratingOn)", () => {
     const bless: HeroConcentration = { spell: 'Bless', rounds: 10 };
     /** Runs turn starts until the hero's Bless ends; her countdown at each of her turn starts. */
@@ -356,6 +386,41 @@ describe('concentrationTurnStart: a spell ends at its caster\'s turn start (srd:
       const short = advance(heroSecond, { spell: 'Readied Fire', rounds: 1 });
       expect(short.heroEnded).toBeUndefined();
       expect(find(short.state, 'hero').concentrationCountdown).toEqual({ spell: 'Readied Fire', roundsLeft: 1 });
+    });
+
+    it("rounds given before the hero's first turn aren't counted down in round 1: they last that many of the hero's turns whatever the order, and 10 given is none given (E4; srd:rule:casting-spells-duration: a time span \"specifies how long the spell lasts in rounds\"; srd:rule:combat-the-order-of-combat: \"A round represents about 6 seconds\")", () => {
+      /** The hero's turns with Bless, and the round whose turn start ended it. */
+      const until = (start: CombatState) => {
+        let state = start;
+        let heroTurns = currentCombatant(state)?.id === 'hero' ? 1 : 0; // round 1's first turn is never started (createCombat)
+        for (let i = 0; i < 60; i++) {
+          const t = advance(state, bless);
+          state = t.state;
+          if (t.heroEnded) return { round: state.round, heroTurns };
+          if (currentCombatant(state)?.id === 'hero') heroTurns++;
+        }
+        return { round: Infinity, heroTurns };
+      };
+      /** update_combat concentrate on the hero with `rounds`: the countdown it stores. */
+      const given = (start: CombatState, roundsLeft: number): CombatState => ({
+        ...start,
+        combatants: start.combatants.map((c) => (c.id === 'hero' ? { ...c, concentrationCountdown: { spell: 'Bless', roundsLeft } } : c)),
+      });
+      const heroFirst = createCombat([heroIn(17), npc('cf', 'Cultist Fanatic', 14), npc('b', 'Bandit', 9)]);
+      const heroSecond = createCombat([npc('cf', 'Cultist Fanatic', 14), heroIn(10), npc('b', 'Bandit', 9)]);
+      for (const [order, start] of Object.entries({ heroFirst, heroSecond })) {
+        // Bless running at start_combat with 6 rounds of its minute left (srd:spell:bless: "Concentration, up to 1 minute").
+        expect(until(given(start, 6)), order).toEqual({ round: 7, heroTurns: 6 });
+        // Its full 10 given lasts as long as none given: it ends as the hero's turn starts in round 11.
+        expect(until(given(start, 10)), order).toEqual({ round: 11, heroTurns: 10 });
+        expect(until(start), order).toEqual({ round: 11, heroTurns: 10 });
+      }
+      // The hero second: the round-1 turn start leaves the count as given.
+      expect(find(advance(given(heroSecond, 6), bless).state, 'hero').concentrationCountdown).toEqual({ spell: 'Bless', roundsLeft: 6 });
+      // Given on the hero's own round-1 turn, once it has started: 10 of the hero's turns, ending in round 11.
+      const onTurn = advance(heroSecond, NO_HERO).state;
+      expect(currentCombatant(onTurn)?.id).toBe('hero');
+      expect(until(given(onTurn, 10))).toEqual({ round: 11, heroTurns: 10 });
     });
   });
 });

@@ -180,25 +180,29 @@ export interface ConcentrationTurn {
  *
  * The countdown is anchored on the caster's turn start: a spell lasting N rounds (srd:rule:casting-spells-duration,
  * srd:rule:combat-the-order-of-combat) cast on its caster's turn ends at the start of that creature's turn N rounds
- * later (Bless, 10 rounds, cast in round 1 ends as its caster's turn starts in round 11).
- * - An NPC or monster whose Concentration is counted: one fewer; at 0 it ends (`ended`).
- * - The hero: no Concentration on the sheet drops the countdown. A countdown for the sheet's spell counts down; at 0 it
- *   is dropped and the spell comes back as `heroEnded`. Without one (or with one for another spell, stale), `rounds`
- *   starts it lazily; without `rounds` the app doesn't count it. At a turn start in round 1 it starts at the full
- *   `rounds`: a spell already running when the fight starts lasts the hero's first `rounds` turns, whether the hero
- *   acts first (that round-1 turn start is never counted, so the count starts at rounds − 1 at the hero's round-2 turn
- *   start) or not (it starts here, in round 1). Later it starts at rounds − 1: the spell was cast before this turn
- *   start, on the hero's last turn (0 or less ends it). Either way Bless running at start_combat ends as the hero's
- *   turn starts in round 11.
+ * later (Bless, 10 rounds, cast in round 1 ends as its caster's turn starts in round 11). Nothing is counted down at a
+ * turn start in round 1: a count there before the caster's first turn (a spell running when the fight starts, or
+ * rounds given before that turn) lasts that many of the caster's turns, whether it acts first (round 1's first turn is
+ * never started) or not, and a spell cast on the caster's round-1 turn is counted from after that turn start anyway.
+ * - An NPC or monster whose Concentration is counted: one fewer, from round 2; at 0 it ends (`ended`).
+ * - The hero: no Concentration on the sheet drops the countdown. A countdown for the sheet's spell counts down from
+ *   round 2; at 0 it is dropped and the spell comes back as `heroEnded`. Without one (or with one for another spell,
+ *   stale), `rounds` starts it lazily; without `rounds` the app doesn't count it. At a turn start in round 1 it starts
+ *   at the full `rounds`: a spell already running when the fight starts lasts the hero's first `rounds` turns, whether
+ *   the hero acts first (that round-1 turn start is never counted, so the count starts at rounds − 1 at the hero's
+ *   round-2 turn start) or not (it starts here, in round 1). Later it starts at rounds − 1: the spell was cast before
+ *   this turn start, on the hero's last turn (0 or less ends it). Either way Bless running at start_combat ends as the
+ *   hero's turn starts in round 11, and so does Bless given 10 rounds before the hero's first turn.
  */
 export function concentrationTurnStart(before: CombatState, after: CombatState, hero: HeroConcentration): ConcentrationTurn {
   const was = currentCombatant(before);
   const now = currentCombatant(after);
   const unchanged: ConcentrationTurn = { state: after, ended: [] };
   if (!now || now.defeated || (before.round === after.round && was?.id === now.id)) return unchanged;
+  const firstRound = after.round <= 1;
   if (!now.isPlayer) {
     const held = now.concentration;
-    if (!held || held.roundsLeft === undefined) return unchanged;
+    if (!held || held.roundsLeft === undefined || firstRound) return unchanged;
     const left = held.roundsLeft - 1;
     if (left > 0) return { state: withField(after, now.id, 'concentration', { ...held, roundsLeft: left }), ended: [] };
     return { state: withField(after, now.id, 'concentration', undefined), ended: [endOf(now, held, false)] };
@@ -208,13 +212,14 @@ export function concentrationTurnStart(before: CombatState, after: CombatState, 
   const spell = typeof hero.spell === 'string' ? hero.spell.trim() : '';
   if (!spell) return { state: drop(), ended: [] };
   if (countdown && nameKey(countdown.spell) === nameKey(spell)) {
+    if (firstRound) return unchanged;
     const left = countdown.roundsLeft - 1;
     if (left > 0) return { state: withField(after, now.id, 'concentrationCountdown', { ...countdown, roundsLeft: left }), ended: [] };
     return { state: drop(), ended: [], heroEnded: spell };
   }
   const rounds = positiveRounds(hero.rounds);
   if (rounds === undefined) return { state: drop(), ended: [] };
-  const left = after.round <= 1 ? rounds : rounds - 1;
+  const left = firstRound ? rounds : rounds - 1;
   if (left > 0) return { state: withField(after, now.id, 'concentrationCountdown', { spell, roundsLeft: left }), ended: [] };
   return { state: drop(), ended: [], heroEnded: spell };
 }

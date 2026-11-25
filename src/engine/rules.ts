@@ -641,20 +641,29 @@ export function countedAcSpells(c: Pick<Character, 'acSpells' | 'acFormula'>): A
 const HAND_SET = 'set by the DM:';
 
 /**
+ * The part the app leaves when it takes a counted bonus spell off an AC set by hand whose DM words name that spell
+ * ("set by the DM: Shield of Faith and Haste + Shield of Faith ended"): from then on those words no longer say the spell
+ * is in the AC (handSetNames), so its next casting adds its bonus again and its end takes it off once
+ * (srd:spell:shield-of-faith: "a +2 bonus to AC for the duration"). Never a counted part (countedAcSpells).
+ */
+function endedPart(name: AcSpellName): string {
+  return `${name} ended`;
+}
+
+/**
  * Whether an AC set by hand names `spell` in the DM's own words: the formula is "set by the DM: …" and, the app's own
- * spell parts aside ("Shield of Faith 2", "Mage Armor: 13", which are never the DM's words), names the spell as whole
- * words. "set by the DM: Slow from the Stone Golem + Shield of Faith 2" names Slow, not Shield of Faith; an old save's
- * "set by the DM: Shield of Faith" names Shield of Faith.
+ * parts aside ("Shield of Faith 2", "Mage Armor: 13", "Shield of Faith ended", which are never the DM's words), names the
+ * spell as whole words. "set by the DM: Slow from the Stone Golem + Shield of Faith 2" names Slow, not Shield of Faith;
+ * an old save's "set by the DM: Shield of Faith" names Shield of Faith, until the app has taken that spell off it
+ * ("set by the DM: Shield of Faith + Shield of Faith ended" doesn't).
  */
 export function handSetNames(formula: string | undefined, spell: string): boolean {
   if (typeof formula !== 'string' || !formula.startsWith(HAND_SET)) return false;
-  const own = new Set<string>(AC_SPELL_NAMES.map(acSpellPart));
-  const words = formula
-    .slice(HAND_SET.length)
-    .split(' + ')
-    .filter((part) => !own.has(part))
-    .join(' + ');
-  return namesPhrase(words, spell);
+  const parts = formula.slice(HAND_SET.length).split(' + ');
+  const acSpell = acSpellNamed(spell);
+  if (acSpell && parts.includes(endedPart(acSpell))) return false;
+  const own = new Set<string>(AC_SPELL_NAMES.flatMap((n) => [acSpellPart(n), endedPart(n)]));
+  return namesPhrase(parts.filter((part) => !own.has(part)).join(' + '), spell);
 }
 
 interface AcOption {
@@ -856,12 +865,20 @@ type AcSync = { character: Character; events: GameEvent[] };
  * An AC the engine can't work out (set by hand, or armor it can't identify) moved by `delta`, what the spells that
  * changed move it by: the parts of `added` (bonus spells recorded, not in it yet) are appended to the stored formula and
  * those of `ended` (bonus spells it counted) taken out, so it still says what it counts ("set by the DM: Haste + Shield
- * of Faith 2").
+ * of Faith 2"). An ended spell the DM's own words still name leaves its "ended" part behind, so those words stop
+ * counting it ("set by the DM: Shield of Faith and Haste + Shield of Faith ended"); recorded again, that part gives way
+ * to the spell's own.
  */
 function movedBySpells(after: Character, delta: number, added: readonly AcSpellName[], ended: readonly AcSpellName[]): AcSync {
   let formula = after.acFormula ?? '';
-  for (const n of ended) formula = withoutPart(formula, acSpellPart(n));
-  for (const n of added) formula = formula ? `${formula} + ${acSpellPart(n)}` : acSpellPart(n);
+  for (const n of ended) {
+    formula = withoutPart(formula, acSpellPart(n));
+    if (acSpellBonus(n) && handSetNames(formula, n)) formula = `${formula} + ${endedPart(n)}`;
+  }
+  for (const n of added) {
+    formula = withoutPart(formula, endedPart(n));
+    formula = formula ? `${formula} + ${acSpellPart(n)}` : acSpellPart(n);
+  }
   const stored = after.armorClass;
   const ac = stored + delta;
   const changes = [...added.map((n) => `${n} ${formatModifier(acSpellBonus(n))}`), ...ended.map((n) => `${n} ${formatModifier(-acSpellBonus(n))}`)];
@@ -906,10 +923,13 @@ function withoutStaleBases(before: Character, r: AcSync, catalog: readonly Equip
  *    spell-effects: the same spell's effects "don't combine"). When gear, features and spells give that same AC
  *    (armor the engine knows), the AC becomes derived. Otherwise it is kept, the spell's part is appended (so it is
  *    counted, and ending Shield of Faith later takes its 2 off), anything else that changed moves it as below, and a
- *    warning says so.
+ *    warning says so. Only for an AC above what gear and features gave (or under armor the engine can't identify): one
+ *    no higher can't hold the spell's bonus or base, whatever its words say, so the spell is added as below. Once the
+ *    app has ended the spell, the words no longer name it (movedBySpells' "Shield of Faith ended").
  * 3. With armor the engine can't identify, computeArmorClass keeps the stored AC: only the spells move it.
  * 4. The sheet's AC counts as derived when it equals computeArmorClass(before); it then becomes the AC computed for
- *    `after`. Armor it can't identify keeps the stored AC and the parts of the bonus spells it counted.
+ *    `after`. Armor it can't identify keeps the stored AC and the parts of the bonus spells it counted, its own part
+ *    giving the AC less their bonuses ("Elven Chain (stats unknown — AC kept at 16) + Shield of Faith 2" at 18).
  * 5. Otherwise it was set by hand: it moves by the spells' change (a hand-set "Haste" 18 plus Shield of Faith is 20;
  *    Shield of Faith ending takes its 2 back off, whatever the rest adds up to), or, when that is nothing, it is kept
  *    and a warning gives the computed value.
@@ -921,12 +941,14 @@ export function syncArmorClass(before: Character, after: Character, catalog: rea
   const recorded = acSpells(after);
   const counted = countedAcSpells(before);
   const added = recorded.filter((n) => !was.includes(n));
-  const alreadyIn = added.filter((n) => handSetNames(after.acFormula, n));
+  const stored = after.armorClass;
+  const unknown = unknownWornArmor(after, catalog);
+  const wasAc = computeArmorClass(before, catalog);
+  const holdsMore = unknown !== undefined || stored > wasAc.ac;
+  const alreadyIn = holdsMore ? added.filter((n) => handSetNames(after.acFormula, n)) : [];
   const adds = added.filter((n) => acSpellBonus(n) && !alreadyIn.includes(n));
   const ends = was.filter((n) => acSpellBonus(n) && !recorded.includes(n) && counted.includes(n));
   const delta = bonusTotal(adds) - bonusTotal(ends);
-  const stored = after.armorClass;
-  const unknown = unknownWornArmor(after, catalog);
   const now = computeArmorClass(after, catalog);
   const done = (r: AcSync): AcSync => withoutStaleBases(before, r, catalog);
 
@@ -943,16 +965,17 @@ export function syncArmorClass(before: Character, after: Character, catalog: rea
     return done({ character: moved.character, events: [...moved.events, note] });
   }
   if (delta !== 0 && unknown) return done(movedBySpells(after, delta, adds, ends));
-  const wasAc = computeArmorClass(before, catalog);
   if (now.ac === wasAc.ac && now.formula === wasAc.formula) return done({ character: after, events: [] });
   const derived = before.armorClass === wasAc.ac && stored === before.armorClass;
   if (derived) {
     if (unknown) {
-      // The stored AC stands for armor it can't identify, and still holds the bonus spells it counted.
-      const parts = counted.filter((n) => acSpellBonus(n) && recorded.includes(n)).map(acSpellPart);
+      // The stored AC stands for armor it can't identify, and still holds the bonus spells it counted: the armor's part
+      // keeps the AC less their bonuses, so the words and the number agree once they end.
+      const kept = counted.filter((n) => acSpellBonus(n) && recorded.includes(n));
+      const armor = computeArmorClass({ ...after, armorClass: stored - bonusTotal(kept) }, catalog).formula;
       const newly = unknown.id !== unknownWornArmor(before, catalog)?.id;
       return done({
-        character: { ...after, acFormula: [now.formula, ...parts].join(' + ') },
+        character: { ...after, acFormula: [armor, ...kept.map(acSpellPart)].join(' + ') },
         events: newly ? [warning(`AC kept at ${stored}: ${unknown.name}'s armor stats are unknown, so set the AC by hand.`)] : [],
       });
     }
