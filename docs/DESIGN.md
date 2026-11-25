@@ -167,8 +167,8 @@ tool_result so Claude can correct itself.
 | `roll_dice` | DM rolls (NPC attacks, damage, random tables, secret checks). `secret` hides it unless the campaign shows DM rolls. On a battle map, `attacker` and `target` add distance, reach, line of sight and cover, and warn when a melee attacker is out of reach. |
 | `request_player_roll` | Ask the player to roll a check/save/attack/damage/initiative/death save. Uses the sheet's modifiers; resolves per roll mode (auto / tap / physical). Returns total, natural, success vs DC. An unarmed strike by another name (`isUnarmedStrikeName`: "Kick", "Punch", a fist named alone such as "Bare Fists"; never a spell or weapon that names one, such as Arcane Hand's "Clenched Fist") rolls the engine's damage for it (`unarmedDamageExpression`: the sheet's Unarmed Strike, else 1 + STR, with a Monk's Martial Arts die and Dexterity). A roll with no dice (a flat 1 + STR) resolves without the dialog: nothing to roll, no die for Heroic Inspiration. |
 | `update_character` | Batched sheet changes: HP (damage/healing/temp), the HP maximum (`hp_max`, `hp.drain`, `hp_max_end`), conditions, exhaustion, slots, feature uses, inventory, currency, XP, inspiration, features, spells, concentration, AC/speed and the Initiative bonus (`initiative_change`). Returns a summary and warnings. |
-| `take_rest` | Short rest (player chooses hit dice in a dialog) or long rest. |
-| `level_up` | Apply a level (HP, hit dice, slots, proficiency, new features) and return reminders for choices. For an imported class or subclass the app adds that level's features with their text. |
+| `take_rest` | Short rest (player chooses hit dice in a dialog) or long rest; after a long rest the result says which classes may change prepared spells on the sheet. |
+| `level_up` | Apply a level (HP, hit dice, slots, proficiency, new features, always-prepared spells) and return reminders for choices, with the spell choices now open (the player makes them on the sheet). For an imported class or subclass the app adds that level's features with their text. |
 | `transform_character` | Begin, advance or end a **transformation** (vampirism, lycanthropy, a fey mark...): features, defenses, senses, speeds, size and ability changes applied atomically and recorded with what they granted, so ending one undoes exactly that. Enforces the campaign's transformations rule (see below). |
 | `start_combat` / `update_combat` / `end_combat` | Initiative tracker: add combatants (auto-numbered), roll NPC initiative, request the player's, advance turns, damage/heal/conditions on NPCs, end with a summary. AC, HP and initiative default to the stat block (SRD or reviewed import) when left out; `start_combat` can lay out a battle map (size, terrain, places, positions; size, speeds and reach default from the stat block); `update_combat` can `reveal` / `hide` creatures, and its `next_turn` result says where everyone stands. |
 | `update_map` | Battle map: create, replace or remove it; add or clear terrain; open, close or lock doors; name places; set creatures' size, speeds and reach. |
@@ -321,6 +321,52 @@ Rest)"), which is what reminds the DM to end Aid or Heroes' Feast; the sheet's c
 text names lasting ones too. Without records nothing is printed, so the prompt and the sheet text of a hero without them
 are byte for byte as before. `initiative_change` adds to the Initiative bonus beyond Dexterity (a ruling, or an Alert the
 app didn't count), never sets a total, and keeps no record.
+
+**Spell choices at a level-up.** What a class may still choose is never stored: `owedSpells`
+(src/data/options/spellPicks.ts) works it out whenever it is read, from the class table and the sheet, the SRD's way
+("choose additional spells … until the number of spells on your list matches the number on the table"): cantrips up
+to the Cantrips column plus a chosen Divine or Primal Order's extra cantrip, prepared spells up to the Prepared Spells
+column, and a Wizard's spellbook up to six plus two per level after 1. The class's spells are those whose source is
+its name, that aren't always prepared and whose level the class has slots for; the highest spell level is the class's
+own (`classSpellLevelCap`: its single-class slots, or a Warlock's Slot Level), never the combined multiclass slots, so
+a Mystic Arcanum recorded under "Warlock" counts nowhere. A spellbook counts the spells its levels added, always
+prepared ones too (the book still holds them); a spell copied into it or added free (Evocation Savant), recorded as
+"Wizard (copied)", comes on top of each level's two and counts only as a prepared spell. Re-added under the bare class
+name, as a DM preparing it may do, such a spell keeps its source (`keepsBookExtra`), and `update_character` tells the DM
+so (from each spell's last entry with a source, with the number its class's levels add): only removing it and adding it
+again, prepared as it was, makes it one of a level's spells (an always-prepared one is left alone: added again, it would
+lose that). Copying prepares nothing, so the DM is told to
+add a copy unprepared unless the player prepares it. Each spellbook spell still owed keeps the limit of the level it belongs to (`bookCaps`:
+the book's spells take the lowest places they fit), so a choice put off across a level, or an older hero's catch-up,
+can't fill earlier levels with the newest spell level. A level-up (the dialog or the DM's
+`level_up`) leaves only a mark, `Spellcasting.spellPicks`: one entry per class, the newest level's, with that level's
+swaps (a Bard, Sorcerer or Warlock may replace one spell on its list, a prepared one; a Bard, Cleric, Druid, Sorcerer
+or Warlock one cantrip), all read from the class's own Spellcasting text. So a hero from before this feature owes
+nothing until its next level-up, and then catches up to the table; deferring, a second level or a prepared checkbox
+never makes a count wrong. In the same edit (`levelSpellsEdit`), the always-prepared spells that a class feature, an
+SRD subclass's table or a book subclass grants up to the class level are added, or, when the sheet already holds one
+as an ordinary pick, turned always prepared, so it stops counting (one unprepared, or above its class's spell level,
+wasn't counted, and frees nothing); a spellbook's keeps its source and stays in the book, and another class whose pick was turned is marked open
+(without swaps) for the place it left. The dialog's Level up waits for the rules index first. The wait and how it
+ended belong to the dialog, not its form: a dialog open when it ends (the one pressed, or one reopened meanwhile) shows
+the Summary, or why the plan was dropped, in place of the form, so no Level up is left under the player's finger for
+the next level; one closed meanwhile shows nothing later (the level is on the sheet). The plan is dropped when, after
+the wait, its campaign is no longer loaded or another hero is, or the hero passed that level (the DM's `level_up`);
+the reason is a toast when the dialog isn't open to show it. The player
+chooses on the sheet: the level-up dialog's summary continues into the choices in the same dialog, and while any are
+open the Spells panel shows a banner, the sheet header a note and the Spells tab a dot. A pick never takes a name the
+sheet holds (one spell per name), and a spell given up is removed by its id. A Long Rest change (Cleric and Druid any
+prepared spell, Paladin and Ranger one, the Wizard a cantrip; the Wizard's prepared list changes with the checkboxes)
+is one-for-one, and offered rather than gated, since rests happen only through `take_rest`. The DM learns through
+result and notice text only, so `DM_TOOLS` doesn't change: `level_up` says what is owed with the sheet's numbers (each
+class it left open, the earlier levels' book limits too, as the dialog's notice does) and how to record choices the
+player names (spells_add, source the class's name, prepared false for a spell only added to the spellbook, "Wizard
+(copied)" for a copy or a spell added free, a book spell prepared by name with no source), names an always-prepared
+spell the rules here lack with what grants it, the source to add it under so no class counts it, and drops the generic
+"Review your … cantrips and prepared spells" line wherever the class could be counted; spells the DM records for a class
+with open choices settle them as the sheet's form does (`settleSpellPicks`: closed once nothing is owed, otherwise the
+level's swaps lapse), and `update_character` says so; `take_rest long` says which classes may change prepared spells,
+and that a book spell is prepared by name; a re-added spell keeps its source and prepared flag.
 
 ### Player-side controls that talk to the DM
 

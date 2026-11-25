@@ -1,13 +1,11 @@
-import { useId, useState } from 'react';
-import { Info } from 'lucide-react';
+import { useState } from 'react';
 import { formatModifier, spellAttackBonus, spellSaveDC } from '@/engine';
-import { cn } from '@/lib/cn';
 import { nameKey } from '@/lib/id';
-import { ABILITY_NAMES, SRD_SOURCE_ID, type Ability } from '@/types';
-import { Badge, Input, Spinner } from '@/ui/components/ui';
+import { ABILITY_NAMES, type Ability } from '@/types';
+import { Badge, Spinner } from '@/ui/components/ui';
 import { RulesEntryDialog } from '@/ui/sheet/SpellsPanel';
 import { SourceFilter } from '../BookBadges';
-import { Issues, RadioCards, StepHeader, SubHeading } from '../BuilderParts';
+import { Issues, RadioCards, StepHeader } from '../BuilderParts';
 import {
   classSpellOptions,
   grantedSpells,
@@ -15,114 +13,15 @@ import {
   picks,
   spellPlan,
   spellsForClass,
-  toggleInList,
-  unreviewedImport,
   validateStep,
   visibleSpells,
   type MagicInitiateChoice,
   type SpellInfo,
 } from '../logic';
+import { SpellChoiceList } from '../SpellChoiceList';
 import type { StepProps } from './stepTypes';
 
 const MENTAL: Ability[] = ['int', 'wis', 'cha'];
-
-function SpellChoiceList({
-  label,
-  options,
-  selected,
-  max,
-  onChange,
-  onInfo,
-  taken,
-}: {
-  label: string;
-  options: SpellInfo[];
-  selected: string[];
-  max: number;
-  onChange: (next: string[]) => void;
-  onInfo: (spell: SpellInfo) => void;
-  /** Spells known by name from a choice in any list (shown, but not selectable unless checked here). */
-  taken?: Set<string>;
-}) {
-  const [filter, setFilter] = useState('');
-  const filterId = useId();
-  const valid = selected.filter((id) => options.some((o) => o.id === id));
-  const full = valid.length >= max;
-  const shown = filter.trim() ? options.filter((o) => o.name.toLowerCase().includes(filter.trim().toLowerCase())) : options;
-  return (
-    <div className="flex flex-col gap-2">
-      <SubHeading hint={`${valid.length}/${max}`}>{label}</SubHeading>
-      {options.length > 12 && (
-        <div>
-          <label htmlFor={filterId} className="sr-only">
-            Filter {label}
-          </label>
-          <Input id={filterId} value={filter} onChange={(e) => setFilter(e.target.value)} placeholder="Filter by name…" className="h-9 max-w-xs" />
-        </div>
-      )}
-      {options.length === 0 ? (
-        <p className="text-sm text-muted">No spells available for this list.</p>
-      ) : (
-        <ul className="grid grid-cols-1 gap-1 sm:grid-cols-2" aria-label={label}>
-          {shown.map((spell) => {
-            const checked = valid.includes(spell.id);
-            const known = !checked && Boolean(taken?.has(spell.id));
-            const disabled = !checked && (full || known);
-            return (
-              <li
-                key={spell.id}
-                className={cn(
-                  'flex items-center gap-2 rounded-lg border px-2.5 py-1.5 transition-colors',
-                  checked ? 'border-arcane bg-arcane-soft' : 'border-border bg-surface',
-                  disabled && 'opacity-55',
-                )}
-              >
-                <label className={cn('flex min-w-0 flex-1 items-center gap-2 text-sm', disabled ? 'cursor-not-allowed' : 'cursor-pointer')}>
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    disabled={disabled}
-                    onChange={() => onChange(toggleInList(valid, spell.id, max))}
-                    className="size-4 shrink-0 accent-[var(--arcane)]"
-                  />
-                  {/* The name keeps its width; the source's label and the school give way first. */}
-                  <span className="max-w-full shrink-0 truncate font-medium">{spell.name}</span>
-                  {/* A book's or homebrew spell says where it comes from ("From Homebrew"), so it can't pass for the SRD's. */}
-                  {spell.entry.sourceId !== SRD_SOURCE_ID && (
-                    <span className="min-w-0 truncate text-xs text-faint">
-                      From {spell.entry.sourceName}
-                      {unreviewedImport(spell) ? ' · not reviewed' : ''}
-                    </span>
-                  )}
-                  {spell.concentration && (
-                    <Badge tone="arcane" className="px-1.5">
-                      C
-                    </Badge>
-                  )}
-                  {spell.ritual && <Badge className="px-1.5">R</Badge>}
-                  {known ? (
-                    <span className="truncate text-xs text-faint">already known</span>
-                  ) : (
-                    spell.school && <span className="hidden truncate text-xs text-faint capitalize sm:inline">{spell.school}</span>
-                  )}
-                </label>
-                <button
-                  type="button"
-                  aria-label={`About ${spell.name}`}
-                  title="Read the spell"
-                  onClick={() => onInfo(spell)}
-                  className="grid size-7 shrink-0 place-items-center rounded-lg text-faint hover:bg-surface-2 hover:text-arcane"
-                >
-                  <Info className="size-4" aria-hidden />
-                </button>
-              </li>
-            );
-          })}
-        </ul>
-      )}
-    </div>
-  );
-}
 
 export function SpellsStep({ draft, setDraft, ctx, onDmDecide, built, spellsLoading, spellsError }: StepProps & { spellsLoading: boolean; spellsError: string | null }) {
   const [info, setInfo] = useState<SpellInfo | null>(null);

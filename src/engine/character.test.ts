@@ -33,6 +33,7 @@ import {
   removeFeature,
   removeItem,
   removeSpell,
+  removeSpellById,
   restoreFeature,
   setConcentration,
   setHeroicInspiration,
@@ -808,6 +809,23 @@ describe('spells and concentration', () => {
     const removed = removeSpell(focused, 'Detect Magic');
     expect(removed.character.spellcasting?.concentratingOn).toBeNull();
     expect(removed.character.spellcasting?.spells.some((s) => s.name === 'Detect Magic')).toBe(false);
+  });
+
+  it('removes a spell by its id: the exact entry, never one a name would match', () => {
+    // Shield and a "Shield of Faith" side by side: removeSpell's name match could take either.
+    const both = addSpell(mira(), { name: 'Shield of Faith', level: 1, prepared: true }).character;
+    const shield = both.spellcasting?.spells.find((s) => s.name === 'Shield');
+    const removed = removeSpellById(both, shield?.id ?? '');
+    expect(removed.character.spellcasting?.spells.map((s) => s.name)).toContain('Shield of Faith');
+    expect(removed.character.spellcasting?.spells.map((s) => s.name)).not.toContain('Shield');
+    expect(removed.events.map((e) => e.message)).toEqual(['Removed spell: Shield']);
+    // It ends Concentration on the spell, as removeSpell does.
+    const focused = setConcentration(mira(), 'Detect Magic').character;
+    const detect = focused.spellcasting?.spells.find((s) => s.name === 'Detect Magic');
+    expect(removeSpellById(focused, detect?.id ?? '').character.spellcasting?.concentratingOn).toBeNull();
+    const gone = removeSpellById(mira(), 'no-such-id');
+    expect(gone.character).toEqual(mira());
+    expect(gone.events.map((e) => e.message)).toEqual(['That spell is no longer on the sheet.']);
   });
 
   it('starting a new concentration effect ends the previous one', () => {

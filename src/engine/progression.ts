@@ -266,15 +266,33 @@ function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: rea
   if (info.name === 'Warlock' && WARLOCK_INVOCATIONS[level - 1] > (WARLOCK_INVOCATIONS[level - 2] ?? 0)) {
     reminders.push(`Warlock ${level}: you now know ${WARLOCK_INVOCATIONS[level - 1]} Eldritch Invocations.`);
   }
-  if (info.casterType !== 'none') reminders.push(`Review your ${info.name} cantrips and prepared spells for level ${level} (see the class table).`);
+  if (info.casterType !== 'none') reminders.push(spellReviewReminder(info.name, level));
   return reminders;
+}
+
+/**
+ * The generic spell line of an SRD class's level-up. Exported so the callers that work out the class's spell choices
+ * from its table (src/data/options/spellPicks.ts) can drop exactly this line and say what is owed instead.
+ */
+export function spellReviewReminder(className: string, level: number): string {
+  return `Review your ${className} cantrips and prepared spells for level ${level} (see the class table).`;
 }
 
 function slotReminders(before: Character, after: Character): string[] {
   const reminders: string[] = [];
   const beforeHigh = Math.max(0, ...Object.entries(before.spellcasting?.slots ?? {}).filter(([, t]) => (t?.max ?? 0) > 0).map(([l]) => Number(l)));
   const afterHigh = Math.max(0, ...Object.entries(after.spellcasting?.slots ?? {}).filter(([, t]) => (t?.max ?? 0) > 0).map(([l]) => Number(l)));
-  if (afterHigh > beforeHigh) reminders.push(`New spell slot level: you can now cast level ${afterHigh} spells.`);
+  // Two Spellcasting classes share the combined table, whose slots can outrun what either class prepares (SRD 5.2.1
+  // Multiclassing: "This table might give you spell slots of a higher level than the spells you prepare. You can use
+  // those slots but only to cast your lower-level spells.").
+  const spellcasting = after.classes.filter((cl) => cl.level > 0 && (cl.casterType === 'full' || cl.casterType === 'half' || cl.casterType === 'third'));
+  if (afterHigh > beforeHigh) {
+    reminders.push(
+      spellcasting.length > 1
+        ? `New spell slot level: level ${afterHigh} slots cast your lower-level spells too; each class prepares spells only up to its own level.`
+        : `New spell slot level: you can now cast level ${afterHigh} spells.`,
+    );
+  }
   const oldPact = before.spellcasting?.pact;
   const newPact = after.spellcasting?.pact;
   if (newPact && (!oldPact || newPact.slotLevel !== oldPact.slotLevel || newPact.slots.max !== oldPact.slots.max)) {

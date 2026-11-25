@@ -5,16 +5,18 @@
  * subclass at its level (chosen by id; a subclass chosen late catches up its earlier features), and —
  * at Ability Score Improvement, Epic Boon and (Additional) Fighting Style levels — a choice whose
  * default, "Decide with my DM", keeps today's level-up. Applied through the engine's levelUp, then every
- * feature's uses are re-read at the new level (Rage, Lay on Hands, Breath Weapon…).
+ * feature's uses are re-read at the new level (Rage, Lay on Hands, Breath Weapon…), the class's and
+ * subclass's always-prepared spells up to the new level are added or turned always prepared, and the class's
+ * spell choices are marked open (spellPicks.ts counts them live), with another class's whose pick was turned. The
+ * Summary's "Choose spells" continues into the choices form in this same dialog.
  */
-import { useId, useState, type ReactNode } from 'react';
-import { ArrowBigUpDash, Check, TriangleAlert } from 'lucide-react';
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
+import { ArrowBigUpDash, Check, Loader2, Sparkles, TriangleAlert } from 'lucide-react';
 import { XP_THRESHOLDS, abilityModifier, characterLevel, levelUp, type LevelUpOptions, type LevelUpResult } from '@/engine';
-import { useBuilderData, useRulesIndex } from '@/data';
+import { getRulesIndex, useBuilderData, useRulesIndexState } from '@/data';
 import { withAdaptationNotes } from '@/data/options/adaptationNotes';
 import { featureUseChanges, gainedFeatures, keptRulings, refreshFeatureUses } from '@/data/options/leveling';
 import {
-  addSubclassSpells,
   applyFeatChoice,
   caughtUpFeatures,
   classRefOf,
@@ -26,15 +28,29 @@ import {
   subclassCastingOf,
   subclassFightingStyle,
   subclassRefOf,
-  subclassSpellsToAdd,
   type FeatChoice,
   type FeatChoiceTrigger,
   type FeatPick,
   type ScoreIncrease,
-  type SubclassSpells,
 } from '@/data/options/levelUpChoices';
 import { subclassesOf, withoutReplacedSrd } from '@/data/options/replaced';
 import { classOptionFor, multiclassPrimariesFor, primaryRuleOf, subclassOptionFor } from '@/data/options/resolve';
+import {
+  alwaysPreparedGained,
+  applyAlwaysPrepared,
+  levelSpellsEdit,
+  openSpellPicks,
+  owedSpells,
+  owedSpellsSummary,
+  recordingClause,
+  spellPicksAfterLevel,
+  swapsText,
+  withoutSpellReview,
+  type AlwaysPreparedGain,
+  type OpenSpellPicks,
+  type OwedSpells,
+  type TurnedSpell,
+} from '@/data/options/spellPicks';
 import { nameKey } from '@/lib/id';
 import { useGame } from '@/state/gameStore';
 import {
@@ -45,15 +61,20 @@ import {
   type ClassFeatureDef,
   type ClassLevel,
   type ClassOption,
+  type CompendiumEntry,
   type Feature,
   type HitDie,
+  type SpellPicksOwed,
   type SubclassOption,
 } from '@/types';
 import { Markdown } from '@/ui/components/Markdown';
+import { toast } from '@/ui/components/toast';
 import { Badge, Button, Dialog, EmptyState, Input, Segmented, Select, Spinner } from '@/ui/components/ui';
 import { BookBadge, OlderEditionBadge, OlderEditionNotes } from '@/ui/builder/BookBadges';
 import { RadioCards } from '@/ui/builder/BuilderParts';
 import { FeatChoicePanel, featChoiceReady, featPanelTitle } from './FeatChoicePanel';
+import { scrollParent, SpellPicksForm, type ReaderBack } from './SpellPicksForm';
+import { openPicksText, picksText } from './spellPicksText';
 import { useSheetEdit } from './useSheetActions';
 
 export interface LevelUpDialogProps {
@@ -62,10 +83,53 @@ export interface LevelUpDialogProps {
 }
 
 export function LevelUpDialog({ open, onClose }: LevelUpDialogProps) {
+  // The Summary's "Choose spells" continues in this same dialog: no dialog on a dialog, and it works where the sheet
+  // isn't mounted (Level up from the composer's menu). The level-up stays mounted behind the choices form, so Cancel
+  // goes back to its Summary.
+  const [picking, setPicking] = useState<string | null>(null);
+  const [footer, setFooter] = useState<HTMLDivElement | null>(null);
+  const chooseButton = useRef<HTMLButtonElement>(null);
+  const readerBack = useRef<ReaderBack | null>(null);
+  // A Level up waiting for the rules index applies even if the dialog closes meanwhile: reopened, it shows that wait
+  // rather than offering the same level again, and then how it ended (the form that pressed Level up may be gone).
+  const [busy, setBusy] = useState(false);
+  const [outcome, setOutcome] = useState<LevelOutcome | null>(null);
+  // Whether the dialog is open (and mounted) now: a wait that ends after a close leaves no outcome to show later.
+  const shown = useRef(false);
+  useLayoutEffect(() => {
+    shown.current = open;
+    return () => {
+      shown.current = false;
+    };
+  }, [open]);
+  if (!open && picking !== null) setPicking(null);
+  if (!open && outcome !== null) setOutcome(null);
+  // How a Level up ended: shown in the open dialog. Closed (or gone with its campaign), a level applied shows on the sheet,
+  // and a refusal is a toast (under an open modal it couldn't be seen or heard).
+  const report = (o: LevelOutcome) => {
+    if (shown.current) setOutcome(o);
+    else if (o.kind === 'refused') toast.info(o.message);
+  };
+  const close = () => {
+    setPicking(null);
+    onClose();
+  };
+  // Escape or Android Back while a spell is read in the choices goes back to their lists (the picks stay); otherwise it
+  // closes, as Close does.
+  const cancel = () => {
+    if (!readerBack.current?.()) close();
+  };
+  const back = () => {
+    setPicking(null);
+    requestAnimationFrame(() => chooseButton.current?.focus());
+  };
   return (
-    <Dialog open={open} onClose={onClose} title="Level up" size="lg">
+    <Dialog open={open} onClose={close} onCancel={cancel} title={picking ? 'Choose spells' : 'Level up'} size="lg" footer={picking ? <div ref={setFooter} className="w-full" /> : undefined}>
       {/* Mounted only while open, so builder data loads on demand. */}
-      <LevelUpForm onClose={onClose} />
+      <div hidden={picking !== null}>
+        <LevelUpForm onClose={close} onChooseSpells={setPicking} chooseButton={chooseButton} busy={busy} onBusy={setBusy} outcome={outcome} onOutcome={report} />
+      </div>
+      {picking && <SpellPicksForm target={{ mode: 'level', classId: picking }} footer={footer} onCancel={back} onDone={close} focusOnOpen readerBackRef={readerBack} />}
     </Dialog>
   );
 }
@@ -82,6 +146,23 @@ export function meetsPrimary(cls: Pick<ClassOption, 'id' | 'primaryAbilities' | 
 }
 
 type Choice = { kind: 'existing'; index: number } | { kind: 'new'; classId: string };
+
+/** How a Level up ended: the level it applied (the Summary's), or why it couldn't. */
+type LevelOutcome =
+  | { kind: 'levelled'; level: LevelUpResult; uses: string[]; choice: string | null; classIds: string[] }
+  | { kind: 'refused'; message: string };
+
+/**
+ * Why a plan made for `hero` at character level `level` can't apply after Level up waited for the rules index, or null.
+ * The wait can outlast the campaign (left for the list or another campaign, whose hero would get this one's level) and
+ * the level (the DM's level_up meanwhile, which would make this a second level with the first one's features).
+ */
+function stalePlanReason(hero: Pick<Character, 'id' | 'name'>, campaignId: string | null, level: number, now: { campaignId: string | null; character: Character | null }): string | null {
+  if (now.campaignId !== campaignId || !now.character) return `Not applied: you left ${hero.name}'s campaign while this level-up waited. Open Level up there again.`;
+  if (now.character.id !== hero.id) return `Not applied: ${hero.name} was replaced as this campaign's hero while this level-up waited.`;
+  const reached = characterLevel(now.character);
+  return reached === level ? null : `Not applied: your character reached level ${reached} while this level-up waited. Open Level up again for the next level.`;
+}
 
 function choiceKey(choice: Choice): string {
   return choice.kind === 'existing' ? `existing:${choice.index}` : `new:${choice.classId}`;
@@ -101,16 +182,33 @@ interface LevelPlan {
   features: Omit<Feature, 'id'>[];
   caughtUp: ClassFeatureDef[];
   trigger: FeatChoiceTrigger | null;
-  spells: SubclassSpells;
+  /** The always-prepared spells the class and subclass grant up to the new level: added, or turned always prepared. */
+  spells: AlwaysPreparedGain;
+  /** The spell choices the new level opens (worked out on the hero as the level-up leaves them), or null. */
+  next: { owed: OwedSpells; entry: SpellPicksOwed } | null;
 }
 
-function planLevel(
-  c: Character,
-  classes: readonly ClassOption[],
-  choice: Choice,
-  subclassId: string,
-  findSpell: Parameters<typeof subclassSpellsToAdd>[3],
-): LevelPlan {
+type FindSpell = (name: string) => CompendiumEntry | undefined;
+
+/**
+ * What the class's spell choices will be once the level is gained: the class entry at its new level (a new class at
+ * level 1), the always-prepared spells applied (they free places), then the mark the level-up writes.
+ */
+function nextSpellPicks(c: Character, existing: ClassLevel | undefined, option: ClassOption | undefined, classLevel: number, gain: AlwaysPreparedGain): LevelPlan['next'] {
+  if (!option) return null;
+  const cl: ClassLevel = existing
+    ? { ...existing, level: classLevel }
+    : { classId: option.id, name: option.name, level: 1, hitDie: option.hitDie, casterType: option.casterType, ...(option.spellcastingAbility ? { spellcastingAbility: option.spellcastingAbility } : {}) };
+  const levelled = applyAlwaysPrepared({ ...c, classes: existing ? c.classes.map((x) => (x === existing ? cl : x)) : [...c.classes, cl] }, gain);
+  const owed = owedSpells(levelled, cl, option);
+  if (!owed) return null;
+  // A hero without spellcasting yet gains it with the class's slots; its level 1 has nothing to replace.
+  const marked = spellPicksAfterLevel(levelled.spellcasting ? levelled : { ...levelled, spellcasting: { ability: option.spellcastingAbility ?? 'int', slots: {}, spells: [], concentratingOn: null } }, cl, option);
+  const entry = marked.spellcasting?.spellPicks?.find((p) => p.classId === cl.classId);
+  return entry ? { owed, entry } : null;
+}
+
+function planLevel(c: Character, classes: readonly ClassOption[], choice: Choice, subclassId: string, findSpell: FindSpell): LevelPlan {
   const existing = choice.kind === 'existing' ? c.classes[choice.index] : undefined;
   const option = existing ? classOptionFor(existing, classes) : classes.find((o) => choice.kind === 'new' && o.id === choice.classId);
   const classLevel = (existing?.level ?? 0) + 1;
@@ -121,6 +219,8 @@ function planLevel(
   // A multiclass hero's other classes' subclasses: a feature of one of theirs isn't this subclass's.
   const otherSubclasses = c.classes.filter((cl) => cl !== existing).flatMap((cl) => (cl.subclass ? [cl.subclass] : []));
   const features = option ? gainedFeatures(option, classLevel, sub, ctx, { have: c.features, subclassChosenNow: needsSubclass, otherSubclasses }) : [];
+  // With the classes' data, a turned spell names the class whose list it leaves, and a spellbook keeps its own.
+  const spells = alwaysPreparedGained(c, option, sub, classLevel, findSpell, classes);
   return {
     existing,
     option,
@@ -132,7 +232,8 @@ function planLevel(
     features,
     caughtUp: needsSubclass ? caughtUpFeatures(sub, classLevel, c.features, otherSubclasses) : [],
     trigger: featChoiceTrigger(features),
-    spells: subclassSpellsToAdd(sub, classLevel, c.spellcasting?.spells ?? [], findSpell),
+    spells,
+    next: nextSpellPicks(c, existing, option, classLevel, spells),
   };
 }
 
@@ -174,6 +275,70 @@ interface NoticeParts {
   /** The uses the DM ruled (keptRulings), or null. */
   rulings: string | null;
   reminders: string[];
+}
+
+/**
+ * The class's open spell choices for the DM, in place of the engine's generic "Review your … spells" line: "spells to
+ * choose: 1 cantrip, 6 spellbook spells (2 up to level 2 and 4 of level 1) and 2 prepared spells", with the level's
+ * swaps; a level that only swaps says nothing new is owed. Then how to record spells the player names instead, for a DM
+ * whose session began before its level_up said so: the spellbook's limits by level hold for those too.
+ */
+function spellsToChooseNotice(owed: OwedSpells, entry: SpellPicksOwed): string {
+  const summary = owedSpellsSummary(owed, true);
+  const swaps = swapsText(entry);
+  const recording = `; if the player names them to you instead: ${recordingClause(owed, entry)}`;
+  if (!summary) return `spells to choose: none new (may ${swaps})${recording}`;
+  return `spells to choose: ${summary}${swaps ? ` (may also ${swaps})` : ''}${recording}`;
+}
+
+/** "Faerie Fire, Sleep (Dusk Domain)": spells by the feature or subclass they come from, in order. */
+function bySource<T extends { name: string; source?: string }>(spells: readonly T[]): [string, string[]][] {
+  const groups = new Map<string, string[]>();
+  for (const s of spells) groups.set(s.source ?? '', [...(groups.get(s.source ?? '') ?? []), s.name]);
+  return [...groups.entries()];
+}
+
+interface TurnedGroup {
+  /** The feature or subclass that keeps them prepared now. */
+  source: string;
+  /** The hero's class whose list they leave, if any. */
+  owner?: string;
+  /** They stay in that class's spellbook. */
+  inBook: boolean;
+  /** They were prepared, so that class counted them. */
+  counted: boolean;
+  names: string[];
+}
+
+/** Turned spells by their new source, the class whose list they leave, whether a spellbook keeps them and whether they counted, in order. */
+function turnedGroups(flips: readonly TurnedSpell[]): TurnedGroup[] {
+  const groups: TurnedGroup[] = [];
+  for (const f of flips) {
+    const inBook = f.inBook === true;
+    const counted = f.counted === true;
+    const group = groups.find((g) => g.source === f.source && g.owner === f.owner && g.inBook === inBook && g.counted === counted);
+    if (group) group.names.push(f.name);
+    else groups.push({ source: f.source, ...(f.owner ? { owner: f.owner } : {}), inBook, counted, names: [f.name] });
+  }
+  return groups;
+}
+
+/**
+ * " — no longer counted among your Cleric prepared spells; it stays in your spellbook": the class named when it isn't
+ * the one gaining the level. One that wasn't prepared wasn't counted, so nothing is freed: only the spellbook is named.
+ */
+function turnedTail(group: TurnedGroup, levelled: string): string {
+  const stays = `${group.names.length === 1 ? 'it stays' : 'they stay'} in your spellbook`;
+  if (!group.counted) return group.inBook ? ` — ${stays}` : '';
+  const other = group.owner && nameKey(group.owner) !== nameKey(levelled) ? `${group.owner} ` : '';
+  return ` — no longer counted among your ${other}prepared spells${group.inBook ? `; ${stays}` : ''}`;
+}
+
+/** "Ashen Choir, Darkness (Dusk Domain)": spells the rules here lack, by what grants them. */
+function missingText(missing: readonly { name: string; source: string }[]): string {
+  return bySource(missing)
+    .map(([source, names]) => `${names.join(', ')}${source ? ` (${source})` : ''}`)
+    .join('; ');
 }
 
 /**
@@ -240,13 +405,47 @@ function choiceSummary(choice: FeatChoice, increases: readonly ScoreIncrease[]):
   }
 }
 
-function Summary({ result, uses, choice, onClose }: { result: LevelUpResult; uses: string[]; choice: string | null; onClose: () => void }) {
+function Summary({
+  result,
+  uses,
+  choice,
+  picks,
+  onChooseSpells,
+  chooseButton,
+  onClose,
+}: {
+  result: LevelUpResult;
+  uses: string[];
+  choice: string | null;
+  /**
+   * The spell choices this level-up left open and still open (live: the form, or the DM's spells, settle them): the
+   * levelled class's first, then those of classes whose picks it turned always prepared.
+   */
+  picks: OpenSpellPicks[];
+  onChooseSpells?: (classId: string) => void;
+  chooseButton?: RefObject<HTMLButtonElement | null>;
+  onClose: () => void;
+}) {
+  // The form and its Level up button are gone: focus the first line, so it is read and Tab goes on to the actions. The
+  // dialog's body was scrolled down to that button: the Summary starts at its top, with this line in view.
+  const heading = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const el = heading.current;
+    if (!el) return;
+    const scroller = scrollParent(el);
+    if (scroller) scroller.scrollTop = 0;
+    el.focus({ preventScroll: true });
+  }, []);
+  // "Choose spells" opens the levelled class's choices while they are open, else the next class's.
+  const first = picks[0];
   return (
     <div className="flex flex-col gap-4">
       <div className="flex items-center gap-3 rounded-xl bg-gold-soft px-4 py-3">
         <ArrowBigUpDash className="size-6 text-gold" aria-hidden />
         <div>
-          <p className="font-display font-semibold">Level {result.newLevel}!</p>
+          <p ref={heading} tabIndex={-1} className="font-display font-semibold focus:outline-none">
+            Level {result.newLevel}!
+          </p>
           <p className="text-sm text-muted">
             +{result.hpGained} HP{result.hpRoll ? ` (rolled ${result.hpRoll.breakdown})` : ''} · HP max {result.character.hp.max}
           </p>
@@ -263,6 +462,16 @@ function Summary({ result, uses, choice, onClose }: { result: LevelUpResult; use
           </ul>
         </Section>
       )}
+      {picks.length > 0 && (
+        <Section title="Spells to choose">
+          {picks.map((p) => (
+            <p key={p.cl.classId} className="text-sm">
+              {openPicksText(p)}
+            </p>
+          ))}
+          <p className="text-xs text-muted">Choose them now, or later from the Spells tab.</p>
+        </Section>
+      )}
       {result.reminders.length > 0 && (
         <Section title="Still to do">
           <ul className="list-disc pl-5 text-sm">
@@ -273,6 +482,38 @@ function Summary({ result, uses, choice, onClose }: { result: LevelUpResult; use
           <p className="text-xs text-muted">The DM has been told, and can help you make these choices.</p>
         </Section>
       )}
+      <div className="flex flex-wrap justify-end gap-2">
+        {first && onChooseSpells && (
+          <Button ref={chooseButton} variant="arcane" icon={<Sparkles className="size-4" aria-hidden />} onClick={() => onChooseSpells(first.cl.classId)}>
+            Choose spells
+          </Button>
+        )}
+        <Button variant={first && onChooseSpells ? 'secondary' : 'primary'} onClick={onClose}>
+          Done
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** A Level up that waited and then couldn't apply, in place of its form (that plan is gone): why, focused, as the Summary is. */
+function Refused({ message, onClose }: { message: string; onClose: () => void }) {
+  const text = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    const el = text.current;
+    if (!el) return;
+    const scroller = scrollParent(el);
+    if (scroller) scroller.scrollTop = 0;
+    el.focus({ preventScroll: true });
+  }, []);
+  return (
+    <div className="flex flex-col gap-4">
+      <div className="flex items-start gap-3 rounded-xl border border-border bg-surface-2 px-4 py-3">
+        <TriangleAlert className="mt-0.5 size-5 shrink-0 text-gold" aria-hidden />
+        <p ref={text} tabIndex={-1} className="text-sm focus:outline-none">
+          {message}
+        </p>
+      </div>
       <div className="flex justify-end">
         <Button variant="primary" onClick={onClose}>
           Done
@@ -428,7 +669,7 @@ function FeatureList({ features }: { features: Omit<Feature, 'id'>[] }) {
   );
 }
 
-function GainedSection({ plan, bookMissing }: { plan: LevelPlan; bookMissing: string | null }) {
+function GainedSection({ plan, bookMissing, rulesLoading }: { plan: LevelPlan; bookMissing: string | null; rulesLoading: boolean }) {
   const { features, option, sub } = plan;
   const fromSubclass = plan.needsSubclass && sub ? features.filter((f) => f.source === 'subclass').map((f) => f.name) : [];
   const caughtUp = plan.caughtUp.map((d) => `${d.name} (level ${d.level})`);
@@ -445,13 +686,28 @@ function GainedSection({ plan, bookMissing }: { plan: LevelPlan; bookMissing: st
       ) : (
         <p className="text-sm text-muted">{option ? 'No new features listed at this level.' : (bookMissing ?? 'Feature details are unavailable; the DM will fill you in.')}</p>
       )}
-      {plan.spells.spells.length > 0 && sub && (
-        <p className="text-sm">
-          Always prepared from {sub.name}: {plan.spells.spells.map((s) => s.name).join(', ')}
+      {bySource(plan.spells.add).map(([source, names]) => (
+        <p key={`add:${source}`} className="text-sm">
+          {source ? `Always prepared from ${source}: ${names.join(', ')}` : `Always prepared: ${names.join(', ')}`}
+        </p>
+      ))}
+      {turnedGroups(plan.spells.flip).map((group) => (
+        <p key={`flip:${group.source}:${group.owner ?? ''}:${group.inBook}:${group.counted}`} className="text-sm">
+          {`Now always prepared from ${group.source}: ${group.names.join(', ')}`}
+          <span className="text-muted">{turnedTail(group, plan.className)}</span>
+        </p>
+      ))}
+      {/* Until the rules index is first built, every spell looks missing: Level up looks them up once it's there. */}
+      {!rulesLoading && plan.spells.missing.length > 0 && (
+        <p className="text-xs text-muted">
+          Not in your rules yet: {plan.spells.missing.map((s) => s.name).join(', ')} — your DM can add {plan.spells.missing.length === 1 ? 'it' : 'them'}.
         </p>
       )}
-      {plan.spells.missing.length > 0 && (
-        <p className="text-xs text-muted">Not in your rules yet: {plan.spells.missing.join(', ')} — your DM can add {plan.spells.missing.length === 1 ? 'it' : 'them'}.</p>
+      {plan.next && picksText(plan.next.owed, plan.next.entry) && (
+        <p className="flex items-start gap-1.5 text-sm text-arcane">
+          <Sparkles className="mt-0.5 size-4 shrink-0" aria-hidden />
+          <span>Next: {picksText(plan.next.owed, plan.next.entry)}</span>
+        </p>
       )}
     </Section>
   );
@@ -461,13 +717,32 @@ function GainedSection({ plan, bookMissing }: { plan: LevelPlan; bookMissing: st
 // Form
 // ---------------------------------------------------------------------------
 
-function LevelUpForm({ onClose }: { onClose: () => void }) {
+function LevelUpForm({
+  onClose,
+  onChooseSpells,
+  chooseButton,
+  busy,
+  onBusy,
+  outcome,
+  onOutcome,
+}: {
+  onClose: () => void;
+  onChooseSpells?: (classId: string) => void;
+  chooseButton?: RefObject<HTMLButtonElement | null>;
+  /** A Level up is applying (the dialog's, so it outlives a close). */
+  busy: boolean;
+  onBusy: (busy: boolean) => void;
+  /** How the last Level up ended (the dialog's, so a form opened during the wait shows it). */
+  outcome: LevelOutcome | null;
+  onOutcome: (outcome: LevelOutcome) => void;
+}) {
   const character = useGame((s) => s.character);
   const campaignId = useGame((s) => s.campaignId);
   const rollMode = useGame((s) => s.campaign?.settings.playerRollMode ?? 'prompt');
   const milestone = useGame((s) => s.campaign?.settings.milestoneLeveling ?? true);
   const builder = useBuilderData();
-  const index = useRulesIndex();
+  // Null until the rules index is first built: Level up then waits for it (getRulesIndex) to look its spells up.
+  const { index, loading: rulesLoading } = useRulesIndexState();
   const edit = useSheetEdit();
   const [choice, setChoice] = useState<Choice>({ kind: 'existing', index: 0 });
   const [hpMethod, setHpMethod] = useState<'average' | 'roll'>('average');
@@ -476,11 +751,16 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
   const [allowAnyway, setAllowAnyway] = useState(false);
   const [featChoice, setFeatChoice] = useState<FeatChoice>({ kind: 'dm' });
   const [featAllowed, setFeatAllowed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [result, setResult] = useState<{ level: LevelUpResult; uses: string[]; choice: string | null } | null>(null);
   const faceId = useId();
 
-  if (result) return <Summary result={result.level} uses={result.uses} choice={result.choice} onClose={onClose} />;
+  if (outcome?.kind === 'levelled') {
+    // The classes whose spell choices this level-up left open (the levelled class first), live: the choices form, or the
+    // DM's spells, settle them.
+    const open = character && builder.data ? openSpellPicks(character, builder.data.classes) : [];
+    const picks = outcome.classIds.flatMap((id) => open.filter((p) => p.cl.classId === id));
+    return <Summary result={outcome.level} uses={outcome.uses} choice={outcome.choice} picks={picks} onChooseSpells={onChooseSpells} chooseButton={chooseButton} onClose={onClose} />;
+  }
+  if (outcome?.kind === 'refused') return <Refused message={outcome.message} onClose={onClose} />;
   if (!character) return <EmptyState title="No character loaded" />;
   const level = characterLevel(character);
   if (level >= 20) return <EmptyState title="Level 20 — the summit">There are no more levels to gain; ask the DM about Epic Boons.</EmptyState>;
@@ -493,7 +773,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
   }
 
   const classes = builder.data?.classes ?? [];
-  const findSpell = (name: string) => index?.findByName(name, { kind: 'spell', campaignId });
+  const findSpell: FindSpell = (name) => index?.findByName(name, { kind: 'spell', campaignId });
   const plan = planLevel(character, classes, choice, subclassId, findSpell);
   const { existing, option, className, classLevel, hitDie } = plan;
   const conMod = abilityModifier(character.abilityScores.con);
@@ -504,8 +784,9 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
   const bookMissing = !option && existing?.ref ? `Class data for ${existing.name} comes from “${existing.ref.sourceTitle}”, which isn't on this device; your DM can fill in its features.` : null;
 
   const multiclassing = choice.kind === 'new';
+  // Each class once: the new class is the hero's too while the Summary is being swapped in.
   const prereqClasses = multiclassing
-    ? [option, ...character.classes.map((cl) => classOptionFor(cl, classes))].filter((c): c is ClassOption => Boolean(c))
+    ? [option, ...character.classes.map((cl) => classOptionFor(cl, classes))].filter((c, i, all): c is ClassOption => Boolean(c) && all.findIndex((x) => x?.id === c?.id) === i)
     : [];
   const prereqMet = prereqClasses.every((c) => meetsPrimary(c, character.abilityScores));
   // An older book's subclass whose own Fighting Style lists its styles: the panel offers those.
@@ -538,7 +819,25 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
 
   const apply = async () => {
     if (!canApply) return;
-    setBusy(true);
+    onBusy(true);
+    try {
+      const ended = await applyLevel();
+      if (ended) onOutcome(ended);
+    } finally {
+      onBusy(false);
+    }
+  };
+
+  const applyLevel = async (): Promise<LevelOutcome | null> => {
+    // The hero this plan is for, as the press found it.
+    const hero = character;
+    // The always-prepared spells are looked up in the rules index, which a quick Level up can reach before it is first
+    // built (Divine Smite would look missing): wait for it, and without it name what wasn't added.
+    const rules = index ?? (await getRulesIndex().catch(() => null));
+    // Still this hero at this level, after the wait? Nothing awaits between this and the edit, which reads the same store.
+    const stale = stalePlanReason(hero, campaignId, level, useGame.getState());
+    if (stale) return { kind: 'refused', message: stale };
+    const findRuleSpell: FindSpell = (name) => rules?.findByName(name, { kind: 'spell', campaignId });
     const base = levelUpOptions(plan, builder.data, hpMethod === 'average' ? 'average' : physical ? { fixed: face } : 'roll', character);
     // A feat picked here joins the level-up, which counts what it brings at this level (Tough: twice the level), and
     // applyFeatChoice completes that same feature by its id: a trait of its name, or an earlier taking of a Repeatable
@@ -547,7 +846,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
       chosen.kind === 'feat' && chosen.pick.feat
         ? { ...base, newFeatures: [...(base.newFeatures ?? []), { name: chosen.pick.name, source: 'feat', description: chosen.pick.description }] }
         : base;
-    const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null } = { result: null, uses: [], choice: null };
+    const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null; classIds: string[] } = { result: null, uses: [], choice: null, classIds: [] };
     const saved = await edit((c) => {
       const r = levelUp(c, opts);
       if (r.character === c) {
@@ -555,7 +854,7 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
       }
       const before = new Set(c.features.map((f) => f.id));
       const addedIds = new Set(r.character.features.filter((f) => !before.has(f.id)).map((f) => f.id));
-      let next = addSubclassSpells(r.character, plan.spells.spells);
+      let next = r.character;
       const warnings: string[] = [];
       let increases: ScoreIncrease[] = [];
       if (plan.trigger) {
@@ -569,35 +868,57 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
       // Existing features grow too: Rage, Second Wind, Lay on Hands, Breath Weapon, Draconic Flight at 5…
       const refreshed = refreshFeatureUses(next, builder.data);
       const uses = featureUseChanges(c, refreshed);
-      // Named for what took effect (a score at 20 can't rise), and a choice that changed nothing keeps its reminder.
+      // The always-prepared spells up to the new level, on the sheet as it is now: added, or a pick turned always prepared
+      // (it stops counting). Then the class's choices are marked open, counted with the places those free (SRD 5.2.1
+      // srd:rule:gaining-spells: "a spell that you always have prepared doesn't count against the number of spells"), and
+      // so are another class's whose pick was turned (levelSpellsEdit, on the levelled entry as the level-up left it).
+      const levelledId = plan.existing?.classId ?? option?.id;
+      const levelled = refreshed.classes.find((cl) => (levelledId ? cl.classId === levelledId : nameKey(cl.name) === nameKey(className)));
+      const spells = option && levelled ? levelSpellsEdit(refreshed, levelled, option, plan.sub, findRuleSpell, classes) : null;
+      const final = spells?.character ?? refreshed;
+      const gain = spells?.gain ?? { add: [], flip: [], missing: [] };
+      const owed = spells?.owed ?? null;
+      const others = spells?.others ?? [];
+      // Named for what took effect (a score at 20 can't rise), and a choice that changed nothing keeps its reminder; the
+      // engine's generic spell line gives way wherever the class's table could be counted.
       const chose = featChoiceNotice(chosen, increases);
-      const reminders = plan.trigger ? dropChoiceReminder(r.reminders, plan.trigger.kind, chosen, increases) : r.reminders;
+      const answered = plan.trigger ? dropChoiceReminder(r.reminders, plan.trigger.kind, chosen, increases) : r.reminders;
+      const reminders = owed ? withoutSpellReview(answered, className, classLevel) : answered;
       const added = chosen.kind === 'dm' ? plan.features.map((f) => f.name) : refreshed.features.filter((f) => !before.has(f.id)).map((f) => f.name);
-      const spells = plan.spells.spells.map((s) => s.name);
-      const hpGained = refreshed.hp.max - c.hp.max;
-      outcome.result = { ...r, character: refreshed, hpGained, reminders };
+      const hpGained = final.hp.max - c.hp.max;
+      outcome.result = { ...r, character: final, hpGained, reminders };
       outcome.uses = uses;
       outcome.choice = choiceSummary(chosen, increases);
+      outcome.classIds = levelled ? [levelled.classId, ...others.map((o) => o.cl.classId)] : [];
       return {
-        character: refreshed,
+        character: final,
         notice: levelUpNotice({
           className,
           classLevel,
           newLevel: r.newLevel,
           hpGained,
-          hpMax: refreshed.hp.max,
+          hpMax: final.hp.max,
           ...(plan.needsSubclass && plan.sub ? { subclass: plan.sub.name } : {}),
           added,
-          extras: [...(chose ? [chose] : []), ...(spells.length ? [`always prepared: ${spells.join(', ')}`] : [])],
+          extras: [
+            ...(chose ? [chose] : []),
+            ...(gain.add.length ? [`always prepared: ${gain.add.map((s) => s.name).join(', ')}`] : []),
+            ...(gain.flip.length ? [`now always prepared: ${gain.flip.map((s) => s.name).join(', ')}`] : []),
+            // A granted spell the rules here lack (a book that isn't on this device): the DM can add it, under what grants it,
+            // so no class counts it among its choices.
+            ...(gain.missing.length ? [`not added (not in the rules here; add with the source named, not a class's name): ${missingText(gain.missing)}`] : []),
+            ...(owed && spells?.entry ? [spellsToChooseNotice(owed, spells.entry)] : []),
+            // Another class whose pick was turned always prepared has that place to fill again, recorded under its name.
+            ...others.map((o) => `${o.cl.name} ${o.cl.level} ${spellsToChooseNotice(o.owed, o.entry)}`),
+          ],
           uses,
-          rulings: keptRulings(refreshed),
+          rulings: keptRulings(final),
           reminders,
         }),
         warning: warnings.join(' ') || null,
       };
     });
-    setBusy(false);
-    if (saved && outcome.result) setResult({ level: { ...outcome.result, character: saved }, uses: outcome.uses, choice: outcome.choice });
+    return saved && outcome.result ? { kind: 'levelled', level: { ...outcome.result, character: saved }, uses: outcome.uses, choice: outcome.choice, classIds: outcome.classIds } : null;
   };
 
   const selectChoice = (next: Choice) => {
@@ -669,15 +990,26 @@ function LevelUpForm({ onClose }: { onClose: () => void }) {
         </Section>
       )}
 
-      <GainedSection plan={plan} bookMissing={bookMissing} />
+      <GainedSection plan={plan} bookMissing={bookMissing} rulesLoading={rulesLoading} />
 
       <div className="flex justify-end gap-2 border-t border-border pt-3">
         <Button variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button variant="primary" loading={busy} disabled={!canApply} icon={<ArrowBigUpDash className="size-4" aria-hidden />} onClick={() => void apply()}>
+        {/* Busy, it stays focusable (aria-disabled), so focus doesn't fall to the page while the level applies. */}
+        <Button
+          variant="primary"
+          disabled={!canApply && !busy}
+          aria-disabled={busy || undefined}
+          icon={busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <ArrowBigUpDash className="size-4" aria-hidden />}
+          className="aria-disabled:cursor-wait aria-disabled:opacity-50"
+          onClick={() => void apply()}
+        >
           Level up
         </Button>
+        <span role="status" className="sr-only">
+          {busy ? 'Leveling up…' : ''}
+        </span>
       </div>
     </div>
   );

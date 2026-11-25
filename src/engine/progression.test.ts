@@ -110,6 +110,15 @@ describe('levelUp', () => {
     expect(five.reminders.some((m) => m.includes('Memorize Spell'))).toBe(true);
   });
 
+  it("words a new slot level for two Spellcasting classes as the combined table's (SRD 5.2.1 Multiclassing)", () => {
+    // "This table might give you spell slots of a higher level than the spells you prepare. You can use those slots but
+    // only to cast your lower-level spells." A Ranger 4 / Sorcerer 2 gaining Sorcerer 3 reaches level 3 slots.
+    const hero = mira({ classes: [{ classId: 'srd:class:ranger', name: 'Ranger', level: 4, hitDie: 10, casterType: 'half' }, { classId: 'srd:class:sorcerer', name: 'Sorcerer', level: 2, hitDie: 6, casterType: 'full' }] });
+    const r = levelUp(recomputeSlots(hero), { className: 'Sorcerer', hpMethod: 'average' });
+    expect(r.reminders).toContain('New spell slot level: level 3 slots cast your lower-level spells too; each class prepares spells only up to its own level.');
+    expect(r.reminders.some((m) => m.startsWith('New spell slot level: you can now cast'))).toBe(false);
+  });
+
   it('subclass at 3 for every class; class-specific ASIs; Epic Boon at 19', () => {
     const fighter = (level: number, extra: Partial<ClassLevel> = {}) =>
       mira({ spellcasting: undefined, classes: [asClass('Fighter', level, extra)], hitDice: [{ die: 10, total: level, spent: 0 }] });

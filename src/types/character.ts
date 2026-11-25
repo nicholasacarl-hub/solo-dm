@@ -194,6 +194,21 @@ export interface KnownSpell {
   ref?: ImportedRef;
 }
 
+/**
+ * A class level gained whose spell choices are still open (SRD 5.2.1, each class's Spellcasting: "choose additional
+ * spells … until the number of spells on your list matches the number on the table"). It holds no counts: what is owed
+ * is worked out live from the class table and the sheet (src/data/options/spellPicks.ts), so deferring, a second level
+ * or a spell the DM adds never makes it wrong; and no ids, so copies need no remap.
+ */
+export interface SpellPicksOwed {
+  /** The class entry (ClassLevel.classId); an entry matching no class is ignored. */
+  classId: string;
+  /** This level lets the class replace one spell on its list (Bard, Sorcerer, Warlock); it lapses with the choices. */
+  replaceSpell?: boolean;
+  /** This level lets the class replace one of its cantrips (Bard, Cleric, Druid, Sorcerer, Warlock). */
+  replaceCantrip?: boolean;
+}
+
 export interface Spellcasting {
   /** Primary spellcasting ability (used for save DC / attack in the sheet). */
   ability: Ability;
@@ -202,6 +217,8 @@ export interface Spellcasting {
   spells: KnownSpell[];
   /** Name of the spell currently being concentrated on, if any. */
   concentratingOn?: string | null;
+  /** Classes with spell choices still open after a level gained (one entry per class, the newest level's). */
+  spellPicks?: SpellPicksOwed[];
 }
 
 export type RechargeOn = 'short' | 'long' | 'dawn' | 'turn' | 'none';

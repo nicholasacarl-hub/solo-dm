@@ -13,7 +13,6 @@ import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test
 import { HOMEBREW_SOURCE_ID, type Character, type ClassFeatureDef, type ClassLevel, type ClassOption, type CompendiumEntry, type FeatOption, type Feature, type OptionSource, type SubclassOption } from '@/types';
 import { featureUseChanges, gainedFeatures, keptRulings } from './leveling';
 import {
-  addSubclassSpells,
   applyFeatChoice,
   caughtUpFeatures,
   dropChoiceReminder,
@@ -26,12 +25,12 @@ import {
   subclassCastingOf,
   subclassFightingStyle,
   subclassRefOf,
-  subclassSpellsToAdd,
   type FeatChoice,
   type FeatChoiceContext,
   type FeatChoiceTrigger,
   type FeatPick,
 } from './levelUpChoices';
+import { alwaysPreparedGained, applyAlwaysPrepared } from './spellPicks';
 
 const classOf = (id: string): ClassOption => {
   const found = EXPECTED_MERGED.classes.find((c) => c.id === id) ?? SRD_BUILDER_DATA.classes.find((c) => c.id === id);
@@ -159,37 +158,44 @@ describe('always-prepared spells of an imported subclass', () => {
   ];
   const find = (name: string) => index.find((e) => nameKey(e.name) === nameKey(name));
 
+  const cleric = (level: number, extra: Partial<Character> = {}) => hero({ classId: CLERIC.id, name: 'Cleric', level, hitDie: 8, casterType: 'full', spellcastingAbility: 'wis' }, extra);
+
   it('adds the spells of the rows up to the class level, with index ids and refs for imported ones', () => {
-    const plan = subclassSpellsToAdd(DUSK, 3, [], find);
-    expect(plan.spells.map((s) => [s.id, s.name, s.level, s.alwaysPrepared, s.source])).toEqual([
+    const plan = alwaysPreparedGained(cleric(3), CLERIC, DUSK, 3, find);
+    expect(plan.add.map((s) => [s.id, s.name, s.level, s.alwaysPrepared, s.source])).toEqual([
       ['srd:spell:faerie-fire', 'Faerie Fire', 1, true, 'Dusk Domain'],
       ['srd:spell:sleep', 'Sleep', 1, true, 'Dusk Domain'],
       ['lib:gloam:40', 'Ashen Choir', 2, true, 'Dusk Domain'],
     ]);
-    expect(plan.spells[0]).toMatchObject({ concentration: true, prepared: true });
-    expect(plan.spells[0].ref).toBeUndefined();
-    expect(plan.spells[2].ref).toEqual({ sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:40', kind: 'spell', entryName: 'Ashen Choir', textHash: '', textCopied: false });
+    expect(plan.add[0]).toMatchObject({ concentration: true, prepared: true });
+    expect(plan.add[0].ref).toBeUndefined();
+    expect(plan.add[2].ref).toEqual({ sourceId: 'gloam', sourceTitle: GLOAMWOOD_TITLE, entryId: 'lib:gloam:40', kind: 'spell', entryName: 'Ashen Choir', textHash: '', textCopied: false });
     // Darkness isn't in this index: the DM adds it.
-    expect(plan.missing).toEqual(['Darkness']);
+    expect(plan.missing).toEqual([{ name: 'Darkness', source: 'Dusk Domain' }]);
   });
 
-  it('skips spells already on the sheet and rows above the class level; SRD subclasses list none', () => {
-    expect(subclassSpellsToAdd(DUSK, 1, [{ name: 'Sleep' }], find).spells.map((s) => s.name)).toEqual(['Faerie Fire']);
-    expect(subclassSpellsToAdd(subOf(CLERIC, 'Life Domain'), 5, [], find)).toEqual({ spells: [], missing: [] });
+  it('leaves rows above the class level, and turns a row spell the hero picked always prepared', () => {
+    // SRD 5.2.1 srd:rule:gaining-spells: "a spell that you always have prepared doesn't count against the number of
+    // spells on that list" — the picked Sleep becomes the subclass's, by its own id.
+    const picked = cleric(1, { spellcasting: { ability: 'wis', slots: {}, spells: [{ id: 'my-sleep', name: 'Sleep', level: 1, prepared: true, source: 'Cleric' }], concentratingOn: null } });
+    const plan = alwaysPreparedGained(picked, CLERIC, DUSK, 1, find);
+    expect(plan.add.map((s) => s.name)).toEqual(['Faerie Fire']);
+    // It leaves the Cleric's list (the class its source names), which owes that place again.
+    expect(plan.flip).toEqual([{ id: 'my-sleep', name: 'Sleep', source: 'Dusk Domain', owner: 'Cleric', counted: true }]);
   });
 
   it("gives a spell the lookup finds in homebrew its entry's id as homebrewId, which the sheet tags", () => {
     // The level-up lookups rank the campaign's homebrew first, so a name the subclass lists can be a homebrew spell.
     const veil: CompendiumEntry = { ...spell('hb:gloaming-veil', 'Gloaming Veil', 1), sourceId: HOMEBREW_SOURCE_ID, sourceName: 'Homebrew' };
     const withVeil: SubclassOption = { ...DUSK, alwaysPreparedSpells: [{ level: 1, spells: ['Faerie Fire', 'Gloaming Veil'] }] };
-    const plan = subclassSpellsToAdd(withVeil, 1, [], (name) => (nameKey(name) === nameKey(veil.name) ? veil : find(name)));
-    expect(plan.spells.map((s) => [s.id, s.homebrewId])).toEqual([
+    const plan = alwaysPreparedGained(cleric(1), CLERIC, withVeil, 1, (name) => (nameKey(name) === nameKey(veil.name) ? veil : find(name)));
+    expect(plan.add.map((s) => [s.id, s.homebrewId])).toEqual([
       ['srd:spell:faerie-fire', undefined],
       ['hb:gloaming-veil', 'hb:gloaming-veil'],
     ]);
-    expect(plan.spells[0]).not.toHaveProperty('homebrewId');
-    const cleric = addSubclassSpells(hero({ classId: CLERIC.id, name: 'Cleric', level: 1, hitDie: 8, casterType: 'full', spellcastingAbility: 'wis' }), plan.spells);
-    expect(characterSheetText(cleric).split('\n')).toContain('- Level 1: Faerie Fire (C, always prepared, Dusk Domain), Gloaming Veil (always prepared, Dusk Domain, homebrew)');
+    expect(plan.add[0]).not.toHaveProperty('homebrewId');
+    const sheet = applyAlwaysPrepared(cleric(1), plan);
+    expect(characterSheetText(sheet).split('\n')).toContain('- Level 1: Faerie Fire (C, always prepared, Dusk Domain), Gloaming Veil (always prepared, Dusk Domain, homebrew)');
   });
 });
 

@@ -1500,6 +1500,21 @@ export function removeSpell(c: Character, name: string): EngineResult {
   const found = matchByName(sc.spells, name, knownSpellName);
   const spell = found.match;
   if (!spell) return unchanged(c, lookupProblem('spell', name, found, knownSpellName));
+  return withoutSpell(c, sc, spell);
+}
+
+/**
+ * Remove the sheet spell with this id: the sheet's replacements name the exact entry, where removeSpell's name match
+ * could take another ("Shield" finding Shield of Faith). Ends Concentration on it, as removeSpell does.
+ */
+export function removeSpellById(c: Character, id: string): EngineResult {
+  const sc = c.spellcasting;
+  const spell = sc?.spells.find((s) => s.id === id);
+  if (!sc || !spell) return unchanged(c, 'That spell is no longer on the sheet.');
+  return withoutSpell(c, sc, spell);
+}
+
+function withoutSpell(c: Character, sc: Spellcasting, spell: KnownSpell): EngineResult {
   const concentrating = sc.concentratingOn && nameKey(sc.concentratingOn) === nameKey(spell.name);
   const spellcasting: Spellcasting = {
     ...sc,

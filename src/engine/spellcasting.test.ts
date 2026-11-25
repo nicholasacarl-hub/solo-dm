@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CasterType, Character, ClassLevel, HitDie, ImportedRef, SourceFormat, SpellSlots } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
-import { casterLevel, ordinal, recomputeSlots, restoreSlot, spellSlotsForClasses, spendSlot } from './spellcasting';
+import { casterLevel, classSpellLevelCap, ordinal, recomputeSlots, restoreSlot, spellSlotsForClasses, spendSlot } from './spellcasting';
 
 const cls = (name: string, level: number, casterType: CasterType, hitDie: HitDie = 8): ClassLevel => ({
   classId: `srd:class:${name.toLowerCase()}`,
@@ -168,5 +168,23 @@ describe('ordinal', () => {
     expect([1, 2, 3, 4, 9, 11, 12, 13, 21, 22, 23, 101, 111].map(ordinal)).toEqual([
       '1st', '2nd', '3rd', '4th', '9th', '11th', '12th', '13th', '21st', '22nd', '23rd', '101st', '111th',
     ]);
+  });
+});
+
+describe('classSpellLevelCap: the highest spell level one class may prepare (SRD 5.2.1 Multiclassing, Spellcasting)', () => {
+  it("follows the class's own table, never the combined slots", () => {
+    // "If you are a level 4 Ranger / level 3 Sorcerer, for example, you can prepare five level 1 Ranger spells, and you
+    // can prepare six Sorcerer spells of level 1 or 2", though their combined slots reach level 3.
+    expect(spellSlotsForClasses([ranger(4), cls('Sorcerer', 3, 'full')]).slots[3]?.max).toBeGreaterThan(0);
+    expect(classSpellLevelCap(ranger(4))).toBe(1);
+    expect(classSpellLevelCap(cls('Sorcerer', 3, 'full'))).toBe(2);
+    expect([1, 3, 5, 17, 20].map((l) => classSpellLevelCap(wizard(l)))).toEqual([1, 2, 3, 9, 9]);
+    expect([1, 4, 5, 9, 17].map((l) => classSpellLevelCap(paladin(l)))).toEqual([1, 1, 2, 3, 5]);
+  });
+
+  it("caps a Warlock at its Slot Level column, and a class with no slots at 0 (srd:rule:warlock-pact-magic)", () => {
+    // "The chosen spells must be of a level no higher than what's shown in the table's Slot Level column for your level."
+    expect([1, 3, 5, 9, 11, 20].map((l) => classSpellLevelCap(warlock(l)))).toEqual([1, 2, 3, 5, 5, 5]);
+    expect(classSpellLevelCap(cls('Fighter', 5, 'none'))).toBe(0);
   });
 });
