@@ -6,8 +6,10 @@
  */
 import {
   ABILITY_NAMES,
+  AC_SPELL_NAMES,
   SKILL_ABILITY,
   SKILL_NAMES,
+  type AcSpellName,
   type Ability,
   type Attack,
   type Character,
@@ -33,7 +35,7 @@ import {
   parseDice,
   type DiceTerm,
 } from './dice';
-import { clamp, gameEvent, matchByName, toInt, warning } from './util';
+import { clamp, gameEvent, matchByName, namesPhrase, toInt, warning } from './util';
 
 const MINUS = '\u2212';
 
@@ -574,6 +576,59 @@ function signedPart(label: string, value: number): string {
   return `${label} ${value < 0 ? `${MINUS}${Math.abs(value)}` : value}`;
 }
 
+// ---------------------------------------------------------------------------
+// AC from spells: the ones the app works out (Character.acSpells)
+// ---------------------------------------------------------------------------
+
+/**
+ * What each spell the app counts does to the AC. Mage Armor gives a base AC (srd:spell:mage-armor: "the target's base AC
+ * becomes 13 plus its Dexterity modifier"), one more way to work the AC out (srd:rule:armor-class); Shield of Faith a
+ * bonus on top of it (srd:spell:shield-of-faith: "a +2 bonus to AC for the duration").
+ */
+export const AC_SPELLS: Record<AcSpellName, { base?: number; bonus?: number }> = {
+  'Mage Armor': { base: 13 },
+  'Shield of Faith': { bonus: 2 },
+};
+
+/** The AC spell of exactly this name (case and punctuation aside), never a looser match: "Shield" isn't Shield of Faith. */
+export function acSpellNamed(name: string): AcSpellName | undefined {
+  const key = typeof name === 'string' ? nameKey(name) : '';
+  return key ? AC_SPELL_NAMES.find((n) => nameKey(n) === key) : undefined;
+}
+
+/** The AC spells recorded on the hero, read leniently (stored rows aren't validated): known names only, once each, in AC_SPELL_NAMES order. */
+export function acSpells(c: Pick<Character, 'acSpells'>): AcSpellName[] {
+  const stored: unknown[] = Array.isArray(c.acSpells) ? c.acSpells : [];
+  const named = new Set(stored.map((n) => (typeof n === 'string' ? acSpellNamed(n) : undefined)));
+  return AC_SPELL_NAMES.filter((n) => named.has(n));
+}
+
+/** The part of an AC formula a counted spell writes: "Mage Armor: 13" (then "DEX 2"), "Shield of Faith 2". */
+function acSpellPart(name: AcSpellName): string {
+  const { base, bonus } = AC_SPELLS[name];
+  return base !== undefined ? `${name}: ${base}` : `${name} ${bonus ?? 0}`;
+}
+
+/** What in an AC formula shows the spell is counted: "Mage Armor:" (the base in use), "Shield of Faith 2". */
+function acSpellMarker(name: AcSpellName): string {
+  return AC_SPELLS[name].base !== undefined ? `${name}:` : acSpellPart(name);
+}
+
+/**
+ * The recorded AC spells the AC in force counts: those whose part is in the formula. Mage Armor isn't while armor is
+ * worn or another base AC is higher (srd:rule:armor-class: "you can't use more than one"), nor is any under an AC set
+ * by hand that doesn't name its part.
+ */
+export function countedAcSpells(c: Pick<Character, 'acSpells' | 'acFormula'>): AcSpellName[] {
+  const formula = typeof c.acFormula === 'string' ? c.acFormula : '';
+  return acSpells(c).filter((n) => formula.includes(acSpellMarker(n)));
+}
+
+/** What the recorded spells add on top of the AC however it is worked out (Shield of Faith's +2). */
+function acSpellBonus(c: Character): number {
+  return acSpells(c).reduce((sum, n) => sum + (AC_SPELLS[n].bonus ?? 0), 0);
+}
+
 interface AcOption {
   ac: number;
   parts: string[];
@@ -623,6 +678,12 @@ function unarmoredOptions(c: Character): AcOption[] {
     const cha = mod(c, 'cha');
     options.push({ ac: 10 + dex + cha, parts: ['Draconic Resilience: 10', signedPart('DEX', dex), signedPart('CHA', cha)], allowsShield: true });
   }
+  // A spell's base AC is one more option, used only without armor (srd:spell:mage-armor: "who isn't wearing armor");
+  // last, so a feature that gives as much keeps the AC (the spell then adds nothing).
+  for (const name of acSpells(c)) {
+    const base = AC_SPELLS[name].base;
+    if (base !== undefined) options.push({ ac: base + dex, parts: [acSpellPart(name), signedPart('DEX', dex)], allowsShield: true });
+  }
   return options;
 }
 
@@ -634,7 +695,8 @@ function bestOf(options: AcOption[]): AcOption {
  * Armor class from equipped armor/shield in the inventory (falls back to 10 + DEX). Returns a formula note.
  * Handles light/medium (DEX max 2)/heavy armor, +N magic armor and shields, shield training (an
  * untrained shield gives no AC), Barbarian/Monk Unarmored Defense, Draconic Resilience, the Defense
- * fighting style, attuned Ring/Cloak of Protection and Bracers of Defense. When equipped armor can't
+ * fighting style, attuned Ring/Cloak of Protection and Bracers of Defense, and the recorded AC spells
+ * (Character.acSpells: Mage Armor's base without armor, Shield of Faith's +2). When equipped armor can't
  * be identified, the sheet's current AC is kept.
  */
 export function computeArmorClass(c: Character, catalog: readonly EquipmentOption[] = []): { ac: number; formula: string } {
@@ -702,6 +764,13 @@ export function computeArmorClass(c: Character, catalog: readonly EquipmentOptio
     ac += bonus;
     parts.push(base.worn?.item.id === item.id ? `${bonus} (magic)` : `${item.name} ${bonus}`);
   }
+  // Spells that add to the AC however it is worked out (srd:spell:shield-of-faith).
+  for (const name of acSpells(c)) {
+    const bonus = AC_SPELLS[name].bonus;
+    if (!bonus) continue;
+    ac += bonus;
+    parts.push(acSpellPart(name));
+  }
   const formula = parts.join(' + ') + (notes.length ? ` (${notes.join('; ')})` : '');
   return { ac, formula };
 }
@@ -740,12 +809,54 @@ export function unknownWornArmor(c: Character, catalog: readonly EquipmentOption
   return unknown.find((i) => i.category === 'armor');
 }
 
+/** The recorded AC spells `before` and `after` don't share: the ones a change added or ended. */
+function changedAcSpells(before: Character, after: Character): AcSpellName[] {
+  const was = acSpells(before);
+  const now = acSpells(after);
+  return AC_SPELL_NAMES.filter((n) => was.includes(n) !== now.includes(n));
+}
+
+/** `formula` without the last ` + `-separated part that is exactly `part`. */
+function withoutPart(formula: string, part: string): string {
+  const parts = formula.split(' + ');
+  const index = parts.lastIndexOf(part);
+  return index < 0 ? formula : parts.filter((_, i) => i !== index).join(' + ');
+}
+
+/**
+ * An AC the engine can't work out (set by hand, or armor it can't identify) moved by exactly what the recorded spells'
+ * bonuses changed (`delta`): their parts are appended to or taken out of the stored formula, so it still says what it
+ * counts ("set by the DM: Haste + Shield of Faith 2").
+ */
+function movedBySpells(before: Character, after: Character, delta: number): { character: Character; events: GameEvent[] } {
+  const was = acSpells(before);
+  const now = acSpells(after);
+  const added = now.filter((n) => AC_SPELLS[n].bonus && !was.includes(n));
+  const ended = was.filter((n) => AC_SPELLS[n].bonus && !now.includes(n));
+  let formula = after.acFormula ?? '';
+  for (const n of ended) formula = withoutPart(formula, acSpellPart(n));
+  for (const n of added) formula = formula ? `${formula} + ${acSpellPart(n)}` : acSpellPart(n);
+  const stored = after.armorClass;
+  const ac = stored + delta;
+  const changes = [...added.map((n) => `${n} ${formatModifier(AC_SPELLS[n].bonus ?? 0)}`), ...ended.map((n) => `${n} ${formatModifier(-(AC_SPELLS[n].bonus ?? 0))}`)];
+  return {
+    character: { ...after, armorClass: ac, acFormula: formula },
+    events: [gameEvent('combat', `AC ${stored} → ${ac} (${changes.join(', ')})`)],
+  };
+}
+
 /**
  * Keep the stored Armor Class in step after a change that can affect it: a new level (Unarmored
- * Defense from multiclassing, Draconic Resilience), or equipping, attuning or dropping an item.
- * The sheet's AC counts as derived when it equals computeArmorClass(before); it then becomes the AC
- * computed for `after`. Otherwise it was set by hand or by an effect the engine doesn't model (Mage
- * Armor, armor it can't identify), so it is kept and a warning gives the computed value instead.
+ * Defense from multiclassing, Draconic Resilience), equipping, attuning or dropping an item, or an AC
+ * spell recorded or ended (Character.acSpells). One rule for every change:
+ * 1. What the spells' bonuses changed by (Shield of Faith's +2) is worked out first.
+ * 2. With armor the engine can't identify, computeArmorClass keeps the stored AC: only that change moves it.
+ * 3. The sheet's AC counts as derived when it equals computeArmorClass(before); it then becomes the AC
+ *    computed for `after`.
+ * 4. Otherwise it was set by hand. When the AC `after` works out equals it and the hand-set formula names a spell
+ *    just recorded or ended (an old save's "set by the DM: Shield of Faith" 18 on gear that gives 16), it already
+ *    counted the spell: it is kept and becomes derived. Else it moves by the spells' change (a hand-set "Haste" 18
+ *    plus Shield of Faith is 20), or, when that is nothing, it is kept and a warning gives the computed value.
  * Without a catalog the SRD armor table is used. No events when the computed AC doesn't change.
  */
 export function syncArmorClass(
@@ -753,18 +864,24 @@ export function syncArmorClass(
   after: Character,
   catalog: readonly EquipmentOption[] = [],
 ): { character: Character; events: GameEvent[] } {
+  const delta = acSpellBonus(after) - acSpellBonus(before);
+  if (delta !== 0 && unknownWornArmor(after, catalog)) return movedBySpells(before, after, delta);
   const was = computeArmorClass(before, catalog);
   const now = computeArmorClass(after, catalog);
   if (now.ac === was.ac && now.formula === was.formula) return { character: after, events: [] };
   const stored = after.armorClass;
   const derived = before.armorClass === was.ac && stored === before.armorClass;
   if (!derived) {
+    if (now.ac === stored && changedAcSpells(before, after).some((n) => namesPhrase(after.acFormula, n))) {
+      return { character: { ...after, acFormula: now.formula }, events: [] };
+    }
+    if (delta !== 0) return movedBySpells(before, after, delta);
     if (now.ac === stored) return { character: after, events: [] };
     return {
       character: after,
       events: [
         warning(
-          `AC kept at ${stored}: it differs from the ${was.ac} that gear and features gave, so it may include a spell such as Mage Armor or a manual change. Gear and features now give AC ${now.ac} (${now.formula}); update the AC if that is right.`,
+          `AC kept at ${stored}: it differs from the ${was.ac} that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC ${now.ac} (${now.formula}); update the AC if that is right.`,
         ),
       ],
     };

@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { Character, ClassLevel, Feature, ImportedRef, SourceFormat } from '@/types';
+import type { Character, ClassLevel, Feature, ImportedRef, InventoryItem, SourceFormat } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import { asiLevels, findSrdClass, SRD_CLASSES } from './classData';
-import { addFeature, adjustHpMax } from './character';
+import { addAcSpell, addFeature, adjustHpMax, setConcentration } from './character';
 import type { Rng } from './dice';
 import {
   applyLongRest,
@@ -517,6 +517,51 @@ describe('applyLongRest (SRD 5.2.1)', () => {
   });
 });
 
+describe('applyLongRest ends the AC spells (srd:spell:mage-armor; srd:spell:shield-of-faith; srd:rule:long-rest)', () => {
+  const mail: InventoryItem = { id: 'cm', name: 'Chain Mail', quantity: 1, weight: 55, category: 'armor', equipped: true };
+  const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
+
+  it("Mage Armor's 8 hours are over by the end of a Long Rest (srd:spell:mage-armor: \"Duration: 8 hours\"; srd:rule:long-rest: \"at least 8 hours\")", () => {
+    const c = addAcSpell(mira(), 'Mage Armor').character;
+    expect(c.armorClass).toBe(15);
+    const r = applyLongRest(c);
+    expect(r.character).toMatchObject({ armorClass: 12, acFormula: '10 + DEX 2' });
+    expect(r.character).not.toHaveProperty('acSpells');
+    expect(messages(r)[0]).toBe('Mage Armor ends: AC 15 → 12');
+    expect(r.events[1].type).toBe('rest');
+  });
+
+  it('every AC spell ends, each with its own step, and the Concentration on Shield of Faith with them', () => {
+    let c = setConcentration(mira(), 'Shield of Faith').character;
+    c = addAcSpell(addAcSpell(c, 'Mage Armor').character, 'Shield of Faith').character;
+    expect(c.armorClass).toBe(17);
+    const r = applyLongRest(c);
+    expect(r.character).toMatchObject({ armorClass: 12, spellcasting: { concentratingOn: null } });
+    expect(r.character).not.toHaveProperty('acSpells');
+    expect(messages(r).slice(0, 2)).toEqual(['Mage Armor ends: AC 17 → 14', 'Shield of Faith ends: AC 14 → 12']);
+    expect(messages(r)[2]).toMatch(/^Long rest: .*Concentration on Shield of Faith ended/);
+    expect(r.events).toHaveLength(3);
+  });
+
+  it('an AC set by hand for Mage Armor or Shield of Faith with no record behind it (an old save) gets a reminder after the rest', () => {
+    const old = mira({ armorClass: 15, acFormula: 'set by the DM: Mage Armor' });
+    const r = applyLongRest(old);
+    expect(r.character.armorClass).toBe(15);
+    expect(r.events.map((e) => e.type)).toEqual(['rest', 'warning']);
+    expect(r.events[1].message).toBe('AC 15 was set by hand for Mage Armor: if it counted Mage Armor, set the AC back to 12 (armor and abilities).');
+    // Shield of Faith set by hand while she concentrates on it: one reminder, not two.
+    const faith = setConcentration(mira({ armorTraining: ['Heavy armor'], inventory: [mail], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }), 'Shield of Faith').character;
+    expect(messages(applyLongRest(faith)).slice(1)).toEqual([
+      'AC 18 was set by hand for Shield of Faith: if it counted Shield of Faith, set the AC back to 16 (armor and abilities).',
+    ]);
+    // Any other spell the Concentration ends with: the same reminder (srd:spell:haste: "+2 bonus to Armor Class").
+    const hasted = setConcentration(mira({ armorTraining: ['Heavy armor'], inventory: [mail], armorClass: 18, acFormula: 'set by the DM: Haste' }), 'Haste').character;
+    expect(messages(applyLongRest(hasted)).slice(1)).toEqual(['AC 18 was set by hand for Haste: if it counted Haste, set the AC back to 16 (armor and abilities).']);
+    // A Short Rest ends nothing (srd:rule:short-rest).
+    expect(applyShortRest(addAcSpell(mira(), 'Mage Armor').character).character).toMatchObject({ armorClass: 15, acSpells: ['Mage Armor'] });
+  });
+});
+
 describe('levelUp: feature uses that grow with level', () => {
   const paladin = (level: number, features: Feature[]) =>
     mira({
@@ -718,7 +763,7 @@ describe('levelUp: Armor Class', () => {
     expect(r.character).toMatchObject({ armorClass: 13, acFormula: 'Unarmored Defense: 10 + DEX 2 + CON 1' });
   });
 
-  it('keeps an AC set by hand (Mage Armor) and reminds the player what gear and features give', () => {
+  it("keeps an AC set by hand (an effect the app doesn't count) and reminds the player what gear and features give", () => {
     const r = levelUp(mira({ armorClass: 15 }), { className: 'Barbarian', hpMethod: 'average' });
     expect(r.character.armorClass).toBe(15);
     expect(r.reminders.some((m) => /^AC kept at 15: .*now give AC 13/.test(m))).toBe(true);

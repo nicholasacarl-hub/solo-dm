@@ -4,7 +4,7 @@ import type { BuilderData, Character, Feature, ImportedRef } from '@/types';
 import { importedPlaceholder, redactImported, wrapImported } from '@/lib/importedContent';
 import { sampleCharacter } from '@/test/fixtures';
 import { GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, importedRef, TEXT } from '@/test/structuredFixtures';
-import { adjustHpMax, applyDamage } from './character';
+import { addAcSpell, adjustHpMax, applyDamage } from './character';
 import { characterSheetText, characterStatusLine, SHEET_TEXT_MAX, sheetCutsText } from './summary';
 import { beginTransformation, endTransformation } from './transform';
 
@@ -60,6 +60,28 @@ describe('characterStatusLine', () => {
     });
     expect(characterStatusLine(c)).toContain('(Wizard 3 / Warlock 2)');
     expect(characterStatusLine(c)).toContain('Pact 1/2 (1st)');
+  });
+});
+
+describe('AC spells on the status line (srd:spell:mage-armor; srd:spell:shield-of-faith)', () => {
+  it('names the spells the AC counts, so the DM never counts them again; nothing without them', () => {
+    const both = addAcSpell(addAcSpell(mira(), 'Mage Armor').character, 'Shield of Faith').character;
+    expect(characterStatusLine(both)).toBe(
+      'Mira Voss (Wizard 3) · HP 12/17 · AC 17 (Mage Armor, Shield of Faith) · Slots 1st 3/4, 2nd 2/2 · Hit Dice 2/3 d6 · Heroic Inspiration',
+    );
+    expect(characterStatusLine(mira())).toContain(' · AC 12 · ');
+    // Recorded but not counted (a higher Unarmored Defense, armor worn): not named (srd:rule:armor-class: "you can't use more than one").
+    const barbarian = mira({
+      abilityScores: { str: 16, dex: 14, con: 18, int: 8, wis: 10, cha: 10 },
+      classes: [{ classId: 'srd:class:barbarian', name: 'Barbarian', level: 1, hitDie: 12, casterType: 'none' }],
+      armorClass: 16,
+      acFormula: 'Unarmored Defense: 10 + DEX 2 + CON 4',
+    });
+    const uncounted = addAcSpell(barbarian, 'Mage Armor').character;
+    expect(uncounted.acSpells).toEqual(['Mage Armor']);
+    expect(characterStatusLine(uncounted)).toContain(' · AC 16 · ');
+    // The sheet's AC line already shows the formula; it reads the same as before.
+    expect(characterSheetText(both)).toContain('**AC** 17 (Mage Armor: 13 + DEX 2 + Shield of Faith 2)');
   });
 });
 

@@ -66,7 +66,7 @@ describe('sheet gear changes pass on what syncArmorClass warns', () => {
     const r = itemEquipChange(c, 'shield', true, null);
     expect(r.character.armorClass).toBe(15);
     const kept =
-      'AC kept at 15: it differs from the 12 that gear and features gave, so it may include a spell such as Mage Armor or a manual change. Gear and features now give AC 14 (10 + DEX 2 + Shield 2); update the AC if that is right.';
+      "AC kept at 15: it differs from the 12 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 14 (10 + DEX 2 + Shield 2); update the AC if that is right.";
     expect(r.notice).toBe(`Player equipped Shield — ${kept}`);
     expect(r.warning).toBe("Your AC stays 15: your gear alone can't settle it, so your DM will be told with your next message.");
   });

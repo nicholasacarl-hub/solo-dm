@@ -38,6 +38,25 @@ export function listJoin(items: readonly string[]): string {
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
 }
 
+/** Lower-case words of a name or a label ("Cutthroat's smoke" → cutthroat, s, smoke). */
+export function phraseWords(text: string): string[] {
+  return text.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/** Does the word list `label` contain `phrase` as a run of whole words (its last word also as a plural)? */
+export function containsPhrase(label: readonly string[], phrase: readonly string[]): boolean {
+  if (phrase.length === 0) return false;
+  const last = phrase.length - 1;
+  const same = (word: string, w: string, j: number) => word === w || (j === last && (word === `${w}s` || word === `${w}es`));
+  for (let i = 0; i + phrase.length <= label.length; i++) if (phrase.every((w, j) => same(label[i + j], w, j))) return true;
+  return false;
+}
+
+/** Does `text` name `name` as whole words, case-insensitively ("Hold Person (Cultist Fanatic)" names Hold Person; "Webs" names Web)? */
+export function namesPhrase(text: unknown, name: string): boolean {
+  return typeof text === 'string' && typeof name === 'string' && containsPhrase(phraseWords(text), phraseWords(name));
+}
+
 // ---------------------------------------------------------------------------
 // Fuzzy name matching (features, items, spells, attacks, combatants)
 // ---------------------------------------------------------------------------

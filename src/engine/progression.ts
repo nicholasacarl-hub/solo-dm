@@ -4,6 +4,7 @@
  */
 import {
   ABILITY_NAMES,
+  AC_SPELL_NAMES,
   type Ability,
   type CasterType,
   type Character,
@@ -18,10 +19,10 @@ import {
   type RollResult,
 } from '@/types';
 import { newId, nameKey, slugify } from '@/lib/id';
-import { endHpMaxAdjustmentsWhere, isAlertFeat, isToughFeat } from './character';
+import { afterConcentrationEnds, endAcSpell, endHpMaxAdjustmentsWhere, handSetAcReminder, isAlertFeat, isToughFeat } from './character';
 import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, rulesClassFor, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
-import { abilityModifier, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
+import { abilityModifier, acSpells, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
 import { recomputeSlots, resetSpellSlots } from './spellcasting';
 import { clamp, formatInt, gameEvent, listJoin, toInt, touch, warning } from './util';
 
@@ -642,7 +643,9 @@ export function applyShortRest(c: Character): { character: Character; events: Ga
 /**
  * Long rest (2024): regain all HP and all spent hit dice (SRD 5.2.1), all spell slots, features that
  * recharge on short/long rest or dawn; exhaustion −1; death saves reset; temp HP removed.
- * Also: Concentration ends (you sleep), and Resourceful (Human) grants Heroic Inspiration.
+ * Also: Concentration ends (you sleep), with what ends with it (afterConcentrationEnds), and Resourceful (Human) grants
+ * Heroic Inspiration. Every AC spell ends: Mage Armor's 8 hours (srd:spell:mage-armor) and Shield of Faith's 10 minutes
+ * are over by the end of the rest; an AC set by hand for either with no record behind it (an old save's) gets a reminder.
  * Like the SRD, it needs at least 1 HP to start. First the Hit Point maximum adjustments that end at a Long Rest end, so
  * HP refill to the maximum restored. Raises go first: Aid's 8 hours are over before the rest finishes (casting it would
  * have stopped the rest: "Casting a spell other than a cantrip"), so if a drain held the maximum within reach of 0, Aid
@@ -670,7 +673,7 @@ export function applyLongRest(start: Character): { character: Character; events:
   const exhaustion = clamp(toInt(c.exhaustion) - 1, 0, 6);
   const resourceful = hasFeatureNamed(c.features, 'Resourceful') && !c.heroicInspiration;
 
-  const character = touch({
+  let character = touch({
     ...c,
     hp: { ...c.hp, current: c.hp.max, temp: 0 },
     hitDice: c.hitDice.map((h) => ({ ...h, spent: 0 })),
@@ -681,6 +684,27 @@ export function applyLongRest(start: Character): { character: Character; events:
     ...(spellcasting ? { spellcasting } : {}),
   });
 
+  // The AC spells end, then what ends with the Concentration (its hand-set AC reminder, worked out on the AC the rest
+  // leaves), then a reminder for an AC set by hand for an AC spell that had no record.
+  const recorded = acSpells(c);
+  const acEvents: GameEvent[] = [];
+  for (const name of recorded) {
+    const ended = endAcSpell(character, name);
+    character = ended.character;
+    acEvents.push(...ended.events);
+  }
+  const concentration = sc?.concentratingOn;
+  if (concentration) {
+    const ended = afterConcentrationEnds(character, concentration);
+    character = ended.character;
+    acEvents.push(...ended.events);
+  }
+  for (const name of AC_SPELL_NAMES) {
+    if (recorded.includes(name) || (concentration && nameKey(concentration) === nameKey(name))) continue;
+    const reminder = handSetAcReminder(character, name);
+    if (reminder) acEvents.push(reminder);
+  }
+
   const parts = [`HP ${c.hp.current} → ${c.hp.max}`];
   if (c.hp.temp > 0) parts.push(`${c.hp.temp} temporary HP lost`);
   if (spentDice > 0) parts.push(`regained ${spentDice} Hit Point ${spentDice === 1 ? 'Die' : 'Dice'}`);
@@ -689,7 +713,16 @@ export function applyLongRest(start: Character): { character: Character; events:
   if (exhaustion !== c.exhaustion) parts.push(`Exhaustion ${c.exhaustion} → ${exhaustion}`);
   if (sc?.concentratingOn) parts.push(`Concentration on ${sc.concentratingOn} ended`);
   if (resourceful) parts.push('gained Heroic Inspiration (Resourceful)');
-  return { character, events: [...raises.events, ...ended.events, gameEvent('rest', `Long rest: ${parts.join('; ')}.`)] };
+  return {
+    character,
+    events: [
+      ...raises.events,
+      ...ended.events,
+      ...acEvents.filter((e) => e.type !== 'warning'),
+      gameEvent('rest', `Long rest: ${parts.join('; ')}.`),
+      ...acEvents.filter((e) => e.type === 'warning'),
+    ],
+  };
 }
 
 /** XP summary for prompts: "900 XP (1,800 to level 4)". */

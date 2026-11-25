@@ -8,7 +8,9 @@
  */
 import {
   ABILITY_NAMES,
+  AC_SPELL_NAMES,
   HP_MAX_ENDS,
+  type AcSpellName,
   type Ability,
   type ActiveCondition,
   type Character,
@@ -26,10 +28,14 @@ import {
 } from '@/types';
 import { nameKey, newId } from '@/lib/id';
 import { safeEnd } from '@/lib/text';
+import { wornArmor } from './armorData';
 import { CONDITIONS, INCAPACITATING_CONDITIONS, conditionKey, conditionName, matchStandardCondition } from './conditions';
 import { levelForXp } from './progression';
 import {
+  AC_SPELLS,
   abilityModifier,
+  acSpellNamed,
+  acSpells,
   characterLevel,
   deathSaveModifier,
   exhaustionLevel,
@@ -39,7 +45,9 @@ import {
   proficiencyBonus,
   spellcastingAbility,
   syncArmorClass,
+  unknownWornArmor,
 } from './rules';
+import { handSetAcNaming } from './spellEffects';
 import { clamp, formatInt, gameEvent, lookupProblem, matchByName, toInt, touch, warning, type NameMatch } from './util';
 
 export interface EngineResult {
@@ -104,13 +112,12 @@ export function concentrationSaveDC(damage: number): number {
   return clamp(Math.floor(Math.max(0, toInt(damage)) / 2), 10, 30);
 }
 
+/** Concentration ends on its own (0 HP, death, an Incapacitating condition), with what ends with it (afterConcentrationEnds). */
 function endConcentration(c: Character, reason: string): EngineResult {
   const spell = c.spellcasting?.concentratingOn;
   if (!c.spellcasting || !spell) return { character: c, events: [] };
-  return {
-    character: { ...c, spellcasting: { ...c.spellcasting, concentratingOn: null } },
-    events: [gameEvent('condition-removed', `Concentration on ${spell} ends (${reason}).`)],
-  };
+  const ended = afterConcentrationEnds({ ...c, spellcasting: { ...c.spellcasting, concentratingOn: null } }, spell);
+  return { character: ended.character, events: [gameEvent('condition-removed', `Concentration on ${spell} ends (${reason}).`), ...ended.events] };
 }
 
 function withCondition(conditions: readonly ActiveCondition[], condition: ActiveCondition): ActiveCondition[] {
@@ -1522,20 +1529,27 @@ function withoutSpell(c: Character, sc: Spellcasting, spell: KnownSpell): Engine
     ...(concentrating ? { concentratingOn: null } : {}),
   };
   const events = [gameEvent('feature-used', `Removed spell: ${spell.name}`)];
-  if (concentrating) events.push(gameEvent('condition-removed', `Concentration on ${spell.name} ends.`));
-  return { character: touch({ ...c, spellcasting }), events };
+  let character: Character = { ...c, spellcasting };
+  if (concentrating) {
+    events.push(gameEvent('condition-removed', `Concentration on ${spell.name} ends.`));
+    const ended = afterConcentrationEnds(character, spell.name);
+    character = ended.character;
+    events.push(...ended.events);
+  }
+  return { character: touch(character), events };
 }
 
-/** Start (name) or end (null) concentration. Starting a new one ends the previous. */
+/**
+ * Start (name) or end (null) concentration. Starting a new one ends the previous (srd:rule:concentration, Another
+ * Concentration Effect); what ended with it ends too (afterConcentrationEnds). The same spell again changes nothing.
+ */
 export function setConcentration(c: Character, spellName: string | null): EngineResult {
   const current = c.spellcasting?.concentratingOn ?? null;
   const name = spellName?.trim() || null;
   if (name === null) {
     if (!current || !c.spellcasting) return { character: c, events: [] };
-    return {
-      character: touch({ ...c, spellcasting: { ...c.spellcasting, concentratingOn: null } }),
-      events: [gameEvent('condition-removed', `No longer concentrating on ${current}.`)],
-    };
+    const ended = afterConcentrationEnds({ ...c, spellcasting: { ...c.spellcasting, concentratingOn: null } }, current);
+    return { character: touch(ended.character), events: [gameEvent('condition-removed', `No longer concentrating on ${current}.`), ...ended.events] };
   }
   if (current && nameKey(current) === nameKey(name)) return { character: c, events: [] };
   if (c.deathSaves.dead) return unchanged(c, "The dead can't concentrate.");
@@ -1544,8 +1558,125 @@ export function setConcentration(c: Character, spellName: string | null): Engine
   const known = c.spellcasting ? matchByName(c.spellcasting.spells, name, knownSpellName).match : undefined;
   const label = known?.name ?? name;
   const sc = ensureSpellcasting(c);
+  let character: Character = { ...c, spellcasting: { ...sc, concentratingOn: label } };
   const events: GameEvent[] = [];
-  if (current) events.push(gameEvent('condition-removed', `Concentration on ${current} ends (started concentrating on ${label}).`));
+  if (current) {
+    events.push(gameEvent('condition-removed', `Concentration on ${current} ends (started concentrating on ${label}).`));
+    const ended = afterConcentrationEnds(character, current);
+    character = ended.character;
+    events.push(...ended.events);
+  }
   events.push(gameEvent('condition-added', `Concentrating on ${label}.`));
-  return { character: touch({ ...c, spellcasting: { ...sc, concentratingOn: label } }), events };
+  return { character: touch(character), events };
+}
+
+/**
+ * The clock (a countdown that ran out at a turn start) or the end of a fight ends the hero's Concentration on `spell`:
+ * while the sheet still concentrates on it, it ends with "Concentration on Bless ends: <reason>." and what ends with it
+ * (afterConcentrationEnds). Otherwise (the sheet moved on, or the call is repeated) nothing changes.
+ */
+export function expireConcentration(c: Character, spell: string, reason: string): EngineResult {
+  const current = c.spellcasting?.concentratingOn;
+  if (!c.spellcasting || !current || typeof spell !== 'string' || nameKey(current) !== nameKey(spell)) return { character: c, events: [] };
+  const why = String(reason ?? '').replace(/\s+/g, ' ').trim().replace(/\.+$/, '');
+  const ended = afterConcentrationEnds({ ...c, spellcasting: { ...c.spellcasting, concentratingOn: null } }, current);
+  return {
+    character: touch(ended.character),
+    events: [gameEvent('condition-removed', `Concentration on ${current} ends${why ? `: ${why}` : ''}.`), ...ended.events],
+  };
+}
+
+/** "AC 18 was set by hand for Haste: if it counted Haste, set the AC back to 16 (armor and abilities)." (handSetAcNaming) */
+export function handSetAcReminder(c: Character, spell: string): GameEvent | null {
+  const named = handSetAcNaming(c, spell);
+  if (!named) return null;
+  return warning(`AC ${named.stored} was set by hand for ${spell}: if it counted ${spell}, set the AC back to ${named.computed} (armor and abilities).`);
+}
+
+/**
+ * What ends with the hero's Concentration on `spell` (srd:rule:concentration: "If the effect's creator loses
+ * Concentration, the effect ends"), for a character that no longer concentrates on it: the Shield of Faith record when
+ * it is that spell (the app counted its +2: endAcSpell), and, for any spell, a reminder when the AC was set by hand for
+ * it (Haste, Slow, an old save's Shield of Faith), which the app can't take out itself. The one helper every path that
+ * ends her Concentration goes through: 0 HP, death and an Incapacitating condition (endConcentration),
+ * setConcentration, a spell removed, a Long Rest and expireConcentration.
+ */
+export function afterConcentrationEnds(c: Character, spell: string): EngineResult {
+  let character = c;
+  const events: GameEvent[] = [];
+  if (acSpellNamed(spell) === 'Shield of Faith' && acSpells(c).includes('Shield of Faith')) {
+    const ended = endAcSpell(c, 'Shield of Faith');
+    character = ended.character;
+    events.push(...ended.events);
+  }
+  const reminder = handSetAcReminder(character, spell);
+  if (reminder) events.push(reminder);
+  return { character, events };
+}
+
+// ---------------------------------------------------------------------------
+// AC from spells (Character.acSpells: Mage Armor, Shield of Faith)
+// ---------------------------------------------------------------------------
+
+/** The record list in its stored form: AC_SPELL_NAMES order, absent when empty. */
+function withAcSpells(c: Character, list: readonly AcSpellName[]): Character {
+  const kept = AC_SPELL_NAMES.filter((n) => list.includes(n));
+  const next: Character = { ...c, acSpells: kept };
+  if (!kept.length) delete next.acSpells;
+  return next;
+}
+
+function notAnAcSpell(name: string): string {
+  const given = typeof name === 'string' ? name.replace(/\s+/g, ' ').trim() : '';
+  return `The app counts AC only for Mage Armor and Shield of Faith${given ? `, not ${given}` : ''}.`;
+}
+
+/** The armor the hero wears, known or not (srd:spell:mage-armor: "a willing creature who isn't wearing armor"). */
+function armorWorn(c: Character, catalog: readonly EquipmentOption[]): InventoryItem | undefined {
+  return wornArmor(c.inventory, catalog).known.find((w) => w.stats.kind === 'armor')?.item ?? unknownWornArmor(c, catalog);
+}
+
+/**
+ * A record changed: the AC follows through syncArmorClass, and one plain event says so ("Mage Armor: AC 12 → 15",
+ * "Mage Armor ends: AC 15 → 12", "…: AC stays 17"); its warnings stay.
+ */
+function acSpellChange(before: Character, after: Character, label: string, catalog: readonly EquipmentOption[]): EngineResult {
+  const synced = syncArmorClass(before, after, catalog);
+  const from = before.armorClass;
+  const to = synced.character.armorClass;
+  return {
+    character: touch(synced.character),
+    events: [
+      gameEvent('combat', `${label}: ${from === to ? `AC stays ${to}` : `AC ${from} → ${to}`}`),
+      ...synced.events.filter((e) => e.type === 'warning'),
+    ],
+  };
+}
+
+/**
+ * Record an AC spell on the hero; the AC follows (syncArmorClass): Mage Armor's base 13 + Dexterity, used while no
+ * armor is worn and no other base AC is higher (srd:spell:mage-armor; srd:rule:armor-class), Shield of Faith's +2
+ * (srd:spell:shield-of-faith). The same spell twice is one record (srd:rule:casting-spells-effects-combining-spell-
+ * effects). A name the app doesn't count, one already recorded, and Mage Armor on a hero wearing armor change nothing,
+ * with a warning.
+ */
+export function addAcSpell(c: Character, name: string, catalog: readonly EquipmentOption[] = []): EngineResult {
+  const spell = acSpellNamed(name);
+  if (!spell) return unchanged(c, notAnAcSpell(name));
+  const list = acSpells(c);
+  if (list.includes(spell)) return unchanged(c, `${spell} is already recorded.`);
+  if (AC_SPELLS[spell].base !== undefined) {
+    const armor = armorWorn(c, catalog);
+    if (armor) return unchanged(c, `${spell} needs a target who isn't wearing armor: ${c.name.trim() || 'the hero'} wears ${armor.name}.`);
+  }
+  return acSpellChange(c, withAcSpells(c, [...list, spell]), spell, catalog);
+}
+
+/** End a recorded AC spell; the AC follows (syncArmorClass). One that isn't recorded changes nothing, with a warning. */
+export function endAcSpell(c: Character, name: string, catalog: readonly EquipmentOption[] = []): EngineResult {
+  const spell = acSpellNamed(name);
+  if (!spell) return unchanged(c, notAnAcSpell(name));
+  const list = acSpells(c);
+  if (!list.includes(spell)) return unchanged(c, `${spell} isn't recorded.`);
+  return acSpellChange(c, withAcSpells(c, list.filter((n) => n !== spell)), `${spell} ends`, catalog);
 }

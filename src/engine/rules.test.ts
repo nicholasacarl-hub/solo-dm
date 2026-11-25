@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import type { Attack, Character, EquipmentOption, Feature, ImportedRef, InventoryItem, PlayerRollRequest, SkillBonus } from '@/types';
+import type { AcSpellName, Attack, Character, EquipmentOption, Feature, ImportedRef, InventoryItem, PlayerRollRequest, SkillBonus } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import { applyAttackRollRules, manualD20Result } from './dice';
 import {
+  AC_SPELLS,
   abilityCheckModifier,
   abilityModifier,
+  acSpellNamed,
+  acSpells,
   attackAbilityModifier,
   attackBonus,
   attackCritRange,
@@ -12,6 +15,7 @@ import {
   attackScaling,
   characterLevel,
   computeArmorClass,
+  countedAcSpells,
   isFightingStyle,
   deathSaveModifier,
   effectiveSpeed,
@@ -613,13 +617,17 @@ describe('syncArmorClass (SRD 5.2.1 Armor table, Armor Class; Ring of Protection
     expect(r.events).toEqual([{ type: 'combat', message: 'AC 12 → 16 (Chain Mail 16)' }]);
   });
 
-  it('keeps an AC set by hand (e.g. Mage Armor) and reports the computed value', () => {
-    const mageArmor = { ...fighter, armorClass: 15 };
-    const r = syncArmorClass(mageArmor, wearing(mageArmor, { name: 'Ring of Protection', category: 'magic-item', attuned: true }));
+  it("keeps an AC set by hand (an effect the app doesn't count, such as Haste) and reports the computed value", () => {
+    const hasted = { ...fighter, armorClass: 15 };
+    const r = syncArmorClass(hasted, wearing(hasted, { name: 'Ring of Protection', category: 'magic-item', attuned: true }));
     expect(r.character.armorClass).toBe(15);
-    expect(r.events).toHaveLength(1);
-    expect(r.events[0].type).toBe('warning');
-    expect(r.events[0].message).toMatch(/^AC kept at 15: .*Gear and features now give AC 13 \(10 \+ DEX 2 \+ Ring of Protection 1\)/);
+    expect(r.events).toEqual([
+      {
+        type: 'warning',
+        message:
+          "AC kept at 15: it differs from the 12 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 13 (10 + DEX 2 + Ring of Protection 1); update the AC if that is right.",
+      },
+    ]);
   });
 
   it("is silent when the computed AC doesn't change, and flags armor it can't identify", () => {
@@ -634,6 +642,186 @@ describe('syncArmorClass (SRD 5.2.1 Armor table, Armor Class; Ring of Protection
     const worn = wearing(fighter, { name: 'Mithral Plate', category: 'armor', compendiumId: 'hb:armor:mithral' });
     expect(syncArmorClass(fighter, worn, catalog).character.armorClass).toBe(18);
     expect(syncArmorClass(fighter, worn).character.armorClass).toBe(12); // unknown without the catalog: kept
+  });
+});
+
+describe('AC from spells: Mage Armor and Shield of Faith (srd:spell:mage-armor; srd:spell:shield-of-faith; srd:rule:armor-class)', () => {
+  const fighter = mira({ armorTraining: ['Light armor', 'Medium armor', 'Heavy armor', 'Shields'] });
+  /** In Chain Mail, AC 16 worked out from it. */
+  const mailed = (patch: Partial<Character> = {}) => wearing({ ...fighter, armorClass: 16, acFormula: 'Chain Mail 16', ...patch }, { name: 'Chain Mail', category: 'armor' });
+  const withSpells = (c: Character, ...names: AcSpellName[]): Character => ({ ...c, acSpells: names });
+
+  it('counts each spell as its text says, by its exact name only', () => {
+    // srd:spell:mage-armor: "Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier."
+    // srd:spell:shield-of-faith: "granting it a +2 bonus to AC for the duration".
+    expect(AC_SPELLS).toEqual({ 'Mage Armor': { base: 13 }, 'Shield of Faith': { bonus: 2 } });
+    expect(['mage armor', 'MAGE-ARMOR', ' Shield of Faith '].map(acSpellNamed)).toEqual(['Mage Armor', 'Mage Armor', 'Shield of Faith']);
+    // Never a looser match: "Shield" (the spell) isn't Shield of Faith.
+    for (const name of ['Shield', 'Shield of Faith (2nd level)', 'Haste', 'Barkskin', '']) expect(acSpellNamed(name), name).toBeUndefined();
+  });
+
+  it('reads the records leniently: known names once each, in a fixed order', () => {
+    const stored = ['Shield of Faith', 'mage armor', 'Mage Armor', 'Haste', 3, null] as unknown as AcSpellName[];
+    expect(acSpells({ acSpells: stored })).toEqual(['Mage Armor', 'Shield of Faith']);
+    expect(acSpells({ acSpells: 'Mage Armor' as unknown as AcSpellName[] })).toEqual([]);
+    expect(acSpells({})).toEqual([]);
+  });
+
+  it('Mage Armor is one more base AC, used without armor (srd:spell:mage-armor: "who isn\'t wearing armor")', () => {
+    expect(computeArmorClass(withSpells(mira(), 'Mage Armor'))).toEqual({ ac: 15, formula: 'Mage Armor: 13 + DEX 2' });
+    // Armor worn: not counted (and not ended: the record stays, and counts again once the armor is off).
+    expect(computeArmorClass(withSpells(mailed(), 'Mage Armor'))).toEqual({ ac: 16, formula: 'Chain Mail 16' });
+    expect(countedAcSpells({ acSpells: ['Mage Armor'], acFormula: 'Chain Mail 16' })).toEqual([]);
+  });
+
+  it('Mage Armor competes with Unarmored Defense and Draconic Resilience: one base AC only, the best (srd:rule:armor-class: "you choose which calculation to use; you can\'t use more than one")', () => {
+    // srd:rule:barbarian-unarmored-defense: 10 + DEX + CON, "You can use a Shield and still gain this benefit."
+    const barbarian = (con: number, ...items: Array<Partial<InventoryItem> & { name: string }>) =>
+      wearing(
+        withSpells(
+          mira({
+            abilityScores: { str: 16, dex: 14, con, int: 8, wis: 10, cha: 10 },
+            armorTraining: ['Light armor', 'Medium armor', 'Shields'],
+            classes: [{ classId: 'srd:class:barbarian', name: 'Barbarian', level: 1, hitDie: 12, casterType: 'none' }],
+          }),
+          'Mage Armor',
+        ),
+        ...items,
+      );
+    // CON 16: Unarmored Defense 15 ties with Mage Armor 15, and the feature keeps the AC (the spell adds nothing).
+    expect(computeArmorClass(barbarian(16))).toEqual({ ac: 15, formula: 'Unarmored Defense: 10 + DEX 2 + CON 3' });
+    expect(computeArmorClass(barbarian(18)).formula).toBe('Unarmored Defense: 10 + DEX 2 + CON 4');
+    expect(computeArmorClass(barbarian(12))).toEqual({ ac: 15, formula: 'Mage Armor: 13 + DEX 2' });
+    expect(computeArmorClass(barbarian(12, { name: 'Shield', category: 'shield' }))).toEqual({ ac: 17, formula: 'Mage Armor: 13 + DEX 2 + Shield 2' });
+    // srd:rule:monk-unarmored-defense: 10 + DEX + WIS "While you aren't wearing armor or wielding a Shield".
+    const monk = (wis: number, ...items: Array<Partial<InventoryItem> & { name: string }>) =>
+      wearing(
+        mira({
+          abilityScores: { str: 10, dex: 16, con: 12, int: 8, wis, cha: 10 },
+          classes: [{ classId: 'srd:class:monk', name: 'Monk', level: 2, hitDie: 8, casterType: 'none' }],
+          armorTraining: ['Shields'],
+        }),
+        ...items,
+      );
+    expect(computeArmorClass(withSpells(monk(16), 'Mage Armor'))).toEqual({ ac: 16, formula: 'Unarmored Defense: 10 + DEX 3 + WIS 3' });
+    expect(computeArmorClass(withSpells(monk(12), 'Mage Armor'))).toEqual({ ac: 16, formula: 'Mage Armor: 13 + DEX 3' });
+    // With a Shield the Monk's Unarmored Defense goes, and Mage Armor (which allows one) is the best base left.
+    const shield = { name: 'Shield', category: 'shield' as const };
+    expect(computeArmorClass(monk(16, shield)).ac).toBe(15);
+    expect(computeArmorClass(withSpells(monk(16, shield), 'Mage Armor'))).toEqual({ ac: 18, formula: 'Mage Armor: 13 + DEX 3 + Shield 2' });
+    // srd:rule:sorcerer-draconic-sorcery-draconic-resilience: 10 + DEX + CHA "While you aren't wearing armor".
+    const sorcerer = (cha: number) =>
+      withSpells(
+        mira({
+          classes: [{ classId: 'srd:class:sorcerer', name: 'Sorcerer', level: 3, hitDie: 6, casterType: 'full', spellcastingAbility: 'cha', subclass: 'Draconic Sorcery', subclassId: 'srd:subclass:draconic-sorcery' }],
+          features: [],
+          inventory: [],
+          abilityScores: { str: 8, dex: 14, con: 13, int: 10, wis: 12, cha },
+        }),
+        'Mage Armor',
+      );
+    expect(computeArmorClass(sorcerer(18))).toEqual({ ac: 16, formula: 'Draconic Resilience: 10 + DEX 2 + CHA 4' });
+    expect(computeArmorClass(sorcerer(16)).formula).toBe('Draconic Resilience: 10 + DEX 2 + CHA 3');
+    expect(computeArmorClass(sorcerer(10))).toEqual({ ac: 15, formula: 'Mage Armor: 13 + DEX 2' });
+  });
+
+  it('items still add to Mage Armor: Bracers of Defense without a Shield, a Ring of Protection (srd:magic-item:bracers-of-defense; srd:magic-item:ring-of-protection)', () => {
+    const bracers = { name: 'Bracers of Defense', category: 'magic-item' as const, attuned: true };
+    const ring = { name: 'Ring of Protection', category: 'magic-item' as const, attuned: true };
+    const trained = withSpells(mira({ armorTraining: ['Shields'] }), 'Mage Armor');
+    expect(computeArmorClass(wearing(trained, bracers))).toEqual({ ac: 17, formula: 'Mage Armor: 13 + DEX 2 + Bracers of Defense 2' });
+    expect(computeArmorClass(wearing(trained, bracers, { name: 'Shield', category: 'shield' })).formula).toBe('Mage Armor: 13 + DEX 2 + Shield 2');
+    expect(computeArmorClass(wearing(trained, ring))).toEqual({ ac: 16, formula: 'Mage Armor: 13 + DEX 2 + Ring of Protection 1' });
+  });
+
+  it('Shield of Faith adds 2 to whatever the AC is worked out from, after the items', () => {
+    expect(computeArmorClass(withSpells(mailed(), 'Shield of Faith'))).toEqual({ ac: 18, formula: 'Chain Mail 16 + Shield of Faith 2' });
+    const shielded = wearing(withSpells(fighter, 'Shield of Faith'), { name: 'Chain Mail', category: 'armor' }, { name: 'Shield', category: 'shield' });
+    expect(computeArmorClass(shielded)).toEqual({ ac: 20, formula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2' });
+    const ring: InventoryItem = { id: 'r', name: 'Ring of Protection', quantity: 1, magic: true, attuned: true, bonuses: { ac: 1 } };
+    const both = withSpells(mira({ inventory: [ring], features: [] }), 'Mage Armor', 'Shield of Faith');
+    expect(computeArmorClass(both)).toEqual({ ac: 18, formula: 'Mage Armor: 13 + DEX 2 + Ring of Protection 1 + Shield of Faith 2' });
+    expect(countedAcSpells({ ...both, acFormula: computeArmorClass(both).formula })).toEqual(['Mage Armor', 'Shield of Faith']);
+    // Armor the app can't identify: the stored AC stands, records or not (syncArmorClass moves it by the bonus).
+    const elven = wearing({ ...withSpells(fighter, 'Shield of Faith'), armorClass: 17 }, { name: 'Elven Chain', category: 'armor' });
+    expect(computeArmorClass(elven).ac).toBe(17);
+  });
+
+  it('counts a spell as in the AC only when its part is in the formula', () => {
+    expect(countedAcSpells({ acSpells: ['Mage Armor', 'Shield of Faith'], acFormula: 'set by the DM: Haste + Shield of Faith 2' })).toEqual(['Shield of Faith']);
+    // An old save's hand-set formula names a spell without its part; a part without a record isn't one.
+    expect(countedAcSpells({ acSpells: ['Mage Armor'], acFormula: 'set by the DM: Mage Armor' })).toEqual([]);
+    expect(countedAcSpells({ acFormula: 'Mage Armor: 13 + DEX 2' })).toEqual([]);
+    expect(countedAcSpells({ acSpells: ['Shield of Faith'] })).toEqual([]);
+  });
+
+  describe("syncArmorClass's one AC rule for a spell recorded or ended", () => {
+    it('a derived AC becomes the AC worked out: Shield of Faith adds 2, and ending it takes them off', () => {
+      const up = syncArmorClass(mailed(), withSpells(mailed(), 'Shield of Faith'));
+      expect(up.character).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield of Faith 2' });
+      expect(up.events).toEqual([{ type: 'combat', message: 'AC 16 → 18 (Chain Mail 16 + Shield of Faith 2)' }]);
+      const down = syncArmorClass(up.character, withSpells(up.character));
+      expect(down.character).toMatchObject({ armorClass: 16, acFormula: 'Chain Mail 16' });
+    });
+
+    it('an AC set by hand moves by +2 and −2, its formula keeping the part ("set by the DM: Haste + Shield of Faith 2")', () => {
+      // A hand-set Haste 18 on gear that gives 16 (srd:spell:haste: "+2 bonus to Armor Class"), then Shield of Faith: 20.
+      const hasted = mailed({ armorClass: 18, acFormula: 'set by the DM: Haste' });
+      const up = syncArmorClass(hasted, withSpells(hasted, 'Shield of Faith'));
+      expect(up.character).toMatchObject({ armorClass: 20, acFormula: 'set by the DM: Haste + Shield of Faith 2' });
+      expect(up.events).toEqual([{ type: 'combat', message: 'AC 18 → 20 (Shield of Faith +2)' }]);
+      expect(countedAcSpells(up.character)).toEqual(['Shield of Faith']);
+      const down = syncArmorClass(up.character, withSpells(up.character));
+      expect(down.character).toMatchObject({ armorClass: 18, acFormula: 'set by the DM: Haste' });
+      expect(down.events).toEqual([{ type: 'combat', message: 'AC 20 → 18 (Shield of Faith −2)' }]);
+    });
+
+    it('armor the app can\'t identify moves by +2 and −2 too, though computeArmorClass keeps the stored AC', () => {
+      const elven = wearing({ ...fighter, armorClass: 17, acFormula: 'Elven Chain (stats unknown — AC kept at 17)' }, { name: 'Elven Chain', category: 'armor' });
+      const up = syncArmorClass(elven, withSpells(elven, 'Shield of Faith'));
+      expect(up.character).toMatchObject({ armorClass: 19, acFormula: 'Elven Chain (stats unknown — AC kept at 17) + Shield of Faith 2' });
+      expect(up.events).toEqual([{ type: 'combat', message: 'AC 17 → 19 (Shield of Faith +2)' }]);
+      const down = syncArmorClass(up.character, withSpells(up.character));
+      expect(down.character).toMatchObject({ armorClass: 17, acFormula: 'Elven Chain (stats unknown — AC kept at 17)' });
+      expect(down.events).toEqual([{ type: 'combat', message: 'AC 19 → 17 (Shield of Faith −2)' }]);
+      // Mage Armor adds no bonus, and doesn't count in armor: nothing moves.
+      expect(syncArmorClass(elven, withSpells(elven, 'Mage Armor'))).toEqual({ character: withSpells(elven, 'Mage Armor'), events: [] });
+    });
+
+    it("an old save's hand-set AC that already counted the spell is kept, once (srd:rule:casting-spells-effects-combining-spell-effects: the same spell's effects \"don't combine\")", () => {
+      // AC 18 "set by the DM: Shield of Faith" on gear that gives 16: recording the spell keeps 18 and makes it derived.
+      const old = mailed({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith' });
+      const r = syncArmorClass(old, withSpells(old, 'Shield of Faith'));
+      expect(r).toEqual({ character: { ...withSpells(old, 'Shield of Faith'), acFormula: 'Chain Mail 16 + Shield of Faith 2' }, events: [] });
+      expect(countedAcSpells(r.character)).toEqual(['Shield of Faith']);
+      // From then on ending it takes the 2 off once.
+      expect(syncArmorClass(r.character, withSpells(r.character)).character).toMatchObject({ armorClass: 16, acFormula: 'Chain Mail 16' });
+      // An old save's Mage Armor 15 (base 13 + DEX 2) is kept the same way.
+      const robe = mira({ armorClass: 15, acFormula: 'set by the DM: Mage Armor' });
+      expect(syncArmorClass(robe, withSpells(robe, 'Mage Armor'))).toEqual({ character: { ...withSpells(robe, 'Mage Armor'), acFormula: 'Mage Armor: 13 + DEX 2' }, events: [] });
+    });
+
+    it('Mage Armor over an AC set by hand for something else: kept, with what gear, features and spells now give', () => {
+      const hasted = mira({ armorClass: 14, acFormula: 'set by the DM: Haste' });
+      const r = syncArmorClass(hasted, withSpells(hasted, 'Mage Armor'));
+      expect(r.character.armorClass).toBe(14);
+      expect(r.events).toEqual([
+        {
+          type: 'warning',
+          message:
+            "AC kept at 14: it differs from the 12 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 15 (Mage Armor: 13 + DEX 2); update the AC if that is right.",
+        },
+      ]);
+    });
+
+    it('equipping armor over Mage Armor leaves the record: it stops counting, and counts again when the armor comes off', () => {
+      const robe = withSpells(mira({ armorTraining: ['Heavy armor'], armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2' }), 'Mage Armor');
+      const armored = syncArmorClass(robe, wearing(robe, { name: 'Chain Mail', category: 'armor' }));
+      expect(armored.character).toMatchObject({ armorClass: 16, acFormula: 'Chain Mail 16', acSpells: ['Mage Armor'] });
+      expect(countedAcSpells(armored.character)).toEqual([]);
+      const off = syncArmorClass(armored.character, { ...armored.character, inventory: [] });
+      expect(off.character).toMatchObject({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2' });
+    });
   });
 });
 

@@ -93,6 +93,14 @@ export interface Combatant {
   hidden?: boolean;
   /** It has used its Reaction since its last turn began. Cleared in advanceFrom when its turn starts. */
   reactionUsed?: boolean;
+  /**
+   * NPCs and monsters only: the spell it concentrates on (srd:rule:concentration) and, while the app counts it, how many
+   * of its turn starts the spell still lasts through (it ends at the start of its turn when that reaches 0). Never on
+   * the hero: her Concentration is the sheet's (Spellcasting.concentratingOn); see concentrationCountdown.
+   */
+  concentration?: { spell: string; roundsLeft?: number };
+  /** The hero (sheet-backed combatants): the countdown for the sheet's Concentration, which counts only while `spell` names the sheet's. */
+  concentrationCountdown?: { spell: string; roundsLeft: number };
 }
 
 export interface CombatState {
