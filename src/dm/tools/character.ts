@@ -1239,13 +1239,13 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
     );
   }
   // A spell the rules data says needs no Concentration never becomes the hero's (as update_combat refuses it for NPCs);
-  // the same spell again is the one held, else the sheet's own (this call's spells_add included), else the data's
-  // name for it (heroConcentration).
+  // the same spell again is the one held, else the sheet's own (this call's spells_add included, its spells_remove
+  // left out), else the data's name for it (heroConcentration).
   let concentration = input.concentration;
   let rounds: number | undefined;
   if (typeof input.concentration === 'string') {
     const spells = (input.spells_add ?? []).map((s) => s.name);
-    const named = await heroConcentration(ctx, ctx.deps.store().character, input.concentration, spells);
+    const named = await heroConcentration(ctx, ctx.deps.store().character, input.concentration, spells, input.spells_remove ?? []);
     if (named.refused) throw new ToolInputError(named.refused);
     concentration = named.label;
     rounds = named.rounds;

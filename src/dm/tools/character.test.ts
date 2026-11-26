@@ -1732,6 +1732,222 @@ describe("the hero's no-Concentration refusal reads the name as given, never a n
       // Neither the data nor the sheet knows it: nothing to count.
       expect(await heroConcentration(laughter.ctx, laughter.sheet(), 'Veil of Thorns')).toEqual({ refused: null, label: 'Veil of Thorns' });
     });
+
+    describe('a noted name read as its spell, the sheet\'s exact name, the call\'s spells_remove and the label\'s refusal (spell effects round 4)', () => {
+      /** The fight with the hero's countdown already running on `spell`. */
+      const counting = (spell: string, roundsLeft: number): CombatState => {
+        const combat = sampleCombat();
+        combat.combatants[0] = { ...combat.combatants[0], concentrationCountdown: { spell, roundsLeft } };
+        return combat;
+      };
+
+      it('ends the +2 of a Shield of Faith recorded under a sheet copy\'s noted name on every end, taking it to be the hero\'s own casting (H1/HN1/HX1; srd:spell:shield-of-faith: "Concentration, up to 10 minutes", "a +2 bonus to AC for the duration"; srd:rule:concentration: "If the effect\'s creator loses Concentration, the effect ends")', async () => {
+        const scroll = { name: 'Shield of Faith (scroll)', level: 1 };
+        const added = 'Concentrating on Shield of Faith (scroll).\nAdded spell: Shield of Faith (scroll) (level 1, prepared)\nShield of Faith (scroll): about 10 minutes left.';
+        // The copy the sheet holds, read by the spell's name; TD1's one call, naming the spell or the copy.
+        const starts: [string, Character, Record<string, unknown>, string][] = [
+          ['the sheet\'s copy', holding([copy('Shield of Faith (scroll)', 'copy-sof')]), { concentration: 'Shield of Faith' }, 'Concentrating on Shield of Faith (scroll).\nShield of Faith (scroll): about 10 minutes left.'],
+          ['one call', holding([]), { spells_add: [scroll], concentration: 'Shield of Faith' }, added],
+          ['one call, the copy named', holding([]), { spells_add: [scroll], concentration: 'Shield of Faith (scroll)' }, added],
+        ];
+        const ended = 'Shield of Faith ends: AC 14 → 12';
+        type Run = ReturnType<typeof withSrdSpells>;
+        const ends: [string, (h: Run) => Promise<{ text: string; after: Character }>, string][] = [
+          ['null', async (h) => ({ text: said((await h.run('update_character', { concentration: null })).content), after: h.sheet() }), `No longer concentrating on Shield of Faith (scroll).\n${ended}`],
+          [
+            '40 damage',
+            async (h) => ({ text: said((await h.run('update_character', { hp: { amount: 40, kind: 'damage' } })).content), after: h.sheet() }),
+            `HP 12 → 0 (40 damage) — massive damage: 28 left over is at least the HP maximum (17). Dies instantly.\nConcentration on Shield of Faith (scroll) ends (death).\n${ended}`,
+          ],
+          [
+            'another spell',
+            async (h) => ({ text: said((await h.run('update_character', { concentration: 'Detect Magic' })).content), after: h.sheet() }),
+            `Concentration on Shield of Faith (scroll) ends (started concentrating on Detect Magic).\n${ended}\nConcentrating on Detect Magic.\nDetect Magic: about 10 minutes left.`,
+          ],
+          [
+            "the sheet's Stop",
+            async (h) => {
+              const r = concentrationChange(h.sheet(), null);
+              return { text: r.notice ?? '', after: r.character };
+            },
+            `Player ended concentration on Shield of Faith (scroll); ${ended}; if Shield of Faith still protects the hero, record it again with ac_spells_add`,
+          ],
+          [
+            'the countdown',
+            async (h) => {
+              await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Shield of Faith', rounds: 1 });
+              let text = '';
+              // Bandit 1's turn now: Bandit 2's, Old Tam's, then the hero's, whose start finds the round used up.
+              for (let i = 0; i < 3; i++) text = (await h.run('update_combat', { action: 'next_turn' })).content;
+              return { text: text.split('\n').slice(0, 3).join('\n'), after: h.sheet() };
+            },
+            `Round 3: Mira Voss's turn.\nMira Voss's Shield of Faith (scroll) ends: its duration is up.\n${ended}`,
+          ],
+        ];
+        for (const [start, character, call, startText] of starts) {
+          for (const [end, run, endText] of ends) {
+            const h = withSrdSpells({ character, state: { combat: sampleCombat() } });
+            expect(said((await h.run('update_character', call)).content), start).toBe(startText);
+            const recorded = said((await h.run('update_character', { ac_spells_add: ['Shield of Faith'] })).content);
+            expect(recorded, start).toBe(
+              "Shield of Faith: AC 12 → 14\nMira Voss is concentrating on Shield of Faith, so the app takes this +2 to be that casting: it ends with Mira Voss's Concentration.",
+            );
+            expect(recorded).not.toContain("isn't concentrating");
+            expect(h.sheet()).toMatchObject({ armorClass: 14, acSpells: ['Shield of Faith'], spellcasting: { concentratingOn: 'Shield of Faith (scroll)' } });
+            const { text, after } = await run(h);
+            expect(text, `${start}, ${end}`).toBe(endText);
+            expect(after, `${start}, ${end}`).toMatchObject({ armorClass: 12, acFormula: '10 + DEX 2' });
+            expect(after).not.toHaveProperty('acSpells');
+          }
+        }
+      });
+
+      it('reminds the DM of an AC set by hand for Haste when a Concentration on a sheet copy\'s "Haste (scroll)" ends, from the DM\'s end and the sheet\'s, whose area clause names Haste (H1/HX2; srd:spell:haste: "it gains a +2 bonus to Armor Class")', async () => {
+        const h = withSrdSpells({ character: holding([copy('Haste (scroll)', 'copy-haste')]) });
+        expect(said((await h.run('update_character', { concentration: 'Haste' })).content)).toBe('Concentrating on Haste (scroll).');
+        expect(said((await h.run('update_character', { armor_class: 14, reason: 'Haste' })).content)).toBe('AC 12 → 14');
+        expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Haste' });
+        const reminder = 'AC 14 was set by hand for Haste (scroll): if it counted Haste (scroll), set the AC back to 12 (armor and abilities).';
+        expect(concentrationChange(h.sheet(), null).notice).toBe(
+          `Player ended concentration on Haste (scroll); if it left an area on the map, end it with update_map effects_end ["Haste"] (it ends every area of that name) — ${reminder}`,
+        );
+        expect(said((await h.run('update_character', { concentration: null })).content)).toBe(`No longer concentrating on Haste (scroll).\nWarning: ${reminder}`);
+        expect(h.sheet().armorClass).toBe(14);
+      });
+
+      it('names a Bandit\'s Paralyzed sourced "Hold Person" and an area labelled "Hold Person" when a Concentration on a sheet copy\'s "Hold Person (scroll)" ends, never removing them (H1; srd:spell:hold-person: "The target must succeed on a Wisdom saving throw or have the Paralyzed condition for the duration"; srd:rule:concentration: "If the effect\'s creator loses Concentration, the effect ends")', async () => {
+        const base = sampleMappedCombat({ heroTurn: true });
+        const map = base.map as NonNullable<CombatState['map']>;
+        // An area the DM placed on Bandit 1's square (F4) and labelled after the spell.
+        const area: MapEffect = {
+          id: 'e20',
+          label: 'Hold Person',
+          spec: { shape: 'squares', rects: [{ x0: 5, y0: 3, x1: 5, y1: 3 }], fromId: 'c-1' },
+          rects: [{ x0: 5, y0: 3, x1: 5, y1: 3 }],
+          terrain: [],
+          duration: 'lasting',
+          round: 2,
+          turnOfId: 'c-1',
+        };
+        const paralyzed = [{ id: 'paralyzed', source: 'Hold Person' }];
+        const combat = { ...base, combatants: base.combatants.map((c) => (c.name === 'Bandit 1' ? { ...c, conditions: paralyzed } : c)), map: { ...map, effects: [area] } };
+        const h = withSrdSpells({ character: holding([copy('Hold Person (scroll)', 'copy-1')]), state: { combat } });
+        expect(said((await h.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Concentrating on Hold Person (scroll).\nHold Person (scroll): 10 rounds left.');
+        // The sheet's Stop: the area clause names the spell without the note (the sheet sees no fight).
+        expect(concentrationChange(h.sheet(), null).notice).toBe(
+          'Player ended concentration on Hold Person (scroll); if it left an area on the map, end it with update_map effects_end ["Hold Person"] (it ends every area of that name)',
+        );
+        expect(said((await h.run('update_character', { concentration: null })).content)).toBe(
+          [
+            'No longer concentrating on Hold Person (scroll).',
+            'Still on the map: Hold Person (F4) — if it was this spell\'s, end it with update_map effects_end ["Hold Person"].',
+            'Bandit 1 is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_combat conditions.',
+          ].join('\n'),
+        );
+        expect(h.s().combat?.map?.effects).toHaveLength(1);
+        expect(h.s().combat?.combatants.find((c) => c.name === 'Bandit 1')?.conditions).toEqual(paralyzed);
+      });
+
+      it('matches a noted name to the sheet copy under a book\'s longer name: recorded as the copy, and while it is held a recast (H4/HN3; srd:spell:hideous-laughter: "Concentration, up to 1 minute", "Using a Higher-Level Spell Slot")', async () => {
+        for (const library of [[LAUGHTER_ENTRY], []]) {
+          // Bandit 1 laughing (srd:spell:hideous-laughter: "it has the Prone and Incapacitated conditions for the duration").
+          const combat = sampleCombat();
+          combat.combatants[1] = { ...combat.combatants[1], conditions: [{ id: 'incapacitated', source: LAUGHTER }] };
+          const h = withSrdSpells({ character: holding([LAUGHTER_COPY]), state: { combat } }, library);
+          expect(said((await h.run('update_character', { concentration: 'Hideous Laughter' })).content)).toBe(`Concentrating on ${LAUGHTER}.\n${LAUGHTER}: 10 rounds left.`);
+          await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: LAUGHTER, rounds: 3 });
+          // Cast again with a 2nd-level slot: nothing ends, no condition is named, the count restarts.
+          expect(said((await h.run('update_character', { concentration: 'Hideous Laughter (2nd level)' })).content)).toBe(`${LAUGHTER}: 10 rounds left.`);
+          expect(h.sheet().spellcasting?.concentratingOn).toBe(LAUGHTER);
+          expect(heroCountdown(h)).toEqual({ spell: LAUGHTER, roundsLeft: 10 });
+          // update_combat reads the noted name the same way.
+          const rounds = await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Hideous Laughter (2nd level)', rounds: 4 });
+          expect(rounds.content.split('\n')[0]).toBe(`Mira Voss's ${LAUGHTER}: 4 rounds left.`);
+          // The noted name alone records the copy, so the Spells tab's toggle shows it held.
+          const first = withSrdSpells({ character: holding([LAUGHTER_COPY]) }, library);
+          expect(said((await first.run('update_character', { concentration: 'Hideous Laughter (2nd level)' })).content)).toBe(`Concentrating on ${LAUGHTER}.`);
+          expect(concentrationChange(first.sheet(), LAUGHTER)).toEqual({ character: first.sheet(), notice: null, warning: null });
+        }
+      });
+
+      it('casts the sheet\'s spell of exactly the name given when the rules data finds it and the spell held as two entries, so the held one ends; the documented merge and a scroll\'s copy stay recasts (H5/HN5/HX3; srd:rule:concentration: "You lose Concentration on an effect the moment you start casting a spell that requires Concentration"; srd:spell:polymorph and srd:spell:true-polymorph: "Concentration, up to 1 hour"; srd:spell:conjure-elemental and srd:spell:conjure-minor-elementals: "Concentration, up to 10 minutes")', async () => {
+        const poly = withSrdSpells({ character: holding([held('True Polymorph', 'Wizard'), held('Polymorph', 'Wizard')], 'True Polymorph'), state: { combat: counting('True Polymorph', 7) } });
+        expect(said((await poly.run('update_character', { concentration: 'Polymorph' })).content)).toBe(
+          'Concentration on True Polymorph ends (started concentrating on Polymorph).\nConcentrating on Polymorph.\nPolymorph: about 60 minutes left.',
+        );
+        expect(poly.sheet().spellcasting?.concentratingOn).toBe('Polymorph');
+        expect(heroCountdown(poly)).toEqual({ spell: 'Polymorph', roundsLeft: 600 });
+        // The Conjure pair, and update_combat afterwards counts the spell now held.
+        const conjure = withSrdSpells({
+          character: holding([held('Conjure Minor Elementals', 'Wizard'), held('Conjure Elemental', 'Wizard')], 'Conjure Minor Elementals'),
+          state: { combat: counting('Conjure Minor Elementals', 7) },
+        });
+        expect(said((await conjure.run('update_character', { concentration: 'Conjure Elemental' })).content)).toBe(
+          'Concentration on Conjure Minor Elementals ends (started concentrating on Conjure Elemental).\nConcentrating on Conjure Elemental.\nConjure Elemental: about 10 minutes left.',
+        );
+        const counted = await conjure.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Conjure Elemental', rounds: 5 });
+        expect(counted.content.split('\n')[0]).toBe("Mira Voss's Conjure Elemental: 5 rounds left.");
+        expect(heroCountdown(conjure)).toEqual({ spell: 'Conjure Elemental', roundsLeft: 5 });
+        // A spell the same call adds is the sheet's too: Polymorph copied into the spellbook and cast at once.
+        const copied = withSrdSpells({ character: holding([held('True Polymorph', 'Wizard')], 'True Polymorph'), state: { combat: counting('True Polymorph', 7) } });
+        const cast = await copied.run('update_character', { spells_add: [{ name: 'Polymorph', level: 4 }], concentration: 'Polymorph' });
+        expect(said(cast.content)).toBe(
+          'Concentration on True Polymorph ends (started concentrating on Polymorph).\nConcentrating on Polymorph.\nAdded spell: Polymorph (level 4, prepared)\nPolymorph: about 60 minutes left.',
+        );
+        // Only the longer on the sheet: the documented merge, a recast of the spell held.
+        const merged = withSrdSpells({ character: holding([held('True Polymorph', 'Wizard')], 'True Polymorph'), state: { combat: counting('True Polymorph', 7) } });
+        expect(said((await merged.run('update_character', { concentration: 'Polymorph' })).content)).toBe('True Polymorph: about 60 minutes left.');
+        expect(merged.sheet().spellcasting?.concentratingOn).toBe('True Polymorph');
+        // A scroll's copy held beside the spell it copies (TD1), its name resolving to that spell's entry or the copy
+        // linked to it: one entry, so the spell's name is a recast.
+        const linkedCopy = { ...held('Hold Person', 'Granted in play'), name: 'Hold Person (scroll)' };
+        for (const spells of [
+          [held('Hold Person', 'Wizard'), copy('Hold Person (scroll)', 'copy-1')],
+          [{ ...copy('Hold Person', 'copy-0'), source: 'Wizard' }, linkedCopy],
+        ]) {
+          const scroll = withSrdSpells({ character: holding(spells, 'Hold Person (scroll)'), state: { combat: counting('Hold Person (scroll)', 3) } });
+          expect(said((await scroll.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Hold Person (scroll): 10 rounds left.');
+          expect(scroll.sheet().spellcasting?.concentratingOn).toBe('Hold Person (scroll)');
+        }
+      });
+
+      it('reads the sheet without the rows the same call removes: a used scroll removed as it is read records the spell, which goes on (H6/HN2; srd:magic-item:spell-scroll: "Once the spell is cast, the scroll crumbles to dust"; srd:rule:concentration)', async () => {
+        const linked = { ...held('Hold Person', 'Granted in play'), name: 'Hold Person (scroll)' };
+        // The scroll removed by its row's name, or by a looser one that row is the only match for (as removeSpell finds it).
+        for (const removed of ['Hold Person (scroll)', 'Hold Person']) {
+          for (const row of [copy('Hold Person (scroll)', 'copy-1'), linked]) {
+            for (const given of ['Hold Person', 'Hold Person (3rd level)', 'Hold Person (scroll)']) {
+              const h = withSrdSpells({ character: holding([row]), state: { combat: sampleCombat() } });
+              const out = await h.run('update_character', { spells_remove: [removed], concentration: given });
+              expect(said(out.content), `${removed}, ${given}`).toBe('Concentrating on Hold Person.\nRemoved spell: Hold Person (scroll)\nHold Person: 10 rounds left.');
+              expect(h.sheet().spellcasting?.concentratingOn).toBe('Hold Person');
+              expect(h.sheet().spellcasting?.spells.some((s) => s.name.startsWith('Hold Person'))).toBe(false);
+              expect(heroCountdown(h)).toEqual({ spell: 'Hold Person', roundsLeft: 10 });
+            }
+          }
+        }
+      });
+
+      it('refuses a loose name that resolves to the spell the same call adds when that spell needs no Concentration, as two calls do, before anything is written (H7/HN6; srd:spell:mage-armor: "Duration: 8 hours")', async () => {
+        const refusal = 'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"].';
+        for (const fight of [false, true]) {
+          const h = withSrdSpells({ character: holding([]), ...(fight ? { state: { combat: sampleCombat() } } : {}) });
+          const start = h.sheet();
+          const combat = h.s().combat;
+          expect(await h.run('update_character', { spells_add: [{ name: 'Mage Armor', level: 1 }], concentration: 'Armor' })).toEqual({ isError: true, content: refusal });
+          expect(h.sheet()).toBe(start);
+          expect(h.s().combat).toBe(combat);
+          expect(h.s().log).toHaveLength(0);
+          // The same two parts in two calls.
+          await h.run('update_character', { spells_add: [{ name: 'Mage Armor', level: 1 }] });
+          expect(await h.run('update_character', { concentration: 'Armor' })).toEqual({ isError: true, content: refusal });
+        }
+        // The resolved name's own refusal; a name resolved to a spell that needs Concentration goes on ("Faith").
+        const fresh = withSrdSpells({ character: holding([]) });
+        expect((await heroConcentration(fresh.ctx, fresh.sheet(), 'Armor', ['Mage Armor'])).refused).toBe(refusal);
+        expect(await heroConcentration(fresh.ctx, fresh.sheet(), 'Faith', ['Shield of Faith'])).toEqual({ refused: null, label: 'Shield of Faith', rounds: 100 });
+      });
+    });
   });
 });
 

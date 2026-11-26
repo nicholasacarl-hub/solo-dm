@@ -797,6 +797,23 @@ describe("update_combat concentrate on the hero: only the countdown of the sheet
       content: "Mage Armor doesn't require Concentration (Duration: 8 hours).",
     });
   });
+
+  it("never gives the rounds of the sheet's other spell of exactly the name given to the spell held (H5/HX3; srd:spell:conjure-elemental and srd:spell:conjure-minor-elementals: \"Concentration, up to 10 minutes\"; srd:rule:concentration: \"You lose Concentration on an effect the moment you start casting a spell that requires Concentration\")", async () => {
+    const sc = sampleCharacter().spellcasting!;
+    const minor = srdKnown('srd:spell:conjure-minor-elementals', 'Conjure Minor Elementals', 4, 'Wizard', true);
+    const conjurer = (spells: KnownSpell[]) => sampleCharacter({ spellcasting: { ...sc, spells: [...sc.spells, ...spells], concentratingOn: 'Conjure Minor Elementals' } });
+    const both = withSrdSpells({ character: conjurer([minor, srdKnown('srd:spell:conjure-elemental', 'Conjure Elemental', 5, 'Wizard', true)]), state: { combat: sampleCombat() } });
+    const combat = both.s().combat;
+    expect((await both.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Conjure Elemental', rounds: 2 })).content).toBe(
+      'Mira Voss is concentrating on Conjure Minor Elementals, not Conjure Elemental: for the hero, concentrate only sets rounds (spell "Conjure Minor Elementals" with rounds); update_character concentration starts or ends the hero\'s Concentration.',
+    );
+    expect(both.s().combat).toBe(combat);
+    // With only the longer on the sheet the two are read as one, as documented: its rounds.
+    const only = withSrdSpells({ character: conjurer([minor]), state: { combat: sampleCombat() } });
+    expect(firstLine((await only.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Conjure Elemental', rounds: 2 })).content)).toBe(
+      "Mira Voss's Conjure Minor Elementals: 2 rounds left.",
+    );
+  });
 });
 
 describe('update_combat damage: the Constitution save the app rolls (srd:rule:concentration, Damage)', () => {
@@ -1140,6 +1157,35 @@ describe("what the app names with a spell's end (§3.5), never removing it", () 
     const out = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null });
     expect(out.content).toContain('Mira Voss\'s Shield of Faith +2: if it was Cultist Fanatic\'s, end it with update_character ac_spells_end ["Shield of Faith"].');
     expect(out.content).not.toContain('was set by hand for Shield of Faith');
+  });
+
+  it("gives no AC set by hand line when an NPC's Concentration on Mage Armor, recorded without the rules data, ends: the spell needs none (H8/HX5; srd:spell:mage-armor: \"Duration: 8 hours\")", async () => {
+    /** The rules index is down when the Concentration is recorded, so nothing refuses it. */
+    const offline = (opts: HarnessOptions) => {
+      const h = setup(opts);
+      setDmDeps({
+        rulesIndex: async () => {
+          throw new Error('offline');
+        },
+      });
+      const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+      return { ...h, run: (name: string, input: unknown) => runTool(name, input, ctx) };
+    };
+    for (const spell of ['Mage Armor', 'Mage Armor (scroll)']) {
+      const h = offline({ character: sampleCharacter({ armorClass: 15, acFormula: `set by the DM: ${spell} from Old Tam` }), state: { combat: sampleCombat() } });
+      expect(firstLine((await h.run('update_combat', { action: 'concentrate', target: 'Old Tam', spell })).content)).toBe(
+        `Old Tam is concentrating on ${spell} (no countdown: ${spell} isn't a spell in the rules data — give rounds to count it).`,
+      );
+      const out = await h.run('update_combat', { action: 'concentrate', target: 'Old Tam', spell: null });
+      expect(out.content.split('\n').slice(0, 2)).toEqual([`Old Tam stops concentrating on ${spell}.`, '']);
+      expect(out.content).not.toContain('set by hand');
+    }
+    // Another spell the AC was set by hand for keeps its line (srd:spell:haste: "it gains a +2 bonus to Armor Class").
+    const hasted = offline({ character: sampleCharacter({ armorClass: 15, acFormula: 'set by the DM: Haste from Old Tam' }), state: { combat: sampleCombat() } });
+    await hasted.run('update_combat', { action: 'concentrate', target: 'Old Tam', spell: 'Haste' });
+    expect((await hasted.run('update_combat', { action: 'concentrate', target: 'Old Tam', spell: null })).content).toContain(
+      "Old Tam stops concentrating on Haste.\nMira Voss's AC 15 was set by hand for Haste: if it counted Haste, set armor_class back to 12 (armor and abilities).",
+    );
   });
 });
 

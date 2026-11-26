@@ -75,6 +75,8 @@ export {
 } from '@/engine/spellEffects';
 export { addAcSpell, concentrationSaveDC, endAcSpell, expireConcentration } from '@/engine/character';
 export { AC_SPELLS, acSpellNamed, acSpells, countedAcSpells, handSetNames } from '@/engine/rules';
+// A name less its trailing note ("Hold Person (scroll)" is Hold Person): the engine's one rule, as the DM tools read it.
+export { withoutNote } from '@/engine/util';
 import { roundsLeftText } from '@/engine/spellEffects';
 // get_entry's budget is the sheet's real field limit.
 export { SHEET_TEXT_MAX } from '@/engine/summary';

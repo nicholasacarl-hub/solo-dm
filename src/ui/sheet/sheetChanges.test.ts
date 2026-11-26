@@ -486,6 +486,41 @@ describe('Concentration ended from the sheet tells the DM what ended with it', (
       'Player ended concentration on Web; if it left an area on the map, end it with update_map effects_end ["Web"] (it ends every area of that name)',
     );
   });
+
+  // H1: a Concentration recorded under a sheet copy's noted name (a Spell Scroll's "Hold Person (scroll)",
+  // srd:magic-item:spell-scroll) is that spell's. The area clause names the spell without the note, an AC spell's copy
+  // gets none (srd:spell:shield-of-faith: "a +2 bonus to AC for the duration"; srd:spell:mage-armor: "Duration: 8
+  // hours"), and the hero's own condition sourced by the spell is named by that source (srd:spell:invisibility: "A
+  // creature you touch has the Invisible condition until the spell ends").
+  it("reads a sheet copy's noted name as its spell: the area clause without the note, none for an AC spell's copy, the hero's condition by its source (H1; srd:spell:hold-person; srd:spell:shield-of-faith; srd:spell:invisibility)", () => {
+    expect(concentrationChange(concentrating(sampleCharacter(), 'Hold Person (scroll)'), null).notice).toBe(
+      'Player ended concentration on Hold Person (scroll); if it left an area on the map, end it with update_map effects_end ["Hold Person"] (it ends every area of that name)',
+    );
+    // srd:spell:web: "The webs fill a 20-foot Cube there for the duration."
+    expect(damageChange(concentrating(sampleCharacter(), 'Web (scroll)'), 12).notice).toBe(
+      'Player changed HP 12 → 0 (12 damage) — dropped to 0 HP; Concentration on Web (scroll) ends (Unconscious); if it left an area on the map, end it with update_map effects_end ["Web"] (it ends every area of that name)',
+    );
+    // A Shield of Faith copy's +2 ends with it, and it left no area.
+    const faith = withAcSpells(concentrating(sampleCharacter(), 'Shield of Faith (scroll)'), 'Shield of Faith');
+    expect(faith).toMatchObject({ armorClass: 14, acSpells: ['Shield of Faith'] });
+    const ended = concentrationChange(faith, null);
+    expect(ended.character.armorClass).toBe(12);
+    expect(ended.notice).toBe(
+      'Player ended concentration on Shield of Faith (scroll); Shield of Faith ends: AC 14 → 12; if Shield of Faith still protects the hero, record it again with ac_spells_add',
+    );
+    // An older save's Concentration on a Mage Armor copy: no area, no reminder (the spell needs no Concentration).
+    expect(concentrationChange(concentrating(sampleCharacter({ armorClass: 15, acFormula: 'set by the DM: Mage Armor' }), 'Mage Armor (scroll)'), null).notice).toBe(
+      'Player ended concentration on Mage Armor (scroll)',
+    );
+    const invisible = concentrating(sampleCharacter({ conditions: [{ id: 'invisible', source: 'Invisibility' }] }), 'Invisibility (scroll)');
+    expect(concentrationChange(invisible, null).notice).toBe(
+      'Player ended concentration on Invisibility (scroll); Mira Voss is Invisible (source: Invisibility): if the spell caused it, remove it with update_character conditions_remove; if it left an area on the map, end it with update_map effects_end ["Invisibility"] (it ends every area of that name)',
+    );
+    // A name that is only a note is no spell's: the clause names it as it is.
+    expect(concentrationChange(concentrating(sampleCharacter(), '(scroll)'), null).notice).toBe(
+      'Player ended concentration on (scroll); if it left an area on the map, end it with update_map effects_end ["(scroll)"] (it ends every area of that name)',
+    );
+  });
 });
 
 // srd:spell:mage-armor: "The spell ends early if the target dons armor"; srd:rule:armor: Light Armor takes "1 Minute to

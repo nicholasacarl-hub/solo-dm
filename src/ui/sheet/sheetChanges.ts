@@ -34,7 +34,7 @@ import {
   type ConditionNaming,
   type HpMaxChange,
 } from '@/engine';
-import { namesPhrase } from '@/engine/util';
+import { namesSpell, withoutNote } from '@/engine/util';
 import {
   bookSpellsOf,
   classSpellRules,
@@ -130,13 +130,14 @@ function concentrationEnded(before: Character, after: Character, events: readonl
 
 /**
  * "Mira Voss is Invisible (source: Invisibility)": a condition that names the ended spell, and the field that names
- * it, as the DM's tools word it (a homebrew one `has "Glowing"`), on one line.
+ * it, as the DM's tools word it (a homebrew one `has "Glowing"`), on one line. The source may name the spell without
+ * its note, as conditionsNaming reads it ("Invisibility" for a sheet copy's "Invisibility (scroll)").
  */
 function conditionNamingText(n: ConditionNaming, spell: string): string {
   const { id, source, duration } = n.condition;
   const standard = matchStandardCondition(id);
   const state = standard && standard.id === conditionKey(id) ? `is ${conditionName(id)}` : `has "${id.trim()}"`;
-  const detail = namesPhrase(source, spell) ? `source: ${source?.trim()}` : `duration: ${duration?.trim() ?? ''}`;
+  const detail = namesSpell(source, spell) ? `source: ${source?.trim()}` : `duration: ${duration?.trim() ?? ''}`;
   return `${n.who} ${state} (${detail})`.replace(/\s+/g, ' ');
 }
 
@@ -144,9 +145,11 @@ function conditionNamingText(n: ConditionNaming, spell: string): string {
  * A notice with what ended with the hero's Concentration, on its one line: the engine's words (but the end itself when
  * the notice already says it), a hint to record a Shield of Faith that still protects a living hero again (the sheet
  * can't tell the hero's own casting from another caster's), each of the hero's conditions that names the spell, with
- * the call that removes it, one conditional clause for an area the spell may have left (Shield of Faith leaves none),
- * then the reminder about an AC set by hand for the spell. The sheet can't see the map, so it can't tell the hero's
- * area from another caster's of the same name: the clause says the call ends every area of that name (RX4).
+ * the call that removes it, one conditional clause for an area the spell may have left (Shield of Faith and Mage Armor
+ * leave none, a sheet copy's "Shield of Faith (scroll)" included), named by the spell without its note (a sheet copy's
+ * "Hold Person (scroll)" leaves an area labelled "Hold Person"), then the reminder about an AC set by hand for the
+ * spell. The sheet can't see the map, so it can't tell the hero's area from another caster's of the same name: the
+ * clause says the call ends every area of that name (RX4).
  */
 function withConcentrationEnd(head: string, ended: ConcentrationEnded, { endSaid }: { endSaid: boolean }): string {
   const clauses = endSaid ? ended.said.slice(1) : [...ended.said];
@@ -155,7 +158,7 @@ function withConcentrationEnd(head: string, ended: ConcentrationEnded, { endSaid
     clauses.push(`${conditionNamingText(n, ended.spell)}: if the spell caused it, remove it with update_character conditions_remove`);
   }
   if (!acSpellNamed(ended.spell)) {
-    clauses.push(`if it left an area on the map, end it with update_map effects_end ${JSON.stringify([ended.spell])} (it ends every area of that name)`);
+    clauses.push(`if it left an area on the map, end it with update_map effects_end ${JSON.stringify([withoutNote(ended.spell)])} (it ends every area of that name)`);
   }
   return `${[head, ...clauses].join('; ')}${ended.forDm.length ? ` — ${ended.forDm.join(' ')}` : ''}`;
 }
