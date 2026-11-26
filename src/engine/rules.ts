@@ -646,8 +646,9 @@ export function countedAcSpells(c: Pick<Character, 'acSpells' | 'acFormula'>): A
 
 /**
  * What an AC the engine worked out (computeArmorClass's `formula`) holds, in a warning's words: "armor and abilities",
- * with the recorded AC spells that formula counts ("armor, abilities and Shield of Faith"), so the words never say a
- * number holds less than it does (srd:spell:shield-of-faith: "a +2 bonus to AC for the duration").
+ * with the recorded AC spells that formula counts ("armor, abilities and Shield of Faith"), so the words never leave out
+ * an AC spell the number holds (srd:spell:shield-of-faith: "a +2 bonus to AC for the duration"). An item's or a
+ * feature's part (a Ring of Protection's +1, the Defense style's) is in the number unnamed.
  */
 export function workedOutWords(c: Pick<Character, 'acSpells'>, formula: string): string {
   return listJoin(['armor', 'abilities', ...countedAcSpells({ acSpells: c.acSpells, acFormula: formula })]);

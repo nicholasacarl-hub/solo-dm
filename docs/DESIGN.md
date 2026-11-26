@@ -413,18 +413,19 @@ of Faith 2" at 18); otherwise the reworded warning. A hand-set or unknown-armor 
 Armor's record ends or armor goes on; since no change in number takes a base out, when Mage Armor's end leaves a
 hand-set AC that counted it where it was and gear, features and the AC spells still recorded give that same number, the
 DM is warned to set it again if it still includes Mage Armor, in words that name a Shield of Faith that number counts
-(another number gets the kept-AC warning); one `ac_spells_end` ends Shield of Faith before Mage Armor, as a Long Rest
-does. `armor_class` sent with `ac_spells_add` or `ac_spells_end` is refused (the spells first, then the AC), and
-restating the AC kept for unknown armor keeps the counted parts. The hero's Shield of Faith ends with the hero's
-Concentration on every path (`afterConcentrationEnds`: 0 HP, death, an Incapacitating condition, another spell, removing
-the spell, a Long Rest, the countdown), except the sheet's spell swaps (at a level-up, after a Long Rest), which keep
-the Concentration and the record: SRD Concentration lists what ends it, and a swap isn't among them. A Long Rest ends
-both, Shield of Faith first (Mage Armor's 8 hours), and reminds once about an AC set by hand for an unrecorded Mage
-Armor. The concentration chip folds in only Shield of Faith, and its × and the Spells tab's Stop ask twice while it
-carries the +2 (the Stop's label adds "not counted" when the AC doesn't count it, as the chip does). The status line
-reads "AC 17 (Mage Armor, Shield of Faith)" and the DM's combat view "Concentrating: Hold Person (7 rounds left)" /
-"Bless: 7 rounds left"; the player's view adds nothing. Without records, prompts, `<game_state>`, summaries and the
-sheet text are byte for byte as before.
+(another number gets the kept-AC warning); one `ac_spells_end` ends the recorded spells first, Shield of Faith before
+Mage Armor, then answers a name with no record (its reminder worked out on the AC the ends leave), as a Long Rest does.
+`armor_class` sent with `ac_spells_add` or `ac_spells_end` is refused (the spells first, then the AC), and restating the
+AC kept for unknown armor keeps the counted parts. The hero's Shield of Faith ends with the hero's Concentration on
+every path (`afterConcentrationEnds`: 0 HP, death, an Incapacitating condition, another spell, removing the spell, a
+Long Rest, the countdown), except the sheet's spell swaps (at a level-up, after a Long Rest), which keep the
+Concentration and the record: SRD Concentration lists what ends it, and a swap isn't among them. A Long Rest ends both,
+Shield of Faith first (Mage Armor's 8 hours), and reminds once about an AC set by hand for an unrecorded Mage Armor. The
+concentration chip folds in only Shield of Faith, and its × and the Spells tab's Stop ask twice while it carries the +2
+(the Stop's label adds "not counted" when the AC doesn't count it, as the chip does). The status line reads "AC 17 (Mage
+Armor, Shield of Faith)" and the DM's combat view "Concentrating: Hold Person (7 rounds left)" / "Bless: 7 rounds left";
+the player's view adds nothing. Without records, prompts, `<game_state>`, summaries and the sheet text are byte for byte
+as before.
 
 **Spell choices at a level-up.** What a class may still choose is never stored: `owedSpells`
 (src/data/options/spellPicks.ts) works it out whenever it is read, from the class table and the sheet, the SRD's way

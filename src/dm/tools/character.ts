@@ -1044,16 +1044,25 @@ const hasAcSpells = (input: ToolInput<'update_character'>): boolean => Boolean(i
  * ac_spells_end then ac_spells_add, the call's last step: after refreshArmorClass (which they don't trigger), so the
  * engine's AC rule (syncArmorClass) works on a settled AC and nothing speaks after an old save's hand-set AC turns
  * counted. Each name is its own warning when it can't apply, never a failed call. A record this same call ended (its
- * Concentration on Shield of Faith ended earlier in the call) is not reported as not recorded. The ends run bonus spells
- * first, then Mage Armor, as the Long Rest ends them, so a base's end is judged on the AC the others leave (one call
+ * Concentration on Shield of Faith ended earlier in the call) is not reported as not recorded. The ends run as the Long
+ * Rest's do: the recorded bonus spells, then a recorded base, then the AC spells with no record (their reminder about an
+ * AC set by hand is then worked out on the AC the ends leave), so each is judged on the AC the others leave (one call
  * ending both, as Dispel Magic does: srd:spell:dispel-magic, "Any ongoing spell of level 3 or lower on the target ends").
+ * A list with a name the app doesn't count keeps the DM's order (it then names one AC spell at most).
  */
 function acSpellStep(start: Character, c: Character, input: ToolInput<'update_character'>, catalog: readonly EquipmentOption[]): EngineResult {
   let character = c;
   const events: GameEvent[] = [];
   const endedHere = acSpells(start).filter((n) => !acSpells(c).includes(n));
-  const isBase = (name: string) => Number(acSpellNamed(name) === 'Mage Armor');
-  const ends = [...(input.ac_spells_end ?? [])].sort((a, b) => isBase(a) - isBase(b));
+  const held = acSpells(c);
+  const rank = (name: string): number | undefined => {
+    const spell = acSpellNamed(name);
+    if (spell === undefined) return undefined;
+    if (!held.includes(spell)) return 2;
+    return AC_SPELLS[spell].base !== undefined ? 1 : 0;
+  };
+  const given = input.ac_spells_end ?? [];
+  const ends = given.every((n) => rank(n) !== undefined) ? [...given].sort((a, b) => (rank(a) ?? 0) - (rank(b) ?? 0)) : [...given];
   for (const name of ends) {
     const spell = acSpellNamed(name);
     if (spell && endedHere.includes(spell)) continue;

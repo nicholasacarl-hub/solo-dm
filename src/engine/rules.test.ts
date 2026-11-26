@@ -1381,6 +1381,11 @@ describe('AC from spells: Mage Armor and Shield of Faith (srd:spell:mage-armor; 
       expect(workedOutWords(armored, computeArmorClass(armored).formula)).toBe('armor, abilities and Shield of Faith');
       // A record whose part isn't in the formula given isn't named.
       expect(workedOutWords(robed, '10 + DEX 2')).toBe('armor and abilities');
+      // Only AC spells are named: an item's part is in the number unnamed (X6-2; srd:magic-item:ring-of-protection: "You
+      // gain a +1 bonus to Armor Class and saving throws while wearing this ring").
+      const ringed = withSpells(wearing(mira(), { name: 'Ring of Protection', category: 'magic-item', attuned: true }), 'Shield of Faith');
+      expect(computeArmorClass(ringed)).toEqual({ ac: 15, formula: '10 + DEX 2 + Ring of Protection 1 + Shield of Faith 2' });
+      expect(workedOutWords(ringed, computeArmorClass(ringed).formula)).toBe('armor, abilities and Shield of Faith');
     });
   });
 });
