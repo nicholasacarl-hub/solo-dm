@@ -473,6 +473,65 @@ with open choices settle them as the sheet's form does (`settleSpellPicks`: clos
 level's swaps lapse), and `update_character` says so; `take_rest long` says which classes may change prepared spells,
 and that a book spell is prepared by name; a re-added spell keeps its source and prepared flag.
 
+**Lineage spells.** An Elf's Elven Lineage and a Tiefling's Fiendish Legacy give a spell at character levels 3 and 5
+(srd:species:elf: "When you reach character levels 3 and 5, you learn a higher-level spell"). At a level-up (the dialog
+or the DM's `level_up`), the lineage the species trait's feature names ("Elven Lineage (Drow)") gives the spells its
+option's own "Level 3:" and "Level 5:" tags name, up to the character level (`lineageSpellGrants`,
+src/data/options/spellPicks.ts). They join `levelSpellsEdit` as extra always-prepared grants, so the same count adds
+them, or turns one the sheet holds as a pick always prepared, with the lineage as their source and its cantrip's
+spellcasting ability and the free casting in their notes. Names come from the rules index: a cantrip tag is skipped, and
+one the index doesn't find is listed as missing, under its own name only when that reads like a name (otherwise "a spell
+the app couldn't read from Drow's table"), so a book's words never reach the transcript. Each lineage spell the sheet
+then holds always prepared gets its free casting as a feature, "Faerie Fire (free casting)" (one use, regained on a Long
+Rest, spent with `features_use`), unless the DM already counts it (a feature with uses named for the spell) or has ruled
+the trait's own uses, which the result names. The dialog's notice adds "free casting once per Long Rest: Faerie Fire
+(Drow)" and `level_up` a line on how to spend it. A hero already past character level 3 or 5 catches up at its next
+level-up (nothing runs at load); a level whose spell edit doesn't run (a class the builder data lacks) adds neither the
+spells nor the castings, and a later one adds both.
+
+**Speed from class features.** `Character.speed` stays the hero's own walking Speed (species or lineage, a
+transformation's change, a DM's ruling); the class features that raise it are worked out whenever it is read, never
+stored (`speedDetails`, src/engine/rules.ts). Unarmored Movement gives +10 ft at Monk 2, growing to +30 ft at 18 (the
+Monk Features table), while the Monk wears no armor and wields no Shield (the Martial Arts test: armor the app can't
+identify counts as armor); Fast Movement at Barbarian 5 and Roving at Ranger 6 give +10 ft each out of Heavy armor (a
+Shield doesn't stop them, and armor the app can't identify withholds them, saying so). Class levels count by
+`rulesClassFor` (a 2024 book's class stands in; an older-edition one gets none), and a multiclass hero's bonuses add up.
+Dead, a condition that makes the Speed 0 and a stored Speed of 0 stay 0 ("can't increase"); otherwise the bonuses come
+first, then heavy armor below its Strength and Exhaustion. The app's ruling, not SRD text: a standing bonus raises the
+walking Speed only, Roving's Climb and Swim Speeds equal the Speed after penalties (by their own words), and a penalty
+still reaches every speed on the map. Every reader takes these numbers: the map (`heroSpeeds`: the walk is the higher of
+the raised Speed and a granted walk, less the penalties, and Dash follows), the status line ("Speed 45 ft (Unarmored
+Movement)", printed for a hero with one of the features even while gear suspends it), the sheet text ("45 ft (base 30
+ft; Unarmored Movement: +15 ft)", or "(base 30 ft; Unarmored Movement: no +15 ft in armor or with a Shield)"), the Speed
+tile (the base and the danger border only below the raised Speed; its title and a screen reader get the notes), Senses &
+size (Roving's speeds), the gear notices ("AC 13 → 12; Speed 45 → 30 ft", for any hero whose Speed the change moves), a
+level-up ("Speed 40 ft → 45 ft (Unarmored Movement)": the engine's event, the dialog's notice and Summary, `level_up`'s
+result) and `update_character` speed, whose result says the number it sets is the Speed before class features and quotes
+the sheet's ("Mira Voss's Speed is now 55 ft (base 40 ft; Unarmored Movement: +15 ft)"). A Speed the DM raised by hand
+for one of these features before the app counted them now gets the bonus on top: the app keeps no record of why a Speed
+was set, so it leaves the number, and the sheet's base and the status line's bonus put it in front of the DM.
+
+**Counted features at a level-up.** A class feature named with its use count ("Indomitable (two uses)"; in SRD 5.2.1
+only the Fighter's Action Surge and Indomitable) is one entry that grows in place. A counted family is a class's own
+entries of one base name (`baseFeatureName`), at least one of which the class names with a count: an entry it holds, a
+new feature at this level, or, on the DM's path, the SRD table's row. A DM's own counted label beside a class feature
+named without one ("Wild Shape (2 uses)" beside the Druid's "Wild Shape") is no family. Engine `levelUp` collapses each
+family after the level's features join (`collapseCountedFamilies`): the earliest of the class's entries stays (its id,
+place and text) under the newest name and count, keeping the uses spent (no more than the count before), and the others
+go, "Granted in play" entries of the base or a counted name (the app's reminder names those) among them. An entry with
+the DM's ruled uses is kept with its ruling instead, and one whose uses follow its class table (a book Fighter's
+"Indomitable", by-table scale) keeps its own name and scale, a higher count from another entry becoming the DM's ruling
+on it. An older sheet's duplicates merge at its next level-up ("Indomitable (one use) and Indomitable (two uses) merged
+into Indomitable (two uses): 2 uses, 1 left."), a lone grow reads "Feature uses now: Indomitable (two uses) 1 → 2.", and
+a folded feature is never listed as new or as grown. The DM's `level_up` without `new_features` joins the SRD level's
+counted names to a family the sheet holds, so the entry grows whether the DM lists it or not, and a family the sheet
+lacks keeps the reminder to add it. A lookup by an older counted name finds the family's entry, and `features_add` of a
+counted name rewrites the family's entry only when an entry of it the sheet holds is named with a count (as many uses as
+the name counts is no ruling); otherwise it is added beside, as before ("Rage (3 uses)" beside a Barbarian's "Rage"). A
+book Fighter's bare "Action Surge" and "Indomitable" read their counts from the class table's features column
+("Indomitable (two uses)" at 13; `usesFromCountedCells`), which the dialog reads again after the level, as it reads
+every feature, and the DM's `level_up` before it, so an older save's are right on either path.
+
 ### Player-side controls that talk to the DM
 
 - **OOC:** messages starting with `OOC:` (or sent with the OOC toggle) are answered out of character
@@ -918,7 +977,8 @@ for an SRD class of the same name for its numbers (hit die, level-up reminders).
 by the SRD class's rules (`rulesClassFor`): the Martial Arts die and a Monk's Dexterity for unarmed strikes and Monk
 weapons (`isMonkWeapon`: Simple Melee, or Martial Melee with Light, by the weapon category and type an attack records from
 the catalog, else by its SRD name; in armor or with a Shield the Dexterity and Unarmed Strike die the builder stored for
-Martial Arts go too, a 2014 book's Monk's included), Unarmored Defense, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
+Martial Arts go too, a 2014 book's Monk's included), Unarmored Defense, the Speed of Unarmored Movement, Fast
+Movement and Roving, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
 the edition (`ImportedRef.format`), set when the class is taken and kept in step with the book's record on load
 and after review (`withClassEditions`, `src/data/options/editions.ts`): by the class's id, and otherwise only filled,
 never changed, from a copy of the same text (the book's fingerprint), so another book's class of the name never lends

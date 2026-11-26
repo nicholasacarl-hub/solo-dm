@@ -15,8 +15,26 @@ vibe-coding session.
 
 ## Rules depth
 
-- **Class extras**: Unarmored Movement, lineage spells gained at levels 3 and 5, and replacing
-  "Action Surge (two uses)" / "Indomitable" entries in place at Fighter 13 and 17.
+- **Class and lineage extras the app doesn't count**: a Speed the DM raised by hand for Unarmored Movement, Fast
+  Movement or Roving before the app counted them now gets the bonus on top; the sheet text shows the base and the status
+  line the bonus, and `update_character` speed says the number it sets is the Speed before class features, so the DM
+  sets it back. A Thief's Climb Speed (Second-Story Work) and Gift of the Depths' Swim Speed, each equal to the Speed,
+  are the DM's to record, and Acrobatic Movement isn't on the battle map. Lineage spells: a lineage its book describes
+  in a paragraph rather than a table row, or one from a switched-off book, gives none; a hero already past character
+  level 3 or 5 gets them at its next level-up (a level in a class the builder data lacks adds none; a later one does),
+  and one who won't level again only by hand, since `spells_add` can't mark a spell always prepared; a lineage spell
+  cast with an ability the sheet's spellcasting doesn't use has no save DC on the sheet; and the Spells tab reads "0
+  prepared" for a hero whose leveled spells are all always prepared. Draconic Flight and Large Form get their use at
+  character level 5 through the level-up dialog only, not the DM's `level_up`. Counted uses: a Fighter keeps the
+  duplicate Action Surge and Indomitable entries an older version added until its next level-up here, and an older
+  version on a synced device adds them again at Fighter 13 and 17 and shows the Speed without class features. A book
+  Fighter whose class table counts no uses keeps the uses it reads today. One whose "Indomitable" follows its table gets
+  a second entry from the DM's `features_add` of a counted name ("Indomitable (two uses)"), which no level-up folds, as
+  a DM's "Wild Shape (2 uses)" beside the Druid's "Wild Shape" stays beside it; an older save's bare "Indomitable"
+  without uses, beside a counted entry the DM's `level_up` added, collapses in the level-up dialog under the counted
+  name, which then stops it growing with the table (the DM's `level_up` reads the table first and keeps it); and
+  `level_up` lists a count the table corrects downward ("Action Surge: 2 → 1 uses") among the features that grew. Two
+  classes of one name (an SRD Fighter beside a book's) count as one family.
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
   DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
   Signature Spells, copying a spell into a spellbook and Evocation Savant's free spells (the DM records those as
@@ -123,7 +141,8 @@ The first version of structured imports deliberately leaves these out:
   edition), but a 2014 book's class gets only the name-based ones (Improved Critical, Unarmored Defense from its
   feature, Aura of Protection, Draconic Resilience's Hit Points…): its Martial Arts die stays the one on the sheet (a
   2014 Monk's grows d4 → d6 → d8 → d10), and an unarmed strike off the sheet (a Kick) follows the sheet's Unarmed
-  Strike, or uses Strength when the sheet has none. The engine would need each edition's numbers.
+  Strike, or uses Strength when the sheet has none; and its Unarmored Movement, Fast Movement and Roving add no Speed
+  (the DM records it). The engine would need each edition's numbers.
 - **Hit Points a character missed**: the app doesn't find them itself, so a character keeps the Hit Points it has where
   the app once counted too few: Tough taken at 1st level (an origin feat), in the level-up dialog's feat panel or
   recorded by the DM (features_add) before the app counted it there, or beside a feature of its name before the feat's
@@ -156,9 +175,10 @@ The first version of structured imports deliberately leaves these out:
   and type is recognized as a Monk weapon by its SRD name only, so a book's own blade on such a sheet gets no Martial
   Arts die and keeps the Dexterity the builder gave it in armor or with a Shield.
 - **Magic armor added by name**: an SRD magic armor or shield whose name doesn't name its base item (Mithral Armor,
-  Elven Chain, Sentinel Shield, Animated Shield) is linked as a magic item, not armor: it doesn't change the AC (the
-  DM sets it) and doesn't stop Martial Arts or Unarmored Defense. The link would need the entry's armor category and
-  its base item's numbers, as a book's magic armor gets them.
+  Elven Chain, Sentinel Shield, Animated Shield) is linked as a magic item, not armor: it doesn't change the AC (the DM
+  sets it) and doesn't stop Martial Arts, Unarmored Defense or Unarmored Movement, and a Heavy one (Armor of
+  Invulnerability, Dwarven Plate) doesn't stop Fast Movement or Roving. The link would need the entry's armor category
+  and its base item's numbers, as a book's magic armor gets them.
 - **Telling a book read again from another book**: a hero's class, subclass, species or background whose book is
   switched off or gone is looked up again by its book's fingerprint, then its source and title, then any book's
   option of its name, so another book's option of that name stands in (a 2014 printing for a 2024 one of the same
