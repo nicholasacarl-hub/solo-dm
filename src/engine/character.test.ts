@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Character, Feature, InventoryItem } from '@/types';
+import type { Character, Feature, ImportedRef, InventoryItem } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
 import {
   addAcSpell,
@@ -556,6 +556,15 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     description: 'Reroll a failed saving throw.',
     ...(max ? { uses: { max, used: 0, recharge: 'long' as const } } : {}),
   });
+  /** A book's Fighter of the given edition: a 2024 book's stands in for the SRD Fighter (rulesClassFor), whose table counts Indomitable. */
+  const bookFighter = (level: number, format: ImportedRef['format'] = '2024') => ({
+    classId: 'lib:lantern:class:fighter',
+    name: 'Fighter',
+    level,
+    hitDie: 10 as const,
+    casterType: 'none' as const,
+    ref: { sourceId: 'lantern', sourceTitle: 'The Lanternfall Handbook', entryId: 'lib:lantern:class:fighter', kind: 'class' as const, entryName: 'Fighter', format, textHash: '', textCopied: false },
+  });
 
   it('finds the entry by the name the sheet had when the session began: "Indomitable (one use)" uses "Indomitable (two uses)"', () => {
     const c = fighter([indomitable('ind', 'Indomitable (two uses)', 2)]);
@@ -576,6 +585,8 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     // srd:class:warlock: Mystic Arcanum "(level 6 spell)" and "(level 7 spell)" are two spells, not counts.
     const arcanum: Feature = { id: 'ma6', name: 'Mystic Arcanum (level 6 spell)', source: 'class', sourceName: 'Warlock 11', description: '', uses: { max: 1, used: 0, recharge: 'long' } };
     expect(useFeature(fighter([arcanum]), 'Mystic Arcanum (level 7 spell)').events[0].message).toBe('No feature named "Mystic Arcanum (level 7 spell)".');
+    // Nor does another parenthetical on a counted family's base: a DM's homebrew "Indomitable (Tactical)" isn't Indomitable.
+    expect(useFeature(fighter([indomitable('ind', 'Indomitable (two uses)', 2)]), 'Indomitable (Tactical)').events[0].message).toBe('No feature named "Indomitable (Tactical)".');
   });
 
   it("features_add of the table's name rewrites the family's entry, not a second one; the table's count is no ruling, and clears one", () => {
@@ -605,6 +616,15 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
       ['ind', 'Indomitable (one use)', 1, undefined],
       ['dm', 'Indomitable (two uses)', 2, undefined],
     ]);
+    // An older sheet's class entry beside the DM's of a table name, neither ruled: the class's is rewritten, the one a
+    // level-up keeps (srd:class:fighter table: "| 17 | +6 | Action Surge (two uses), Indomitable (three uses) |").
+    const older = fighter([indomitable('ind', 'Indomitable (one use)', 1), { ...indomitable('dm', 'Indomitable (two uses)', 2), sourceName: 'Granted in play' }]);
+    const three = addFeature(older, tableRow('Indomitable (three uses)', 3));
+    expect(three.events[0].message).toBe('Updated feature: Indomitable (one use) → Indomitable (three uses)');
+    expect(three.character.features.map((f) => [f.id, f.name, f.uses?.max])).toEqual([
+      ['ind', 'Indomitable (three uses)', 3],
+      ['dm', 'Indomitable (two uses)', 2],
+    ]);
   });
 
   it('a counted name beside a class feature no entry names with a count is added beside it as before (srd:class:barbarian Rage, srd:class:druid Wild Shape)', () => {
@@ -629,7 +649,7 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     const scale = { by: 'table' as const, className: 'Fighter', values: [...Array<number>(8).fill(0), 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3] };
     const own = indomitable('ind', 'Indomitable', 2, 1, { uses: { max: 2, used: 1, recharge: 'long', scale } });
     const dm = indomitable('dm', 'Indomitable (one use)', 1, 0, { sourceName: 'Granted in play' });
-    const c = mira({ classes: [{ classId: 'lib:lantern:class:fighter', name: 'Fighter', level: 13, hitDie: 10, casterType: 'none' }], spellcasting: undefined, features: [own, dm] });
+    const c = mira({ classes: [bookFighter(13)], spellcasting: undefined, features: [own, dm] });
     const same = addFeature(c, { ...tableRow('Indomitable (two uses)', 2), description: 'Rewritten.', uses: { max: 2, used: 0, recharge: 'short' } });
     expect(same.character.features).toEqual([{ ...own, description: 'Rewritten.' }, dm]);
     expect(same.events[0].message).toBe('Updated feature: Indomitable');
@@ -651,6 +671,77 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     // The DM's "Indomitable (2/LR)" is no family entry: a counted name doesn't rewrite it.
     const house = fighter([{ ...indomitable('house', 'Indomitable (2/LR)', 2), sourceName: 'Granted in play' }]);
     expect(addFeature(house, tableRow('Indomitable (two uses)', 2)).character.features.map((f) => f.name)).toEqual(['Indomitable (2/LR)', 'Indomitable (two uses)']);
+    // Nor is the class's own entry of another parenthetical (a DM's homebrew "Indomitable (Tactical)" from level_up).
+    const tactical = fighter([{ ...indomitable('tac', 'Indomitable (Tactical)', 1), sourceName: 'Fighter 13' }]);
+    expect(addFeature(tactical, tableRow('Indomitable (two uses)', 2)).character.features.map((f) => f.name)).toEqual(['Indomitable (Tactical)', 'Indomitable (two uses)']);
+  });
+
+  it("a DM's second counted label beside a class feature no table counts by name is added beside too: the class's entry and the DM's first label stay as they are (srd:class:barbarian Rage, srd:class:druid Wild Shape)", () => {
+    // srd:class:barbarian, Rage: "You can enter your Rage the number of times shown for your Barbarian level in the Rages
+    // column of the Barbarian Features table."; srd:class:druid, Wild Shape: "You can use Wild Shape twice." and "You gain
+    // additional uses when you reach certain Druid levels, as shown in the Wild Shape column of the Druid Features table."
+    // Neither table names the feature with a count, so the DM's labels are entries of their own, as they always were.
+    const rages = { by: 'table' as const, className: 'Barbarian', values: [2, 2, 3, 3, 3, 4, 4, 4, 4, 4, 4, 5, 5, 5, 5, 5, 6, 6, 6, 6] };
+    const rage: Feature = { id: 'rage', name: 'Rage', source: 'class', sourceName: 'Barbarian 1', description: 'The SRD text.', uses: { max: 3, used: 1, recharge: 'long', scale: rages } };
+    const barbarian = mira({ classes: [{ classId: 'srd:class:barbarian', name: 'Barbarian', level: 3, hitDie: 12, casterType: 'none' }], spellcasting: undefined, features: [rage] });
+    const shapes = { by: 'table' as const, className: 'Druid', values: [0, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 4, 4] };
+    const shape: Feature = { id: 'ws', name: 'Wild Shape', source: 'class', sourceName: 'Druid 2', description: 'The SRD text.', uses: { max: 2, used: 0, recharge: 'long', scale: shapes } };
+    const druid = mira({ classes: [{ classId: 'srd:class:druid', name: 'Druid', level: 2, hitDie: 8, casterType: 'full', spellcastingAbility: 'wis' }], features: [shape] });
+    for (const [hero, base, first, second] of [
+      [barbarian, 'Rage', 3, 4],
+      [druid, 'Wild Shape', 2, 3],
+    ] as const) {
+      const one = addFeature(hero, { ...tableRow(`${base} (${first} uses)`, first), description: 'The DM label.' }).character;
+      const two = addFeature(one, { ...tableRow(`${base} (${second} uses)`, second), description: 'The DM label, later.' });
+      expect(two.events[0].message).toBe(`Gained feature: ${base} (${second} uses) (${second} uses, recharges on a Long Rest)`);
+      expect(two.character.features.slice(0, 2)).toEqual(one.features);
+      expect(two.character.features[0]).toEqual(hero.features[0]);
+      expect(two.character.features.map((f) => [f.name, f.sourceName, f.uses?.max])).toEqual([
+        [base, hero.features[0].sourceName, hero.features[0].uses?.max],
+        [`${base} (${first} uses)`, 'Granted in play', first],
+        [`${base} (${second} uses)`, 'Granted in play', second],
+      ]);
+    }
+  });
+
+  it("Mira's own Channel Divinity labels stay two entries, and a use by a count the sheet doesn't hold warns as always (srd:rule:cleric-channel-divinity)", () => {
+    // srd:rule:cleric-channel-divinity: "You can use this class's Channel Divinity twice." A Wizard's (the DM's grant) is
+    // the DM's own: no class of Mira's counts it by name.
+    const granted = (name: string, max: number): Feature => ({ id: name, name, source: 'class', sourceName: 'Granted in play', description: 'A boon.', uses: { max, used: 0, recharge: 'long' } });
+    const c = mira({ features: [...mira().features, granted('Channel Divinity (2 uses)', 2)] });
+    const r = addFeature(c, { ...tableRow('Channel Divinity (3 uses)', 3), description: 'A greater boon.' });
+    expect(r.events[0].message).toBe('Gained feature: Channel Divinity (3 uses) (3 uses, recharges on a Long Rest)');
+    expect(r.character.features.slice(-2).map((f) => [f.name, f.uses?.max])).toEqual([
+      ['Channel Divinity (2 uses)', 2],
+      ['Channel Divinity (3 uses)', 3],
+    ]);
+    const used = useFeature(c, 'Channel Divinity (1 use)');
+    expect(used.character).toBe(c);
+    expect(used.events[0]).toMatchObject({ type: 'warning', message: 'No feature named "Channel Divinity (1 use)".' });
+  });
+
+  it("a DM-only Fighter (every entry from features_add): the Fighter's table counts the family by name, so lookups and the table's names find the DM's entries", () => {
+    const granted = (id: string, name: string, max: number, used = 0): Feature => ({ ...indomitable(id, name, max, used), sourceName: 'Granted in play' });
+    const c = fighter([granted('dm', 'Indomitable (two uses)', 2)]);
+    expect(useFeature(c, 'Indomitable (one use)').events[0].message).toBe('Used Indomitable (two uses) (1/2 left; recharges on a Long Rest)');
+    expect(restoreFeature(useFeature(c, 'Indomitable (one use)').character, 'Indomitable (three uses)').events[0].message).toBe('Indomitable (two uses): regained 1 use (2/2)');
+    // The table's next name rewrites it, under that name.
+    const r = addFeature(c, tableRow('Indomitable (three uses)', 3));
+    expect(r.character.features.map((f) => [f.id, f.name, f.uses?.max])).toEqual([['dm', 'Indomitable (three uses)', 3]]);
+  });
+
+  it("an older 2024 book Fighter's bare Indomitable without uses beside the DM's \"Indomitable (one use)\": the table's next name rewrites the DM's entry, and the class's is left to the table's re-read (srd:class:fighter, \"Indomitable (two uses)\" at 13)", () => {
+    // The class's entry from before the app read the table's counts (no uses); the DM's from a features_add at 9.
+    const bare: Feature = { id: 'ind', name: 'Indomitable', source: 'class', sourceName: 'Fighter 9', description: 'The book text.' };
+    const dm = indomitable('dm', 'Indomitable (one use)', 1, 1, { sourceName: 'Granted in play' });
+    const c = mira({ classes: [bookFighter(13)], spellcasting: undefined, features: [bare, dm] });
+    const r = addFeature(c, { ...tableRow('Indomitable (two uses)', 2), description: 'The DM words.' });
+    expect(r.events[0].message).toBe('Updated feature: Indomitable (one use) → Indomitable (two uses)');
+    expect(r.character.features).toEqual([bare, { ...dm, name: 'Indomitable (two uses)', description: 'The DM words.', uses: { max: 2, used: 1, recharge: 'long' } }]);
+    // An older-edition book's Fighter doesn't stand in for the SRD's: its table's counts aren't the app's to read, so the
+    // name is added beside as for any family no one counts.
+    const older = { ...c, classes: [bookFighter(13, '2014')] };
+    expect(addFeature(older, tableRow('Indomitable (two uses)', 2)).character.features.map((f) => f.name)).toEqual(['Indomitable', 'Indomitable (one use)', 'Indomitable (two uses)']);
   });
 });
 

@@ -30,6 +30,7 @@ import {
 import { nameKey, newId } from '@/lib/id';
 import { safeEnd } from '@/lib/text';
 import { wornArmor } from './armorData';
+import { rulesClassFor } from './classData';
 import { CONDITIONS, INCAPACITATING_CONDITIONS, conditionKey, conditionName, matchStandardCondition } from './conditions';
 import { levelForXp, scaledUsesMax } from './progression';
 import {
@@ -906,24 +907,59 @@ export function featureClassOf(f: Pick<Feature, 'source' | 'sourceName'>, classe
 }
 
 /**
+ * A name an entry of the counted family whose base name is `base` has: the base alone ("Indomitable") or with a use
+ * count ("Indomitable (two uses)"), as the class table and the app's level-up reminder name it. Another parenthetical
+ * ("Indomitable (Tactical)", "Indomitable (2/LR)") is a feature of its own.
+ */
+export function familyNamed(name: string, base: string): boolean {
+  return nameKey(featureBaseName(name)) === nameKey(base) && (nameKey(name) === nameKey(base) || nameUseCount(name) !== null);
+}
+
+/**
  * The DM's entry of a counted family whose base name is `base`: a class feature "Granted in play" (features_add) named
  * as the app's level-up reminder names the table's rows, "<base>" or "<base> (N use(s))".
  */
 export function isGrantedFamilyEntry(f: Pick<Feature, 'name' | 'source' | 'sourceName'>, base: string): boolean {
   if (f.source !== 'class' || nameKey(f.sourceName ?? '') !== 'granted-in-play') return false;
-  return nameKey(featureBaseName(f.name)) === nameKey(base) && (nameKey(f.name) === nameKey(base) || nameUseCount(f.name) !== null);
+  return familyNamed(f.name, base);
+}
+
+/**
+ * The hero's class that counts `base` by name: one whose rules table (rulesClassFor: the SRD class, or the SRD class a
+ * 2024 book's class stands in for) names "<base> (N use(s))" at some level. In SRD 5.2.1 only the Fighter's, for
+ * Action Surge and Indomitable (the Fighter Features table: "Action Surge (one use)" at 2, "Action Surge (two uses)" at
+ * 17; "Indomitable (one use)" at 9, "(two uses)" at 13, "(three uses)" at 17). Undefined for any other base, and for an
+ * older-edition book's class (its table can count otherwise).
+ */
+export function classCountingByName(classes: readonly ClassLevel[], base: string): ClassLevel | undefined {
+  const key = nameKey(base);
+  return classes.find((cl) =>
+    rulesClassFor(cl)?.featuresByLevel.some((names) => names.some((name) => nameUseCount(name) !== null && nameKey(featureBaseName(name)) === key)),
+  );
+}
+
+/**
+ * The entries of the counted family whose base name is `base` (features_add's rewrite, a lookup by an older counted
+ * name): the class features of that base one of the hero's classes owns (featureClassOf) and the DM's
+ * (isGrantedFamilyEntry), named "<base>" or "<base> (N use(s))" only (familyNamed), when the family is counted: one
+ * of the class's own is named with a count, or the hero's class counts the base by name (classCountingByName). Empty
+ * otherwise: a DM's counted label beside a class feature named without one ("Rage (3 uses)" beside a Barbarian's
+ * "Rage", a second "Channel Divinity (3 uses)" beside the first) is its own entry.
+ */
+function countedFamily(c: Character, base: string): Feature[] {
+  const own = (f: Feature) => featureClassOf(f, c.classes) !== undefined;
+  const members = c.features.filter((f) => (own(f) && familyNamed(f.name, base)) || isGrantedFamilyEntry(f, base));
+  const counted = members.some((f) => own(f) && nameUseCount(f.name) !== null) || classCountingByName(c.classes, base) !== undefined;
+  return counted ? members : [];
 }
 
 /**
  * For a name with a trailing use count ("Indomitable (one use)", as the sheet a session began with names it): the
- * entries of its counted family on the sheet (the class features of its base name, one of them named with a count;
- * after a level-up, the one entry renamed by the table: "Indomitable (two uses)"). Empty for any other name.
+ * entries of its counted family on the sheet (countedFamily; after a level-up, the one entry renamed by the table:
+ * "Indomitable (two uses)"). Empty for any other name.
  */
 function countedFamilyEntries(c: Character, name: string): Feature[] {
-  if (nameUseCount(name) === null) return [];
-  const base = nameKey(featureBaseName(name));
-  const family = c.features.filter((f) => f.source === 'class' && nameKey(featureBaseName(f.name)) === base);
-  return family.some((f) => nameUseCount(f.name) !== null) ? family : [];
+  return nameUseCount(name) === null ? [] : countedFamily(c, featureBaseName(name));
 }
 
 /** Find a feature by (fuzzy, case-insensitive) name. */
@@ -1114,10 +1150,13 @@ const storesNumbers = (f: Pick<Feature, 'name' | 'source'>): boolean => isAlertF
  * beside it, as the level-up panel's feat does. A feat whose numbers the sheet stores (Alert, Tough) stays the feat: a
  * species trait or class feature of its name joins beside it too, so its numbers are never left without it, nor paid
  * again when the feat is recorded after. A name with a use count that no feature has ("Indomitable (two uses)", as the
- * level-up reminder names the table's row) rewrites its counted family's entry instead of adding a second one, when an
- * entry the sheet holds is named with a count ("Indomitable (one use)"): the DM's ruling of its uses first, else the
- * class's own entry ("Fighter 9"), else the DM's (isGrantedFamilyEntry), as a level-up keeps one. Beside a class feature
- * no entry names with a count ("Rage (3 uses)" beside a Barbarian's "Rage") it is added as any other name is.
+ * level-up reminder names the table's row) rewrites an entry of its counted family (countedFamily: one of the class's
+ * own entries named with a count, or a class whose table counts it by name, SRD 5.2.1's Fighter) instead of adding a
+ * second one: the DM's ruling of its uses first, else the class's own entry named with a count ("Fighter 9"), else the
+ * class's own entry whose uses follow its class table (tableCounted, a 2024 book's "Indomitable": it keeps its name),
+ * else the DM's named with a count (isGrantedFamilyEntry), else the class's own, as a level-up keeps one. Beside a class
+ * feature of a family no one counts ("Rage (3 uses)" beside a Barbarian's "Rage", or beside the DM's "Rage (2 uses)")
+ * it is added as any other name is.
  */
 export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | 'source'>): Feature | undefined {
   const name = feature.name.trim();
@@ -1130,12 +1169,17 @@ export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | '
   };
   const exact = c.features.find((f) => nameKey(f.name) === nameKey(name) && fits(f));
   if (exact || nameUseCount(name) === null) return exact;
-  const base = featureBaseName(name);
-  const family = c.features.filter(
-    (f) => fits(f) && nameKey(featureBaseName(f.name)) === nameKey(base) && (featureClassOf(f, c.classes) !== undefined || isGrantedFamilyEntry(f, base)),
+  const family = countedFamily(c, featureBaseName(name)).filter(fits);
+  const own = (f: Feature) => featureClassOf(f, c.classes) !== undefined;
+  const counted = (f: Feature) => nameUseCount(f.name) !== null;
+  return (
+    family.find((f) => f.uses?.ruled) ??
+    family.find((f) => own(f) && counted(f)) ??
+    family.find((f) => own(f) && tableCounted(c, f) !== null) ??
+    family.find((f) => !own(f) && counted(f)) ??
+    family.find(own) ??
+    family[0]
   );
-  if (!family.some((f) => nameUseCount(f.name) !== null)) return undefined;
-  return family.find((f) => f.uses?.ruled) ?? family.find((f) => featureClassOf(f, c.classes)) ?? family[0];
 }
 
 /**

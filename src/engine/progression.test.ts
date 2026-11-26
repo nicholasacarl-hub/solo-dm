@@ -1056,17 +1056,26 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     expect(next.merges?.map((m) => m.id)).toEqual(['surge1', 'ind1']);
   });
 
-  it("keeps the DM's ruling: the ruled entry stays as it is, the row and any duplicate fold into it, and the reminder still names the row (S2)", () => {
+  it("keeps the DM's ruling: the ruled entry stays as it is, the row and any duplicate fold into it, and no reminder asks to add the row (S2)", () => {
     const ruled: Feature = { ...entry('ind', 'Indomitable (one use)', 9, 2, 1), uses: { max: 2, used: 1, recharge: 'long', ruled: true } };
     const sixteen = fighterAt(16, [entry('surge', 'Action Surge (one use)', 2, 1), ruled]);
     const dialog = up(sixteen, [row('Action Surge (two uses)', 17, 2), row('Indomitable (three uses)', 17, 3)]);
     for (const r of [dialog, up(sixteen)]) {
       expect(family(r.character, 'Indomitable')).toEqual([ruled]);
       expect(family(r.character, 'Action Surge')).toEqual([{ ...sixteen.features[0], name: 'Action Surge (two uses)', uses: { max: 2, used: 0, recharge: 'short' } }]);
-      expect(r.reminders).toContain('New Fighter 17 features to add to the sheet: Indomitable (three uses).');
+      // The row folded into the ruled entry, which the sheet holds: nothing to add (the kept ruling is the DM's line).
+      expect(r.reminders.some((m) => m.startsWith('New Fighter 17 features'))).toBe(false);
       expect(r.merges).toBeUndefined();
     }
     expect(dialog.folded).toEqual(['Action Surge (two uses)', 'Indomitable (three uses)']);
+    // srd:class:fighter table: "| 13 | +5 | Indomitable (two uses), Studied Attacks |": a ruling of 3 at Fighter 12 is
+    // kept, and the reminder lists only what the sheet lacks.
+    const ruled12 = fighterAt(12, [entry('surge', 'Action Surge (one use)', 2, 1), { ...ruled, uses: { max: 3, used: 1, recharge: 'long', ruled: true } }]);
+    const dialog12 = up(ruled12, [row('Indomitable (two uses)', 13, 2), row('Studied Attacks', 13)]);
+    const dm12 = up(ruled12);
+    for (const r of [dialog12, dm12]) expect(family(r.character, 'Indomitable')).toEqual([ruled12.features[1]]);
+    expect(dialog12.reminders.some((m) => m.startsWith('New Fighter 13 features'))).toBe(false);
+    expect(dm12.reminders).toContain('New Fighter 13 features to add to the sheet: Studied Attacks.');
     // Beside an older version's duplicate: one entry, the ruling's, its spent uses at most its number.
     const both = fighterAt(16, [ruled, entry('ind2', 'Indomitable (two uses)', 13, 2, 2)]);
     const merged = up(both);
@@ -1079,7 +1088,7 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     expect(laterRuled.merges).toMatchObject([{ id: 'ind2', name: 'Indomitable (two uses)', merged: ['Indomitable (one use)', 'Indomitable (two uses)'] }]);
   });
 
-  it("folds the DM's entry of the table's name into the class's (S3); a family of the DM's entries only is left as it is", () => {
+  it("folds the DM's entry of the table's name into the class's (S3); a family of the DM's entries only grows in place by the table's row (R2)", () => {
     // An older sheet: the DM followed the Fighter 13 reminder with features_add beside the class's entry.
     const dm: Feature = { id: 'dm', name: 'Indomitable (two uses)', source: 'class', sourceName: 'Granted in play', description: 'DM words.', uses: { max: 2, used: 1, recharge: 'long' } };
     const houseRule: Feature = { ...dm, id: 'house', name: 'Indomitable (house rule)', uses: { max: 1, used: 0, recharge: 'long' } };
@@ -1091,12 +1100,115 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     const bare: Feature = { ...dm, id: 'bare', name: 'Indomitable', uses: { max: 2, used: 0, recharge: 'long' } };
     const fourteen = fighterAt(14, [{ ...entry('ind', 'Indomitable (two uses)', 9, 2, 1) }, bare]);
     expect(up(fourteen).character.features).toEqual([fourteen.features[0]]);
-    // A DM-only Fighter (every feature from features_add): nothing folds, and the reminder is today's.
+    // A DM-only Fighter (every feature from features_add): the Fighter's table counts Indomitable by name, so its row at
+    // 13 grows the DM's entry in place, and the reminder lists only what the sheet lacks.
     const granted = (name: string, max: number): Feature => ({ id: name, name, source: 'class', sourceName: 'Granted in play', description: 'DM words.', uses: { max, used: 0, recharge: 'long' } });
     const dmOnly = fighterAt(12, [granted('Action Surge (one use)', 1), granted('Indomitable (one use)', 1)]);
     const dmUp = up(dmOnly);
-    expect(dmUp.character.features).toEqual(dmOnly.features);
-    expect(dmUp.reminders).toContain('New Fighter 13 features to add to the sheet: Indomitable (two uses), Studied Attacks.');
+    expect(dmUp.character.features).toEqual([dmOnly.features[0], { ...dmOnly.features[1], name: 'Indomitable (two uses)', uses: { max: 2, used: 0, recharge: 'long' } }]);
+    expect(dmUp.reminders).toContain('New Fighter 13 features to add to the sheet: Studied Attacks.');
+  });
+
+  it("an older Fighter the DM's level_up levelled (every row added with features_add) merges to one entry of each at its next level-up, on either path (R2)", () => {
+    // srd:rule:fighter-action-surge: "Starting at level 17, you can use it twice before a rest"; srd:rule:fighter-indomitable:
+    // "three times before a Long Rest starting at level 17". The DM's level_up added no SRD class features before, and the
+    // DM followed each reminder with features_add ("Granted in play"): five entries for two features.
+    const granted = (id: string, name: string, max: number, used = 0): Feature => ({ ...entry(id, name, 0, max, used), sourceName: 'Granted in play' });
+    const old17 = fighterAt(17, [
+      granted('surge1', 'Action Surge (one use)', 1, 1),
+      granted('ind1', 'Indomitable (one use)', 1, 1),
+      granted('ind2', 'Indomitable (two uses)', 2),
+      granted('surge2', 'Action Surge (two uses)', 2),
+      granted('ind3', 'Indomitable (three uses)', 3),
+    ]);
+    // Fighter 18 brings the Champion's Survivor (a subclass feature) through the dialog, nothing through the DM's level_up.
+    const survivor: Omit<Feature, 'id'> = { name: 'Survivor', source: 'subclass', sourceName: 'Champion 18', description: '' };
+    for (const r of [up(old17), up(old17, [survivor])]) {
+      expect(r.character.features.slice(0, 2)).toEqual([
+        { ...old17.features[0], name: 'Action Surge (two uses)', uses: { max: 2, used: 1, recharge: 'short' } },
+        { ...old17.features[1], name: 'Indomitable (three uses)', uses: { max: 3, used: 1, recharge: 'long' } },
+      ]);
+      expect(family(r.character, 'Action Surge')).toHaveLength(1);
+      expect(family(r.character, 'Indomitable')).toHaveLength(1);
+      expect(messages(r)).toEqual(
+        expect.arrayContaining([
+          'Action Surge (one use) and Action Surge (two uses) merged into Action Surge (two uses): 2 uses, 1 left.',
+          'Indomitable (one use), Indomitable (two uses) and Indomitable (three uses) merged into Indomitable (three uses): 3 uses, 2 left.',
+        ]),
+      );
+      expect(r.merges?.map((m) => [m.id, m.text])).toEqual([
+        ['surge1', 'merged into Action Surge (two uses) (2 uses, 1 left): Action Surge (one use), Action Surge (two uses)'],
+        ['ind1', 'merged into Indomitable (three uses) (3 uses, 2 left): Indomitable (one use), Indomitable (two uses), Indomitable (three uses)'],
+      ]);
+    }
+    // A Rogue level merges them too: the family is the Fighter's, whatever class the level is in.
+    const multi = { ...old17, classes: [asClass('Fighter', 16), asClass('Rogue', 1)] };
+    expect(levelUp(multi, { className: 'Rogue', hpMethod: 'average' }).merges?.map((m) => m.id)).toEqual(['surge1', 'ind1']);
+  });
+
+  it("a DM-only Fighter's rows grow its entries in place at 13 and 17, spent uses kept; at 2 and 9, with no entry of the family yet, the reminder is today's (R2; srd:class:fighter table)", () => {
+    // srd:class:fighter, Fighter Features table: "| 13 | +5 | Indomitable (two uses), Studied Attacks |", "| 17 | +6 |
+    // Action Surge (two uses), Indomitable (three uses) |".
+    const granted = (id: string, name: string, max: number, used = 0): Feature => ({ ...entry(id, name, 0, max, used), sourceName: 'Granted in play' });
+    const twelve = fighterAt(12, [granted('surge', 'Action Surge (one use)', 1), granted('ind', 'Indomitable (one use)', 1, 1)]);
+    const thirteen = up(twelve);
+    expect(thirteen.character.features).toEqual([twelve.features[0], { ...twelve.features[1], name: 'Indomitable (two uses)', uses: { max: 2, used: 1, recharge: 'long' } }]);
+    expect(messages(thirteen)).toContain('Feature uses now: Indomitable (two uses) 1 → 2.');
+    expect(thirteen.reminders).toContain('New Fighter 13 features to add to the sheet: Studied Attacks.');
+    expect(thirteen.merges).toBeUndefined();
+    const sixteen = fighterAt(16, [granted('surge', 'Action Surge (one use)', 1, 1), granted('ind', 'Indomitable (two uses)', 2, 2)]);
+    const seventeen = up(sixteen);
+    expect(seventeen.character.features).toEqual([
+      { ...sixteen.features[0], name: 'Action Surge (two uses)', uses: { max: 2, used: 1, recharge: 'short' } },
+      { ...sixteen.features[1], name: 'Indomitable (three uses)', uses: { max: 3, used: 2, recharge: 'long' } },
+    ]);
+    expect(messages(seventeen)).toContain('Feature uses now: Action Surge (two uses) 1 → 2 and Indomitable (three uses) 2 → 3.');
+    expect(seventeen.reminders.some((m) => m.startsWith('New Fighter 17 features'))).toBe(false);
+    // The DM's entry with the DM's ruling keeps it, and the row it folds isn't one to add.
+    const ruled: Feature = { ...granted('ind', 'Indomitable (one use)', 3, 1), uses: { max: 3, used: 1, recharge: 'long', ruled: true } };
+    const ruledUp = up(fighterAt(12, [twelve.features[0], ruled]));
+    expect(ruledUp.character.features).toEqual([twelve.features[0], ruled]);
+    expect(ruledUp.reminders).toContain('New Fighter 13 features to add to the sheet: Studied Attacks.');
+    // No entry of the family yet: nothing to grow, and the row is to add, as always.
+    expect(up(fighterAt(1, [])).reminders).toContain('New Fighter 2 features to add to the sheet: Action Surge (one use), Tactical Mind.');
+    const eight = fighterAt(8, [granted('surge', 'Action Surge (one use)', 1)]);
+    const nine = up(eight);
+    expect(nine.character.features).toEqual(eight.features);
+    expect(nine.reminders).toContain('New Fighter 9 features to add to the sheet: Indomitable (one use), Tactical Master.');
+  });
+
+  it("the DM's level_up new_features of another parenthetical are features of their own: added and listed, as before (F2; srd:rule:fighter-action-surge)", () => {
+    // srd:rule:fighter-action-surge: "you can take one additional action, except the Magic action". A DM's homebrew "Action
+    // Surge (Bonus)" is no row of the table: the class's Action Surge stays as it is beside it.
+    const thirteen = fighterAt(13, [entry('surge', 'Action Surge (one use)', 2, 1), entry('ind', 'Indomitable (two uses)', 9, 2, 1)]);
+    const bonus: Omit<Feature, 'id'> = { name: 'Action Surge (Bonus)', source: 'class', description: 'Homebrew: a Bonus Action surge.', uses: { max: 1, used: 0, recharge: 'short' } };
+    const r = up(thirteen, [bonus]);
+    expect(r.character.features).toEqual([...thirteen.features, { ...bonus, id: expect.any(String), sourceName: 'Fighter 14' }]);
+    expect(messages(r)).toContain('New features: Action Surge (Bonus).');
+    expect(r.folded).toBeUndefined();
+    expect(r.merges).toBeUndefined();
+    // At 13 the table's row still grows the class's Indomitable, and the DM's "Indomitable (Tactical)" joins beside it.
+    const twelve = fighterAt(12, [entry('surge', 'Action Surge (one use)', 2, 1), entry('ind', 'Indomitable (one use)', 9, 1, 1)]);
+    const tactical: Omit<Feature, 'id'> = { name: 'Indomitable (Tactical)', source: 'class', description: 'Homebrew: a tactical reroll.', uses: { max: 1, used: 0, recharge: 'long' } };
+    const t = up(twelve, [tactical]);
+    expect(family(t.character, 'Indomitable').map((f) => [f.name, f.uses?.max, f.uses?.used])).toEqual([
+      ['Indomitable (two uses)', 2, 1],
+      ['Indomitable (Tactical)', 1, 0],
+    ]);
+    expect(messages(t)).toContain('New features: Indomitable (Tactical).');
+    expect(messages(t)).toContain('Feature uses now: Indomitable (two uses) 1 → 2.');
+    expect(t.reminders).toContain('New Fighter 13 features to add to the sheet: Studied Attacks.');
+  });
+
+  it("a DM's higher count among the level's new features is the entry's count, and the table's row isn't told to be added (F4; srd:class:fighter table, \"Indomitable (two uses)\" at 13)", () => {
+    const twelve = fighterAt(12, [entry('surge', 'Action Surge (one use)', 2, 1), entry('ind', 'Indomitable (one use)', 9, 1, 1)]);
+    const house = (name: string): Omit<Feature, 'id'> => ({ name, source: 'class', description: 'A house rule.', uses: { max: 3, used: 0, recharge: 'long' } });
+    for (const name of ['Indomitable (three uses)', 'Indomitable']) {
+      const r = up(twelve, [house(name)]);
+      expect(family(r.character, 'Indomitable')).toEqual([{ ...twelve.features[1], name, uses: { max: 3, used: 1, recharge: 'long' } }]);
+      expect(r.reminders).toContain('New Fighter 13 features to add to the sheet: Studied Attacks.');
+      expect(r.reminders.join(' ')).not.toContain('Indomitable (two uses)');
+    }
   });
 
   it("folds the DM's new_features entry of the family into the entry the sheet holds, by the table's name or the bare name", () => {
@@ -1184,6 +1296,10 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     expect(barbarian.character.features).toEqual([rage, dmRage]);
     expect(barbarian.merges).toBeUndefined();
     expect(barbarian.folded).toBeUndefined();
+    // Nor does the DM's label hold the table's row of the bare name: Druid 2 ("| 2 | +2 | Wild Shape, Wild Companion |")
+    // still names Wild Shape to add.
+    const druid1 = levelUp(mira({ classes: [asClass('Druid', 1)], features: [dmShape] }), { className: 'Druid', hpMethod: 'average' });
+    expect(druid1.reminders).toContain('New Druid 2 features to add to the sheet: Wild Shape, Wild Companion.');
   });
 
   it("a book Fighter's entry that follows its table's counts keeps its name and scale as the DM's entry of the table's name folds in; a higher count is the DM's ruling on it", () => {

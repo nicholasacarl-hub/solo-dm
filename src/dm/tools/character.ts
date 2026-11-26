@@ -63,6 +63,7 @@ import {
   gainXp,
   levelUp,
   matchStandardCondition,
+  nameUseCount,
   removeCondition,
   removeItem,
   removeSpell,
@@ -722,12 +723,17 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
       const match = links.feats[i];
       const own = rewritten?.ref?.textCopied ? runsIn(runsOf(f.description), rewritten.description) : 0;
       const ref = rewritten?.ref && own > 0 && own >= (match?.runs ?? 0) ? rewritten.ref : match?.ref;
+      // A counted name routed onto its family's entry under another name ("Action Surge (two uses)" onto "Action Surge
+      // (one use)"): what the call leaves out is the entry's, not the call's defaults. Its recharge stays (SRD 5.2.1
+      // Action Surge: "until you finish a Short or Long Rest"), and its number is the name's count.
+      const routed = rewritten && nameKey(rewritten.name) !== nameKey(f.name.trim()) ? rewritten : undefined;
+      const max = f.uses_max ?? (routed ? (nameUseCount(f.name) ?? undefined) : undefined);
       return addFeature(c, {
         name: f.name,
         description: f.description,
         source: f.source,
         sourceName: 'Granted in play',
-        ...(f.uses_max ? { uses: { max: f.uses_max, used: 0, recharge: f.recharge ?? 'long' } } : {}),
+        ...(max ? { uses: { max, used: 0, recharge: f.recharge ?? routed?.uses?.recharge ?? 'long' } } : {}),
         ...(ref ? { ref } : {}),
       });
     });
@@ -1530,6 +1536,19 @@ function updatedUses(before: Character, after: Character): string[] {
   return lines;
 }
 
+/**
+ * The counts a book class's table gave its own entries before the level (refreshTableCountedUses: an older save's
+ * "Action Surge" with 2 uses at Fighter 12, its "Indomitable" with none), for the DM and the player's log: "Uses read
+ * from the Fighter class table: Action Surge 2 → 1, Indomitable none → 1." Null when no count changed.
+ */
+function tableReadLine(className: string, before: Character, after: Character): string | null {
+  const read = after.features.flatMap((f) => {
+    const old = before.features.find((o) => o.id === f.id);
+    return f.uses && old?.uses?.max !== f.uses.max ? [`${f.name} ${old?.uses ? old.uses.max : 'none'} → ${f.uses.max}`] : [];
+  });
+  return read.length ? `Uses read from the ${className} class table: ${read.join(', ')}.` : null;
+}
+
 /** What the merged builder data says about a level_up (spec §5.5); null without data or for a class it lacks. */
 interface DataLevel {
   option: ClassOption;
@@ -1804,12 +1823,15 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   const findSpell = (name: string) => exactEntry(index, campaign, name, 'spell') ?? undefined;
   const { features: extra, replaced, replacedBySrd, kept } = dmFeatures(input, level, plan, before.features, data, index);
   const spells = noLevelSpells();
+  // The sheet before and after the class table's re-read, when the re-read changed it (filled inside the edit).
+  const reread: { from: Character | null; to: Character | null; className: string } = { from: null, to: null, className: '' };
   const change = await mutateCharacter(ctx, (c) => {
     Object.assign(spells, noLevelSpells());
+    Object.assign(reread, { from: null, to: null, className: '' });
     // A book's class whose table counts a feature by name ("Indomitable (two uses)" at 13): its own entries named
     // without a count (a 2024 book's Fighter as the offline parser names them, from before the app read the counts)
     // are re-read by that table first (refreshTableCountedUses), so the level-up grows them by it, and a counted family
-    // the level folds keeps their name (the level-up dialog re-reads every feature's uses after it).
+    // the level folds keeps their name (the level-up dialog re-reads them the same way first).
     const held = plan?.option.source && plan.existing ? c.classes.find((cl) => cl.classId === plan.existing?.classId) : undefined;
     const start = plan && held ? refreshTableCountedUses(c, plan.option, held) : c;
     const r = levelUp(start, {
@@ -1829,6 +1851,7 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
     });
     // Refused: the sheet stays as it was, re-read or not.
     if (r.character === start) return start === c ? r : { ...r, character: c };
+    if (start !== c && held) Object.assign(reread, { from: c, to: start, className: held.name });
     if (!plan || !data) return r;
     // The older-edition notes of the class and its subclass (a 2014 subclass chosen now) join the sheet's (B6); then the
     // class's always-prepared spells and the lineage's, their free castings, and the mark that its spell choices are open.
@@ -1837,9 +1860,13 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   });
   const className = plan && !plan.existing ? plan.option.name : input.class_name;
   const summary = `Level up! Level ${change.newLevel} (${className}) · HP +${change.hpGained} (max ${change.character.hp.max})`;
-  // A counted family's entries merged into one are told by the merge's own line (the events), not as the kept entry's growth.
+  // A counted family's entries merged into one are told by the merge's own line (the events), not as the kept entry's
+  // growth; what grew is from the counts the class table's re-read gave, which are told on their own line.
   const merged = new Set((change.merges ?? []).map((m) => m.id));
-  const uses = updatedUses({ ...before, features: before.features.filter((f) => !merged.has(f.id)) }, change.character);
+  const grownFrom = reread.to ?? before;
+  const uses = updatedUses({ ...grownFrom, features: grownFrom.features.filter((f) => !merged.has(f.id)) }, change.character);
+  const readLine = reread.from && reread.to ? tableReadLine(reread.className, reread.from, reread.to) : null;
+  const read = readLine ? [readLine] : [];
   const notes = (change.character.adaptationNotes ?? []).filter((n) => !(before.adaptationNotes ?? []).includes(n));
   const books = (forDm: boolean) => [
     ...bookLines(plan, replaced, replacedBySrd, kept, change.folded),
@@ -1856,8 +1883,8 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   // The levelled class's choices, then each other class open for a place its turned spell left.
   const picks: ClassPicks[] = [...(owed && entry ? [{ owed, entry }] : []), ...spells.others];
   const choices = picks.map((p) => `Spell choices: ${owedSpellsLine(p.owed, p.entry)}`);
-  await logTool(ctx, 'level_up', 'level', summary, { detail: [...eventLines(change.events), ...uses, ...books(false), ...reminders, ...choices].join('\n') || undefined });
-  const lines = [summary, ...eventLines(change.events), ...books(true)];
+  await logTool(ctx, 'level_up', 'level', summary, { detail: [...read, ...eventLines(change.events), ...uses, ...books(false), ...reminders, ...choices].join('\n') || undefined });
+  const lines = [summary, ...read, ...eventLines(change.events), ...books(true)];
   if (uses.length) lines.push('Limited-use features that grew with the level (already on the sheet):', ...uses.map((u) => `- ${u}`));
   // The numbers of uses the DM ruled, which the level-up left as they are.
   const rulings = keptRulings(change.character);

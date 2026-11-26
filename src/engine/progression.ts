@@ -21,8 +21,10 @@ import {
 import { newId, nameKey, slugify } from '@/lib/id';
 import {
   afterConcentrationEnds,
+  classCountingByName,
   endAcSpell,
   endHpMaxAdjustmentsWhere,
+  familyNamed,
   featureBaseName,
   featureClassOf,
   handSetAcReminder,
@@ -280,7 +282,13 @@ const FEAT_CHOICE_HINTS: readonly (readonly [name: string, hint: string])[] = [
   ['Skilled', 'Skilled: choose three skills or tools to gain proficiency in.'],
 ];
 
-function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: readonly { name: string }[], added: readonly Feature[]): string[] {
+/** The entry of the counted family the row `name` belongs to that `sheet` holds: the class's own or the DM's (familyNamed). */
+function holdsFamilyEntry(sheet: readonly Feature[], cl: ClassLevel, name: string): boolean {
+  const base = featureBaseName(name);
+  return sheet.some((f) => (featureClassOf(f, [cl]) !== undefined && familyNamed(f.name, base)) || isGrantedFamilyEntry(f, base));
+}
+
+function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: readonly Feature[], added: readonly Feature[]): string[] {
   const level = cl.level;
   const reminders: string[] = [];
   const features = featuresAtLevel(info, level);
@@ -300,7 +308,10 @@ function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: rea
   const named = features.filter(
     (f) => f !== 'Ability Score Improvement' && f !== 'Epic Boon' && f !== 'Subclass feature' && !f.endsWith(' Subclass'),
   );
-  const missing = named.filter((f) => !hasFeatureNamed(alreadyAdded, f));
+  // A row the table names with a use count ("Indomitable (two uses)") is held when the sheet holds an entry of its
+  // family, bare or named with any count: the level-up grew it or folded the row into it, a ruled entry and a DM's
+  // higher count included (SRD 5.2.1 Fighter Features table: one Indomitable, "(two uses)" at 13).
+  const missing = named.filter((f) => !hasFeatureNamed(alreadyAdded, f) && !(nameUseCount(f) !== null && holdsFamilyEntry(alreadyAdded, cl, f)));
   if (missing.length) reminders.push(`New ${info.name} ${level} features to add to the sheet: ${missing.join(', ')}.`);
   for (const feature of named) {
     const hint = CHOICE_HINTS.find(([pattern]) => pattern.test(feature));
@@ -520,20 +531,34 @@ function newerMember(m: FamilyMember, best: FamilyMember): FamilyMember {
 const usesLeft = (uses: FeatureUses): string => `${uses.max} use${uses.max === 1 ? '' : 's'}, ${uses.max - uses.used} left`;
 
 /**
+ * A counted family's merge as a notice or summary says it, from the entry kept as the sheet stores it (its name and
+ * uses) and the names merged: "merged into Indomitable (two uses) (2 uses, 1 left): Indomitable (one use), Indomitable
+ * (two uses)" (FeatureMerge.text; the level-up dialog's, after it re-reads the uses).
+ */
+export function featureMergeText(kept: Pick<Feature, 'name' | 'uses'>, merged: readonly string[]): string {
+  const left = kept.uses ? usesLeft(kept.uses) : '';
+  return `merged into ${kept.name}${left ? ` (${left})` : ''}: ${merged.join(', ')}`;
+}
+
+/**
  * One entry for each counted family (SRD 5.2.1 Fighter Features table: "Action Surge (one use)" at Fighter 2 and "(two
  * uses)" at 17; Action Surge: "Starting at level 17, you can use it twice before a rest but only once on a turn"): the
- * hero's class's own class features of one base name (one trailing parenthetical off), one of the class's own, on the
- * sheet, new, or the level's row of an SRD class's table, named with a use count. Only these fold: Ability Score
- * Improvement, Expertise, Metamagic, Improved Brutal Strike and Mystic Arcanum ("(level 7 spell)" counts nothing) repeat
- * as they always have, and so does the DM's own counted name beside a class feature named without one ("Wild Shape (2
- * uses)" beside the Druid's "Wild Shape"). The DM's entries named as the app's reminder names the rows
- * (isGrantedFamilyEntry) join the family of a class that has an entry of it, and so do the level's rows of an SRD class's
- * table (`rows`), when the sheet holds the family. Each family keeps one entry:
+ * hero's class's own class features of one base name (one trailing parenthetical off), named by it alone or with a use
+ * count (familyNamed: "Action Surge (Bonus)" is a feature of its own), one of the class's own, on the sheet, new, or the
+ * level's row of an SRD class's table, named with a use count, or of a class that counts the base by name
+ * (classCountingByName: SRD 5.2.1's Fighter). Only these fold: Ability Score Improvement, Expertise, Metamagic, Improved
+ * Brutal Strike and Mystic Arcanum ("(level 7 spell)" counts nothing) repeat as they always have, and so does the DM's
+ * own counted name beside a class feature named without one ("Wild Shape (2 uses)" beside the Druid's "Wild Shape").
+ * The DM's entries named as the app's reminder names the rows (isGrantedFamilyEntry) join the family of a class that has
+ * an entry of it, or of a class that counts the base by name, on their own (an older Fighter the DM's level_up levelled,
+ * every row added with features_add); the level's rows of an SRD class's table (`rows`) join a family the sheet holds an
+ * entry of. Each family keeps one entry:
  * - the first that holds the DM's ruling (FeatureUses.ruled), with its name and number; the others' spent uses join it,
  *   up to its number;
- * - else the class's first entry whole (id, place, source name, text, ref) under the newest member's name, the highest
- *   count ("Indomitable (three uses)"), with that count as its maximum; spent uses are all the members', at most the
- *   family's count before this level-up (an older sheet's duplicates allowed more), up to the new maximum;
+ * - else the class's first entry whole (id, place, source name, text, ref), or the DM's first when the class has none,
+ *   under the newest member's name, the highest count ("Indomitable (three uses)"), with that count as its maximum; spent
+ *   uses are all the members', at most the family's count before this level-up (an older sheet's duplicates allowed
+ *   more), up to the new maximum;
  * - but an entry whose uses follow its class table's counts (a by-table scale: a 2024 book's Fighter as the offline
  *   parser names it, "Indomitable") keeps its own name and its scale, whose count at the class level is its maximum; a
  *   member counting more (the DM's "Indomitable (three uses)" at Fighter 13, where the table gives two) is the DM's
@@ -552,40 +577,46 @@ function collapseCountedFamilies(
   const features = [...held, ...added];
   const isNew = new Set(added);
   const collapsed: Collapsed = { features, grows: [], merges: [], events: [], folded: new Set() };
-  // By class and base name: "fighter indomitable".
-  const families = new Map<string, { base: string; members: FamilyMember[] }>();
+  // By class and base name: "fighter indomitable". `byName`: the class counts the base by name (classCountingByName).
+  const families = new Map<string, { base: string; byName: boolean; members: FamilyMember[] }>();
   const keyOf = (cl: ClassLevel, f: Feature) => `${nameKey(cl.name)} ${nameKey(featureBaseName(f.name))}`;
+  const familyOf = (cl: ClassLevel, f: Feature) => {
+    const family = families.get(keyOf(cl, f)) ?? { base: nameKey(featureBaseName(f.name)), byName: classCountingByName([cl], featureBaseName(f.name)) !== undefined, members: [] };
+    families.set(keyOf(cl, f), family);
+    return family;
+  };
   for (const f of features) {
     const cl = featureClassOf(f, classes);
-    if (!cl) continue;
-    const key = keyOf(cl, f);
-    const family = families.get(key) ?? { base: nameKey(featureBaseName(f.name)), members: [] };
-    family.members.push({ f, held: !isNew.has(f), own: true, row: false });
-    families.set(key, family);
+    // Another parenthetical ("Action Surge (Bonus)", a DM's homebrew among the level's new features) is a feature of its own.
+    if (!cl || !familyNamed(f.name, featureBaseName(f.name))) continue;
+    familyOf(cl, f).members.push({ f, held: !isNew.has(f), own: true, row: false });
   }
-  if (!families.size) return collapsed;
   for (const f of features) {
     if (featureClassOf(f, classes) || !isGrantedFamilyEntry(f, featureBaseName(f.name))) continue;
-    const family = [...families.values()].find((x) => x.base === nameKey(featureBaseName(f.name)));
+    // The family of a class that has an entry of it; else, for a class that counts the base by name, the DM's entries
+    // are its family on their own (every row the DM's level_up reminded of, added with features_add).
+    const counting = classCountingByName(classes, featureBaseName(f.name));
+    const family = [...families.values()].find((x) => x.base === nameKey(featureBaseName(f.name))) ?? (counting ? familyOf(counting, f) : undefined);
     family?.members.push({ f, held: !isNew.has(f), own: false, row: false });
   }
+  if (!families.size) return collapsed;
   for (const f of rows) {
     const cl = featureClassOf(f, classes);
     const family = cl ? families.get(keyOf(cl, f)) : undefined;
-    if (family?.members.some((m) => m.own && m.held)) family.members.push({ f, held: false, own: false, row: true });
+    if (family?.members.some((m) => m.held)) family.members.push({ f, held: false, own: false, row: true });
   }
 
   const place = new Map(features.map((f, i) => [f, i]));
   const order = (m: FamilyMember) => (m.row ? features.length : (place.get(m.f) ?? features.length));
   const drop = new Set<Feature>();
   const replace = new Map<Feature, Feature>();
-  for (const { members } of families.values()) {
-    // Counted by the class's own name for it (its entry, its new feature, its table's row): the DM's own counted label
-    // beside a class feature named without a count is no family.
-    if (members.length < 2 || !members.some((m) => (m.own || m.row) && namesItsCount(m))) continue;
+  for (const { byName, members } of families.values()) {
+    // Counted by the class's own name for it (its entry, its new feature, its table's row, or its table naming the base
+    // with a count): the DM's own counted label beside a class feature named without a count is no family.
+    if (members.length < 2 || !(byName || members.some((m) => (m.own || m.row) && namesItsCount(m)))) continue;
     members.sort((a, b) => order(a) - order(b));
     const real = members.filter((m) => !m.row);
-    const keep = real.find((m) => m.f.uses?.ruled) ?? real.find((m) => m.own);
+    const keep = real.find((m) => m.f.uses?.ruled) ?? real.find((m) => m.own) ?? real[0];
     if (!keep) continue;
     const spent = real.reduce((sum, m) => sum + Math.max(0, toInt(m.f.uses?.used)), 0);
     const before = Math.max(0, ...real.filter((m) => m.held).map((m) => memberCount(m.f)));
@@ -617,7 +648,7 @@ function collapseCountedFamilies(
       const merged = heldMembers.map((m) => m.f.name);
       const left = kept.uses ? usesLeft(kept.uses) : '';
       collapsed.events.push(gameEvent('level-up', `${listJoin(merged)} merged into ${kept.name}${left ? `: ${left}` : ''}.`));
-      collapsed.merges.push({ id: kept.id, name: kept.name, merged, text: `merged into ${kept.name}${left ? ` (${left})` : ''}: ${merged.join(', ')}` });
+      collapsed.merges.push({ id: kept.id, name: kept.name, merged, text: featureMergeText(kept, merged) });
     } else if (keep.held && kept.uses && kept.uses.max !== keep.f.uses?.max) {
       collapsed.grows.push(keep.f.uses ? `${kept.name} ${keep.f.uses.max} → ${kept.uses.max}` : `${kept.name} ${kept.uses.max}`);
     }
@@ -672,8 +703,8 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
 
   // The level's rows an SRD class's table names with a use count ("Indomitable (two uses)" at Fighter 13; SRD 5.2.1
   // Indomitable: "You can use this feature twice before a Long Rest starting at level 13"): the DM's level_up adds no
-  // SRD class features, so they grow the entry the sheet holds, listed or not. An entry of the row's name among the new
-  // features (the level-up dialog's, the DM's) stands for it.
+  // SRD class features, so they grow the entry the sheet holds (the class's own or the DM's), listed or not. An entry of
+  // the row's name among the new features (the level-up dialog's, the DM's) stands for it.
   const rows = info
     ? featuresAtLevel(info, gained.level)
         .filter((name) => nameUseCount(name) !== null && !added.some((f) => nameKey(f.name) === nameKey(name)))
@@ -715,7 +746,7 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
 
   const reminders: string[] = [];
   if (!existing && oldTotal > 0) reminders.push(...multiclassPrerequisites(c, info, gained.name, opts.multiclassPrimaries));
-  // What to add is what the sheet lacks after the fold: a family the level's row grew is held under the row's name.
+  // What to add is what the sheet lacks after the fold: a family the level's row grew or folded into is held.
   if (info) reminders.push(...srdLevelReminders(info, gained, counted.features, added));
   else reminders.push(`Check the ${gained.name} class table for level ${gained.level} features and choices.`);
   // A subclass feature no class table lists (SRD 5.2.1 Champion, level 7: "You gain another Fighting Style feat of your

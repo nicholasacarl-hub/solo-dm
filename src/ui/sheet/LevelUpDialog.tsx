@@ -4,7 +4,8 @@
  * Choose the class (or multiclass, with the 2024 13+ primary-ability prerequisite), the HP method, a
  * subclass at its level (chosen by id; a subclass chosen late catches up its earlier features), and —
  * at Ability Score Improvement, Epic Boon and (Additional) Fighting Style levels — a choice whose
- * default, "Decide with my DM", keeps today's level-up. Applied through the engine's levelUp, then every
+ * default, "Decide with my DM", keeps today's level-up. Applied through the engine's levelUp (a book class's entries
+ * its table counts by name re-read first, as the DM's level_up does), then every
  * feature's uses are re-read at the new level (Rage, Lay on Hands, Breath Weapon…), the class's and
  * subclass's always-prepared spells up to the new level, and the lineage's up to the character level (each with its
  * free casting, once per Long Rest), are added or turned always prepared, and the class's
@@ -15,9 +16,10 @@
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowBigUpDash, Check, Loader2, Sparkles, TriangleAlert } from 'lucide-react';
-import { XP_THRESHOLDS, abilityModifier, characterLevel, levelUp, type LevelUpOptions, type LevelUpResult } from '@/engine';
+import { XP_THRESHOLDS, abilityModifier, characterLevel, featureMergeText, levelUp, type LevelUpOptions, type LevelUpResult } from '@/engine';
 import { getRulesIndex, useBuilderData, useRulesIndexState } from '@/data';
 import { withAdaptationNotes } from '@/data/options/adaptationNotes';
+import { refreshTableCountedUses } from '@/data/options/featureUses';
 import { featureUseChanges, gainedFeatures, keptRulings, refreshFeatureUses } from '@/data/options/leveling';
 import {
   applyFeatChoice,
@@ -870,8 +872,14 @@ function LevelUpForm({
         : base;
     const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null; classIds: string[] } = { result: null, uses: [], choice: null, classIds: [] };
     const saved = await edit((c) => {
-      const r = levelUp(c, opts);
-      if (r.character === c) {
+      // A book's class whose table counts a feature by name ("Indomitable (two uses)" at 13): its own entries named
+      // without a count (an older save's "Indomitable" without uses) are re-read by that table first, as the DM's
+      // level_up does (refreshTableCountedUses), so the level-up grows them by it and a counted family it folds keeps
+      // their name. Refused, the sheet stays as it was.
+      const held = option?.source && plan.existing ? c.classes.find((cl) => cl.classId === plan.existing?.classId) : undefined;
+      const start = option && held ? refreshTableCountedUses(c, option, held) : c;
+      const r = levelUp(start, opts);
+      if (r.character === start) {
         return { character: c, notice: null, warning: r.events.find((e) => e.type === 'warning')?.message ?? 'Could not level up.' };
       }
       const before = new Set(c.features.map((f) => f.id));
@@ -892,7 +900,12 @@ function LevelUpForm({
       // the merge, not as the kept entry's growth.
       const refreshed = refreshFeatureUses(next, builder.data);
       const merged = new Set((r.merges ?? []).map((m) => m.id));
-      const uses = [...featureUseChanges({ ...c, features: c.features.filter((f) => !merged.has(f.id)) }, refreshed), ...(r.merges ?? []).map((m) => m.text)];
+      // Each merge as the sheet stores the entry it kept, its uses re-read.
+      const merges = (r.merges ?? []).map((m) => {
+        const kept = refreshed.features.find((f) => f.id === m.id);
+        return kept ? featureMergeText(kept, m.merged) : m.text;
+      });
+      const uses = [...featureUseChanges({ ...c, features: c.features.filter((f) => !merged.has(f.id)) }, refreshed), ...merges];
       // The always-prepared spells up to the new level, on the sheet as it is now: added, or a pick turned always prepared
       // (it stops counting). Then the class's choices are marked open, counted with the places those free (SRD 5.2.1
       // srd:rule:gaining-spells: "a spell that you always have prepared doesn't count against the number of spells"), and
