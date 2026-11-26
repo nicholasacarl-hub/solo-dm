@@ -478,16 +478,18 @@ and that a book spell is prepared by name; a re-added spell keeps its source and
 or the DM's `level_up`), the lineage the species trait's feature names ("Elven Lineage (Drow)") gives the spells its
 option's own "Level 3:" and "Level 5:" tags name, up to the character level (`lineageSpellGrants`,
 src/data/options/spellPicks.ts). They join `levelSpellsEdit` as extra always-prepared grants, so the same count adds
-them, or turns one the sheet holds as a pick always prepared, with the lineage as their source and its cantrip's
-spellcasting ability and the free casting in their notes. Names come from the rules index: a cantrip tag is skipped, and
-one the index doesn't find is listed as missing, under its own name only when that reads like a name (otherwise "a spell
+them, with the lineage as their source and its cantrip's spellcasting ability and the free casting in their notes, or
+turns one the sheet holds as a pick always prepared (a spellbook's keeps its source and stays in the book; a spell with
+notes of its own keeps them). Names come from the rules index: a cantrip tag is skipped, and one the index doesn't find
+is listed as missing, under its own name only when that reads like a name (otherwise by its column: "the Level 3 spell
 the app couldn't read from Drow's table"), so a book's words never reach the transcript. Each lineage spell the sheet
 then holds always prepared gets its free casting as a feature, "Faerie Fire (free casting)" (one use, regained on a Long
 Rest, spent with `features_use`), unless the DM already counts it (a feature with uses named for the spell) or has ruled
-the trait's own uses, which the result names. The dialog's notice adds "free casting once per Long Rest: Faerie Fire
-(Drow)" and `level_up` a line on how to spend it. A hero already past character level 3 or 5 catches up at its next
-level-up (nothing runs at load); a level whose spell edit doesn't run (a class the builder data lacks) adds neither the
-spells nor the castings, and a later one adds both.
+the trait's own uses, which the result names; the trait itself reads no use off the spells' free-casting sentence
+(`usesFromText` leaves out the paragraph in which the trait teaches "a higher-level spell"). The dialog's notice adds
+"free casting once per Long Rest: Faerie Fire (Drow)" and `level_up` a line on how to spend it. A hero already past
+character level 3 or 5 catches up at its next level-up (nothing runs at load); a level whose spell edit doesn't run (a
+class the builder data lacks) adds neither the spells nor the castings, and a later one adds both.
 
 **Speed from class features.** `Character.speed` stays the hero's own walking Speed (species or lineage, a
 transformation's change, a DM's ruling); the class features that raise it are worked out whenever it is read, never
@@ -506,31 +508,39 @@ ft; Unarmored Movement: +15 ft)", or "(base 30 ft; Unarmored Movement: no +15 ft
 tile (the base and the danger border only below the raised Speed; its title and a screen reader get the notes), Senses &
 size (Roving's speeds), the gear notices ("AC 13 → 12; Speed 45 → 30 ft", for any hero whose Speed the change moves), a
 level-up ("Speed 40 ft → 45 ft (Unarmored Movement)": the engine's event, the dialog's notice and Summary, `level_up`'s
-result) and `update_character` speed, whose result says the number it sets is the Speed before class features and quotes
-the sheet's ("Mira Voss's Speed is now 55 ft (base 40 ft; Unarmored Movement: +15 ft)"). A Speed the DM raised by hand
+result) and `update_character` speed and a transformation's change to it, whose results say the number set is the Speed
+before the features they name ("the Speed before Unarmored Movement, which the app adds") and quote the sheet's ("Mira
+Voss's Speed is now 55 ft (base 40 ft; Unarmored Movement: +15 ft)"); a transformation's climb or swim line names the
+speed the sheet shows ("Swim Speed stays 40 ft (Tidemark gives 35 ft)" for a Ranger 6). A Speed the DM raised by hand
 for one of these features before the app counted them now gets the bonus on top: the app keeps no record of why a Speed
 was set, so it leaves the number, and the sheet's base and the status line's bonus put it in front of the DM.
 
 **Counted features at a level-up.** A class feature named with its use count ("Indomitable (two uses)"; in SRD 5.2.1
-only the Fighter's Action Surge and Indomitable) is one entry that grows in place. A counted family is a class's own
-entries of one base name (`baseFeatureName`), at least one of which the class names with a count: an entry it holds, a
-new feature at this level, or, on the DM's path, the SRD table's row. A DM's own counted label beside a class feature
-named without one ("Wild Shape (2 uses)" beside the Druid's "Wild Shape") is no family. Engine `levelUp` collapses each
-family after the level's features join (`collapseCountedFamilies`): the earliest of the class's entries stays (its id,
-place and text) under the newest name and count, keeping the uses spent (no more than the count before), and the others
-go, "Granted in play" entries of the base or a counted name (the app's reminder names those) among them. An entry with
-the DM's ruled uses is kept with its ruling instead, and one whose uses follow its class table (a book Fighter's
-"Indomitable", by-table scale) keeps its own name and scale, a higher count from another entry becoming the DM's ruling
-on it. An older sheet's duplicates merge at its next level-up ("Indomitable (one use) and Indomitable (two uses) merged
-into Indomitable (two uses): 2 uses, 1 left."), a lone grow reads "Feature uses now: Indomitable (two uses) 1 → 2.", and
-a folded feature is never listed as new or as grown. The DM's `level_up` without `new_features` joins the SRD level's
-counted names to a family the sheet holds, so the entry grows whether the DM lists it or not, and a family the sheet
-lacks keeps the reminder to add it. A lookup by an older counted name finds the family's entry, and `features_add` of a
-counted name rewrites the family's entry only when an entry of it the sheet holds is named with a count (as many uses as
-the name counts is no ruling); otherwise it is added beside, as before ("Rage (3 uses)" beside a Barbarian's "Rage"). A
-book Fighter's bare "Action Surge" and "Indomitable" read their counts from the class table's features column
-("Indomitable (two uses)" at 13; `usesFromCountedCells`), which the dialog reads again after the level, as it reads
-every feature, and the DM's `level_up` before it, so an older save's are right on either path.
+only the Fighter's Action Surge and Indomitable) is one entry that grows in place. A counted family is the entries of
+one base name (`baseFeatureName`) named bare or with a use count, the class's own and the DM's "Granted in play" ones,
+when the hero's class table names the base with a count (`classCountingByName`: the SRD Fighter's, and the SRD class a
+2024 book's Fighter stands in for) or the class names an entry with one (an entry it holds, a new feature at this level,
+or, on the DM's path, the SRD table's row). A DM's own counted label beside a class feature no table counts ("Wild Shape
+(2 uses)" beside the Druid's "Wild Shape") is no family, and an entry under another parenthetical ("Action Surge
+(Bonus)") is its own feature. Engine `levelUp` collapses each family after the level's features join
+(`collapseCountedFamilies`): the entry with the DM's ruled uses stays with its ruling, else the class's earliest entry,
+else the DM's earliest (an older DM-levelled Fighter's are all the DM's), whole (its id, place and text), under the
+newest name and count, keeping the uses spent (no more than the count before), and the others go; one whose uses follow
+its class table (a book Fighter's "Indomitable", by-table scale) keeps its own name and scale, a higher count from
+another entry becoming the DM's ruling on it. An older sheet's duplicates merge at its next level-up ("Indomitable (one
+use) and Indomitable (two uses) merged into Indomitable (two uses): 2 uses, 1 left."), a lone grow reads "Feature uses
+now: Indomitable (two uses) 1 → 2.", and a folded feature is never listed as new or as grown. The DM's `level_up`
+without `new_features` joins the SRD level's counted names to a family the sheet holds, the DM's entries alone included,
+so the entry grows whether the DM lists it or not; the reminder names a row only when the sheet holds no entry of its
+family (a ruled entry or the DM's higher count holds it). A lookup by an older counted name finds the family's entry,
+and `features_add` of a counted name rewrites one entry of a counted family (the ruled one, else the class's counted
+one, its by-table one, the DM's counted one; as many uses as the name counts is no ruling, and the rewrite keeps the
+entry's recharge and takes the name's count when the DM gives none); otherwise it is added beside, as before ("Rage (3
+uses)" beside a Barbarian's "Rage", a second label beside the first). A book Fighter's bare "Action Surge" and
+"Indomitable" read their counts from the class table's features column ("Indomitable (two uses)" at 13;
+`usesFromCountedCells`), which the dialog and the DM's `level_up` both read again before the level (the dialog after it
+too, as it reads every feature), so an older save's are right on either path; `level_up` names what that read corrected
+("Uses read from the Fighter class table: Action Surge 2 → 1, Indomitable none → 1.") apart from what grew.
 
 ### Player-side controls that talk to the DM
 

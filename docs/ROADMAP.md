@@ -17,24 +17,35 @@ vibe-coding session.
 
 - **Class and lineage extras the app doesn't count**: a Speed the DM raised by hand for Unarmored Movement, Fast
   Movement or Roving before the app counted them now gets the bonus on top; the sheet text shows the base and the status
-  line the bonus, and `update_character` speed says the number it sets is the Speed before class features, so the DM
-  sets it back. A Thief's Climb Speed (Second-Story Work) and Gift of the Depths' Swim Speed, each equal to the Speed,
-  are the DM's to record, and Acrobatic Movement isn't on the battle map. Lineage spells: a lineage its book describes
-  in a paragraph rather than a table row, or one from a switched-off book, gives none; a hero already past character
-  level 3 or 5 gets them at its next level-up (a level in a class the builder data lacks adds none; a later one does),
-  and one who won't level again only by hand, since `spells_add` can't mark a spell always prepared; a lineage spell
-  cast with an ability the sheet's spellcasting doesn't use has no save DC on the sheet; and the Spells tab reads "0
-  prepared" for a hero whose leveled spells are all always prepared. Draconic Flight and Large Form get their use at
-  character level 5 through the level-up dialog only, not the DM's `level_up`. Counted uses: a Fighter keeps the
-  duplicate Action Surge and Indomitable entries an older version added until its next level-up here, and an older
-  version on a synced device adds them again at Fighter 13 and 17 and shows the Speed without class features. A book
-  Fighter whose class table counts no uses keeps the uses it reads today. One whose "Indomitable" follows its table gets
-  a second entry from the DM's `features_add` of a counted name ("Indomitable (two uses)"), which no level-up folds, as
-  a DM's "Wild Shape (2 uses)" beside the Druid's "Wild Shape" stays beside it; an older save's bare "Indomitable"
-  without uses, beside a counted entry the DM's `level_up` added, collapses in the level-up dialog under the counted
-  name, which then stops it growing with the table (the DM's `level_up` reads the table first and keeps it); and
-  `level_up` lists a count the table corrects downward ("Action Surge: 2 → 1 uses") among the features that grew. Two
-  classes of one name (an SRD Fighter beside a book's) count as one family.
+  line the bonus, and `update_character` speed says the number it sets is the Speed before the features it names ("the
+  Speed before Fast Movement"), so the DM sets it back. A Thief's Climb Speed (Second-Story Work) and Gift of the
+  Depths' Swim Speed, each equal to the Speed, are the DM's to record, and Acrobatic Movement isn't on the battle map. A
+  Ranger's Climb and Swim Speeds follow its Speed, so a transformation's change to the walking Speed moves them without
+  a line of their own, and a call that changes both names the climb or swim as it stood before the walking change; the
+  warning when something else changed a transformation's speed meanwhile names the stored speed, the number
+  `update_character` other_speeds sets. Lineage spells: a lineage its book describes in a paragraph rather than a table
+  row, or one from a switched-off book, gives none; a book's lineage table laid out other than
+  `Lineage | Level 1 | Level 3 | Level 5` is read by position, its third and fourth columns taken as the Level 3 and
+  Level 5 spells whatever they are headed (a cell that isn't a spell is listed at every level-up from character level 3
+  as one for the DM to add, and a table with a column more gives its Level 3 spell at character level 5 and its Level 5
+  spell never, saying nothing); a book's lineage trait whose paragraph on the later spells doesn't say "learn a
+  higher-level spell" reads a use of its own off "cast it once without a spell slot", beside the spells' own counters (a
+  hero made before this version from a book worded otherwise keeps that use until the DM removes it); a hero already
+  past character level 3 or 5 gets the spells at its next level-up (a level in a class the builder data lacks adds none;
+  a later one does), and one who won't level again only by hand, since `spells_add` can't mark a spell always prepared;
+  a lineage spell cast with an ability the sheet's spellcasting doesn't use has no save DC on the sheet; and the Spells
+  tab reads "0 prepared" for a hero whose leveled spells are all always prepared. Draconic Flight and Large Form get
+  their use at character level 5 through the level-up dialog only, not the DM's `level_up`. Counted uses: a Fighter
+  keeps the duplicate Action Surge and Indomitable entries an older version added (the class's own, or the DM's from an
+  older `level_up`) until its next level-up here, and an older version on a synced device adds them again at Fighter 13
+  and 17, reads a book Fighter's counts as it used to and shows the Speed without class features. A book Fighter whose
+  class table counts no uses keeps the uses it reads today. An older-edition book's Fighter doesn't stand in for the
+  SRD's, so only its own entries' names count: the DM's `features_add` of a counted name ("Indomitable (two uses)")
+  beside its bare "Indomitable" is added beside it, and no level-up folds the two, as a DM's "Wild Shape (2 uses)"
+  beside the Druid's "Wild Shape" stays beside it. A DM's ruled Action Surge or Indomitable keeps its number at the
+  table's later rows, and `level_up` names the kept ruling, not the table's new count; a `uses_max` the DM gives one of
+  the table's names in `level_up` `new_features` ("Indomitable (two uses)" with 3) gives way to the name's count, which
+  the result shows as growth (1 → 2). Two classes of one name (an SRD Fighter beside a book's) count as one family.
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
   DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
   Signature Spells, copying a spell into a spellbook and Evocation Savant's free spells (the DM records those as
