@@ -14,6 +14,7 @@ import {
   type Ability,
   type ActiveCondition,
   type Character,
+  type ClassLevel,
   type Currency,
   type EquipmentOption,
   type Feature,
@@ -873,6 +874,58 @@ function rechargeText(uses: FeatureUses): string {
 
 const featureName = (f: Feature) => f.name;
 
+// Counted families: a class's features the class table names by their uses ("Action Surge (one use)" at Fighter 2,
+// "Action Surge (two uses)" at 17), which the sheet keeps as one entry per class (levelUp folds a later row into it).
+
+const USE_COUNT = /\((\w+) uses?\)\s*$/i;
+const COUNT_WORDS: Readonly<Record<string, number>> = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10, once: 1, twice: 2 };
+
+/**
+ * The use count a feature's name ends with, as the SRD 5.2.1 Fighter Features table writes it ("Action Surge (one use)",
+ * "Indomitable (three uses)"; digits too, "(2 uses)"), or null: the number the data layer's usesFromName reads from
+ * the name, so the level-up dialog's refresh and the engine agree.
+ */
+export function nameUseCount(name: string): number | null {
+  const word = USE_COUNT.exec(name)?.[1];
+  if (word === undefined) return null;
+  const n = Number(word);
+  const count = Number.isFinite(n) ? n : (COUNT_WORDS[word.toLowerCase()] ?? null);
+  return count !== null && count > 0 ? count : null;
+}
+
+/** A feature's name less its one trailing parenthetical ("Indomitable (two uses)" → "Indomitable"), as baseFeatureName. */
+export function featureBaseName(name: string): string {
+  return name.replace(/\s*\([^()]*\)\s*$/, '').trim() || name.trim();
+}
+
+/** The hero's class a class feature is from by its source name ("Fighter 9" → the hero's Fighter), if any. */
+export function featureClassOf(f: Pick<Feature, 'source' | 'sourceName'>, classes: readonly ClassLevel[]): ClassLevel | undefined {
+  if (f.source !== 'class') return undefined;
+  const owner = nameKey((f.sourceName ?? '').replace(/\s+\d+$/, ''));
+  return owner ? classes.find((cl) => nameKey(cl.name) === owner) : undefined;
+}
+
+/**
+ * The DM's entry of a counted family whose base name is `base`: a class feature "Granted in play" (features_add) named
+ * as the app's level-up reminder names the table's rows, "<base>" or "<base> (N use(s))".
+ */
+export function isGrantedFamilyEntry(f: Pick<Feature, 'name' | 'source' | 'sourceName'>, base: string): boolean {
+  if (f.source !== 'class' || nameKey(f.sourceName ?? '') !== 'granted-in-play') return false;
+  return nameKey(featureBaseName(f.name)) === nameKey(base) && (nameKey(f.name) === nameKey(base) || nameUseCount(f.name) !== null);
+}
+
+/**
+ * For a name with a trailing use count ("Indomitable (one use)", as the sheet a session began with names it): the
+ * entries of its counted family on the sheet (the class features of its base name, one of them named with a count;
+ * after a level-up, the one entry renamed by the table: "Indomitable (two uses)"). Empty for any other name.
+ */
+function countedFamilyEntries(c: Character, name: string): Feature[] {
+  if (nameUseCount(name) === null) return [];
+  const base = nameKey(featureBaseName(name));
+  const family = c.features.filter((f) => f.source === 'class' && nameKey(featureBaseName(f.name)) === base);
+  return family.some((f) => nameUseCount(f.name) !== null) ? family : [];
+}
+
 /** Find a feature by (fuzzy, case-insensitive) name. */
 export function findFeature(c: Character, name: string): Feature | undefined {
   return matchByName(c.features, name, featureName).match;
@@ -902,22 +955,28 @@ function splitQualifier(text: string): { base: string; words: string } | null {
 /**
  * The features named `name` exactly; else, for "Lantern Luck (Mothkin)", those named "Lantern Luck" whose source
  * ("feat", "species") or source name ("Mothkin"; "Ability Score Improvement" for "Ability Score Improvement (Fighter
- * 8)") the parentheses give: how the DM picks one of several features of one name.
+ * 8)") the parentheses give: how the DM picks one of several features of one name. Else, for a name with a use count
+ * ("Indomitable (one use)" from the sheet the session began with), its counted family's entry ("Indomitable (two uses)"
+ * since the level-up that grew it; countedFamilyEntries).
  */
 function namedFeatures(c: Character, name: string): Feature[] {
   const exact = c.features.filter((f) => nameKey(f.name) === nameKey(name));
-  const split = exact.length ? null : splitQualifier(name);
-  if (!split) return exact;
-  const words = nameKey(split.words);
-  const same = c.features.filter((f) => nameKey(f.name) === nameKey(split.base));
-  const exactly = same.filter((f) => nameKey(f.source) === words || nameKey(f.sourceName ?? '') === words);
-  return exactly.length ? exactly : same.filter((f) => nameKey(f.sourceName ?? '').startsWith(`${words}-`));
+  if (exact.length) return exact;
+  const split = splitQualifier(name);
+  if (split) {
+    const words = nameKey(split.words);
+    const same = c.features.filter((f) => nameKey(f.name) === nameKey(split.base));
+    const exactly = same.filter((f) => nameKey(f.source) === words || nameKey(f.sourceName ?? '') === words);
+    const qualified = exactly.length ? exactly : same.filter((f) => nameKey(f.sourceName ?? '').startsWith(`${words}-`));
+    if (qualified.length) return qualified;
+  }
+  return countedFamilyEntries(c, name);
 }
 
 /**
  * A feature by name (namedFeatures, else matchByName). Of several of that name (a feat beside the trait it's named
- * like, a Repeatable feat taken twice): the first whose uses pass the first test in `fits`, else the next test, else
- * the first with uses, else the first.
+ * like, a Repeatable feat taken twice; an older sheet's counted family in two entries): the first whose uses pass the
+ * first test in `fits`, else the next test, else the first with uses, else the first.
  */
 function featureByName(c: Character, name: string, fits: ReadonlyArray<(uses: FeatureUses) => boolean>): NameMatch<Feature> {
   const named = namedFeatures(c, name);
@@ -1054,17 +1113,40 @@ const storesNumbers = (f: Pick<Feature, 'name' | 'source'>): boolean => isAlertF
  * power is the transformation's (transform_character changes it, and its end takes it): another entry of its name joins
  * beside it, as the level-up panel's feat does. A feat whose numbers the sheet stores (Alert, Tough) stays the feat: a
  * species trait or class feature of its name joins beside it too, so its numbers are never left without it, nor paid
- * again when the feat is recorded after.
+ * again when the feat is recorded after. A name with a use count that no feature has ("Indomitable (two uses)", as the
+ * level-up reminder names the table's row) rewrites its counted family's entry instead of adding a second one: the
+ * DM's ruling of its uses first, else the class's own entry ("Indomitable (one use)", "Fighter 9"), else the DM's
+ * (isGrantedFamilyEntry), as a level-up keeps one.
  */
 export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | 'source'>): Feature | undefined {
-  const key = nameKey(feature.name.trim());
+  const name = feature.name.trim();
   const side = featOrTrait(feature.source);
-  return c.features.find((f) => {
+  const fits = (f: Feature) => {
     const theirs = featOrTrait(f.source);
-    if (nameKey(f.name) !== key || (f.source === 'transformation') !== (feature.source === 'transformation')) return false;
+    if ((f.source === 'transformation') !== (feature.source === 'transformation')) return false;
     if (side === 'trait' && storesNumbers(f)) return false;
     return !side || !theirs || side === theirs;
-  });
+  };
+  const exact = c.features.find((f) => nameKey(f.name) === nameKey(name) && fits(f));
+  if (exact || nameUseCount(name) === null) return exact;
+  const base = featureBaseName(name);
+  const family = c.features.filter(
+    (f) => fits(f) && nameKey(featureBaseName(f.name)) === nameKey(base) && (featureClassOf(f, c.classes) !== undefined || isGrantedFamilyEntry(f, base)),
+  );
+  return family.find((f) => f.uses?.ruled) ?? family.find((f) => featureClassOf(f, c.classes)) ?? family[0];
+}
+
+/**
+ * How the uses a rewrite gives (addFeature) grow: the number the feature had keeps its scale and any ruling; another
+ * number is the DM's ruling (FeatureUses.ruled). A class feature named with a use count (`named`) given that number
+ * ("Indomitable (two uses)" with 2) is the table's row under its name, no ruling, and clears one it had (SRD 5.2.1
+ * Fighter Features table: "Indomitable (two uses)" at 13).
+ */
+function rewrittenGrowth(old: FeatureUses | undefined, max: number, named: number | null): Pick<FeatureUses, 'scale' | 'ruled'> {
+  const scale = old?.max === max && old.scale ? { scale: old.scale } : {};
+  if (named === max) return scale;
+  if (old?.max !== max) return { ruled: true };
+  return { ...scale, ...(old.ruled ? { ruled: true } : {}) };
 }
 
 /**
@@ -1072,9 +1154,11 @@ export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | '
  * name: "Mothkin", "Ability Score Improvement (Fighter 4)", which the DM's "Granted in play" never replaces, so a name
  * a result gave, "Lantern Luck (Mothkin)", still finds it) and the uses it has spent (a features_restore or a rest gives
  * those back). Uses that keep the number keep how it grows (a Rage the DM rewrites still follows the Barbarian table);
- * another number, or uses where it had none, is the DM's ruling (FeatureUses.ruled), which level-ups leave as it is.
- * Beside a namesake, the result names the feature as a use or restore takes it now (featureLabel). A feat and a species
- * trait or class feature never merge (featOrTrait):
+ * another number, or uses where it had none, is the DM's ruling (FeatureUses.ruled), which level-ups leave as it is,
+ * except a class feature named with a use count given that number (rewrittenGrowth). A counted name that rewrote its
+ * family's entry under another name (featureToRewrite) says so: "Updated feature: Indomitable (one use) → Indomitable
+ * (two uses)". Beside a namesake, the result names the feature as a use or restore takes it now (featureLabel). A feat
+ * and a species trait or class feature never merge (featOrTrait):
  * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
  * and the trait keeps its text. A feature on neither side (the DM's entry for an Epic Boon as a boon, or an Origin feat
  * as its background's) updates the one of its name on either. The sheet coming to hold the Alert or Tough feat gets its
@@ -1089,14 +1173,15 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
     const updated: Feature = { ...existing, ...feature, id: existing.id, name, ...(existing.sourceName ? { sourceName: existing.sourceName } : {}) };
     const old = existing.uses;
     if (feature.uses) {
-      const growth = old?.max === feature.uses.max ? { ...(old.scale ? { scale: old.scale } : {}), ...(old.ruled ? { ruled: true } : {}) } : { ruled: true };
+      const growth = rewrittenGrowth(old, feature.uses.max, updated.source === 'class' ? nameUseCount(name) : null);
       updated.uses = { ...feature.uses, used: Math.min(old?.used ?? feature.uses.used, feature.uses.max), ...growth };
     }
     const character = replaceFeature(c, updated);
     // A trait rewritten by a boon's or other entry of the name is the Alert or Tough feat now (isFeatNamed): it brings its numbers.
     const numbers = joiningNumbers(c, character);
     // By the name a use or restore takes now, beside a namesake (a boon's entry over a trait changes its "(species)").
-    return { character: numbers.character, events: [gameEvent('feature-restored', `Updated feature: ${featureLabel(updated, character.features)}`), ...numbers.events] };
+    const renamed = nameKey(existing.name) === nameKey(name) ? '' : `${existing.name} → `;
+    return { character: numbers.character, events: [gameEvent('feature-restored', `Updated feature: ${renamed}${featureLabel(updated, character.features)}`), ...numbers.events] };
   }
   const added: Feature = { ...feature, id: feature.id ?? newId(), name };
   const features = [...c.features, added];

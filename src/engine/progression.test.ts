@@ -941,3 +941,234 @@ describe('levelUp: imported classes and subclasses (SRD 5.2.1 Multiclassing; Mul
     expect(r.character.spellcasting?.slots[1]).toEqual({ max: 2, used: 0 });
   });
 });
+
+describe('levelUp: one entry for each counted family, Action Surge and Indomitable (SRD 5.2.1 Fighter)', () => {
+  // srd:class:fighter, Fighter Features table: "Action Surge (one use), Tactical Mind" at 2, "Indomitable (one use),
+  // Tactical Master" at 9, "Indomitable (two uses), Studied Attacks" at 13, "Action Surge (two uses), Indomitable (three
+  // uses)" at 17. The texts below are the SRD's own.
+  const SURGE =
+    "You can push yourself beyond your normal limits for a moment. On your turn, you can take one additional action, except the Magic action.\n\nOnce you use this feature, you can't do so again until you finish a Short or Long Rest. Starting at level 17, you can use it twice before a rest but only once on a turn.";
+  const INDOMITABLE =
+    "If you fail a saving throw, you can reroll it with a bonus equal to your Fighter level. You must use the new roll, and you can't use this feature again until you finish a Long Rest.\n\nYou can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17.";
+  /** An entry on the sheet: the class's own ("Fighter 9"), as the level-up dialog adds the table's row. */
+  const entry = (id: string, name: string, level: number, max: number, used = 0): Feature => ({
+    id,
+    name,
+    source: 'class',
+    sourceName: `Fighter ${level}`,
+    description: name.startsWith('Action Surge') ? SURGE : INDOMITABLE,
+    uses: { max, used, recharge: name.startsWith('Action Surge') ? 'short' : 'long' },
+  });
+  /** A new feature as the level-up dialog gives it from the data (gainedFeatures: the table's row, uses from its name). */
+  const row = (name: string, level: number, max?: number): Omit<Feature, 'id'> => {
+    const { id: _id, ...f } = entry('', name, level, max ?? 0);
+    return max === undefined ? { ...f, description: '', uses: undefined } : f;
+  };
+  const fighterAt = (level: number, features: Feature[]) =>
+    mira({ classes: [asClass('Fighter', level)], hitDice: [{ die: 10, total: level, spent: 0 }], spellcasting: undefined, features });
+  const family = (c: Character, base: string) => c.features.filter((f) => f.name.startsWith(base));
+  const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
+  const up = (c: Character, newFeatures?: Omit<Feature, 'id'>[]) => levelUp(c, { className: 'Fighter', hpMethod: 'average', ...(newFeatures ? { newFeatures } : {}) });
+
+  it('Fighter 2 and 9 add their rows as they always have, through the level-up dialog and the DM\'s level_up', () => {
+    const two = up(fighterAt(1, []), [row('Action Surge (one use)', 2, 1), row('Tactical Mind', 2)]);
+    expect(two.character.features.map((f) => [f.name, f.uses?.max])).toEqual([['Action Surge (one use)', 1], ['Tactical Mind', undefined]]);
+    expect(messages(two)).toContain('New features: Action Surge (one use), Tactical Mind.');
+    expect(two.merges).toBeUndefined();
+    expect(two.folded).toBeUndefined();
+    // The DM's level_up names no SRD class features: the reminder is today's, byte for byte.
+    expect(up(fighterAt(1, [])).reminders).toContain('New Fighter 2 features to add to the sheet: Action Surge (one use), Tactical Mind.');
+    const eight = fighterAt(8, [entry('surge', 'Action Surge (one use)', 2, 1)]);
+    expect(up(eight).reminders).toContain('New Fighter 9 features to add to the sheet: Indomitable (one use), Tactical Master.');
+    expect(up(eight).character.features).toEqual(eight.features);
+    const nine = up(eight, [row('Indomitable (one use)', 9, 1), row('Tactical Master', 9)]);
+    expect(nine.character.features.map((f) => f.name)).toEqual(['Action Surge (one use)', 'Indomitable (one use)', 'Tactical Master']);
+    expect(messages(nine)).toContain('New features: Indomitable (one use), Tactical Master.');
+  });
+
+  it('Fighter 13 grows the Indomitable the sheet holds in place, its spent use kept, through either path ("twice before a Long Rest starting at level 13")', () => {
+    const twelve = fighterAt(12, [entry('surge', 'Action Surge (one use)', 2, 1), entry('ind', 'Indomitable (one use)', 9, 1, 1)]);
+    const grown = { ...twelve.features[1], name: 'Indomitable (two uses)', uses: { max: 2, used: 1, recharge: 'long' } };
+    const dialog = up(twelve, [row('Indomitable (two uses)', 13, 2), row('Studied Attacks', 13)]);
+    const dm = up(twelve);
+    for (const r of [dialog, dm]) {
+      expect(family(r.character, 'Indomitable')).toEqual([grown]);
+      expect(family(r.character, 'Action Surge')).toEqual([twelve.features[0]]);
+      expect(messages(r)).toContain('Feature uses now: Indomitable (two uses) 1 → 2.');
+      expect(r.merges).toBeUndefined();
+    }
+    // The dialog's row is folded in: no new feature, and the result says so for the notice's list.
+    expect(messages(dialog)).toContain('New features: Studied Attacks.');
+    expect(dialog.folded).toEqual(['Indomitable (two uses)']);
+    // The DM's level_up: the row grew the entry, so the reminder lists only what the sheet lacks.
+    expect(dm.reminders).toContain('New Fighter 13 features to add to the sheet: Studied Attacks.');
+    expect(messages(dm).some((m) => m.startsWith('New features'))).toBe(false);
+    expect(dm.folded).toBeUndefined();
+  });
+
+  it('Fighter 17 grows both, spent uses kept ("Starting at level 17, you can use it twice before a rest"; "three times before a Long Rest starting at level 17")', () => {
+    const sixteen = fighterAt(16, [entry('surge', 'Action Surge (one use)', 2, 1, 1), entry('ind', 'Indomitable (two uses)', 9, 2, 2)]);
+    const dialog = up(sixteen, [row('Action Surge (two uses)', 17, 2), row('Indomitable (three uses)', 17, 3)]);
+    const dm = up(sixteen);
+    for (const r of [dialog, dm]) {
+      expect(r.character.features).toEqual([
+        { ...sixteen.features[0], name: 'Action Surge (two uses)', uses: { max: 2, used: 1, recharge: 'short' } },
+        { ...sixteen.features[1], name: 'Indomitable (three uses)', uses: { max: 3, used: 2, recharge: 'long' } },
+      ]);
+      expect(messages(r)).toContain('Feature uses now: Action Surge (two uses) 1 → 2 and Indomitable (three uses) 2 → 3.');
+      expect(messages(r).some((m) => m.startsWith('New features'))).toBe(false);
+      expect(r.reminders.some((m) => m.startsWith('New Fighter 17 features'))).toBe(false);
+    }
+    expect(dialog.folded).toEqual(['Action Surge (two uses)', 'Indomitable (three uses)']);
+  });
+
+  it("merges an older version's duplicates at the next level-up: spent uses at most the count the family had (S1)", () => {
+    // Fighter 16 made by an older version: "(one use)" and "(two uses)" side by side, all three uses spent there (the
+    // SRD's two at 16). At 17 it has three uses, two of them spent: one left.
+    const old16 = fighterAt(16, [entry('surge', 'Action Surge (one use)', 2, 1), entry('ind1', 'Indomitable (one use)', 9, 1, 1), entry('ind2', 'Indomitable (two uses)', 13, 2, 2)]);
+    const r = up(old16, [row('Action Surge (two uses)', 17, 2), row('Indomitable (three uses)', 17, 3)]);
+    expect(family(r.character, 'Indomitable')).toEqual([{ ...old16.features[1], name: 'Indomitable (three uses)', uses: { max: 3, used: 2, recharge: 'long' } }]);
+    expect(messages(r)).toContain('Indomitable (one use) and Indomitable (two uses) merged into Indomitable (three uses): 3 uses, 1 left.');
+    // The merge isn't growth: only Action Surge grew.
+    expect(messages(r)).toContain('Feature uses now: Action Surge (two uses) 1 → 2.');
+    expect(r.merges).toEqual([
+      { id: 'ind1', name: 'Indomitable (three uses)', merged: ['Indomitable (one use)', 'Indomitable (two uses)'], text: 'merged into Indomitable (three uses) (3 uses, 1 left): Indomitable (one use), Indomitable (two uses)' },
+    ]);
+    // A Fighter 17 with an older version's five entries: one of each at its next level-up, whatever it brings.
+    const old17 = fighterAt(17, [
+      entry('surge1', 'Action Surge (one use)', 2, 1, 1),
+      entry('ind1', 'Indomitable (one use)', 9, 1, 1),
+      entry('ind2', 'Indomitable (two uses)', 13, 2),
+      entry('surge2', 'Action Surge (two uses)', 17, 2),
+      entry('ind3', 'Indomitable (three uses)', 17, 3),
+    ]);
+    const next = up(old17);
+    expect(next.character.features).toEqual([
+      { ...old17.features[0], name: 'Action Surge (two uses)', uses: { max: 2, used: 1, recharge: 'short' } },
+      { ...old17.features[1], name: 'Indomitable (three uses)', uses: { max: 3, used: 1, recharge: 'long' } },
+    ]);
+    expect(messages(next)).toEqual(
+      expect.arrayContaining([
+        'Action Surge (one use) and Action Surge (two uses) merged into Action Surge (two uses): 2 uses, 1 left.',
+        'Indomitable (one use), Indomitable (two uses) and Indomitable (three uses) merged into Indomitable (three uses): 3 uses, 2 left.',
+      ]),
+    );
+    expect(next.merges?.map((m) => m.id)).toEqual(['surge1', 'ind1']);
+  });
+
+  it("keeps the DM's ruling: the ruled entry stays as it is, the row and any duplicate fold into it, and the reminder still names the row (S2)", () => {
+    const ruled: Feature = { ...entry('ind', 'Indomitable (one use)', 9, 2, 1), uses: { max: 2, used: 1, recharge: 'long', ruled: true } };
+    const sixteen = fighterAt(16, [entry('surge', 'Action Surge (one use)', 2, 1), ruled]);
+    const dialog = up(sixteen, [row('Action Surge (two uses)', 17, 2), row('Indomitable (three uses)', 17, 3)]);
+    for (const r of [dialog, up(sixteen)]) {
+      expect(family(r.character, 'Indomitable')).toEqual([ruled]);
+      expect(family(r.character, 'Action Surge')).toEqual([{ ...sixteen.features[0], name: 'Action Surge (two uses)', uses: { max: 2, used: 0, recharge: 'short' } }]);
+      expect(r.reminders).toContain('New Fighter 17 features to add to the sheet: Indomitable (three uses).');
+      expect(r.merges).toBeUndefined();
+    }
+    expect(dialog.folded).toEqual(['Action Surge (two uses)', 'Indomitable (three uses)']);
+    // Beside an older version's duplicate: one entry, the ruling's, its spent uses at most its number.
+    const both = fighterAt(16, [ruled, entry('ind2', 'Indomitable (two uses)', 13, 2, 2)]);
+    const merged = up(both);
+    expect(merged.character.features).toEqual([{ ...ruled, uses: { ...ruled.uses!, used: 2 } }]);
+    expect(messages(merged)).toContain('Indomitable (one use) and Indomitable (two uses) merged into Indomitable (one use): 2 uses, 0 left.');
+    // The ruling on the later entry (the DM rewrote the level-13 one with 3): that entry is the one kept, under its name.
+    const later: Feature = { ...entry('ind2', 'Indomitable (two uses)', 13, 3), uses: { max: 3, used: 0, recharge: 'long', ruled: true } };
+    const laterRuled = up(fighterAt(14, [entry('ind1', 'Indomitable (one use)', 9, 1, 1), later]));
+    expect(laterRuled.character.features).toEqual([{ ...later, uses: { ...later.uses!, used: 1 } }]);
+    expect(laterRuled.merges).toMatchObject([{ id: 'ind2', name: 'Indomitable (two uses)', merged: ['Indomitable (one use)', 'Indomitable (two uses)'] }]);
+  });
+
+  it("folds the DM's entry of the table's name into the class's (S3); a family of the DM's entries only is left as it is", () => {
+    // An older sheet: the DM followed the Fighter 13 reminder with features_add beside the class's entry.
+    const dm: Feature = { id: 'dm', name: 'Indomitable (two uses)', source: 'class', sourceName: 'Granted in play', description: 'DM words.', uses: { max: 2, used: 1, recharge: 'long' } };
+    const houseRule: Feature = { ...dm, id: 'house', name: 'Indomitable (house rule)', uses: { max: 1, used: 0, recharge: 'long' } };
+    const thirteen = fighterAt(13, [entry('surge', 'Action Surge (one use)', 2, 1), entry('ind', 'Indomitable (one use)', 9, 1), dm, houseRule]);
+    const r = up(thirteen);
+    expect(family(r.character, 'Indomitable')).toEqual([{ ...thirteen.features[1], name: 'Indomitable (two uses)', uses: { max: 2, used: 1, recharge: 'long' } }, houseRule]);
+    expect(messages(r)).toContain('Indomitable (one use) and Indomitable (two uses) merged into Indomitable (two uses): 2 uses, 1 left.');
+    // The DM's bare "Indomitable" with the same count beside it: the table's name stays.
+    const bare: Feature = { ...dm, id: 'bare', name: 'Indomitable', uses: { max: 2, used: 0, recharge: 'long' } };
+    const fourteen = fighterAt(14, [{ ...entry('ind', 'Indomitable (two uses)', 9, 2, 1) }, bare]);
+    expect(up(fourteen).character.features).toEqual([fourteen.features[0]]);
+    // A DM-only Fighter (every feature from features_add): nothing folds, and the reminder is today's.
+    const granted = (name: string, max: number): Feature => ({ id: name, name, source: 'class', sourceName: 'Granted in play', description: 'DM words.', uses: { max, used: 0, recharge: 'long' } });
+    const dmOnly = fighterAt(12, [granted('Action Surge (one use)', 1), granted('Indomitable (one use)', 1)]);
+    const dmUp = up(dmOnly);
+    expect(dmUp.character.features).toEqual(dmOnly.features);
+    expect(dmUp.reminders).toContain('New Fighter 13 features to add to the sheet: Indomitable (two uses), Studied Attacks.');
+  });
+
+  it("folds the DM's new_features entry of the family into the entry the sheet holds, by the table's name or the bare name", () => {
+    const twelve = fighterAt(12, [entry('surge', 'Action Surge (one use)', 2, 1), entry('ind', 'Indomitable (one use)', 9, 1, 1)]);
+    const grown = { ...twelve.features[1], name: 'Indomitable (two uses)', uses: { max: 2, used: 1, recharge: 'long' } };
+    const dmEntry = (name: string): Omit<Feature, 'id'> => ({ name, source: 'class', description: 'DM words.', uses: { max: 2, used: 0, recharge: 'long' } });
+    for (const name of ['Indomitable (two uses)', 'Indomitable']) {
+      const r = up(twelve, [dmEntry(name)]);
+      expect(family(r.character, 'Indomitable')).toEqual([grown]);
+      expect(messages(r)).toContain('Feature uses now: Indomitable (two uses) 1 → 2.');
+      expect(messages(r).some((m) => m.startsWith('New features'))).toBe(false);
+      expect(r.folded).toEqual([name]);
+      expect(r.reminders).toContain('New Fighter 13 features to add to the sheet: Studied Attacks.');
+    }
+  });
+
+  it('counts by Fighter level in a multiclass: a Wizard or Rogue level grows nothing (srd:rule:multiclassing-class-features: "When you gain a new level in a class, you get its features for that level.")', () => {
+    // Fighter 12 / Wizard 1 levelling Wizard (character level 14) keeps one Indomitable; a Fighter level gives two.
+    const fw = mira({ classes: [asClass('Fighter', 12), asClass('Wizard', 1)], features: [entry('surge', 'Action Surge (one use)', 2, 1), entry('ind', 'Indomitable (one use)', 9, 1)] });
+    const wizard = levelUp(fw, { className: 'Wizard', hpMethod: 'average' });
+    expect(wizard.character.features).toEqual(fw.features);
+    expect(messages(wizard).some((m) => m.startsWith('Feature uses now'))).toBe(false);
+    expect(family(levelUp(fw, { className: 'Fighter', hpMethod: 'average' }).character, 'Indomitable')).toMatchObject([{ name: 'Indomitable (two uses)', uses: { max: 2 } }]);
+    // Fighter 16 / Rogue 1 (character level 17) keeps one Action Surge, by either class's level.
+    const fr = (fighter: number, rogue: number) =>
+      mira({ classes: [asClass('Fighter', fighter), asClass('Rogue', rogue)], spellcasting: undefined, features: [entry('surge', 'Action Surge (one use)', 2, 1), entry('ind', 'Indomitable (two uses)', 9, 2)] });
+    for (const r of [levelUp(fr(15, 1), { className: 'Fighter', hpMethod: 'average' }), levelUp(fr(16, 1), { className: 'Rogue', hpMethod: 'average' })]) {
+      expect(r.character.features).toEqual(fr(16, 1).features);
+    }
+  });
+
+  it('every other repeated row is added and kept as always: Ability Score Improvement (Fighter 6, 8), Improved Brutal Strike (Barbarian 13, 17), Mystic Arcanum (Warlock 13), Expertise (Rogue 6, Bard 9)', () => {
+    const feature = (id: string, name: string, sourceName: string, description = ''): Feature => ({ id, name, source: 'class', sourceName, description });
+    const add = ({ id: _id, ...f }: Feature) => f;
+    // srd:class:fighter table: "| 6 | +3 | Ability Score Improvement | 3 | 4 |", "| 8 | +3 | Ability Score Improvement | 3 | 4 |".
+    const asi = (level: number) => feature(`asi${level}`, 'Ability Score Improvement', `Fighter ${level}`);
+    const six = up(fighterAt(5, [asi(4)]), [add(asi(6))]);
+    expect(six.character.features.map((f) => f.name)).toEqual(['Ability Score Improvement', 'Ability Score Improvement']);
+    expect(messages(six)).toContain('New features: Ability Score Improvement.');
+    expect(six.reminders.some((m) => m.startsWith('Fighter 6: Ability Score Improvement'))).toBe(true);
+    expect(six.folded).toBeUndefined();
+    const eight = up(fighterAt(7, [asi(4), asi(6)]), [add(asi(8))]);
+    expect(eight.character.features.map((f) => f.sourceName)).toEqual(['Fighter 4', 'Fighter 6', 'Fighter 8']);
+    expect(eight.reminders.some((m) => m.startsWith('Fighter 8: Ability Score Improvement'))).toBe(true);
+    // srd:class:barbarian: 13 "You have honed new ways to attack furiously. The following effects are now among your
+    // Brutal Strike options."; 17 "The extra damage of your Brutal Strike increases to 2d10. …": two rules, two entries.
+    const ibs13 = feature('ibs13', 'Improved Brutal Strike', 'Barbarian 13', 'You have honed new ways to attack furiously.');
+    const ibs17 = feature('ibs17', 'Improved Brutal Strike', 'Barbarian 17', 'The extra damage of your Brutal Strike increases to 2d10.');
+    const barbarian = mira({ classes: [asClass('Barbarian', 16)], spellcasting: undefined, features: [ibs13] });
+    const b17 = levelUp(barbarian, { className: 'Barbarian', hpMethod: 'average', newFeatures: [add(ibs17)] });
+    expect(b17.character.features.map((f) => [f.name, f.description])).toEqual([
+      ['Improved Brutal Strike', ibs13.description],
+      ['Improved Brutal Strike', ibs17.description],
+    ]);
+    // srd:class:warlock: "you gain another Warlock spell of your choice that can be cast in this way when you reach
+    // Warlock levels 13 (level 7 spell), 15 (level 8 spell), and 17 (level 9 spell)."
+    const warlock = mira({ classes: [asClass('Warlock', 12)], features: [feature('ma6', 'Mystic Arcanum (level 6 spell)', 'Warlock 11')] });
+    const w13 = levelUp(warlock, { className: 'Warlock', hpMethod: 'average', newFeatures: [add(feature('ma7', 'Mystic Arcanum (level 7 spell)', 'Warlock 13'))] });
+    expect(w13.character.features.map((f) => f.name)).toEqual(['Mystic Arcanum (level 6 spell)', 'Mystic Arcanum (level 7 spell)']);
+    expect(w13.reminders).toContain('Warlock 13: choose a Warlock spell for your Mystic Arcanum.');
+    // srd:class:rogue: "At Rogue level 6, you gain Expertise in two more of your skill proficiencies of your choice.";
+    // srd:class:bard: "At Bard level 9, you gain Expertise in two more of your skill proficiencies of your choice."
+    for (const [cls, from, to] of [['Rogue', 1, 6], ['Bard', 2, 9]] as const) {
+      const hero = mira({ classes: [asClass(cls, to - 1)], features: [feature('e1', 'Expertise', `${cls} ${from}`)] });
+      const r = levelUp(hero, { className: cls, hpMethod: 'average', newFeatures: [add(feature('e2', 'Expertise', `${cls} ${to}`))] });
+      expect(r.character.features.map((f) => f.sourceName)).toEqual([`${cls} ${from}`, `${cls} ${to}`]);
+      expect(r.reminders).toContain(`${cls} ${to}: choose two skill proficiencies to gain Expertise in.`);
+    }
+  });
+
+  it("a hero with no counted family levels up exactly as before: no merges, nothing folded", () => {
+    const r = levelUp(mira(), { className: 'Wizard', hpMethod: 'average' });
+    expect(Object.keys(r).sort()).toEqual(['character', 'events', 'hpGained', 'newLevel', 'reminders']);
+  });
+});

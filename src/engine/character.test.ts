@@ -534,6 +534,92 @@ describe('features', () => {
   });
 });
 
+describe("counted families: the one entry a level-up keeps, by any of the table's names (SRD 5.2.1 Fighter Features table)", () => {
+  // srd:class:fighter, Fighter Features table: "Indomitable (one use)" at 9, "Indomitable (two uses)" at 13,
+  // "Indomitable (three uses)" at 17. Indomitable: "You can use this feature twice before a Long Rest starting at level
+  // 13 and three times before a Long Rest starting at level 17."
+  const indomitable = (id: string, name: string, max: number, used = 0, extra: Partial<Feature> = {}): Feature => ({
+    id,
+    name,
+    source: 'class',
+    sourceName: 'Fighter 9',
+    description: 'Reroll a failed saving throw.',
+    uses: { max, used, recharge: 'long' },
+    ...extra,
+  });
+  const fighter = (features: Feature[]) =>
+    mira({ classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level: 13, hitDie: 10, casterType: 'none' }], spellcasting: undefined, features });
+  const tableRow = (name: string, max?: number): Omit<Feature, 'id'> => ({
+    name,
+    source: 'class',
+    sourceName: 'Granted in play',
+    description: 'Reroll a failed saving throw.',
+    ...(max ? { uses: { max, used: 0, recharge: 'long' as const } } : {}),
+  });
+
+  it('finds the entry by the name the sheet had when the session began: "Indomitable (one use)" uses "Indomitable (two uses)"', () => {
+    const c = fighter([indomitable('ind', 'Indomitable (two uses)', 2)]);
+    const used = useFeature(c, 'Indomitable (one use)');
+    expect(used.character.features[0].uses?.used).toBe(1);
+    expect(used.events[0].message).toBe('Used Indomitable (two uses) (1/2 left; recharges on a Long Rest)');
+    expect(restoreFeature(used.character, 'Indomitable (three uses)').events[0].message).toBe('Indomitable (two uses): regained 1 use (2/2)');
+    // The bare name found it before and still does.
+    expect(useFeature(c, 'Indomitable').events[0].message).toBe('Used Indomitable (two uses) (1/2 left; recharges on a Long Rest)');
+    // An older sheet's two entries: the one with a use left, as for any two of one name.
+    const old = fighter([indomitable('ind1', 'Indomitable (one use)', 1, 1), indomitable('ind2', 'Indomitable (two uses)', 2, 0, { sourceName: 'Fighter 13' })]);
+    expect(useFeature(old, 'Indomitable (three uses)').character.features.map((f) => f.uses?.used)).toEqual([1, 1]);
+  });
+
+  it('counted families only: a count on a name whose family no entry counts, or another parenthetical, finds nothing new', () => {
+    const wind: Feature = { id: 'wind', name: 'Second Wind', source: 'class', sourceName: 'Fighter 1', description: '', uses: { max: 4, used: 0, recharge: 'long' } };
+    expect(useFeature(fighter([wind]), 'Second Wind (two uses)').events[0].message).toBe('No feature named "Second Wind (two uses)".');
+    // srd:class:warlock: Mystic Arcanum "(level 6 spell)" and "(level 7 spell)" are two spells, not counts.
+    const arcanum: Feature = { id: 'ma6', name: 'Mystic Arcanum (level 6 spell)', source: 'class', sourceName: 'Warlock 11', description: '', uses: { max: 1, used: 0, recharge: 'long' } };
+    expect(useFeature(fighter([arcanum]), 'Mystic Arcanum (level 7 spell)').events[0].message).toBe('No feature named "Mystic Arcanum (level 7 spell)".');
+  });
+
+  it("features_add of the table's name rewrites the family's entry, not a second one; the table's count is no ruling, and clears one", () => {
+    const c = fighter([indomitable('ind', 'Indomitable (one use)', 1, 1)]);
+    const r = addFeature(c, tableRow('Indomitable (two uses)', 2));
+    expect(r.character.features).toEqual([{ ...c.features[0], name: 'Indomitable (two uses)', uses: { max: 2, used: 1, recharge: 'long' } }]);
+    expect(r.events[0].message).toBe('Updated feature: Indomitable (one use) → Indomitable (two uses)');
+    // Another number than the name's is the DM's ruling, as for any rewrite.
+    expect(addFeature(c, { ...tableRow('Indomitable (two uses)'), uses: { max: 3, used: 0, recharge: 'long' } }).character.features[0].uses).toEqual({ max: 3, used: 1, recharge: 'long', ruled: true });
+    // A ruling made under the old name (today's features_add "Indomitable (one use)" uses_max 2) is cleared by the
+    // table's count, under the table's name or the old one.
+    const ruled = fighter([indomitable('ind', 'Indomitable (one use)', 2, 0, { uses: { max: 2, used: 0, recharge: 'long', ruled: true } })]);
+    expect(addFeature(ruled, tableRow('Indomitable (two uses)', 2)).character.features[0].uses).toEqual({ max: 2, used: 0, recharge: 'long' });
+    expect(addFeature(ruled, tableRow('Indomitable (one use)', 1)).character.features[0].uses).toEqual({ max: 1, used: 0, recharge: 'long' });
+    // Without uses the rewrite keeps the entry's own.
+    expect(addFeature(c, tableRow('Indomitable (two uses)')).character.features[0]).toMatchObject({ name: 'Indomitable (two uses)', uses: c.features[0].uses });
+  });
+
+  it("features_add of the table's name rewrites the DM's own entry of the family, the DM's ruling first", () => {
+    // A DM-only Fighter: the DM's features_add "Indomitable (one use)" at 9, then the Fighter 13 reminder's name.
+    const dm = fighter([{ ...indomitable('dm', 'Indomitable (one use)', 1), sourceName: 'Granted in play' }]);
+    const r = addFeature(dm, tableRow('Indomitable (two uses)', 2));
+    expect(r.character.features.map((f) => [f.id, f.name, f.sourceName, f.uses])).toEqual([['dm', 'Indomitable (two uses)', 'Granted in play', { max: 2, used: 0, recharge: 'long' }]]);
+    // The class's entry beside a ruled one of the DM's: the ruling is the entry a level-up keeps, so it is rewritten.
+    const both = fighter([indomitable('ind', 'Indomitable (one use)', 1), { ...indomitable('dm', 'Indomitable', 3), sourceName: 'Granted in play', uses: { max: 3, used: 0, recharge: 'long', ruled: true } }]);
+    expect(addFeature(both, tableRow('Indomitable (two uses)', 2)).character.features.map((f) => [f.id, f.name, f.uses?.max, f.uses?.ruled])).toEqual([
+      ['ind', 'Indomitable (one use)', 1, undefined],
+      ['dm', 'Indomitable (two uses)', 2, undefined],
+    ]);
+  });
+
+  it('a name without a count, a feat of the name, or a DM entry named otherwise is added beside it as before', () => {
+    const c = fighter([indomitable('ind', 'Indomitable (one use)', 1)]);
+    const bare = addFeature(c, tableRow('Indomitable', 2));
+    expect(bare.character.features.map((f) => f.name)).toEqual(['Indomitable (one use)', 'Indomitable']);
+    expect(bare.events[0].message).toBe('Gained feature: Indomitable (2 uses, recharges on a Long Rest)');
+    const feat = addFeature(c, { ...tableRow('Indomitable (two uses)', 2), source: 'feat' });
+    expect(feat.character.features.map((f) => [f.name, f.source])).toEqual([['Indomitable (one use)', 'class'], ['Indomitable (two uses)', 'feat']]);
+    // The DM's "Indomitable (2/LR)" is no family entry: a counted name doesn't rewrite it.
+    const house = fighter([{ ...indomitable('house', 'Indomitable (2/LR)', 2), sourceName: 'Granted in play' }]);
+    expect(addFeature(house, tableRow('Indomitable (two uses)', 2)).character.features.map((f) => f.name)).toEqual(['Indomitable (2/LR)', 'Indomitable (two uses)']);
+  });
+});
+
 describe("addFeature: what a feat joining the sheet brings (the DM's features_add)", () => {
   const feat = (name: string, source: Feature['source'] = 'feat'): Omit<Feature, 'id'> => ({ name, source, description: 'By the DM.' });
 
