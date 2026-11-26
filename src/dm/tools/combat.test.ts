@@ -753,14 +753,49 @@ describe("update_combat concentrate on the hero: only the countdown of the sheet
     expect(blessing.s().combat).toBe(combat);
     expect(blessing.s().character).toBe(character);
     expect(blessing.s().log).toHaveLength(0);
-    // "Faith" for a held Shield of Faith isn't refused (the rules data has no "Faith"; the sheet's spell needs Concentration)
-    // and changes nothing (H9): concentrate gives rounds to the sheet's spell by its name.
+    // "Faith" for a held Shield of Faith isn't refused (the rules data has no "Faith"; the sheet's spell needs Concentration),
+    // and it is the sheet's spell, as update_character reads it (TX3): its rounds, by the sheet's name.
     const faithful = withSrdSpells({ character: cleric('Shield of Faith'), state: { combat: sampleCombat() } });
-    const before = faithful.s().combat;
-    expect((await faithful.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Faith', rounds: 5 })).content).toBe(
-      'Mira Voss is concentrating on Shield of Faith, not Faith: for the hero, concentrate only sets rounds (spell "Shield of Faith" with rounds); update_character concentration starts or ends the hero\'s Concentration.',
+    expect(firstLine((await faithful.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Faith', rounds: 3 })).content)).toBe(
+      "Mira Voss's Shield of Faith: 3 rounds left.",
     );
-    expect(faithful.s().combat).toBe(before);
+    expect(named(faithful.s().combat, 'Mira Voss')?.concentrationCountdown).toEqual({ spell: 'Shield of Faith', roundsLeft: 3 });
+  });
+
+  it('reads the name as update_character does: the spell it recorded, by its note or a looser name (TX3; srd:spell:hold-person: "Concentration, up to 1 minute"; srd:spell:bless: "Concentration, up to 1 minute")', async () => {
+    for (const [given, recorded] of [
+      ['Hold Person (3rd level)', 'Hold Person'],
+      ['Bless (upcast)', 'Bless'],
+    ]) {
+      const h = withSrdSpells({ state: { combat: sampleCombat() } });
+      await h.run('update_character', { concentration: given });
+      expect(h.s().character?.spellcasting?.concentratingOn).toBe(recorded);
+      expect(firstLine((await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: given, rounds: 4 })).content)).toBe(
+        `Mira Voss's ${recorded}: 4 rounds left.`,
+      );
+      expect(named(h.s().combat, 'Mira Voss')?.concentrationCountdown).toEqual({ spell: recorded, roundsLeft: 4 });
+    }
+    // Another spell by the rules data is still refused, quoting the name as given (srd:spell:greater-invisibility:
+    // "Concentration, up to 1 minute"; srd:spell:invisibility: "Concentration, up to 1 hour").
+    const sc = sampleCharacter().spellcasting!;
+    const greater = sampleCharacter({
+      spellcasting: { ...sc, spells: [...sc.spells, srdKnown('srd:spell:greater-invisibility', 'Greater Invisibility', 4, 'Wizard', true)], concentratingOn: 'Greater Invisibility' },
+    });
+    const h = withSrdSpells({ character: greater, state: { combat: sampleCombat() } });
+    const combat = h.s().combat;
+    expect((await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Invisibility', rounds: 4 })).content).toBe(
+      'Mira Voss is concentrating on Greater Invisibility, not Invisibility: for the hero, concentrate only sets rounds (spell "Greater Invisibility" with rounds); update_character concentration starts or ends the hero\'s Concentration.',
+    );
+    expect(h.s().combat).toBe(combat);
+  });
+
+  it('refuses Mage Armor for the hero without asking for its record once the hero holds it (srd:spell:mage-armor: "Duration: 8 hours")', async () => {
+    const recorded = sampleCharacter({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'] });
+    const h = withSrdSpells({ character: recorded, state: { combat: sampleCombat() } });
+    expect(await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Mage Armor', rounds: 4800 })).toEqual({
+      isError: true,
+      content: "Mage Armor doesn't require Concentration (Duration: 8 hours).",
+    });
   });
 });
 
@@ -1181,6 +1216,11 @@ describe('start_combat and end_combat with Concentration running (SPEC §3.4)', 
     // The call it names is accepted.
     expect((await h.run('update_character', { concentration: null })).isError).toBeUndefined();
     expect(h.s().character?.spellcasting?.concentratingOn).toBeNull();
+    // Mage Armor already recorded: the refusal alone, then the end (nothing left to record).
+    const recorded = withSrdSpells({ character: { ...concentrating('Mage Armor'), armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'] } });
+    expect((await recorded.run('start_combat', { combatants: [OLD_TAM] })).content).toContain(
+      "Mage Armor doesn't require Concentration (Duration: 8 hours). End it with update_character concentration: null.",
+    );
     // A mis-flagged Shield (srd:spell:shield: "Duration: 1 round"): its refusal names the hero, "The hero" when blank (D7).
     const blank = withSrdSpells({ character: { ...concentrating('Shield'), name: '   ' } });
     expect((await blank.run('start_combat', { combatants: [OLD_TAM] })).content).toContain(

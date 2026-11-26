@@ -41,12 +41,14 @@ import { redactImportedDeep } from '@/storage/backup';
 import { redactCopiedImports } from '@/storage/redact';
 import { campaignGraph } from '@/storage/testData';
 import type { CampaignData } from '@/storage/types';
+import { concentrationChange } from '@/ui/sheet/sheetChanges';
 import { deps, resetDmDeps, setDmDeps } from '../deps';
 import { SAMPLE_RULES } from '../testing/fakeData';
 import { setupHarness, type HarnessOptions } from '../testing/harness';
 import { acSpellLines } from './character';
 import type { ToolContext } from './context';
 import { runTool } from './handlers';
+import { heroConcentration } from './spellEffects';
 
 afterEach(() => {
   resetDmDeps();
@@ -1394,13 +1396,13 @@ describe("a spell that needs no Concentration never becomes the hero's (D5)", ()
 });
 
 describe("the hero's no-Concentration refusal reads the name as given, never a namesake on the sheet (RD1, on SRD 5.2.1's own entries)", () => {
-  /** The real rules index over the SRD 5.2.1 spells (its own name lookup), in place of the test's few entries. */
-  function withSrdSpells(opts: HarnessOptions = {}) {
+  /** The real rules index over the SRD 5.2.1 spells (its own name lookup) and `extra`, in place of the test's few entries. */
+  function withSrdSpells(opts: HarnessOptions = {}, extra: CompendiumEntry[] = []) {
     const h = setup(opts);
-    const index = createRulesIndex(SRD_SPELLS);
+    const index = createRulesIndex([...SRD_SPELLS, ...extra]);
     setDmDeps({ rulesIndex: async () => index });
     const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
-    return { ...h, run: (name: string, input: unknown) => runTool(name, input, ctx) };
+    return { ...h, ctx, run: (name: string, input: unknown) => runTool(name, input, ctx) };
   }
   /** Mira Voss's Wizard spells and these SRD spells, as the builder records them. */
   const wizardWith = (...names: string[]) => {
@@ -1507,6 +1509,175 @@ describe("the hero's no-Concentration refusal reads the name as given, never a n
     expect((await h.run('update_character', { concentration: 'Mage Armour' })).content).toBe(
       'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"].',
     );
+  });
+
+  it('refuses Mage Armor without asking for its record once the hero holds it (srd:spell:mage-armor: "Duration: 8 hours")', async () => {
+    const h = withSrdSpells({ character: sampleCharacter({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'] }) });
+    expect(await h.run('update_character', { concentration: 'Mage Armor' })).toEqual({ isError: true, content: "Mage Armor doesn't require Concentration (Duration: 8 hours)." });
+  });
+
+  describe("one rule for the hero's spell and its name, in both tools (F5)", () => {
+    /** A result's lines above its Status line. */
+    const said = (content: string) => content.split('\n').filter((l) => !l.startsWith('Status: ')).join('\n');
+    const heroCountdown = (h: ReturnType<typeof withSrdSpells>) => h.s().combat?.combatants.find((c) => c.isPlayer)?.concentrationCountdown;
+    /** A copy of an SRD spell the sheet holds under its own name, linked to no entry (a scroll's, recorded by the DM). */
+    const copy = (name: string, id: string): KnownSpell => ({ id, name, level: 2, prepared: true, source: 'Granted in play' });
+    /** Mira Voss's Wizard spells and these, concentrating on `concentratingOn`. */
+    const holding = (spells: KnownSpell[], concentratingOn: string | null = null) => {
+      const sc = sampleCharacter().spellcasting!;
+      return sampleCharacter({ spellcasting: { ...sc, spells: [...sc.spells, ...spells], concentratingOn } });
+    };
+    /** An invented book's name for the SRD's Hideous Laughter (its creator's name before it, as such books name spells). */
+    const LAUGHTER = "Ysolde's Hideous Laughter";
+    const laughterEntry = (data: Record<string, unknown>) => entry('lib:gloam:spell:ysoldes-hideous-laughter', LAUGHTER, 'spell', { level: 1, ...data });
+    /** The book's own entry, with the SRD spell's Concentration and duration (srd:spell:hideous-laughter). */
+    const LAUGHTER_ENTRY = laughterEntry({ concentration: true, duration: 'Concentration, up to 1 minute' });
+    /** The sheet's copy, linked to the book's entry as the builder links it. */
+    const LAUGHTER_COPY: KnownSpell = { id: LAUGHTER_ENTRY.id, name: LAUGHTER, level: 1, prepared: true, source: 'Wizard', concentration: true };
+
+    it('records a sheet copy with a note by the sheet\'s own name, in one call or two, and takes it again with or without the note for a recast (TD1; srd:spell:hold-person: "Concentration, up to 1 minute"; srd:rule:concentration)', async () => {
+      for (const calls of [1, 2]) {
+        const h = withSrdSpells({ character: holding([]), state: { combat: sampleCombat() } });
+        // Cast from a Spell Scroll: the copy recorded and concentrated on, in one call or one after the other.
+        const scroll = { name: 'Hold Person (scroll)', level: 2 };
+        const out =
+          calls === 1
+            ? await h.run('update_character', { spells_add: [scroll], concentration: 'Hold Person (scroll)' })
+            : (await h.run('update_character', { spells_add: [scroll] }), await h.run('update_character', { concentration: 'Hold Person (scroll)' }));
+        expect(said(out.content)).toBe(
+          calls === 1
+            ? 'Concentrating on Hold Person (scroll).\nAdded spell: Hold Person (scroll) (level 2, prepared)\nHold Person (scroll): 10 rounds left.'
+            : 'Concentrating on Hold Person (scroll).\nHold Person (scroll): 10 rounds left.',
+        );
+        // Recorded as the sheet's row is named, so the Spells tab shows it held (it compares the two exactly).
+        expect(h.sheet().spellcasting?.spells.filter((s) => s.name.startsWith('Hold Person')).map((s) => s.name)).toEqual(['Hold Person (scroll)']);
+        expect(h.sheet().spellcasting?.concentratingOn).toBe('Hold Person (scroll)');
+        await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_add: [{ condition: 'Paralyzed', source: 'Hold Person' }] });
+        // The same spell again, with its note, without it or with another note: a recast, so nothing ends, Bandit 1's
+        // Paralyzed isn't named for removal, and the count restarts.
+        for (const again of ['Hold Person (scroll)', 'Hold Person', 'Hold Person (3rd level)']) {
+          await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Hold Person (scroll)', rounds: 3 });
+          expect(said((await h.run('update_character', { concentration: again })).content)).toBe('Hold Person (scroll): 10 rounds left.');
+          expect(h.sheet().spellcasting?.concentratingOn).toBe('Hold Person (scroll)');
+          expect(heroCountdown(h)).toEqual({ spell: 'Hold Person (scroll)', roundsLeft: 10 });
+        }
+      }
+      // The sheet holding the copy and the DM naming the spell without its note: the copy.
+      const holder = withSrdSpells({ character: holding([copy('Hold Person (scroll)', 'copy-1')]) });
+      expect(said((await holder.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Concentrating on Hold Person (scroll).');
+      // So too when the same call adds the copy again (to change it): the sheet holds it once.
+      const readded = withSrdSpells({ character: holding([copy('Hold Person (scroll)', 'copy-1')]) });
+      const changed = await readded.run('update_character', { spells_add: [{ name: 'Hold Person (scroll)', level: 2, prepared: false }], concentration: 'Hold Person' });
+      expect(said(changed.content)).toBe('Concentrating on Hold Person (scroll).\nUpdated spell: Hold Person (scroll) (level 2)');
+    });
+
+    it("records the SRD spell the sheet holds under a book's longer name by the sheet's name, counting its minute with or without the book in the Library (TS1; srd:spell:hideous-laughter: \"Concentration, up to 1 minute\")", async () => {
+      for (const library of [[LAUGHTER_ENTRY], []]) {
+        const h = withSrdSpells({ character: holding([LAUGHTER_COPY]), state: { combat: sampleCombat() } }, library);
+        const out = await h.run('update_character', { concentration: 'Hideous Laughter' });
+        expect(said(out.content)).toBe(`Concentrating on ${LAUGHTER}.\n${LAUGHTER}: 10 rounds left.`);
+        expect(heroCountdown(h)).toEqual({ spell: LAUGHTER, roundsLeft: 10 });
+        // The Spells tab's toggle shows it held, and pressing it changes nothing (the sheet's concentrationChange).
+        expect(h.sheet().spellcasting?.concentratingOn).toBe(LAUGHTER);
+        expect(concentrationChange(h.sheet(), LAUGHTER)).toEqual({ character: h.sheet(), notice: null, warning: null });
+      }
+      // The same duration however the book writes it; a book entry with another duration or without Concentration is
+      // another spell by the rules data, so the SRD's name is recorded.
+      for (const [data, recorded] of [
+        [{ concentration: true, duration: 'concentration, up to 1 Minute' }, LAUGHTER],
+        [{ concentration: true, duration: 'Concentration, up to 10 minutes' }, 'Hideous Laughter'],
+        [{ concentration: false, duration: 'Concentration, up to 1 minute' }, 'Hideous Laughter'],
+      ] as const) {
+        const h = withSrdSpells({ character: holding([LAUGHTER_COPY]) }, [laughterEntry(data)]);
+        expect(said((await h.run('update_character', { concentration: 'Hideous Laughter' })).content)).toBe(`Concentrating on ${recorded}.`);
+      }
+    });
+
+    it('takes no looser name for a sheet spell without the rules data: the name given is recorded (TD3; E5; srd:spell:invisibility: "Concentration, up to 1 hour"; srd:spell:see-invisibility: "Duration: 1 hour")', async () => {
+      const offline = (character: Character) => {
+        const h = setup({ character });
+        setDmDeps({
+          rulesIndex: async () => {
+            throw new Error('offline');
+          },
+        });
+        const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+        return { ...h, run: (name: string, input: unknown) => runTool(name, input, ctx) };
+      };
+      const cases: [Character, string, string][] = [
+        [wizardWith('See Invisibility'), 'Invisibility', 'Concentrating on Invisibility.'],
+        [wizardWith('Delayed Blast Fireball'), 'Fireball', 'Concentrating on Fireball.'],
+        [cleric('Bless'), 'Shield', 'Concentration on Bless ends (started concentrating on Shield).\nConcentrating on Shield.'],
+      ];
+      for (const [character, spell, lines] of cases) {
+        const h = offline(character);
+        expect(said((await h.run('update_character', { concentration: spell })).content)).toBe(lines);
+        expect(h.sheet().spellcasting?.concentratingOn).toBe(spell);
+      }
+      // A note still makes no other spell: holding a scroll's copy, "Hold Person" is the same spell again.
+      const scroll = offline(holding([copy('Hold Person (scroll)', 'copy-1')], 'Hold Person (scroll)'));
+      expect((await scroll.run('update_character', { concentration: 'Hold Person' })).content).toMatch(/^Status: [^\n]*$/);
+      expect(scroll.sheet().spellcasting?.concentratingOn).toBe('Hold Person (scroll)');
+    });
+
+    it('gives rounds to the spell update_character recorded by the same name in update_combat concentrate, on the real engine (TX3; srd:spell:hold-person: "Concentration, up to 1 minute"; srd:spell:shield-of-faith: "Concentration, up to 10 minutes")', async () => {
+      const h = withSrdSpells({ character: holding([]), state: { combat: sampleCombat() } });
+      await h.run('update_character', { concentration: 'Hold Person (3rd level)' });
+      expect(h.sheet().spellcasting?.concentratingOn).toBe('Hold Person');
+      const out = await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Hold Person (3rd level)', rounds: 4 });
+      expect(out.content.split('\n')[0]).toBe("Mira Voss's Hold Person: 4 rounds left.");
+      expect(heroCountdown(h)).toEqual({ spell: 'Hold Person', roundsLeft: 4 });
+      const faith = withSrdSpells({ character: cleric('Shield of Faith'), state: { combat: sampleCombat() } });
+      const counted = await faith.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Faith', rounds: 3 });
+      expect(counted.content.split('\n')[0]).toBe("Mira Voss's Shield of Faith: 3 rounds left.");
+      expect(heroCountdown(faith)).toEqual({ spell: 'Shield of Faith', roundsLeft: 3 });
+    });
+
+    it('ends Greater Invisibility for Invisibility: once the name is resolved, only the very name held is the same spell (F4; srd:spell:greater-invisibility: "Concentration, up to 1 minute"; srd:spell:invisibility: "Concentration, up to 1 hour"; srd:rule:concentration, Another Concentration Effect)', async () => {
+      const h = withSrdSpells({ character: holding([held('Greater Invisibility', 'Wizard')], 'Greater Invisibility'), state: { combat: sampleCombat() } });
+      const out = await h.run('update_character', { concentration: 'Invisibility' });
+      expect(said(out.content)).toBe(
+        'Concentration on Greater Invisibility ends (started concentrating on Invisibility).\nConcentrating on Invisibility.\nInvisibility: about 60 minutes left.',
+      );
+      expect(h.sheet().spellcasting?.concentratingOn).toBe('Invisibility');
+      expect(heroCountdown(h)).toEqual({ spell: 'Invisibility', roundsLeft: 600 });
+    });
+
+    it("takes the same spell again for a recast however the record names it, and a sheet copy's name only for the one copy that is the spell (srd:spell:hold-person; srd:rule:concentration)", async () => {
+      // An older save's record kept with its note, the sheet holding no copy: "Hold Person" is that spell again.
+      const older = withSrdSpells({ character: holding([], 'Hold Person (3rd level)'), state: { combat: sampleCombat() } });
+      expect(said((await older.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Hold Person (3rd level): 10 rounds left.');
+      expect(older.sheet().spellcasting?.concentratingOn).toBe('Hold Person (3rd level)');
+      // A copy the sheet linked to the entry under another name (KnownSpell.id is the entry's id) is that spell: held, the
+      // same spell again; not held, recorded by the sheet's name.
+      const renamed = { ...held('Hold Person', 'Wizard'), name: 'Paralyzing Word' };
+      const holder = withSrdSpells({ character: holding([renamed], 'Paralyzing Word') });
+      expect((await holder.run('update_character', { concentration: 'Hold Person' })).content).toMatch(/^Status: [^\n]*$/);
+      expect(holder.sheet().spellcasting?.concentratingOn).toBe('Paralyzing Word');
+      const caster = withSrdSpells({ character: holding([renamed]) });
+      expect(said((await caster.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Concentrating on Paralyzing Word.');
+      // The sheet's spell of exactly the name given comes before another copy of it.
+      const both = withSrdSpells({ character: holding([held('Hold Person', 'Wizard'), copy('Hold Person (scroll)', 'copy-1')]) });
+      expect(said((await both.run('update_character', { concentration: 'Hold Person (scroll)' })).content)).toBe('Concentrating on Hold Person (scroll).');
+      // Two copies with notes, neither of that name: the data's name.
+      const two = withSrdSpells({ character: holding([copy('Hold Person (scroll)', 'copy-1'), copy('Hold Person (Wizard)', 'copy-2')]) });
+      expect(said((await two.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Concentrating on Hold Person.');
+      // A spell the same call adds (no entry yet) is never the spell of a name the data doesn't know.
+      const veil = withSrdSpells({ character: holding([]) });
+      const out = await veil.run('update_character', { spells_add: [{ name: 'Hold Person (scroll)', level: 2 }], concentration: 'Veil of Thorns' });
+      expect(said(out.content)).toBe('Concentrating on Veil of Thorns.\nAdded spell: Hold Person (scroll) (level 2, prepared)');
+    });
+
+    it('gives the rounds of the name it records, else of the name given (srd:spell:shield-of-faith: "Concentration, up to 10 minutes"; srd:spell:hideous-laughter: "Concentration, up to 1 minute")', async () => {
+      // "Faith" is no spell of the rules data: the sheet's Shield of Faith, and its 10 minutes.
+      const faith = withSrdSpells({ character: cleric(null) });
+      expect(await heroConcentration(faith.ctx, faith.sheet(), 'Faith')).toEqual({ refused: null, label: 'Shield of Faith', rounds: 100 });
+      // A book's copy the Library doesn't hold: the SRD spell's minute.
+      const laughter = withSrdSpells({ character: holding([LAUGHTER_COPY]) });
+      expect(await heroConcentration(laughter.ctx, laughter.sheet(), 'Hideous Laughter')).toEqual({ refused: null, label: LAUGHTER, rounds: 10 });
+      // Neither the data nor the sheet knows it: nothing to count.
+      expect(await heroConcentration(laughter.ctx, laughter.sheet(), 'Veil of Thorns')).toEqual({ refused: null, label: 'Veil of Thorns' });
+    });
   });
 });
 

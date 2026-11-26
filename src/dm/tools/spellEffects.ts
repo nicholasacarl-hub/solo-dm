@@ -38,6 +38,10 @@ import { findAllowedEntry } from './rules';
 export interface SpellTiming {
   /** A spell by that id or name is among the sources the DM may consult. */
   found: boolean;
+  /** There was no rules data to consult (the rules index didn't load, or no campaign is open): nothing was found. */
+  unavailable?: boolean;
+  /** The entry's id, when found. */
+  id?: string;
   /** Its name as the rules data spells it. */
   name?: string;
   /** data.concentration, when the data says. */
@@ -59,16 +63,20 @@ async function indexOrNull(ctx: ToolContext) {
 /** A name's trailing qualifier, as stat blocks and DMs write a casting: "Hold Person (3rd level)" is Hold Person. */
 const QUALIFIED = /^(.*\S)\s*\([^()]*\)\s*$/;
 
+/** A name without its trailing qualifier: "Hold Person (scroll)" is "Hold Person". */
+const withoutNote = (name: string): string => QUALIFIED.exec(name)?.[1] ?? name;
+
 /**
  * A spell's Concentration flag and duration from the rules data the DM may consult (findAllowedEntry, kind 'spell'): by
  * the hero's own copy's id when given (KnownSpell.id is the entry's id when the sheet linked it), else by name. A name
  * that finds nothing and ends in a parenthetical ("Hold Person (3rd level)", "Mind Spike (level 4 version)") is looked
  * up without it, so the spell found is recorded by its own name and the cascade matches conditions sourced "Hold Person".
+ * `unavailable` when there is no rules data to look in at all (the index didn't load), as against a name it doesn't know.
  */
 export async function spellTiming(ctx: ToolContext, name: string, id?: string): Promise<SpellTiming> {
   const campaign = ctx.deps.store().campaign;
   const index = await indexOrNull(ctx);
-  if (!index || !campaign) return { found: false };
+  if (!index || !campaign) return { found: false, unavailable: true };
   const byId = id ? index.get(id) : undefined;
   const find = (n: string) => findAllowedEntry(index, n, { kind: 'spell', campaign });
   const bare = QUALIFIED.exec(name)?.[1];
@@ -79,6 +87,7 @@ export async function spellTiming(ctx: ToolContext, name: string, id?: string): 
   const rounds = durationRounds(duration);
   return {
     found: true,
+    id: entry.id,
     name: entry.name,
     ...(typeof data.concentration === 'boolean' ? { concentration: data.concentration } : {}),
     ...(duration ? { duration } : {}),
@@ -102,41 +111,33 @@ export function noConcentrationText(timing: SpellTiming, spell: string): string 
 
 /**
  * The hero's Concentration started on a spell the rules data says needs none (update_combat concentrate on the hero,
- * update_character concentration): the refusal, with where its effect goes instead. The name is looked up as given (by
- * the sheet's id only for a spell of exactly that name), so a namesake on the sheet never decides it: Invisibility isn't
- * refused beside the sheet's See Invisibility (srd:spell:invisibility: "Concentration, up to 1 hour"), and Shield is
- * refused beside its Shield of Faith (srd:spell:shield: "Duration: 1 round"). Only a name the rules data doesn't know is
- * read as the sheet's spell it matches ("Faith" for Shield of Faith). Mage Armor's and Shield of Faith's AC the app
- * records (srd:spell:mage-armor: "Duration: 8 hours"); Shield's +5 the DM folds in (srd:spell:shield: "Until the start
- * of your next turn, you have a +5 bonus to AC"). Null when nothing is refused.
+ * update_character concentration, start_combat's note on the sheet's own spell): the refusal, with where its effect
+ * goes instead. The name is looked up as given (by the sheet's id only for a spell of exactly that name), so a namesake
+ * on the sheet never decides a name the rules data knows: Invisibility isn't refused beside the sheet's See Invisibility
+ * (srd:spell:invisibility: "Concentration, up to 1 hour"), and Shield is refused beside its Shield of Faith
+ * (srd:spell:shield: "Duration: 1 round"). Only a name the rules data doesn't know is read as the sheet's spell it
+ * matches ("Faith" for Shield of Faith). Mage Armor's and Shield of Faith's AC the app records (srd:spell:mage-armor:
+ * "Duration: 8 hours"), so the refusal says to record it unless the hero holds that record already; Shield's +5 the
+ * DM folds in (srd:spell:shield: "Until the start of your next turn, you have a +5 bonus to AC"). Null when nothing is
+ * refused.
  */
 export async function heroConcentrationRefusal(ctx: ToolContext, hero: Character | null, spell: string): Promise<string | null> {
-  return (await heroConcentration(ctx, hero, spell)).refused;
+  return heroRefusal(ctx, hero, spell, await spellTiming(ctx, spell, knownSpellId(hero, spell)));
 }
 
-/**
- * The hero's Concentration as the DM names it (update_character concentration): the refusal above, and the name to
- * record, found in the same order. The sheet's own spell of that name keeps the sheet's spelling (setConcentration);
- * else a spell the rules data finds is recorded by its own name, as an NPC's is ("hold person" and "Hold Person (3rd
- * level)" are Hold Person, so the end names the conditions sourced "Hold Person"); else the sheet's spell the name
- * matches ("Faith" for its Shield of Faith, so the spell's +2 record ends with it: srd:rule:concentration, "If the
- * effect's creator loses Concentration, the effect ends"); else the name as given.
- */
-export async function heroConcentration(ctx: ToolContext, hero: Character | null, spell: string): Promise<{ refused: string | null; label: string }> {
-  const held = hero?.spellcasting?.spells.find((s) => nameKey(s.name) === nameKey(spell));
+/** The refusal above for `spell`, `g` its lookup as given. */
+async function heroRefusal(ctx: ToolContext, hero: Character | null, spell: string, g: SpellTiming): Promise<string | null> {
   let asked = spell;
-  let timing = await spellTiming(ctx, spell, held?.id);
-  let label = !held && timing.found && timing.name ? timing.name : spell;
+  let timing = g;
   if (!timing.found) {
     const known = hero?.spellcasting ? matchByName(hero.spellcasting.spells, spell, (s) => s.name).match : undefined;
     // The sheet's spell of exactly that name was looked up already (by its id).
     if (known && nameKey(known.name) !== nameKey(spell)) {
       asked = known.name;
-      label = known.name;
       timing = await spellTiming(ctx, asked, known.id);
     }
   }
-  return { refused: heroRefusalText(hero, asked, timing), label };
+  return heroRefusalText(hero, asked, timing);
 }
 
 function heroRefusalText(hero: Character | null, asked: string, timing: SpellTiming): string | null {
@@ -145,9 +146,86 @@ function heroRefusalText(hero: Character | null, asked: string, timing: SpellTim
   const name = timing.name ?? asked;
   const heroName = hero?.name.trim() || 'The hero';
   const ac = acSpellNamed(name);
-  if (ac) return `${refused} Record its AC with update_character ac_spells_add ["${ac}"].`;
+  if (ac) return acSpells(hero ?? {}).includes(ac) ? refused : `${refused} Record its AC with update_character ac_spells_add ["${ac}"].`;
   if (nameKey(name) === 'shield') return `${refused} Fold its +5 into the dc of attacks on ${heroName} until the start of ${heroName}'s next turn.`;
   return refused;
+}
+
+/**
+ * Whether the DM's name for the hero's spell (`given`, looked up as `g`) is the spell `name` the hero concentrates on or
+ * the sheet holds (`id`: the sheet copy's, its entry's id when the sheet linked it; none for a spell the same call
+ * adds), in this order:
+ * 1. The names agree once a trailing note is left off each: "Hold Person (3rd level)", "Hold Person (scroll)" and "Hold
+ *    Person" are one spell (srd:spell:hold-person).
+ * 2. With no rules data to tell spells apart, nothing looser counts (E5: "Invisibility" isn't the sheet's See
+ *    Invisibility).
+ * 3. A sheet copy linked to the entry the given name finds is that spell, whatever the sheet calls it.
+ * 4. Otherwise the given name's words must be within `name`'s ("Faith" in "Shield of Faith", "Hideous Laughter" in a
+ *    book's longer name for it), and
+ * 5. the rules data mustn't find them to be different spells: two entries whose Concentration or duration differ
+ *    (srd:spell:invisibility, "Concentration, up to 1 hour", is neither srd:spell:see-invisibility, "1 hour", nor
+ *    srd:spell:greater-invisibility, "Concentration, up to 1 minute"). A book's copy of srd:spell:hideous-laughter
+ *    ("Concentration, up to 1 minute" in both) is that spell, and so is the sheet's spell for a name the data doesn't
+ *    know ("Faith"). One entry has one flag and one duration, so the same entry found twice never differs.
+ */
+async function sameSpell(ctx: ToolContext, given: string, g: SpellTiming, name: string, id?: string): Promise<boolean> {
+  if (nameKey(withoutNote(given)) === nameKey(withoutNote(name))) return true;
+  if (g.unavailable) return false;
+  if (g.found && id === g.id) return true;
+  if (!matchByName([name], given, (n) => n).match) return false;
+  const t = await spellTiming(ctx, name, id);
+  return !(g.found && t.found && (g.concentration !== t.concentration || nameKey(g.duration ?? '') !== nameKey(t.duration ?? '')));
+}
+
+/** The hero's Concentration as the DM names it: the refusal, the name to record and the rounds that name lasts. */
+export interface HeroConcentration {
+  /** heroConcentrationRefusal's refusal, or null. */
+  refused: string | null;
+  /** The name the hero's Concentration is recorded under (and update_combat concentrate compares with the sheet's). */
+  label: string;
+  /** The label's duration in rounds when the rules data finds the label, else the given name's. */
+  rounds?: number;
+}
+
+/**
+ * The hero's Concentration as the DM names it (update_character concentration, update_combat concentrate on the hero):
+ * the refusal above, and the name to record, in this order (sameSpell decides "the same spell"):
+ * 1. The spell the hero concentrates on, when it is the same spell: a recast, so nothing ends (srd:rule:concentration:
+ *    "If the effect's creator loses Concentration, the effect ends"; casting it again isn't losing it).
+ * 2. The sheet's spell of exactly that name, one the same call adds included, as the sheet spells it.
+ * 3. The one sheet spell that is the same spell: the sheet's own name, so the Spells tab shows it held ("Hold Person"
+ *    for the sheet's "Hold Person (scroll)", "Faith" for its Shield of Faith, so the +2 record ends with it).
+ * 4. The rules data's name for it, as an NPC's is recorded ("hold person (3rd level)" is Hold Person).
+ * 5. The name as given.
+ * `adding`: the names of the same call's spells_add, as the sheet will hold them (they have no ids yet). `rounds`: what
+ * the label lasts, by the given name when the data doesn't know the label (a book's longer name the Library doesn't
+ * hold still counts the SRD spell's rounds).
+ */
+export async function heroConcentration(ctx: ToolContext, hero: Character | null, spell: string, adding: readonly string[] = []): Promise<HeroConcentration> {
+  const g = await spellTiming(ctx, spell, knownSpellId(hero, spell));
+  const refused = await heroRefusal(ctx, hero, spell, g);
+  const { label, id } = await heroLabel(ctx, hero, spell, g, adding);
+  const own = await spellTiming(ctx, label, id);
+  const rounds = own.found ? own.rounds : g.rounds;
+  return { refused, label, ...(rounds !== undefined ? { rounds } : {}) };
+}
+
+/** heroConcentration's label (rules 1-5), with the id of the sheet's copy it names. */
+async function heroLabel(ctx: ToolContext, hero: Character | null, spell: string, g: SpellTiming, adding: readonly string[]): Promise<{ label: string; id?: string }> {
+  const current = hero?.spellcasting?.concentratingOn?.trim();
+  if (current) {
+    const id = knownSpellId(hero, current);
+    if (await sameSpell(ctx, spell, g, current, id)) return { label: current, id };
+  }
+  // The sheet as the call will leave it: its own spells, then those the call adds that it doesn't hold yet.
+  const sheet: { name: string; id?: string }[] = (hero?.spellcasting?.spells ?? []).map((s) => ({ name: s.name, id: s.id }));
+  for (const name of adding) if (!sheet.some((s) => nameKey(s.name) === nameKey(name))) sheet.push({ name });
+  const exact = sheet.find((s) => nameKey(s.name) === nameKey(spell));
+  if (exact) return { label: exact.name, id: exact.id };
+  const same: { name: string; id?: string }[] = [];
+  for (const s of sheet) if (await sameSpell(ctx, spell, g, s.name, s.id)) same.push(s);
+  if (same.length === 1) return { label: same[0].name, id: same[0].id };
+  return { label: g.name ?? spell };
 }
 
 /** A creature's Constitution saving throw bonus from its stat block, and whether the block has Legendary Resistance. */

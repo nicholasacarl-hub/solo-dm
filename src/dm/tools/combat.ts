@@ -94,6 +94,7 @@ import { performPlayerRoll } from './rolls';
 import {
   cascadeLines,
   concentrationSavePurpose,
+  heroConcentration,
   heroConcentrationRefusal,
   knownSpellId,
   noConcentrationText,
@@ -485,6 +486,8 @@ interface Prepared {
   reinforcements: Reinforcements | null;
   /** concentrate on an NPC: the spell in the rules data (its Concentration flag and duration). */
   timing?: SpellTiming;
+  /** concentrate on the hero: the name the spell given resolves to, as update_character reads it (heroConcentration). */
+  heroLabel?: string;
   /** damage to a concentrating NPC that stays above 0 HP. */
   save?: PreparedSave;
   /** next_turn and remove: the hero's spell's full duration, when the hero's combatant has no countdown for it. */
@@ -518,9 +521,9 @@ async function prepareEffects(ctx: ToolContext, state: CombatState, input: Updat
     case 'concentrate': {
       if (!target || typeof input.spell !== 'string') return {};
       if (target.isPlayer) {
-        const refused = await heroConcentrationRefusal(ctx, ctx.deps.store().character, input.spell);
+        const { refused, label } = await heroConcentration(ctx, ctx.deps.store().character, input.spell);
         if (refused) throw new ToolInputError(refused);
-        return {};
+        return { heroLabel: label };
       }
       const timing = await spellTiming(ctx, input.spell);
       const refused = noConcentrationText(timing, input.spell);
@@ -765,9 +768,10 @@ function hide(state: CombatState, input: UpdateInput): CombatChange {
  * it held ends: srd:rule:concentration, Another Concentration Effect) or end it (spell null). DM knowledge only: no
  * player log line (srd:rule:casting-spells-effects-targets).
  */
-function concentrate(state: CombatState, hero: Character | null, input: UpdateInput, timing: SpellTiming | undefined): CombatChange {
+function concentrate(state: CombatState, hero: Character | null, input: UpdateInput, prepared: Prepared): CombatChange {
+  const { timing } = prepared;
   const target = requireTarget(state, input.target, 'concentrate');
-  if (target.isPlayer) return heroConcentrate(state, target, hero, input);
+  if (target.isPlayer) return heroConcentrate(state, target, hero, input, prepared.heroLabel);
   const name = target.name;
   if (input.spell === undefined) throw new ToolInputError(`update_combat concentrate needs \`spell\`: what ${name} concentrates on, or null when that ends.`);
   if (input.spell === null) {
@@ -792,16 +796,19 @@ function concentrate(state: CombatState, hero: Character | null, input: UpdateIn
 
 /**
  * update_combat concentrate on the hero: only how long the sheet's spell still lasts (Extended Spell, a higher-level
- * slot), on the hero's countdown. The sheet holds the hero's Concentration: update_character starts and ends it.
+ * slot), on the hero's countdown. The sheet holds the hero's Concentration: update_character starts and ends it. The
+ * spell is named as update_character reads it (`label`, heroConcentration's): "Hold Person (3rd level)" and "Bless
+ * (upcast)" are the sheet's Hold Person and Bless (srd:spell:hold-person, "Concentration, up to 1 minute"), "Faith" its
+ * Shield of Faith; the line names the sheet's spell, and every refusal quotes the name as given.
  */
-function heroConcentrate(state: CombatState, target: Combatant, hero: Character | null, input: UpdateInput): CombatChange {
+function heroConcentrate(state: CombatState, target: Combatant, hero: Character | null, input: UpdateInput, label?: string): CombatChange {
   const name = target.name;
   const sheet = hero?.spellcasting?.concentratingOn?.trim() || null;
   if (input.spell === null) throw new ToolInputError(`${name}'s Concentration is on the character sheet: end it with update_character concentration: null.`);
   if (!sheet) {
     throw new ToolInputError(`${name} isn't concentrating on anything: start it with update_character concentration${input.spell ? ` "${input.spell}"` : ''}.`);
   }
-  if (input.spell === undefined || nameKey(input.spell) !== nameKey(sheet)) {
+  if (input.spell === undefined || nameKey(label ?? input.spell) !== nameKey(sheet)) {
     throw new ToolInputError(
       `${name} is concentrating on ${sheet}${input.spell ? `, not ${input.spell}` : ''}: for the hero, concentrate only sets rounds (spell "${sheet}" with rounds); update_character concentration starts or ends the hero's Concentration.`,
     );
@@ -855,7 +862,7 @@ function applyAction(state: CombatState, hero: Character | null, input: UpdateIn
       return { state: next, summary, log: target.hidden ? null : summary, notes: [note] };
     }
     case 'concentrate':
-      return concentrate(state, hero, input, prepared.timing);
+      return concentrate(state, hero, input, prepared);
     case 'note': {
       const target = requireTarget(state, input.target, 'note');
       if (!input.note) throw new ToolInputError('update_combat note needs `note`.');

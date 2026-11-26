@@ -674,8 +674,9 @@ function spellSteps(input: ToolInput<'update_character'>, links: Links): ((c: Ch
     steps.push((c) => restoreSlot(c, slot.level as SpellSlotLevel, 1, { pact: slot.pact }));
   }
   if (input.concentration !== undefined) {
+    // The name heroConcentration resolved, which already judged "the same spell": only that very name held is (F4).
     const spell = input.concentration;
-    steps.push((c) => setConcentration(c, spell));
+    steps.push((c) => setConcentration(c, spell, { exact: true }));
   }
   for (const name of input.spells_remove ?? []) steps.push((c) => removeSpell(c, name));
   (input.spells_add ?? []).forEach((spell, i) => {
@@ -1177,10 +1178,19 @@ async function logSections(ctx: ToolContext, results: SectionResult[], reason?: 
  * In a fight the hero's combatant counts the sheet's Concentration (Combatant.concentrationCountdown), written after
  * the sheet (character first, then combat). A spell this call started or recast counts from its full duration in the
  * rules data (a recast, by the name heroConcentration resolved, restarts it; setConcentration leaves the sheet as it
- * was); a sheet no longer concentrating on the counted spell (null, another spell, 0 HP, an Incapacitating condition,
- * the spell removed) drops it. The line says what the app counts.
+ * was): the recorded spell's own duration, else `given`, heroConcentration's for the name the DM gave ("Hideous
+ * Laughter" recorded under a book copy's longer name the Library doesn't hold counts the SRD spell's minute:
+ * srd:spell:hideous-laughter, "Concentration, up to 1 minute"); a sheet no longer concentrating on the counted spell
+ * (null, another spell, 0 HP, an Incapacitating condition, the spell removed) drops it. The line says what the app
+ * counts.
  */
-async function syncHeroCountdown(ctx: ToolContext, input: ToolInput<'update_character'>, before: Character, after: Character): Promise<string | null> {
+async function syncHeroCountdown(
+  ctx: ToolContext,
+  input: ToolInput<'update_character'>,
+  before: Character,
+  after: Character,
+  given?: number,
+): Promise<string | null> {
   const combat = ctx.deps.store().combat;
   const heroC = combat?.active ? combat.combatants.find((c) => c.isPlayer) : undefined;
   if (!heroC) return null;
@@ -1188,7 +1198,7 @@ async function syncHeroCountdown(ctx: ToolContext, input: ToolInput<'update_char
   const was = before.spellcasting?.concentratingOn?.trim() || null;
   const changed = spell !== null && (was === null || nameKey(was) !== nameKey(spell));
   if (typeof input.concentration === 'string' && spell !== null && (changed || nameKey(input.concentration) === nameKey(spell))) {
-    const { rounds } = await spellTiming(ctx, spell, knownSpellId(after, spell));
+    const rounds = (await spellTiming(ctx, spell, knownSpellId(after, spell))).rounds ?? given;
     await mutateCombat(ctx, (c) => ({ state: withHeroCountdown(c, rounds !== undefined ? { spell, roundsLeft: rounds } : undefined) }));
     return rounds !== undefined
       ? `${spell}: ${roundsLeftText(rounds)}.`
@@ -1229,12 +1239,16 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
     );
   }
   // A spell the rules data says needs no Concentration never becomes the hero's (as update_combat refuses it for NPCs);
-  // one it finds is recorded by its own name, a name it doesn't know as the sheet's spell it matches (heroConcentration).
+  // the same spell again is the one held, else the sheet's own (this call's spells_add included), else the data's
+  // name for it (heroConcentration).
   let concentration = input.concentration;
+  let rounds: number | undefined;
   if (typeof input.concentration === 'string') {
-    const { refused, label } = await heroConcentration(ctx, ctx.deps.store().character, input.concentration);
-    if (refused) throw new ToolInputError(refused);
-    concentration = label;
+    const spells = (input.spells_add ?? []).map((s) => s.name);
+    const named = await heroConcentration(ctx, ctx.deps.store().character, input.concentration, spells);
+    if (named.refused) throw new ToolInputError(named.refused);
+    concentration = named.label;
+    rounds = named.rounds;
   }
   const links = await resolveLinks(input, ctx);
   const track: AcTrack = { kept: [] };
@@ -1304,7 +1318,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   lines.push(...heroCascadeLines(ctx, input, startSheet, change.character));
   lines.push(...acSpellLines(input, startSheet, change.character, track.kept, links.catalog));
   // In a fight the hero's countdown follows the sheet: one combat write, after the character's (spec §3.3).
-  const countdown = await syncHeroCountdown(ctx, { ...input, concentration }, startSheet, change.character);
+  const countdown = await syncHeroCountdown(ctx, { ...input, concentration }, startSheet, change.character, rounds);
   if (countdown) lines.push(countdown);
   // A size change during a mapped fight re-fits the hero's space (D39).
   const mapLine = await refitHeroAfterSheetChange(ctx, before, change.character);
