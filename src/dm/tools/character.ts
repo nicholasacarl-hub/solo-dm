@@ -678,7 +678,9 @@ function spellSteps(input: ToolInput<'update_character'>, links: Links): ((c: Ch
     const spell = input.concentration;
     steps.push((c) => setConcentration(c, spell, { exact: true }));
   }
-  for (const name of input.spells_remove ?? []) steps.push((c) => removeSpell(c, name));
+  // The Concentration the same call names goes on whatever it removes (a scroll removed as it is read).
+  const keepConcentration = typeof input.concentration === 'string';
+  for (const name of input.spells_remove ?? []) steps.push((c) => removeSpell(c, name, { keepConcentration }));
   (input.spells_add ?? []).forEach((spell, i) => {
     const add = addedSpell(spell, links.spells[i] ?? null, links.spellCopies[i] ?? null);
     steps.push((c) => {
@@ -1042,13 +1044,17 @@ const hasAcSpells = (input: ToolInput<'update_character'>): boolean => Boolean(i
  * ac_spells_end then ac_spells_add, the call's last step: after refreshArmorClass (which they don't trigger), so the
  * engine's AC rule (syncArmorClass) works on a settled AC and nothing speaks after an old save's hand-set AC turns
  * counted. Each name is its own warning when it can't apply, never a failed call. A record this same call ended (its
- * Concentration on Shield of Faith ended earlier in the call) is not reported as not recorded.
+ * Concentration on Shield of Faith ended earlier in the call) is not reported as not recorded. The ends run bonus spells
+ * first, then Mage Armor, as the Long Rest ends them, so a base's end is judged on the AC the others leave (one call
+ * ending both, as Dispel Magic does: srd:spell:dispel-magic, "Any ongoing spell of level 3 or lower on the target ends").
  */
 function acSpellStep(start: Character, c: Character, input: ToolInput<'update_character'>, catalog: readonly EquipmentOption[]): EngineResult {
   let character = c;
   const events: GameEvent[] = [];
   const endedHere = acSpells(start).filter((n) => !acSpells(c).includes(n));
-  for (const name of input.ac_spells_end ?? []) {
+  const isBase = (name: string) => Number(acSpellNamed(name) === 'Mage Armor');
+  const ends = [...(input.ac_spells_end ?? [])].sort((a, b) => isBase(a) - isBase(b));
+  for (const name of ends) {
     const spell = acSpellNamed(name);
     if (spell && endedHere.includes(spell)) continue;
     const r = endAcSpell(character, name, catalog);

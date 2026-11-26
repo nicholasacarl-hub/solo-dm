@@ -816,6 +816,17 @@ describe('spells and concentration', () => {
     expect(removed.character.spellcasting?.spells.some((s) => s.name === 'Detect Magic')).toBe(false);
   });
 
+  it('keeps the Concentration when asked: a scroll removed as it is read, its spell going on (N3; srd:magic-item:spell-scroll: "Once the spell is cast, the scroll crumbles to dust"; srd:rule:concentration)', () => {
+    const scroll = addSpell(mira(), { name: 'Hold Person', level: 2, prepared: true, source: 'Spell Scroll' }).character;
+    const reading = setConcentration(scroll, 'Hold Person').character;
+    const kept = removeSpell(reading, 'Hold Person', { keepConcentration: true });
+    expect(kept.character.spellcasting?.concentratingOn).toBe('Hold Person');
+    expect(kept.character.spellcasting?.spells.some((s) => s.name === 'Hold Person')).toBe(false);
+    expect(kept.events.map((e) => e.message)).toEqual(['Removed spell: Hold Person']);
+    // Without the option, removing it ends it, as before.
+    expect(removeSpell(reading, 'Hold Person').events.map((e) => e.message)).toEqual(['Removed spell: Hold Person', 'Concentration on Hold Person ends.']);
+  });
+
   it('removes a spell by its id: the exact entry, never one a name would match', () => {
     // Shield and a "Shield of Faith" side by side: removeSpell's name match could take either.
     const both = addSpell(mira(), { name: 'Shield of Faith', level: 1, prepared: true }).character;
@@ -1840,11 +1851,12 @@ describe("Mage Armor's Concentration and an exact Concentration (spell effects r
         expect(r.character.spellcasting?.concentratingOn, `${what}: ${path}`).not.toBe('Mage Armor');
       }
     }
-    // Haste's own reminder is unchanged (srd:spell:haste: "+2 bonus to Armor Class"), beside the same Mage Armor.
+    // Haste's own reminder stands (srd:spell:haste: "+2 bonus to Armor Class"), beside the same Mage Armor, whose base the
+    // 15 holds (srd:spell:mage-armor: "the target's base AC becomes 13 plus its Dexterity modifier").
     const hasted = setConcentration(mira({ armorClass: 17, acFormula: 'set by the DM: Mage Armor and Haste', acSpells: ['Mage Armor'] }), 'Haste').character;
     expect(setConcentration(hasted, null).events).toEqual([
       { type: 'condition-removed', message: 'No longer concentrating on Haste.' },
-      { type: 'warning', message: 'AC 17 was set by hand for Haste: if it counted Haste, set the AC back to 15 (armor and abilities).' },
+      { type: 'warning', message: 'AC 17 was set by hand for Haste: if it counted Haste, set the AC back to 15 (armor, abilities and Mage Armor).' },
     ]);
     // Mage Armor's own end still reminds the DM of the AC set by hand for it (no record to end).
     expect(warnings(endAcSpell(robed(), 'Mage Armor'))).toEqual([

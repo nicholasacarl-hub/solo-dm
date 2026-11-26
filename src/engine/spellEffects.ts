@@ -14,7 +14,7 @@ import { nameKey } from '@/lib/id';
 import { safeEnd } from '@/lib/text';
 import { currentCombatant, findCombatant } from './combat';
 import { INCAPACITATING_CONDITIONS, conditionKey, conditionName, matchStandardCondition } from './conditions';
-import { computeArmorClass, handSetNames } from './rules';
+import { computeArmorClass, handSetNames, workedOutWords } from './rules';
 import { namesSpell } from './util';
 
 // ---------------------------------------------------------------------------
@@ -295,17 +295,18 @@ export function conditionsNaming(
  * The hero's AC was set by hand for `spell` (its formula is "set by the DM: …" and the DM's words name the spell as
  * whole words, or the spell without its trailing note: Haste, Slow, an old save's Shield of Faith or Mage Armor, and
  * "Haste" for a sheet copy's "Haste (scroll)"; handSetNames), so the app can't take the spell back out of it itself:
- * the stored AC and what armor, abilities and the recorded spells give instead. The app's own parts never count ("set
- * by the DM: shrine blessing +1 + Shield of Faith 2" isn't set for Shield of Faith: the app takes that +2 off itself).
- * Undefined otherwise, and when the two are the same (nothing to set back; armor the app can't identify keeps the
- * stored AC).
+ * the stored AC and what armor, abilities and the recorded spells give instead, with `words` for what that number
+ * counts ("armor and abilities", "armor, abilities and Shield of Faith": workedOutWords). The app's own parts never
+ * count ("set by the DM: shrine blessing +1 + Shield of Faith 2" isn't set for Shield of Faith: the app takes that +2
+ * off itself). Undefined otherwise, and when the two are the same (nothing to set back; armor the app can't identify
+ * keeps the stored AC).
  */
 export function handSetAcNaming(
   c: Character,
   spell: string,
   catalog: readonly EquipmentOption[] = [],
-): { stored: number; computed: number } | undefined {
+): { stored: number; computed: number; words: string } | undefined {
   if (!handSetNames(c.acFormula, spell)) return undefined;
-  const computed = computeArmorClass(c, catalog).ac;
-  return computed === c.armorClass ? undefined : { stored: c.armorClass, computed };
+  const now = computeArmorClass(c, catalog);
+  return now.ac === c.armorClass ? undefined : { stored: c.armorClass, computed: now.ac, words: workedOutWords(c, now.formula) };
 }

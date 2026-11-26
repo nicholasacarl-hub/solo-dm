@@ -1099,6 +1099,13 @@ describe("what the app names with a spell's end (§3.5), never removing it", () 
     expect((await golem.run('update_combat', { action: 'concentrate', target: 'Stone Golem', spell: null })).content).toContain(
       "Mira Voss's AC 10 was set by hand for Slow: if it counted Slow, set armor_class back to 12 (armor and abilities).",
     );
+    // With a Shield of Faith recorded, the AC to set back holds its +2, and the words say so (A1/E5-1;
+    // srd:spell:shield-of-faith: "a +2 bonus to AC for the duration"; srd:spell:haste: "+2 bonus to Armor Class").
+    const faithful = sampleCharacter({ armorClass: 16, acFormula: 'set by the DM: Haste + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    const hasted = setup({ character: faithful, state: { combat: fanaticFight(holding('Haste', 6)) } });
+    expect((await hasted.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null })).content).toContain(
+      "Cultist Fanatic stops concentrating on Haste.\nMira Voss's AC 16 was set by hand for Haste: if it counted Haste, set armor_class back to 14 (armor, abilities and Shield of Faith).",
+    );
     // Nothing matches: nothing is printed.
     const plain = setup({ state: { combat: fanaticFight(holding('Bless', 3)) } });
     const out = await plain.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null });

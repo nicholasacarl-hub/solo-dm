@@ -342,13 +342,17 @@ name by one rule (`heroConcentration`): it is the same spell as another name whe
 finds for it, or when its words, without a trailing note, are within the other's and the data doesn't find two spells
 whose Concentration or duration differ ("Faith" is Shield of Faith, and a book's longer name for an SRD spell is that
 spell, named with a note or without, while Invisibility is neither See Invisibility nor Greater Invisibility). The same
-spell as the one held is a recast (nothing ends; in a fight its count restarts), unless the sheet holds a spell of
-exactly the given name that the data finds as another entry (Polymorph beside a held True Polymorph switches); otherwise
-the spell is recorded under the sheet's own name for it, counting the spells the same call's `spells_add` adds and not
-those its `spells_remove` removes (so the Spells tab's toggle shows it, and a used-up scroll's copy isn't recorded),
-else under the data's name, as an NPC's is, else as given, and the engine takes that name as final (`setConcentration`'s
-`exact`, so "Invisibility" while holding Greater Invisibility ends it). Whatever reads a recorded Concentration as a
-spell reads its name with a trailing note or without (`withoutNote`): a "Shield of Faith (scroll)" copy's +2 ends with
+spell as the one held is a recast (nothing ends; in a fight its count restarts), unless the two names differ without
+their trailing notes, the sheet holds a spell of the given name, either name's note aside (a row the same call's
+`spells_remove` removes counts: a scroll read as it is removed), and the data finds the given name and the held spell as
+two entries (Polymorph, or "Polymorph (4th level)", beside a held True Polymorph switches; a scroll's "Hold Person
+(scroll)" beside a held Hold Person never does, whatever entries the data finds by link and by name); otherwise the
+spell is recorded under the sheet's own name for it (once the held spell ends, not under that one's), counting the
+spells the same call's `spells_add` adds and not those its `spells_remove` removes (so the Spells tab's toggle shows it,
+and a used-up scroll's copy isn't recorded), else under the data's name, as an NPC's is, else as given, and the engine
+takes that name as final (`setConcentration`'s `exact`, so "Invisibility" while holding Greater Invisibility ends it);
+the same call's `spells_remove` never ends the Concentration the call names. Whatever reads a recorded Concentration as
+a spell reads its name with a trailing note or without (`withoutNote`): a "Shield of Faith (scroll)" copy's +2 ends with
 it and `ac_spells_add` takes the +2 to be that casting, `ac_spells_add` and `ac_spells_end` read "Shield of Faith
 (scroll)" as Shield of Faith, and the areas, conditions and AC set by hand named when "Haste (scroll)" ends include
 those that name Haste. Without the rules data only names that agree without their notes count as one.
@@ -381,34 +385,36 @@ DM is told which map areas share its name (with the `update_map effects_end` cal
 one area carries is flagged, since the call ends them all and any that isn't the spell's is placed again with
 `resolve_area` as a lasting area, rolling no saves for it; the app never removes one), which conditions name it in their
 source or duration (skipping those the same call added), a Shield of Faith on the hero another caster may have held, and
-an AC set by hand that may have counted it (not for a spell the hero holds a record of, nor for Mage Armor, which a
-Concentration never carries: an older save's Concentration on it, or an NPC's recorded without the rules data, ends
-nothing). For an NPC removed from the fight or still concentrating when it ends, the DM is told the conditions to
-remove, and the hero's Shield of Faith to end, when that spell ends. A sheet-side end (the toggle, the chip's ×, 0 HP,
-an Incapacitating condition, death by Exhaustion or by a Hit Point maximum of 0, lowered or when Aid ends) names the
-hero's own conditions that name the spell and adds one conditional `effects_end` clause for the spell's name without a
-trailing note, which says it ends every area of that name, since the sheet can't see the fight to tell the hero's area
-from another caster's (none for Shield of Faith or Mage Armor). *AC from spells* is `Character.acSpells` (Mage Armor,
-Shield of Faith; `ac_spells_add` / `ac_spells_end`, and the sheet's chips), counted inside `computeArmorClass`: Mage
-Armor is one more unarmored base (13 + DEX, never while armor is worn, and not ended by putting armor on: the DM ends
-it), Shield of Faith a +2 part after the items'. `armorClass` stays the AC in force, so every reader and older devices
-read one number, and the formula's whole ` + ` parts ("Mage Armor: 13", "Shield of Faith 2") say which spells it counts.
-One rule in `syncArmorClass` handles every change: the spells' change in AC is worked out first, from the spells added
-and the ended ones the AC counted. A spell added that a hand-set formula already names in the DM's own words (an older
-save's "set by the DM: Shield of Faith and Haste") is taken to be in it while that AC is above what gear, features and
-the AC spells its formula counts gave, or the armor is unknown; one no higher is taken not to hold it, so the spell is
-added as below, and when that moves the AC the DM is warned how to set it back (naming the AC spells that baseline
-counts), since the DM's words may have counted the spell beside a penalty the app doesn't count (Slow). Taken to be in
-it, the AC becomes derived when the armor is known and the computed AC equals it, else it is kept, the spell's part is
-added and the DM is warned (with the computed AC when the armor is known). When the app takes a counted Shield of Faith
-off a formula whose DM words still name it, it leaves the part "Shield of Faith ended", so those words stop counting it:
-the next casting adds the +2 again and its end takes it off once. Unknown armor or a hand-set AC moves by the change
-(armor it can't identify, put on or renamed, keeps the counted parts, its own part giving the AC less their bonuses:
-"Elven Chain (stats unknown — AC kept at 16) + Shield of Faith 2" at 18); otherwise the reworded warning. A hand-set or
-unknown-armor formula drops "Mage Armor: 13" once Mage Armor's record ends or armor goes on; since no change in number
-takes a base out, when Mage Armor's end leaves a hand-set AC that counted it where it was and gear and features give
-that same number, the DM is warned to set it again if it still includes Mage Armor (another number gets the kept-AC
-warning). `armor_class` sent with `ac_spells_add` or `ac_spells_end` is refused (the spells first, then the AC), and
+an AC set by hand that may have counted it, with the AC to set back and the AC spells that number counts (not for a
+spell the hero holds a record of, nor for Mage Armor, which a Concentration never carries: an older save's Concentration
+on it, or an NPC's recorded without the rules data, ends nothing). For an NPC removed from the fight or still
+concentrating when it ends, the DM is told the conditions to remove, and the hero's Shield of Faith to end, when that
+spell ends. A sheet-side end (the toggle, the chip's ×, 0 HP, an Incapacitating condition, death by Exhaustion or by a
+Hit Point maximum of 0, lowered or when Aid ends) names the hero's own conditions that name the spell and adds one
+conditional `effects_end` clause for the spell's name without a trailing note, which says it ends every area of that
+name, since the sheet can't see the fight to tell the hero's area from another caster's (none for Shield of Faith or
+Mage Armor). *AC from spells* is `Character.acSpells` (Mage Armor, Shield of Faith; `ac_spells_add` / `ac_spells_end`,
+and the sheet's chips), counted inside `computeArmorClass`: Mage Armor is one more unarmored base (13 + DEX, never while
+armor is worn, and not ended by putting armor on: the DM ends it), Shield of Faith a +2 part after the items'.
+`armorClass` stays the AC in force, so every reader and older devices read one number, and the formula's whole ` + `
+parts ("Mage Armor: 13", "Shield of Faith 2") say which spells it counts. One rule in `syncArmorClass` handles every
+change: the spells' change in AC is worked out first, from the spells added and the ended ones the AC counted. A spell
+added that a hand-set formula already names in the DM's own words (an older save's "set by the DM: Shield of Faith and
+Haste") is taken to be in it while that AC is above what gear, features and the AC spells its formula counts gave, or
+the armor is unknown; one no higher is taken not to hold it, so the spell is added as below, and when that moves the AC
+the DM is warned how to set it back (naming the AC spells that baseline counts), since the DM's words may have counted
+the spell beside a penalty the app doesn't count (Slow). Taken to be in it, the AC becomes derived when the armor is
+known and the computed AC equals it, else it is kept, the spell's part is added and the DM is warned (with the computed
+AC when the armor is known). When the app takes a counted Shield of Faith off a formula whose DM words still name it, it
+leaves the part "Shield of Faith ended", so those words stop counting it: the next casting adds the +2 again and its end
+takes it off once. Unknown armor or a hand-set AC moves by the change (armor it can't identify, put on or renamed, keeps
+the counted parts, its own part giving the AC less their bonuses: "Elven Chain (stats unknown — AC kept at 16) + Shield
+of Faith 2" at 18); otherwise the reworded warning. A hand-set or unknown-armor formula drops "Mage Armor: 13" once Mage
+Armor's record ends or armor goes on; since no change in number takes a base out, when Mage Armor's end leaves a
+hand-set AC that counted it where it was and gear, features and the AC spells still recorded give that same number, the
+DM is warned to set it again if it still includes Mage Armor, in words that name a Shield of Faith that number counts
+(another number gets the kept-AC warning); one `ac_spells_end` ends Shield of Faith before Mage Armor, as a Long Rest
+does. `armor_class` sent with `ac_spells_add` or `ac_spells_end` is refused (the spells first, then the AC), and
 restating the AC kept for unknown armor keeps the counted parts. The hero's Shield of Faith ends with the hero's
 Concentration on every path (`afterConcentrationEnds`: 0 HP, death, an Incapacitating condition, another spell, removing
 the spell, a Long Rest, the countdown), except the sheet's spell swaps (at a level-up, after a Long Rest), which keep

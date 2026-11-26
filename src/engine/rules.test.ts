@@ -40,6 +40,7 @@ import {
   spellcastingAbility,
   syncArmorClass,
   weaponCritRange,
+  workedOutWords,
 } from './rules';
 
 const mira = (overrides: Partial<Character> = {}) => sampleCharacter(overrides);
@@ -1342,6 +1343,44 @@ describe('AC from spells: Mage Armor and Shield of Faith (srd:spell:mage-armor; 
       const off = syncArmorClass(slowed, withSpells(slowed));
       expect(off.character).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Slow from the Stone Golem (-2)' });
       expect(off.events.filter((e) => e.type === 'warning')).toEqual([]);
+    });
+
+    it('names a Shield of Faith still counted in the AC the warning gives when Mage Armor ends first (E5-1; srd:spell:mage-armor: "Until the spell ends, the target\'s base AC becomes 13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration")', () => {
+      // 14 "cursed (-3)" with both spells counted (13 + 2 + 2 − 3). Mage Armor ends while Shield of Faith lasts: the 14
+      // the DM is told to work from holds the +2, so the words say so (armor and abilities alone give 12).
+      const faithful = withSpells(mira({ armorClass: 14, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13 + Shield of Faith 2' }), 'Mage Armor', 'Shield of Faith');
+      expect(countedAcSpells(faithful)).toEqual(['Mage Armor', 'Shield of Faith']);
+      const first = syncArmorClass(faithful, withSpells(faithful, 'Shield of Faith'));
+      expect(first.character).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: cursed (-3) + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+      expect(first.events).toEqual([
+        {
+          type: 'warning',
+          message: 'AC 14, set by hand, counted Mage Armor, which has ended: if 14 still includes it, set the AC again (armor, abilities and Shield of Faith give 14).',
+        },
+      ]);
+      expect(computeArmorClass(withSpells(faithful)).ac).toBe(12);
+      // The words describe the number given, the AC worked out: a Shield of Faith recorded whose part the hand-set formula
+      // lacks (an older save's) is in that 14 all the same.
+      const older = withSpells(mira({ armorClass: 14, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13' }), 'Mage Armor', 'Shield of Faith');
+      expect(countedAcSpells(older)).toEqual(['Mage Armor']);
+      expect(syncArmorClass(older, withSpells(older, 'Shield of Faith')).events).toEqual([
+        {
+          type: 'warning',
+          message: 'AC 14, set by hand, counted Mage Armor, which has ended: if 14 still includes it, set the AC again (armor, abilities and Shield of Faith give 14).',
+        },
+      ]);
+    });
+
+    it('workedOutWords: what an AC worked out holds, in words, with the recorded AC spells its formula counts (E5-1; srd:spell:mage-armor: "13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2 bonus to AC")', () => {
+      const robed = withSpells(mira(), 'Mage Armor', 'Shield of Faith');
+      expect(workedOutWords(mira(), computeArmorClass(mira()).formula)).toBe('armor and abilities');
+      expect(computeArmorClass(robed).formula).toBe('Mage Armor: 13 + DEX 2 + Shield of Faith 2');
+      expect(workedOutWords(robed, computeArmorClass(robed).formula)).toBe('armor, abilities, Mage Armor and Shield of Faith');
+      // Only what the formula counts: Mage Armor under Chain Mail isn't (srd:spell:mage-armor: "who isn't wearing armor").
+      const armored = withSpells(mailed(), 'Mage Armor', 'Shield of Faith');
+      expect(workedOutWords(armored, computeArmorClass(armored).formula)).toBe('armor, abilities and Shield of Faith');
+      // A record whose part isn't in the formula given isn't named.
+      expect(workedOutWords(robed, '10 + DEX 2')).toBe('armor and abilities');
     });
   });
 });

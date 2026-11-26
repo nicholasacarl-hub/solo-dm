@@ -147,8 +147,8 @@ function conditionNamingText(n: ConditionNaming, spell: string): string {
  * can't tell the hero's own casting from another caster's), each of the hero's conditions that names the spell, with
  * the call that removes it, one conditional clause for an area the spell may have left (Shield of Faith and Mage Armor
  * leave none, a sheet copy's "Shield of Faith (scroll)" included), named by the spell without its note (a sheet copy's
- * "Hold Person (scroll)" leaves an area labelled "Hold Person"), then the reminder about an AC set by hand for the
- * spell. The sheet can't see the map, so it can't tell the hero's area from another caster's of the same name: the
+ * "Web (scroll)" ends the areas labelled "Web": srd:spell:web, "The webs fill a 20-foot Cube there for the duration"),
+ * then the reminder about an AC set by hand for the spell. The sheet can't see the map, so it can't tell the hero's area from another caster's of the same name: the
  * clause says the call ends every area of that name (RX4).
  */
 function withConcentrationEnd(head: string, ended: ConcentrationEnded, { endSaid }: { endSaid: boolean }): string {

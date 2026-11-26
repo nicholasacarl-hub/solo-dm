@@ -519,8 +519,12 @@ describe('handSetAcNaming: an AC set by hand for a spell (srd:spell:haste: "+2 b
 
   it('gives the stored AC and what armor and abilities give when the hand-set formula names the spell', () => {
     const hasted = fighter({ armorClass: 18, acFormula: 'set by the DM: Haste' });
-    expect(handSetAcNaming(hasted, 'Haste')).toEqual({ stored: 18, computed: 16 });
-    expect(handSetAcNaming(fighter({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith from the priest' }), 'Shield of Faith')).toEqual({ stored: 18, computed: 16 });
+    expect(handSetAcNaming(hasted, 'Haste')).toEqual({ stored: 18, computed: 16, words: 'armor and abilities' });
+    expect(handSetAcNaming(fighter({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith from the priest' }), 'Shield of Faith')).toEqual({
+      stored: 18,
+      computed: 16,
+      words: 'armor and abilities',
+    });
     expect(handSetAcNaming(hasted, 'Slow')).toBeUndefined();
     expect(handSetAcNaming(fighter({ armorClass: 18, acFormula: 'set by the DM: Hasted' }), 'Haste')).toBeUndefined();
     // A formula the gear worked out, or one that names the spell without being set by hand, says nothing.
@@ -538,9 +542,11 @@ describe('handSetAcNaming: an AC set by hand for a spell (srd:spell:haste: "+2 b
     // srd:spell:slow: "it takes a -2 penalty to AC": Slow is the DM's word, Shield of Faith the app's part.
     const slowed = fighter({ acSpells: ['Shield of Faith'], armorClass: 16, acFormula: 'set by the DM: Slow from the Stone Golem + Shield of Faith 2' });
     expect(handSetAcNaming(slowed, 'Shield of Faith')).toBeUndefined();
-    expect(handSetAcNaming(slowed, 'Slow')).toEqual({ stored: 16, computed: 18 });
+    // The 18 the DM is told to set holds the recorded +2, and the words say so (srd:spell:shield-of-faith: "a +2 bonus
+    // to AC for the duration").
+    expect(handSetAcNaming(slowed, 'Slow')).toEqual({ stored: 16, computed: 18, words: 'armor, abilities and Shield of Faith' });
     // An old save's words beside the app's part still name the spell.
     const old = fighter({ acSpells: ['Shield of Faith'], armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste + Shield of Faith 2' });
-    expect(handSetAcNaming(old, 'Shield of Faith')).toEqual({ stored: 20, computed: 18 });
+    expect(handSetAcNaming(old, 'Shield of Faith')).toEqual({ stored: 20, computed: 18, words: 'armor, abilities and Shield of Faith' });
   });
 });

@@ -165,7 +165,7 @@ function heroRefusalText(hero: Character | null, asked: string, timing: SpellTim
  *    know ("Faith"). One entry has one flag and one duration, so the same entry found twice never differs.
  */
 async function sameSpell(ctx: ToolContext, given: string, g: SpellTiming, name: string, id?: string): Promise<boolean> {
-  if (nameKey(withoutNote(given)) === nameKey(withoutNote(name))) return true;
+  if (oneName(given, name)) return true;
   if (g.unavailable) return false;
   if (g.found && id === g.id) return true;
   if (!matchByName([name], withoutNote(given), (n) => n).match) return false;
@@ -188,20 +188,25 @@ export interface HeroConcentration {
  * the refusal above, and the name to record, in this order (sameSpell decides "the same spell"):
  * 1. The spell the hero concentrates on, when it is the same spell: a recast, so nothing ends (srd:rule:concentration:
  *    "If the effect's creator loses Concentration, the effect ends"; casting it again isn't losing it). Not when the
- *    sheet holds another spell of exactly the name given and the rules data finds it and the held spell as two entries:
- *    that spell is cast, so the held one ends (srd:rule:concentration: "You lose Concentration on an effect the moment
- *    you start casting a spell that requires Concentration"; Polymorph beside the True Polymorph held).
+ *    name given and the held one differ without their trailing notes, the sheet holds a spell of the name given (its
+ *    exact name, or the two agreeing without their notes: "Conjure Elemental (6th level)" is its Conjure Elemental and
+ *    its "Conjure Elemental (scroll)"; a row the same call removes counts, a scroll removed as it is read), and the
+ *    rules data finds the name given and the held spell as two entries: that spell is cast, so the held one ends
+ *    (srd:rule:concentration: "You lose Concentration on an effect the moment you start casting a spell that requires
+ *    Concentration"; Polymorph beside the True Polymorph held). A scroll's "Hold Person (scroll)" and the "Hold Person"
+ *    it copies are never two spells, whichever entries the data finds by link and by name.
  * 2. The sheet's spell of exactly that name, one the same call adds included, as the sheet spells it.
  * 3. The one sheet spell that is the same spell: the sheet's own name, so the Spells tab shows it held ("Hold Person"
- *    for the sheet's "Hold Person (scroll)", "Faith" for its Shield of Faith, so the +2 record ends with it).
+ *    for the sheet's "Hold Person (scroll)", "Faith" for its Shield of Faith, so the +2 record ends with it); once the
+ *    held spell ends (rule 1's exception), not the held spell's own rows.
  * 4. The rules data's name for it, as an NPC's is recorded ("hold person (3rd level)" is Hold Person).
  * 5. The name as given.
  * `adding`: the names of the same call's spells_add, as the sheet will hold them (they have no ids yet); `removing`:
- * those of its spells_remove, whose rows rules 2 and 3 (and rule 1's exception) leave out, each as removeSpell finds it
- * (a used scroll removed as it is read: srd:magic-item:spell-scroll, "Once the spell is cast, the scroll crumbles to
- * dust"). A name that resolves to a spell the rules data says needs no Concentration is refused as that spell ("Armor"
- * for the Mage Armor the same call adds). `rounds`: what the label lasts, by the given name when the data doesn't know
- * the label (a book's longer name the Library doesn't hold still counts the SRD spell's rounds).
+ * those of its spells_remove, whose rows rules 2 and 3 leave out, each as removeSpell finds it (a used scroll removed as
+ * it is read: srd:magic-item:spell-scroll, "Once the spell is cast, the scroll crumbles to dust"). A name that resolves
+ * to a spell the rules data says needs no Concentration is refused as that spell ("Armor" for the Mage Armor the same
+ * call adds). `rounds`: what the label lasts, by the given name when the data doesn't know the label (a book's longer
+ * name the Library doesn't hold still counts the SRD spell's rounds).
  */
 export async function heroConcentration(
   ctx: ToolContext,
@@ -232,7 +237,8 @@ async function heroLabel(
   const current = hero?.spellcasting?.concentratingOn?.trim();
   // The sheet as the call will leave it: its own spells less those the call removes (each as removeSpell finds it),
   // then those the call adds that it doesn't hold yet.
-  let own: { name: string; id?: string }[] = (hero?.spellcasting?.spells ?? []).map((s) => ({ name: s.name, id: s.id }));
+  const rows: { name: string; id?: string }[] = (hero?.spellcasting?.spells ?? []).map((s) => ({ name: s.name, id: s.id }));
+  let own = rows;
   for (const name of removing) {
     const gone = matchByName(own, name, (s) => s.name).match;
     if (gone) own = own.filter((s) => s !== gone);
@@ -240,23 +246,36 @@ async function heroLabel(
   const sheet = [...own];
   for (const name of adding) if (!sheet.some((s) => nameKey(s.name) === nameKey(name))) sheet.push({ name });
   const exact = sheet.find((s) => nameKey(s.name) === nameKey(spell));
+  // Rule 1's exception: the name given isn't the held one (sameSpell's step 1), the sheet holds a spell of that name,
+  // either name's trailing note aside (the rows the call removes included), and it is another entry than the one held.
+  let ends = false;
   if (current) {
     const id = knownSpellId(hero, current);
-    // Rule 1's exception: the sheet's spell of exactly the name given is another entry than the one held.
-    const other = exact !== undefined && nameKey(exact.name) !== nameKey(current) && (await twoEntries(ctx, g, current, id));
-    if (!other && (await sameSpell(ctx, spell, g, current, id))) return { label: current, id };
+    const named = exact !== undefined || [...sheet, ...rows.filter((r) => !own.includes(r))].some((s) => oneName(s.name, spell));
+    ends = named && !oneName(spell, current) && (await twoEntries(ctx, g, current, id));
+    if (!ends && (await sameSpell(ctx, spell, g, current, id))) return { label: current, id };
   }
   if (exact) return { label: exact.name, id: exact.id };
   const same: { name: string; id?: string }[] = [];
-  for (const s of sheet) if (await sameSpell(ctx, spell, g, s.name, s.id)) same.push(s);
+  for (const s of sheet) {
+    // The held spell, which the exception ends, isn't the one cast.
+    if (ends && current && oneName(s.name, current)) continue;
+    if (await sameSpell(ctx, spell, g, s.name, s.id)) same.push(s);
+  }
   if (same.length === 1) return { label: same[0].name, id: same[0].id };
   return { label: g.name ?? spell };
+}
+
+/** Two names of one spell by sameSpell's step 1: they agree once a trailing note is left off each. */
+function oneName(a: string, b: string): boolean {
+  return nameKey(withoutNote(a)) === nameKey(withoutNote(b));
 }
 
 /**
  * The rules data finds the name given (`g`) and the spell held (by its sheet copy's `id`, else its name) as two
  * different entries: Polymorph and True Polymorph, never a sheet copy linked to the entry held or one whose name
- * resolves to it (a scroll's "Hold Person (scroll)" is Hold Person).
+ * resolves to it. (Names that agree without their notes never get here: a scroll's "Hold Person (scroll)" is Hold
+ * Person even when its name finds a book's "Hold Person" and the sheet's row is linked to the SRD's.)
  */
 async function twoEntries(ctx: ToolContext, g: SpellTiming, held: string, id?: string): Promise<boolean> {
   if (!g.found) return false;
@@ -435,7 +454,7 @@ export function cascadeLines(
     const recorded = acSpellNamed(spell);
     const handSet = recorded === 'Mage Armor' || (recorded && acSpells(hero).includes(recorded)) ? undefined : handSetAcNaming(hero, spell);
     if (handSet) {
-      lines.push(`${heroName}'s AC ${handSet.stored} was set by hand for ${spell}: if it counted ${spell}, set armor_class back to ${handSet.computed} (armor and abilities).`);
+      lines.push(`${heroName}'s AC ${handSet.stored} was set by hand for ${spell}: if it counted ${spell}, set armor_class back to ${handSet.computed} (${handSet.words}).`);
     }
   }
   return lines;

@@ -1501,13 +1501,18 @@ export function addSpell(c: Character, spell: Omit<KnownSpell, 'id'> & { id?: st
   };
 }
 
-export function removeSpell(c: Character, name: string): EngineResult {
+/**
+ * Remove the sheet spell `name` finds. Ends Concentration on it, unless `keepConcentration`: the DM's call that also
+ * names the hero's Concentration (a scroll removed as it is read: srd:magic-item:spell-scroll, "Once the spell is cast,
+ * the scroll crumbles to dust"; the spell it cast goes on, srd:rule:concentration).
+ */
+export function removeSpell(c: Character, name: string, opts: { keepConcentration?: boolean } = {}): EngineResult {
   const sc = c.spellcasting;
   if (!sc) return unchanged(c, `No spell named "${name}".`);
   const found = matchByName(sc.spells, name, knownSpellName);
   const spell = found.match;
   if (!spell) return unchanged(c, lookupProblem('spell', name, found, knownSpellName));
-  return withoutSpell(c, sc, spell);
+  return withoutSpell(c, sc, spell, opts.keepConcentration === true);
 }
 
 /**
@@ -1596,11 +1601,14 @@ export function expireConcentration(c: Character, spell: string, reason: string)
   };
 }
 
-/** "AC 18 was set by hand for Haste: if it counted Haste, set the AC back to 16 (armor and abilities)." (handSetAcNaming) */
+/**
+ * "AC 18 was set by hand for Haste: if it counted Haste, set the AC back to 16 (armor and abilities)." (handSetAcNaming;
+ * "(armor, abilities and Shield of Faith)" when the 16 counts a recorded Shield of Faith.)
+ */
 export function handSetAcReminder(c: Character, spell: string, catalog: readonly EquipmentOption[] = []): GameEvent | null {
   const named = handSetAcNaming(c, spell, catalog);
   if (!named) return null;
-  return warning(`AC ${named.stored} was set by hand for ${spell}: if it counted ${spell}, set the AC back to ${named.computed} (armor and abilities).`);
+  return warning(`AC ${named.stored} was set by hand for ${spell}: if it counted ${spell}, set the AC back to ${named.computed} (${named.words}).`);
 }
 
 /**

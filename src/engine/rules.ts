@@ -644,6 +644,15 @@ export function countedAcSpells(c: Pick<Character, 'acSpells' | 'acFormula'>): A
   return acSpells(c).filter((n) => hasPart(formula, acSpellPart(n)));
 }
 
+/**
+ * What an AC the engine worked out (computeArmorClass's `formula`) holds, in a warning's words: "armor and abilities",
+ * with the recorded AC spells that formula counts ("armor, abilities and Shield of Faith"), so the words never say a
+ * number holds less than it does (srd:spell:shield-of-faith: "a +2 bonus to AC for the duration").
+ */
+export function workedOutWords(c: Pick<Character, 'acSpells'>, formula: string): string {
+  return listJoin(['armor', 'abilities', ...countedAcSpells({ acSpells: c.acSpells, acFormula: formula })]);
+}
+
 /** How an AC formula the DM set by hand starts (update_character armor_class with a reason): "set by the DM: Haste". */
 const HAND_SET = 'set by the DM:';
 
@@ -946,7 +955,8 @@ function withoutStaleBases(before: Character, r: AcSync, catalog: readonly Equip
  *    Shield of Faith ending takes its 2 back off, whatever the rest adds up to), or, when that is nothing, it is kept
  *    and a warning gives the computed value when that differs. When it is the same number, nothing is said, unless the
  *    formula counted Mage Armor, whose record has ended (a DM's 12 "cursed (-3) + Mage Armor: 13"): then a warning says
- *    the number may still hold its base, which a delta can't take out.
+ *    the number may still hold its base, which a delta can't take out, and what the AC worked out counts
+ *    (workedOutWords: "armor, abilities and Shield of Faith give 14").
  * 6. A formula the engine didn't work out drops a Mage Armor part that no longer applies (withoutStaleBases).
  * Without a catalog the SRD armor table is used. No events when the computed AC doesn't change.
  */
@@ -989,12 +999,16 @@ export function syncArmorClass(before: Character, after: Character, catalog: rea
    * formula, "set by the DM" with the DM's reason or without) and the AC worked out without it is that same number:
    * nothing moved, yet the number may still hold the base (srd:spell:mage-armor: "the target's base AC becomes 13 plus
    * its Dexterity modifier"), which no delta takes out. One base AC counts at a time (srd:rule:armor-class: "you can't
-   * use more than one"), so one spell at most.
+   * use more than one"), so one spell at most. The words for the AC worked out name a Shield of Faith it still counts.
    */
   const endedBase = counted.find((n) => AC_SPELLS[n].base !== undefined && !recorded.includes(n));
   const keptOnBase = (): GameEvent[] =>
     endedBase && typeof after.acFormula === 'string' && after.acFormula.startsWith('set by the DM')
-      ? [warning(`AC ${stored}, set by hand, counted ${endedBase}, which has ended: if ${stored} still includes it, set the AC again (armor and abilities give ${now.ac}).`)]
+      ? [
+          warning(
+            `AC ${stored}, set by hand, counted ${endedBase}, which has ended: if ${stored} still includes it, set the AC again (${workedOutWords(after, now.formula)} give ${now.ac}).`,
+          ),
+        ]
       : [];
 
   if (alreadyIn.length) {
