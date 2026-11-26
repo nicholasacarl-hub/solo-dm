@@ -33,7 +33,7 @@ import {
 } from './character';
 import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, rulesClassFor, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
-import { AC_SPELLS, abilityModifier, acSpellNamed, acSpells, characterLevel, formatModifier, proficiencyBonus, syncArmorClass } from './rules';
+import { AC_SPELLS, abilityModifier, acSpellNamed, acSpells, characterLevel, formatModifier, proficiencyBonus, speedChangeText, syncArmorClass } from './rules';
 import { recomputeSlots, resetSpellSlots } from './spellcasting';
 import { clamp, formatInt, gameEvent, listJoin, toInt, touch, warning } from './util';
 
@@ -109,6 +109,11 @@ export interface LevelUpResult {
    * growing "Indomitable (one use)"), which a list of new features leaves out. Absent when there were none.
    */
   folded?: string[];
+  /**
+   * What the level did to the hero's Speed (speedChangeText: "Speed 40 ft → 45 ft (Unarmored Movement)", Roving's Climb
+   * and Swim Speeds), also an event. Absent when it changed nothing.
+   */
+  speedChange?: string;
 }
 
 /**
@@ -517,20 +522,33 @@ const usesLeft = (uses: FeatureUses): string => `${uses.max} use${uses.max === 1
 /**
  * One entry for each counted family (SRD 5.2.1 Fighter Features table: "Action Surge (one use)" at Fighter 2 and "(two
  * uses)" at 17; Action Surge: "Starting at level 17, you can use it twice before a rest but only once on a turn"): the
- * hero's class's own class features of one base name (one trailing parenthetical off), one of them, on the sheet or new,
- * named with a use count. Only these fold: Ability Score Improvement, Expertise, Metamagic, Improved Brutal Strike and
- * Mystic Arcanum ("(level 7 spell)" counts nothing) repeat as they always have. The DM's entries named as the app's
- * reminder names the rows (isGrantedFamilyEntry) join the family of a class that has an entry of it, and so do the
- * level's rows of an SRD class's table (`rows`), when the sheet holds the family. Each family keeps one entry:
+ * hero's class's own class features of one base name (one trailing parenthetical off), one of the class's own, on the
+ * sheet, new, or the level's row of an SRD class's table, named with a use count. Only these fold: Ability Score
+ * Improvement, Expertise, Metamagic, Improved Brutal Strike and Mystic Arcanum ("(level 7 spell)" counts nothing) repeat
+ * as they always have, and so does the DM's own counted name beside a class feature named without one ("Wild Shape (2
+ * uses)" beside the Druid's "Wild Shape"). The DM's entries named as the app's reminder names the rows
+ * (isGrantedFamilyEntry) join the family of a class that has an entry of it, and so do the level's rows of an SRD class's
+ * table (`rows`), when the sheet holds the family. Each family keeps one entry:
  * - the first that holds the DM's ruling (FeatureUses.ruled), with its name and number; the others' spent uses join it,
  *   up to its number;
  * - else the class's first entry whole (id, place, source name, text, ref) under the newest member's name, the highest
  *   count ("Indomitable (three uses)"), with that count as its maximum; spent uses are all the members', at most the
- *   family's count before this level-up (an older sheet's duplicates allowed more), up to the new maximum.
+ *   family's count before this level-up (an older sheet's duplicates allowed more), up to the new maximum;
+ * - but an entry whose uses follow its class table's counts (a by-table scale: a 2024 book's Fighter as the offline
+ *   parser names it, "Indomitable") keeps its own name and its scale, whose count at the class level is its maximum; a
+ *   member counting more (the DM's "Indomitable (three uses)" at Fighter 13, where the table gives two) is the DM's
+ *   ruling of that number on the same entry.
  * The other entries leave the sheet. A merge of entries the sheet held is reported as one (an event and a FeatureMerge);
- * a held entry the level's row grew is reported as growth.
+ * a held entry the level's row grew is reported as growth. `levelled` is the hero with the level's classes, for a scale's
+ * count.
  */
-function collapseCountedFamilies(held: readonly Feature[], added: readonly Feature[], classes: readonly ClassLevel[], rows: readonly Feature[]): Collapsed {
+function collapseCountedFamilies(
+  held: readonly Feature[],
+  added: readonly Feature[],
+  classes: readonly ClassLevel[],
+  rows: readonly Feature[],
+  levelled: Character,
+): Collapsed {
   const features = [...held, ...added];
   const isNew = new Set(added);
   const collapsed: Collapsed = { features, grows: [], merges: [], events: [], folded: new Set() };
@@ -562,19 +580,29 @@ function collapseCountedFamilies(held: readonly Feature[], added: readonly Featu
   const drop = new Set<Feature>();
   const replace = new Map<Feature, Feature>();
   for (const { members } of families.values()) {
-    if (members.length < 2 || !members.some(namesItsCount)) continue;
+    // Counted by the class's own name for it (its entry, its new feature, its table's row): the DM's own counted label
+    // beside a class feature named without a count is no family.
+    if (members.length < 2 || !members.some((m) => (m.own || m.row) && namesItsCount(m))) continue;
     members.sort((a, b) => order(a) - order(b));
     const real = members.filter((m) => !m.row);
     const keep = real.find((m) => m.f.uses?.ruled) ?? real.find((m) => m.own);
     if (!keep) continue;
     const spent = real.reduce((sum, m) => sum + Math.max(0, toInt(m.f.uses?.used)), 0);
+    const before = Math.max(0, ...real.filter((m) => m.held).map((m) => memberCount(m.f)));
     let kept: Feature;
     const ruled = keep.f.uses?.ruled ? keep.f.uses : undefined;
+    const tracked = !ruled && keep.f.uses?.scale?.by === 'table' ? keep.f.uses : undefined;
+    const table = tracked ? scaledUsesMax(levelled, tracked.scale) : null;
     if (ruled) kept = { ...keep.f, uses: { ...ruled, used: clamp(spent, 0, ruled.max) } };
-    else {
+    else if (tracked && table !== null) {
+      // The table's count by its scale; another member's higher count is the DM's ruling on this entry (its scale off).
+      const most = Math.max(0, ...members.filter((m) => m !== keep).map((m) => memberCount(m.f)));
+      const { scale: _scale, ...own } = tracked;
+      const uses: FeatureUses = most > table ? { ...own, max: most, ruled: true } : { ...tracked, max: table };
+      kept = { ...keep.f, uses: { ...uses, used: clamp(Math.min(spent, before), 0, uses.max) } };
+    } else {
       const newest = members.reduce((best, m) => newerMember(m, best));
       const count = memberCount(newest.f);
-      const before = Math.max(0, ...real.filter((m) => m.held).map((m) => memberCount(m.f)));
       const template = keep.f.uses ?? newest.f.uses ?? real.find((m) => m.f.uses)?.f.uses;
       kept = { ...keep.f, name: newest.f.name, ...(template ? { uses: { ...template, max: count, used: clamp(Math.min(spent, before), 0, count) } } : {}) };
     }
@@ -651,7 +679,7 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
         .filter((name) => nameUseCount(name) !== null && !added.some((f) => nameKey(f.name) === nameKey(name)))
         .map((name): Feature => ({ id: `row:${nameKey(name)}`, name, source: 'class', sourceName: `${gained.name} ${gained.level}`, description: '' }))
     : [];
-  const counted = collapseCountedFamilies(c.features, added, classes, rows);
+  const counted = collapseCountedFamilies(c.features, added, classes, rows, { ...c, classes });
   let next: Character = {
     ...c,
     classes,
@@ -664,6 +692,9 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
   // A new class or subclass can change the AC (Unarmored Defense, Draconic Resilience, Defense).
   const ac = syncArmorClass(c, uses.character, opts.equipment ?? []);
   next = touch(recomputeSlots(ac.character));
+  // A class feature that raises Speed at this level (Unarmored Movement at Monk 2, 6, 10, 14, 18; Fast Movement at
+  // Barbarian 5; Roving at Ranger 6): worked out when read (speedDetails), so it is told here.
+  const speedChange = speedChangeText(c, next);
 
   const bonusText = bonuses.map((b) => ` + ${b.amount} ${b.note}`).join('');
   const classText = classes.map((cl) => `${cl.name} ${cl.level}`).join(' / ');
@@ -680,6 +711,7 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
   const usesNow = [...counted.grows, ...uses.changes];
   if (usesNow.length) events.push(gameEvent('level-up', `Feature uses now: ${listJoin(usesNow)}.`));
   events.push(...ac.events.filter((e) => e.type !== 'warning'));
+  if (speedChange) events.push(gameEvent('level-up', `${speedChange}.`));
 
   const reminders: string[] = [];
   if (!existing && oldTotal > 0) reminders.push(...multiclassPrerequisites(c, info, gained.name, opts.multiclassPrimaries));
@@ -709,6 +741,7 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
     reminders,
     ...(counted.merges.length ? { merges: counted.merges } : {}),
     ...(folded.length ? { folded } : {}),
+    ...(speedChange ? { speedChange } : {}),
   };
 }
 

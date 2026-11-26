@@ -70,6 +70,8 @@ import {
   restoreSlot,
   setConcentration,
   setTempHp,
+  sheetSpeedText,
+  speedDetails,
   spendHitDie,
   spendSlot,
   stabilize,
@@ -84,20 +86,25 @@ import type { RulesIndex } from '@/data';
 import { withAdaptationNotes } from '@/data/options/adaptationNotes';
 import { entryRef, inventoryFromEntry } from '@/data/options/inventory';
 import { inlineFightingStyles, inlineOptionRef } from '@/data/options/classFeatures';
+import { refreshTableCountedUses } from '@/data/options/featureUses';
 import { gainedFeatures, keptRulings } from '@/data/options/leveling';
 import { classRefOf, subclassCastingOf, subclassRefOf, spellEntryRef, spellHomebrewId } from '@/data/options/levelUpChoices';
 import { subclassesOf } from '@/data/options/replaced';
 import { classByName, classOptionFor, multiclassPrimariesFor, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
 import {
   classSpellRules,
+  freeCastingLines,
   keepsBookExtra,
   keptBookExtraLines,
   levelSpellsEdit,
+  lineageSpellGrants,
   owedSpellsLine,
   recordingHint,
   settleSpellPicks,
+  withLineageCastings,
   withoutSpellReview,
   type ClassPicks,
+  type LineageCastings,
   type OwedSpells,
   type SettledPicks,
 } from '@/data/options/spellPicks';
@@ -754,6 +761,17 @@ function besideLines(before: Character, after: Character): string[] {
   });
 }
 
+/**
+ * For the DM, after "Speed 30 ft. → 40 ft.": what `speed` is for a hero with a class feature that raises Speed at its
+ * levels (Unarmored Movement, Fast Movement, Roving), which the app adds when the Speed is read, and the Speed it reads
+ * now on the sheet as the call left it (its own notes: a bonus in force, one gear suspends, a penalty, Speed 0), so a
+ * Speed raised by hand for the feature is in front of the DM.
+ */
+function speedLines(input: ToolInput<'update_character'>, after: Character): string[] {
+  if (input.speed === undefined || !speedDetails(after).classFeatures.length) return [];
+  return [`speed is the Speed before class features, which the app adds: ${after.name.trim() || 'The hero'}'s Speed is now ${sheetSpeedText(after)}.`];
+}
+
 /** "Stable" or "Stabilized", alone or with a detail after it ("Stable (Healer's Kit)", "Stabilized by Brother Aldo"). */
 const STABLE_NAME = /^(?:stable|stabili[sz]ed?)(?=$|[\s(:,.\-–—])/i;
 
@@ -1312,6 +1330,7 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
 
   const lines = results.flatMap((r) => eventLines(r.events)).filter(Boolean);
   // For the DM only (the player's log keeps the change itself).
+  lines.push(...speedLines(input, change.character));
   lines.push(...besideLines(before, change.character));
   lines.push(...untilEndedLines(before, change.character));
   if (input.initiative_change && ctx.deps.store().combat?.active) {
@@ -1634,12 +1653,21 @@ function dataLevelOptions(plan: DataLevel, data: BuilderData, input: ToolInput<'
   };
 }
 
-/** The result's lines about the books: features added with their text (names only), copies not added, ties. */
-function bookLines(plan: DataLevel | null, replaced: string[], replacedBySrd: string[], kept: string[]): string[] {
+/**
+ * The result's lines about the books: features added with their text (names only; one the level-up folded into an entry
+ * the sheet held, a counted family's row, was not added), copies not added, ties.
+ */
+function bookLines(plan: DataLevel | null, replaced: string[], replacedBySrd: string[], kept: string[], folded: readonly string[] = []): string[] {
   const already = kept.length ? [`Already on the sheet with the book's text, kept as they are (uses included): ${kept.join(', ')}.`] : [];
   if (!plan) return already;
   const lines: string[] = [...already];
-  const fromBooks = plan.features.filter((f) => f.ref).map((f) => `- ${f.name} (${f.ref?.sourceTitle}) — get_character_sheet has its text`);
+  const left = [...folded];
+  const added = plan.features.filter((f) => {
+    const at = left.findIndex((name) => nameKey(name) === nameKey(f.name));
+    if (at >= 0) left.splice(at, 1);
+    return at < 0;
+  });
+  const fromBooks = added.filter((f) => f.ref).map((f) => `- ${f.name} (${f.ref?.sourceTitle}) — get_character_sheet has its text`);
   if (fromBooks.length) lines.push("Features from the player's books (added with their text):", ...fromBooks);
   if (replaced.length) lines.push(`Used the book's text instead of your description for: ${replaced.join(', ')}.`);
   if (replacedBySrd.length) lines.push(`Used the SRD's text instead of your description for: ${replacedBySrd.join(', ')}.`);
@@ -1664,9 +1692,11 @@ interface LevelSpells {
   entry: SpellPicksOwed | null;
   /** Other classes open now for the places their turned spells left. */
   others: ClassPicks[];
+  /** The free castings of the lineage's spells the edit added (or why none were), or null when the edit didn't run. */
+  castings: LineageCastings | null;
 }
 
-const noLevelSpells = (): LevelSpells => ({ added: [], turned: [], missing: [], owed: null, entry: null, others: [] });
+const noLevelSpells = (): LevelSpells => ({ added: [], turned: [], missing: [], owed: null, entry: null, others: [], castings: null });
 
 /**
  * The levelled class's spells, in the level-up's own edit (levelSpellsEdit, SRD 5.2.1 srd:rule:gaining-spells): the
@@ -1674,13 +1704,22 @@ const noLevelSpells = (): LevelSpells => ({ added: [], turned: [], missing: [], 
  * sheet holds one as an ordinary spell ("a spell that you always have prepared doesn't count against the number of
  * spells on that list", so its place is free again: the class it leaves is marked open too); then the mark that its
  * choices are open, counted after them. The class is the levelled entry: the hero's by its id, or a new one by the
- * option's id levelUp was given. Fills `out`.
+ * option's id levelUp was given. The lineage's spells up to the character level join the class's in that count
+ * (lineageSpellGrants: SRD 5.2.1 srd:species:elf, "When you reach character levels 3 and 5, you learn a higher-level
+ * spell"), and each one the sheet then holds gets its free casting, once per Long Rest (withLineageCastings). Fills `out`.
  */
-function withLevelSpells(c: Character, plan: DataLevel, findSpell: (name: string) => CompendiumEntry | undefined, classes: readonly ClassOption[], out: LevelSpells): Character {
+function withLevelSpells(
+  c: Character,
+  plan: DataLevel,
+  findSpell: (name: string) => CompendiumEntry | undefined,
+  data: BuilderData,
+  out: LevelSpells,
+): Character {
   const classId = plan.existing?.classId ?? plan.option.id;
   const cl = c.classes.find((x) => x.classId === classId);
   if (!cl) return c;
-  const r = levelSpellsEdit(c, cl, plan.option, plan.sub, findSpell, classes);
+  const lineage = lineageSpellGrants(c, data, findSpell);
+  const r = levelSpellsEdit(c, cl, plan.option, plan.sub, findSpell, data.classes, lineage);
   out.added = r.gain.add.map((s) => ({ name: s.name, source: s.source ?? '' }));
   for (const f of r.gain.flip) {
     // A class's spell it didn't count (unprepared) frees nothing: outside a spellbook it reads as a spell added.
@@ -1691,7 +1730,9 @@ function withLevelSpells(c: Character, plan: DataLevel, findSpell: (name: string
   out.owed = r.owed;
   out.entry = r.entry;
   out.others = r.others;
-  return r.character;
+  const cast = withLineageCastings(r.character, data, lineage);
+  out.castings = cast;
+  return cast.character;
 }
 
 /** Names grouped by a key, in the order they came: [key, names]. */
@@ -1765,7 +1806,13 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   const spells = noLevelSpells();
   const change = await mutateCharacter(ctx, (c) => {
     Object.assign(spells, noLevelSpells());
-    const r = levelUp(c, {
+    // A book's class whose table counts a feature by name ("Indomitable (two uses)" at 13): its own entries named
+    // without a count (a 2024 book's Fighter as the offline parser names them, from before the app read the counts)
+    // are re-read by that table first (refreshTableCountedUses), so the level-up grows them by it, and a counted family
+    // the level folds keeps their name (the level-up dialog re-reads every feature's uses after it).
+    const held = plan?.option.source && plan.existing ? c.classes.find((cl) => cl.classId === plan.existing?.classId) : undefined;
+    const start = plan && held ? refreshTableCountedUses(c, plan.option, held) : c;
+    const r = levelUp(start, {
       className: input.class_name,
       hpMethod: input.hp_method ?? 'average',
       rng: ctx.deps.rng,
@@ -1780,19 +1827,25 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
       ...(data ? { multiclassPrimaries: multiclassPrimariesFor(plan?.option, c, data.classes) } : {}),
       newFeatures: [...(plan?.features ?? []), ...extra],
     });
-    if (r.character === c || !plan) return r;
+    // Refused: the sheet stays as it was, re-read or not.
+    if (r.character === start) return start === c ? r : { ...r, character: c };
+    if (!plan || !data) return r;
     // The older-edition notes of the class and its subclass (a 2014 subclass chosen now) join the sheet's (B6); then the
-    // class's always-prepared spells and the mark that its spell choices are open.
-    const next = withLevelSpells(withAdaptationNotes(r.character, [plan.option, plan.sub]), plan, findSpell, data?.classes ?? [], spells);
+    // class's always-prepared spells and the lineage's, their free castings, and the mark that its spell choices are open.
+    const next = withLevelSpells(withAdaptationNotes(r.character, [plan.option, plan.sub]), plan, findSpell, data, spells);
     return next === r.character ? r : { ...r, character: next };
   });
   const className = plan && !plan.existing ? plan.option.name : input.class_name;
   const summary = `Level up! Level ${change.newLevel} (${className}) · HP +${change.hpGained} (max ${change.character.hp.max})`;
-  const uses = updatedUses(before, change.character);
+  // A counted family's entries merged into one are told by the merge's own line (the events), not as the kept entry's growth.
+  const merged = new Set((change.merges ?? []).map((m) => m.id));
+  const uses = updatedUses({ ...before, features: before.features.filter((f) => !merged.has(f.id)) }, change.character);
   const notes = (change.character.adaptationNotes ?? []).filter((n) => !(before.adaptationNotes ?? []).includes(n));
   const books = (forDm: boolean) => [
-    ...bookLines(plan, replaced, replacedBySrd, kept),
+    ...bookLines(plan, replaced, replacedBySrd, kept, change.folded),
     ...alwaysPreparedLines(spells, forDm),
+    // How the DM spends a lineage spell's free casting (the player's log keeps the spells' lines).
+    ...(forDm && spells.castings ? freeCastingLines(spells.castings) : []),
     ...(notes.length ? ['Older-edition notes now on the sheet (app notes):', ...notes.map((n) => `- ${n}`)] : []),
   ];
   // What the class may still choose, from its table and the sheet: it replaces the engine's generic spell line wherever

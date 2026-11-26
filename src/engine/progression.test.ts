@@ -1167,8 +1167,73 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     }
   });
 
+  it("a DM's own counted label beside a class feature named without a count is no family: both stay as before (srd:class:druid Wild Shape, srd:class:barbarian Rage)", () => {
+    // srd:class:druid, Wild Shape: "You can use Wild Shape twice. … You gain additional uses when you reach certain Druid
+    // levels, as shown in the Wild Shape column of the Druid Features table" ("| 6 | +3 | Subclass feature | 3 |").
+    const wildShape: Feature = { id: 'ws', name: 'Wild Shape', source: 'class', sourceName: 'Druid 2', description: '', uses: { max: 2, used: 1, recharge: 'long' } };
+    const dmShape: Feature = { id: 'dm', name: 'Wild Shape (2 uses)', source: 'class', sourceName: 'Granted in play', description: 'DM words.', uses: { max: 2, used: 0, recharge: 'long' } };
+    const druid = levelUp(mira({ classes: [asClass('Druid', 5)], features: [wildShape, dmShape] }), { className: 'Druid', hpMethod: 'average' });
+    expect(druid.character.features).toEqual([{ ...wildShape, uses: { ...wildShape.uses!, max: 3 } }, dmShape]);
+    expect(messages(druid)).toContain('Feature uses now: Wild Shape 2 → 3.');
+    expect(druid.merges).toBeUndefined();
+    // srd:class:barbarian, Rage: "the number of times shown for your Barbarian level in the Rages column of the
+    // Barbarian Features table" ("| 4 | +2 | Ability Score Improvement | 3 |"); the DM's entry named with that count.
+    const rage: Feature = { id: 'rage', name: 'Rage', source: 'class', sourceName: 'Barbarian 1', description: '', uses: { max: 3, used: 1, recharge: 'long' } };
+    const dmRage: Feature = { id: 'dm-rage', name: 'Rage (3 uses)', source: 'class', sourceName: 'Granted in play', description: 'DM words.', uses: { max: 3, used: 0, recharge: 'long' } };
+    const barbarian = levelUp(mira({ classes: [asClass('Barbarian', 3)], spellcasting: undefined, features: [rage, dmRage] }), { className: 'Barbarian', hpMethod: 'average' });
+    expect(barbarian.character.features).toEqual([rage, dmRage]);
+    expect(barbarian.merges).toBeUndefined();
+    expect(barbarian.folded).toBeUndefined();
+  });
+
+  it("a book Fighter's entry that follows its table's counts keeps its name and scale as the DM's entry of the table's name folds in; a higher count is the DM's ruling on it", () => {
+    // A 2024 book's Fighter as the offline parser names it ("Indomitable"): its uses read from the table's "Indomitable
+    // (two uses)" cell at 13 (srd:class:fighter's Fighter Features table, as the book prints it), a by-table scale.
+    const scale = { by: 'table' as const, className: 'Fighter', values: [...Array<number>(8).fill(0), 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3] };
+    const bookFighter = (level: number): ClassLevel => ({ classId: 'lib:lantern:class:fighter', name: 'Fighter', level, hitDie: 10, casterType: 'none' });
+    const bare: Feature = { ...entry('ind', 'Indomitable', 9, 1, 1), uses: { max: 1, used: 1, recharge: 'long', scale } };
+    const twelve = mira({ classes: [bookFighter(12)], hitDice: [{ die: 10, total: 12, spent: 0 }], spellcasting: undefined, features: [bare] });
+    const dmEntry = (name: string, max: number): Omit<Feature, 'id'> => ({ name, source: 'class', description: 'DM words.', uses: { max, used: 0, recharge: 'long' } });
+    const r = up(twelve, [dmEntry('Indomitable (two uses)', 2)]);
+    expect(r.character.features).toEqual([{ ...bare, uses: { max: 2, used: 1, recharge: 'long', scale } }]);
+    expect(r.folded).toEqual(['Indomitable (two uses)']);
+    expect(messages(r)).toContain('Feature uses now: Indomitable 1 → 2.');
+    // Three at Fighter 13, where the table gives two: the DM's ruling, on the same entry under its own name.
+    const ruled = up(twelve, [dmEntry('Indomitable (three uses)', 3)]);
+    expect(ruled.character.features).toEqual([{ ...bare, uses: { max: 3, used: 1, recharge: 'long', ruled: true } }]);
+    // The next level leaves the ruling as it is.
+    expect(up({ ...ruled.character, classes: [bookFighter(16)] }).character.features).toEqual(ruled.character.features);
+  });
+
   it("a hero with no counted family levels up exactly as before: no merges, nothing folded", () => {
     const r = levelUp(mira(), { className: 'Wizard', hpMethod: 'average' });
     expect(Object.keys(r).sort()).toEqual(['character', 'events', 'hpGained', 'newLevel', 'reminders']);
+  });
+});
+
+describe('levelUp: the Speed a level changes (Unarmored Movement, Fast Movement, Roving)', () => {
+  const unarmored = (cls: string, level: number) => mira({ classes: [asClass(cls, level)], hitDice: [{ die: findSrdClass(cls)!.hitDie, total: level, spent: 0 }], spellcasting: undefined, features: [], inventory: [] });
+  const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
+
+  it('names the Speed a Monk level raises, as a field and an event (srd:class:monk table: "+10 ft." at 2–5, "| 6 | +3 | … | +15 ft. |")', () => {
+    // srd:rule:monk-unarmored-movement: "Your speed increases by 10 feet while you aren't wearing armor or wielding a
+    // Shield. This bonus increases when you reach certain Monk levels, as shown in the Monk Features table."
+    const six = levelUp(unarmored('Monk', 5), { className: 'Monk', hpMethod: 'average' });
+    expect(six.speedChange).toBe('Speed 40 ft → 45 ft (Unarmored Movement)');
+    expect(messages(six)).toContain('Speed 40 ft → 45 ft (Unarmored Movement).');
+    // Monk 7 changes nothing: no field, no event.
+    const seven = levelUp(six.character, { className: 'Monk', hpMethod: 'average' });
+    expect('speedChange' in seven).toBe(false);
+    expect(messages(seven).some((m) => m.startsWith('Speed'))).toBe(false);
+  });
+
+  it("names Roving's Climb and Swim Speeds at Ranger 6 (srd:rule:ranger-roving), and Fast Movement at Barbarian 5 (srd:rule:barbarian-fast-movement)", () => {
+    // "Your Speed increases by 10 feet while you aren't wearing Heavy armor. You also have a Climb Speed and a Swim Speed
+    // equal to your Speed."
+    const ranger = levelUp(unarmored('Ranger', 5), { className: 'Ranger', hpMethod: 'average' });
+    expect(ranger.speedChange).toBe('Speed 30 ft → 40 ft (Roving), with a Climb Speed and a Swim Speed of 40 ft');
+    expect(messages(ranger)).toContain('Speed 30 ft → 40 ft (Roving), with a Climb Speed and a Swim Speed of 40 ft.');
+    // "Your speed increases by 10 feet while you aren't wearing Heavy armor."
+    expect(levelUp(unarmored('Barbarian', 4), { className: 'Barbarian', hpMethod: 'average' }).speedChange).toBe('Speed 30 ft → 40 ft (Fast Movement)');
   });
 });

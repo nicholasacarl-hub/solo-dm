@@ -30,7 +30,9 @@ import {
   type CombatState,
   type CompendiumEntry,
   type FeatOption,
+  type Feature,
   type HomebrewEntry,
+  type ImportedRef,
   type KnownSpell,
   type MapEffect,
   type OptionSource,
@@ -3290,5 +3292,190 @@ describe('AC from spells: ac_spells_add and ac_spells_end, the call\'s last step
     // Not concentrating on it: the nudge instead.
     const other = setup();
     expect((await other.run('update_character', { ac_spells_add: ['Shield of Faith'] })).content).not.toContain('so the app takes this +2 to be that casting');
+  });
+});
+
+describe('class extras through the DM tools: lineage spells, Speed and counted families', () => {
+  describe("a lineage's spell at character level 3 (srd:species:elf, Elven Lineage)", () => {
+    // "When you reach character levels 3 and 5, you learn a higher-level spell, as shown on the table. You always have that
+    // spell prepared. You can cast it once without a spell slot, and you regain the ability to cast it in that way when
+    // you finish a Long Rest."
+    const drow = (level: number): Character =>
+      hero(srdEntry('Fighter', level), {
+        species: 'Elf (Drow lineage)',
+        speciesId: 'srd:species:elf',
+        features: [{ id: 'f-lineage', name: 'Elven Lineage (Drow)', source: 'species', sourceName: 'Elf', description: 'The Drow benefits.' }],
+        spellcasting: {
+          ability: 'cha',
+          slots: {},
+          spells: [{ id: 'srd:spell:dancing-lights', name: 'Dancing Lights', level: 0, prepared: true, source: 'Drow', concentration: true, notes: 'Spellcasting ability: Charisma' }],
+          concentratingOn: null,
+        },
+      });
+
+    it('level_up of a Drow Fighter 2 → 3 adds Faerie Fire always prepared with its free casting, and says how to spend it', async () => {
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: drow(2) });
+      const out = await h.run('level_up', { class_name: 'Fighter', subclass: 'Champion' });
+      expect(out.isError).toBeUndefined();
+      expect(out.content).toContain(
+        '\nAlways prepared now: Faerie Fire (Drow).\nFree casting now, once per Long Rest without a spell slot: Faerie Fire (Drow); spend it with update_character features_use "Faerie Fire (free casting)".\n',
+      );
+      const c = h.sheet();
+      expect(c.spellcasting?.spells.find((s) => s.name === 'Faerie Fire')).toMatchObject({ alwaysPrepared: true, prepared: true, source: 'Drow', notes: 'Spellcasting ability: Charisma. Once per Long Rest without a spell slot' });
+      expect(c.features.find((f) => f.name === 'Faerie Fire (free casting)')).toMatchObject({ source: 'species', sourceName: 'Drow', uses: { max: 1, used: 0, recharge: 'long' } });
+      // The player's log names the spell, never the tool.
+      expect(toolLog(h, 'level_up')?.detail).toContain('Always prepared now: Faerie Fire (Drow).');
+      expect(toolLog(h, 'level_up')?.detail).not.toContain('features_use');
+      // Spent by its name, and given back by a Long Rest.
+      expect((await h.run('update_character', { features_use: [{ name: 'Faerie Fire (free casting)' }] })).content).toContain('Used Faerie Fire (free casting) (0/1 left; recharges on a Long Rest)');
+      await h.run('take_rest', { kind: 'long' });
+      expect(h.sheet().features.find((f) => f.name === 'Faerie Fire (free casting)')?.uses?.used).toBe(0);
+    });
+  });
+
+  describe('one Action Surge and one Indomitable (srd:class:fighter table: "| 13 | +5 | Indomitable (two uses), Studied Attacks |")', () => {
+    const FIGHTER_SRD = srdOption('Fighter');
+    const own = (id: string, name: string, level: number, max: number, used = 0): Feature => ({
+      id,
+      name,
+      source: 'class',
+      sourceName: `Fighter ${level}`,
+      description: FIGHTER_SRD.features.find((f) => f.name === name)?.description ?? '',
+      uses: { max, used, recharge: name.startsWith('Action Surge') ? 'short' : 'long' },
+    });
+
+    it('level_up Fighter 12 → 13 without new_features grows the Indomitable the sheet holds; the reminder lists only Studied Attacks', async () => {
+      const twelve = hero(srdEntry('Fighter', 12, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), {
+        features: [own('surge', 'Action Surge (one use)', 2, 1), own('ind', 'Indomitable (one use)', 9, 1, 1)],
+      });
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: twelve });
+      const out = await h.run('level_up', { class_name: 'Fighter' });
+      expect(h.sheet().features.filter((f) => f.name.startsWith('Indomitable'))).toEqual([{ ...twelve.features[1], name: 'Indomitable (two uses)', uses: { max: 2, used: 1, recharge: 'long' } }]);
+      expect(out.content).toContain('\nFeature uses now: Indomitable (two uses) 1 → 2.\n');
+      expect(out.content).toContain('\nLimited-use features that grew with the level (already on the sheet):\n- Indomitable (two uses): 1 → 2 uses\n');
+      expect(out.content).toContain('\n- New Fighter 13 features to add to the sheet: Studied Attacks.\n');
+      expect(out.content).not.toContain('New features:');
+    });
+
+    it("an older sheet's duplicates merge at the next level_up, told by the merge, not as growth", async () => {
+      const old16 = hero(srdEntry('Fighter', 16, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), {
+        features: [own('surge', 'Action Surge (one use)', 2, 1), own('ind1', 'Indomitable (one use)', 9, 1, 1), own('ind2', 'Indomitable (two uses)', 13, 2, 2)],
+      });
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: old16 });
+      const out = await h.run('level_up', { class_name: 'Fighter' });
+      expect(out.content).toContain('\nIndomitable (one use) and Indomitable (two uses) merged into Indomitable (three uses): 3 uses, 1 left.\n');
+      expect(out.content).toContain('\nLimited-use features that grew with the level (already on the sheet):\n- Action Surge (two uses): 1 → 2 uses\nChoices');
+    });
+
+    /** A 2024 book's Fighter as the offline parser names its features (by their headings), with the SRD's table. */
+    const BOOK: ClassOption = {
+      ...FIGHTER_SRD,
+      id: 'lib:lantern:class:fighter',
+      source: { sourceId: 'lantern', title: 'The Lanternfall Handbook', recordId: 'r-fighter', format: '2024', adaptations: [] },
+      subclasses: [],
+      features: FIGHTER_SRD.features.filter((f) => !/\((two|three) uses\)$/.test(f.name)).map((f) => ({ ...f, name: f.name.replace(/\s*\(one use\)$/, '') })),
+    };
+    const bookData: BuilderData = { ...SRD_BUILDER_DATA, classes: [BOOK, ...SRD_BUILDER_DATA.classes.filter((c) => c.id !== FIGHTER_SRD.id)] };
+    const bookFighter = (level: number): ClassLevel => ({
+      classId: BOOK.id,
+      name: 'Fighter',
+      level,
+      hitDie: 10,
+      casterType: 'none',
+      ref: { sourceId: 'lantern', sourceTitle: 'The Lanternfall Handbook', entryId: BOOK.id, kind: 'class', entryName: 'Fighter', format: '2024', textHash: '', textCopied: false },
+    });
+    /** Made before the app read the table's counts: "Action Surge" with the level-17 sentence's 2 uses, "Indomitable" with none. */
+    const olderBook = (level: number) =>
+      hero(bookFighter(level), {
+        features: [
+          { id: 'surge', name: 'Action Surge', source: 'class', sourceName: 'Fighter 2', description: own('', 'Action Surge (one use)', 2, 1).description, uses: { max: 2, used: 2, recharge: 'short' } },
+          { id: 'ind', name: 'Indomitable', source: 'class', sourceName: 'Fighter 9', description: own('', 'Indomitable (one use)', 9, 1).description },
+        ],
+      });
+    const scale = (values: number[]) => ({ by: 'table', className: 'Fighter', values });
+    const SURGE_COUNTS = [0, ...Array<number>(15).fill(1), 2, 2, 2, 2];
+    const INDOMITABLE_COUNTS = [...Array<number>(8).fill(0), 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3];
+
+    it("level_up re-reads a book Fighter's entries by its table's counts: Action Surge 1, Indomitable 2 at 13, by the table from then on", async () => {
+      const h = setup({ builderData: bookData, character: olderBook(12) });
+      const out = await h.run('level_up', { class_name: 'Fighter' });
+      expect(h.sheet().features.map((f) => [f.name, f.uses])).toEqual([
+        ['Action Surge', { max: 1, used: 1, recharge: 'short', scale: scale(SURGE_COUNTS) }],
+        ['Indomitable', { max: 2, used: 0, recharge: 'long', scale: scale(INDOMITABLE_COUNTS) }],
+        ['Studied Attacks', undefined],
+      ]);
+      expect(out.content).toContain('\nFeature uses now: Indomitable 1 → 2.\n');
+      expect(out.content).toContain('\n- Action Surge: 2 → 1 uses\n');
+      // The DM's entry of the table's name folds into it, which keeps its own name (its count follows the table).
+      const listed = setup({ builderData: bookData, character: olderBook(12) });
+      const folded = await listed.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Indomitable (two uses)', description: 'DM words.', uses_max: 2 }] });
+      expect(listed.sheet().features.filter((f) => f.name.startsWith('Indomitable')).map((f) => [f.id, f.name, f.uses])).toEqual([['ind', 'Indomitable', { max: 2, used: 0, recharge: 'long', scale: scale(INDOMITABLE_COUNTS) }]]);
+      expect(folded.content).toContain('\nNew features: Studied Attacks.\n');
+      expect(folded.content).toContain('\nFeature uses now: Indomitable 1 → 2.\n');
+    });
+
+    it("a book Fighter whose features keep the table's names: the rows at 17 fold into the entries held, never listed as book features added", async () => {
+      // The book prints its features as the SRD's table names them ("Action Surge (one use)" … "(two uses)" at 17), each
+      // with its text copied (a ref).
+      const ref = (name: string, level: number): ImportedRef => ({
+        sourceId: 'lantern',
+        sourceTitle: 'The Lanternfall Handbook',
+        entryId: 'lib:lantern:class:fighter-named',
+        kind: 'class',
+        entryName: 'Fighter',
+        part: name,
+        level,
+        textHash: '',
+        textCopied: true,
+      });
+      const named: ClassOption = { ...BOOK, id: 'lib:lantern:class:fighter-named', features: FIGHTER_SRD.features.map((f) => ({ ...f, ref: ref(f.name, f.level) })) };
+      const data: BuilderData = { ...SRD_BUILDER_DATA, classes: [named, ...SRD_BUILDER_DATA.classes.filter((c) => c.id !== FIGHTER_SRD.id)] };
+      const sixteen = hero({ ...bookFighter(16), classId: named.id }, {
+        features: [
+          { ...own('surge', 'Action Surge (one use)', 2, 1), ref: ref('Action Surge (one use)', 2) },
+          { ...own('ind', 'Indomitable (two uses)', 13, 2, 1), ref: ref('Indomitable (two uses)', 13) },
+        ],
+      });
+      const h = setup({ builderData: data, character: sixteen });
+      const out = await h.run('level_up', { class_name: 'Fighter' });
+      expect(h.sheet().features.map((f) => [f.id, f.name, f.uses?.max])).toEqual([
+        ['surge', 'Action Surge (two uses)', 2],
+        ['ind', 'Indomitable (three uses)', 3],
+      ]);
+      expect(out.content).toContain('\nFeature uses now: Action Surge (two uses) 1 → 2 and Indomitable (three uses) 2 → 3.\n');
+      expect(out.content).not.toContain("Features from the player's books");
+      expect(out.content).not.toContain('New features:');
+    });
+
+    it('features_add of a counted name rewrites the family\'s entry; "Rage (3 uses)" beside a Barbarian\'s Rage is added beside it, as before (srd:class:barbarian)', async () => {
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Fighter', 13), { features: [own('ind', 'Indomitable (one use)', 9, 1, 1)] }) });
+      const out = await h.run('update_character', { features_add: [{ name: 'Indomitable (two uses)', description: 'DM words.', source: 'class', uses_max: 2 }] });
+      expect(out.content).toContain('Updated feature: Indomitable (one use) → Indomitable (two uses)');
+      expect(h.sheet().features.map((f) => [f.id, f.name, f.uses])).toEqual([['ind', 'Indomitable (two uses)', { max: 2, used: 1, recharge: 'long' }]]);
+      // srd:class:barbarian, Rage: "the number of times shown for your Barbarian level in the Rages column".
+      const rage: Feature = { id: 'rage', name: 'Rage', source: 'class', sourceName: 'Barbarian 1', description: '', uses: { max: 3, used: 0, recharge: 'long' } };
+      const b = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Barbarian', 3), { features: [rage] }) });
+      const added = await b.run('update_character', { features_add: [{ name: 'Rage (3 uses)', description: 'DM words.', source: 'class', uses_max: 3 }] });
+      expect(added.content).toContain('Gained feature: Rage (3 uses) (3 uses, recharges on a Long Rest)');
+      expect(b.sheet().features.map((f) => [f.name, f.sourceName])).toEqual([['Rage', 'Barbarian 1'], ['Rage (3 uses)', 'Granted in play']]);
+    });
+  });
+
+  describe("update_character speed for a Monk 6 (srd:rule:monk-unarmored-movement; the Monk Features table's \"+15 ft.\" at 6)", () => {
+    it("says what speed is and the Speed the app reads now, after the call's every step; nothing for a hero without such a feature", async () => {
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Monk', 6)) });
+      const out = await h.run('update_character', { speed: 40 });
+      expect(out.content).toContain(
+        'Speed 30 ft. → 40 ft.\nspeed is the Speed before class features, which the app adds: Mira Voss\'s Speed is now 55 ft (base 40 ft; Unarmored Movement: +15 ft).\n',
+      );
+      expect(out.content).toContain('· Speed 55 ft (Unarmored Movement) ·');
+      // An Exhaustion in the same call counts (srd:condition:exhaustion: "Your Speed is reduced by a number of feet equal to 5 times your Exhaustion level").
+      const tired = setup({ builderData: SRD_BUILDER_DATA, character: { ...hero(srdEntry('Monk', 6)), name: '' } });
+      expect((await tired.run('update_character', { speed: 40, exhaustion_change: 2 })).content).toContain(
+        "speed is the Speed before class features, which the app adds: The hero's Speed is now 45 ft (base 40 ft; Unarmored Movement: +15 ft; Exhaustion 2: −10 ft).",
+      );
+      const wizard = setup();
+      expect((await wizard.run('update_character', { speed: 25 })).content).not.toContain('speed is the Speed');
+    });
   });
 });
