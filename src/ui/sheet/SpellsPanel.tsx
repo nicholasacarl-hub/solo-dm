@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { Brain, BookOpen } from 'lucide-react';
-import { formatModifier, ordinal, spellAttackBonus, spellSaveDC } from '@/engine';
+import { countedAcSpells, formatModifier, ordinal, spellAttackBonus, spellSaveDC } from '@/engine';
 import { getRulesIndex } from '@/data';
 import { cn } from '@/lib/cn';
 import { isImportedPlaceholder } from '@/lib/importedContent';
@@ -18,7 +18,7 @@ import { Badge, Dialog, EmptyState, Spinner } from '@/ui/components/ui';
 import { BookBadge } from '@/ui/builder/BookBadges';
 import { FromBookLine } from './FromBook';
 import { concentrationChange, preparedChange, slotChange } from './sheetChanges';
-import { Pips, SheetSection, StatTile } from './SheetParts';
+import { acSpellWords, concentrationAcSpell, Pips, SheetSection, StatTile, useAskFirst } from './SheetParts';
 import { hasSpellPicks, SpellChoicesBar } from './SpellPicksCues';
 import { SpellPicksDialog, type SpellPicksTarget } from './SpellPicksForm';
 import type { SheetChange } from './useSheetActions';
@@ -132,6 +132,12 @@ function SpellRow({
   onOpen: (spell: KnownSpell) => void;
 }) {
   const concentrating = c.spellcasting?.concentratingOn === spell.name;
+  // A Concentration that carries an AC spell (Shield of Faith's +2 on the hero) ends on a second press, as its chip's ×
+  // does: the sheet can't record the spell again. One the AC doesn't count says so, as its chip does.
+  const carried = concentrating ? concentrationAcSpell(c) : undefined;
+  const ac = carried ? ` (${acSpellWords(carried).spoken}${countedAcSpells(c).includes(carried) ? '' : ', not counted'})` : '';
+  const stop = useAskFirst(`${spell.name}${ac}`);
+  const asking = Boolean(carried) && stop.asking;
   const canToggle = editable && spell.level > 0 && !spell.alwaysPrepared;
   const notes = notesText(spell);
   return (
@@ -165,15 +171,22 @@ function SpellRow({
           <button
             type="button"
             aria-pressed={concentrating}
-            aria-label={concentrating ? `Stop concentrating on ${spell.name}` : `Concentrate on ${spell.name}`}
-            title={concentrating ? 'Stop concentrating' : 'Concentrate on this spell'}
-            onClick={() => onEdit((cur) => concentrationChange(cur, concentrating ? null : spell.name))}
+            aria-label={!concentrating ? `Concentrate on ${spell.name}` : asking ? `Confirm ending concentration on ${spell.name}${ac}` : `Stop concentrating on ${spell.name}${ac}`}
+            title={!concentrating ? 'Concentrate on this spell' : asking ? 'Click again to end it' : 'Stop concentrating'}
+            onClick={() => {
+              if (carried && !stop.asking) stop.ask();
+              else onEdit((cur) => concentrationChange(cur, concentrating ? null : spell.name));
+            }}
             className={cn(
-              'grid size-7 shrink-0 place-items-center rounded-lg transition-colors',
-              concentrating ? 'bg-arcane-soft text-arcane' : 'text-faint hover:bg-surface-3 hover:text-arcane',
+              'grid h-7 min-w-7 shrink-0 place-items-center rounded-lg transition-colors',
+              asking
+                ? 'bg-danger px-1.5 text-[11px] leading-none font-semibold text-danger-ink'
+                : concentrating
+                  ? 'bg-arcane-soft text-arcane'
+                  : 'text-faint hover:bg-surface-3 hover:text-arcane',
             )}
           >
-            <Brain className="size-3.5" aria-hidden />
+            {asking ? 'End?' : <Brain className="size-3.5" aria-hidden />}
           </button>
         )}
       </div>

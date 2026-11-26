@@ -33,9 +33,10 @@ describe('the static tools array (append-only: it never changes during a session
   });
 
   it('keeps each schema under its cap and every description substantial', () => {
-    // 8,000 characters each; update_character alone may reach 8,500 since it gained hp_max, hp_max_end, hp.drain and
-    // initiative_change (their guidance lives in its description, not in the schema).
-    const caps: Record<string, number> = { update_character: 8_500 };
+    // 8,000 characters each; update_character alone may reach 8,750: it gained hp_max, hp_max_end, hp.drain and
+    // initiative_change, then ac_spells_add and ac_spells_end (measured at 8,656; their guidance lives in its
+    // description, not in the schema).
+    const caps: Record<string, number> = { update_character: 8_750 };
     for (const tool of DM_TOOLS) {
       expect(JSON.stringify(tool.input_schema).length, tool.name).toBeLessThan(caps[tool.name] ?? 8_000);
       expect(tool.description?.length, tool.name).toBeGreaterThan(80);
@@ -75,6 +76,65 @@ describe('the Hit Point maximum fields explain themselves to sessions whose froz
     expect(TOOL_DESCRIPTIONS.take_rest).toContain('a reduced HP maximum returns to normal');
     // srd:spell:aid ("Duration: 8 hours") ends before srd:rule:long-rest finishes.
     expect(TOOL_DESCRIPTIONS.take_rest).toContain("raises that end at a Long Rest end first, since Aid's 8 hours are over before the rest finishes");
+  });
+});
+
+describe('spell effects explain themselves to sessions whose frozen prompt never mentions them (the third change)', () => {
+  type FieldSchema = { description?: string; enum?: string[]; maxItems?: number; anyOf?: unknown[]; items?: FieldSchema };
+  type ToolSchema = { properties: Record<string, FieldSchema & { items?: { properties?: Record<string, FieldSchema> } }> };
+  const schemaOf = (name: string) => DM_TOOLS.find((t) => t.name === name)?.input_schema as unknown as ToolSchema;
+
+  it("update_combat says how NPC Concentration works, what the app rolls and ends, and what it doesn't (srd:rule:concentration)", () => {
+    for (const phrase of [
+      "`concentrate` records an NPC's or monster's Concentration on `spell` (a spell or another Concentration effect) on the caster's turn, before next_turn",
+      'spell null ends it, and the same spell again is a recast',
+      '1 minute = 10 rounds',
+      "one round more for a spell cast between the caster's turns",
+      'rounds for a longer "(level N version)"',
+      'rolls a plain Constitution save from its stat block when it takes damage',
+      'one damage call per hit',
+      "Magic Resistance doesn't apply",
+      'a creature with Legendary Resistance decides first',
+      'without saves in its stat block you roll it',
+      // D13: srd:spell:bless adds 1d4 to a save, srd:spell:bane takes 1d4 off: a kept save that should have failed is
+      // put right with spell null, a failed one with the spell and its rounds again.
+      "a bonus or penalty the app can't see (Bless, Bane) is put right with concentrate: the spell and its rounds again, or spell null",
+      'ends the spell at 0 HP, on an Incapacitating condition, a failed save or when its time is up — not on defeat or remove',
+      'naming what to end with it (areas, conditions)',
+      "Don't record a spell a stat block casts without Concentration.",
+      "For the hero's own spell, concentrate only sets `rounds` (update_character starts and ends it).",
+    ]) {
+      expect(TOOL_DESCRIPTIONS.update_combat, phrase).toContain(phrase);
+    }
+    expect(TOOL_DESCRIPTIONS.update_combat).not.toContain('is put right with concentrate and rounds');
+    const update = schemaOf('update_combat').properties;
+    expect(update.action.enum).toContain('concentrate');
+    expect(update.spell.description).toBe('For action "concentrate": the spell or effect it concentrates on, or null when that ends.');
+    expect(update.rounds.description).toBe('For action "concentrate": rounds left (1 minute = 10); default: the spell\'s duration.');
+  });
+
+  it('update_character says how AC spells are recorded and ended (srd:spell:mage-armor, srd:spell:shield-of-faith, srd:spell:shield)', () => {
+    for (const phrase of [
+      'ac_spells_add records Mage Armor (base AC 13 + Dexterity while no armor is worn, until a Long Rest)',
+      "or Shield of Faith (+2, ending with the hero's Concentration on it) and ac_spells_end ends one; the app applies and removes the AC",
+      "fold Shield's +5 into the dc of attacks on the hero",
+      'for a lasting one (Haste, Barkskin) set armor_class, and set it back when it ends',
+    ]) {
+      expect(TOOL_DESCRIPTIONS.update_character, phrase).toContain(phrase);
+    }
+    const sheet = schemaOf('update_character').properties;
+    expect(sheet.armor_class.description).toBe("AC set by hand (a homebrew effect, armor the app can't identify); not for Mage Armor or Shield of Faith (ac_spells_add).");
+    expect(sheet.concentration.description).toBe('Spell the hero starts (or recasts) concentrating on, or null when it ends; in a fight the app counts its duration.');
+    for (const key of ['ac_spells_add', 'ac_spells_end']) {
+      expect(sheet[key].description, key).toBeUndefined();
+      expect(sheet[key].maxItems, key).toBe(2);
+    }
+  });
+
+  it('teaches a condition\'s source to name the spell, so the app can name the conditions a spell may hold', () => {
+    const source = 'What caused it: "Giant spider venom", a spell by its name ("Hold Person").';
+    expect(schemaOf('update_character').properties.conditions_add.items?.properties?.source.description).toBe(source);
+    expect(schemaOf('update_combat').properties.conditions_add.items?.properties?.source.description).toBe(source);
   });
 });
 

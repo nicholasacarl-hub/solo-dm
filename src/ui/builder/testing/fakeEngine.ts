@@ -23,11 +23,27 @@ import type {
   SpellSlots,
 } from '@/types';
 import { SKILL_ABILITY } from '@/types';
-// Pure name rules and Hit Point maximum adjustments: the real ones (the module itself; '@/engine' is what tests mock).
-import { addSpell, adjustHpMax, endHpMaxAdjustments, featOrTrait, featureLabel, hpMaxAdjustmentLabel, hpMaxAdjustments, hpMaxEndsText, removeSpellById } from '@/engine/character';
+// Pure name rules, Hit Point maximum adjustments, AC spells and Concentration (with what ends with it): the real ones
+// (the module itself; '@/engine' is what tests mock).
+import {
+  addAcSpell,
+  addSpell,
+  adjustHpMax,
+  endAcSpell,
+  endHpMaxAdjustments,
+  featOrTrait,
+  featureLabel,
+  hpMaxAdjustmentLabel,
+  hpMaxAdjustments,
+  hpMaxEndsText,
+  removeSpellById,
+  setConcentration,
+} from '@/engine/character';
+import { conditionKey, matchStandardCondition } from '@/engine/conditions';
 import { spellReviewReminder } from '@/engine/progression';
-import { isFightingStyle } from '@/engine/rules';
+import { AC_SPELLS, acSpellNamed, acSpells, countedAcSpells, isFightingStyle } from '@/engine/rules';
 import { classSpellLevelCap } from '@/engine/spellcasting';
+import { conditionsNaming } from '@/engine/spellEffects';
 
 type Rng = Engine.Rng;
 
@@ -227,6 +243,13 @@ export const fakeEngine = {
   hpMaxAdjustmentLabel,
   hpMaxAdjustments,
   hpMaxEndsText,
+  // AC spells (Mage Armor, Shield of Faith) run the real rules, the AC included (their own sync, not this fake's).
+  AC_SPELLS,
+  acSpellNamed,
+  acSpells,
+  countedAcSpells,
+  addAcSpell,
+  endAcSpell,
   // Spell picks run the real rules (pure): adding and removing a sheet spell, a class's own spell-level cap, and the
   // generic reminder they replace.
   addSpell,
@@ -334,8 +357,10 @@ export const fakeEngine = {
     return { character: bump({ ...c, deathSaves: ds }), events: [], outcome };
   },
   changeExhaustion: (c: Character, delta: number) => ({ character: bump({ ...c, exhaustion: Math.max(0, Math.min(6, c.exhaustion + delta)) }), events: [] }),
-  setConcentration: (c: Character, spellName: string | null) =>
-    c.spellcasting ? { character: bump({ ...c, spellcasting: { ...c.spellcasting, concentratingOn: spellName } }), events: [] } : { character: c, events: [] },
+  // The real rules: its refusals, and what ends with a Concentration (a Shield of Faith record, its AC), with the hero's
+  // conditions that name the spell.
+  setConcentration,
+  conditionsNaming,
   findFeature: (c: Character, name: string) => c.features.find((f) => f.name.toLowerCase() === name.toLowerCase()),
   useFeature: (c: Character, name: string, amount = 1) => ({
     character: bump({ ...c, features: c.features.map((f) => (f.name === name && f.uses ? { ...f, uses: { ...f.uses, used: Math.min(f.uses.max, f.uses.used + amount) } } : f)) }),
@@ -407,5 +432,7 @@ export const fakeEngine = {
   // conditions
   CONDITIONS: {} as (typeof Engine)['CONDITIONS'],
   conditionName: (conditionId: string) => conditionId.charAt(0).toUpperCase() + conditionId.slice(1),
+  conditionKey,
+  matchStandardCondition,
   normalizeConditionId: () => null,
 } satisfies Partial<typeof Engine>;

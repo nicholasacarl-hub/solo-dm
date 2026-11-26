@@ -14,10 +14,11 @@ vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
+import { createRulesIndex } from '@/data/search';
 import { knownSpellFromEntry } from '@/data/options/levelUpChoices';
 import { owedSpells } from '@/data/options/spellPicks';
 import { characterSheetText, levelUp, recomputeSlots, weaponCritRange } from '@/engine';
-import { sampleCharacter, sampleCombat } from '@/test/fixtures';
+import { sampleCharacter, sampleCombat, sampleMappedCombat } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
 import {
   HOMEBREW_SOURCE_ID,
@@ -26,10 +27,12 @@ import {
   type ClassFeatureDef,
   type ClassLevel,
   type ClassOption,
+  type CombatState,
   type CompendiumEntry,
   type FeatOption,
   type HomebrewEntry,
   type KnownSpell,
+  type MapEffect,
   type OptionSource,
   type SubclassOption,
   type TranscriptMessage,
@@ -38,11 +41,14 @@ import { redactImportedDeep } from '@/storage/backup';
 import { redactCopiedImports } from '@/storage/redact';
 import { campaignGraph } from '@/storage/testData';
 import type { CampaignData } from '@/storage/types';
+import { concentrationChange } from '@/ui/sheet/sheetChanges';
 import { deps, resetDmDeps, setDmDeps } from '../deps';
 import { SAMPLE_RULES } from '../testing/fakeData';
 import { setupHarness, type HarnessOptions } from '../testing/harness';
+import { acSpellLines } from './character';
 import type { ToolContext } from './context';
 import { runTool } from './handlers';
+import { heroConcentration } from './spellEffects';
 
 afterEach(() => {
   resetDmDeps();
@@ -1196,9 +1202,11 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
     const handSet = setup({ character: fighter4({ inventory: [mail], armorClass: 17, acFormula: 'set by the DM: Defense' }) });
     const matched = await handSet.run('update_character', { features_add: [{ name: 'Defense', description: 'A Fighting Style feat.', source: 'feat' }] });
     expect(handSet.sheet().armorClass).toBe(17);
+    // H1/P1: the example of what a hand-set AC may still have counted is an effect the app doesn't count (Haste).
     expect(matched.content).toContain(
-      'AC 17 stays as set by hand; armor and features now give 17 too (Chain Mail 16 + Defense 1). If the hand-set AC counted a bonus that still applies (a spell such as Shield of Faith), set armor_class to include it.',
+      'AC 17 stays as set by hand; armor and features now give 17 too (Chain Mail 16 + Defense 1). If the hand-set AC counted an effect that still applies (such as Haste), set armor_class to include it.',
     );
+    expect(matched.content).not.toContain('a spell such as Shield of Faith');
   });
 
   it("tells the DM when new gear only matches a hand-set AC that counted a spell (SRD 5.2.1 Shield of Faith: +2 AC)", async () => {
@@ -1207,9 +1215,12 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
     const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }) });
     const out = await h.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }] });
     expect(h.sheet().armorClass).toBe(18);
+    // H1/P1: an older save's hand-set Shield of Faith with no record is recorded with ac_spells_add, never folded into
+    // armor_class (the app then takes its +2 off when the spell ends).
     expect(out.content).toContain(
-      'AC 18 stays as set by hand; armor and features now give 18 too (Chain Mail 16 + Shield 2). If the hand-set AC counted a bonus that still applies (a spell such as Shield of Faith), set armor_class to include it.',
+      'AC 18 stays as set by hand; armor and features now give 18 too (Chain Mail 16 + Shield 2). If it counted Shield of Faith, record it with ac_spells_add ["Shield of Faith"] (the app adds and ends it).',
     );
+    expect(out.content).not.toContain('set armor_class to include it');
     // The DM's own armor_class in the same call is final, the same value restated too: nothing to ask.
     const restated = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }) });
     const final = await restated.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }], armor_class: 18, reason: 'Shield of Faith ends' });
@@ -1225,6 +1236,948 @@ describe("a feat's numbers when the DM records it (features_add)", () => {
     expect(h.sheet().armorClass).toBe(15);
     expect(donned.content).toContain("AC stays 15 (set by hand): Dragonhide Coat's armor stats are unknown, so set armor_class by hand.");
     expect(donned.content).not.toContain('now give 15 too');
+  });
+});
+
+describe('a hand-set AC the new gear only matches: what it may have counted (H1/P1)', () => {
+  const mail = { id: 'cm', name: 'Chain Mail', quantity: 1, equipped: true, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'heavy' as const, baseAc: 16, dexCap: 0 } };
+  const shield = { id: 'sh', name: 'Shield', quantity: 1, equipped: false, category: 'shield' as const, armor: { kind: 'shield' as const, baseAc: 2, dexCap: 0 } };
+  const fighter4 = (extra: Partial<Character> = {}) => hero({ classId: FIGHTER.id, name: 'Fighter', level: 4, hitDie: 10 }, extra);
+  const concentratingOn = (spell: string) => ({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: spell } });
+  const dragonBlooded = { name: 'Draconic Resilience', description: 'Invented: scales on the skin.', source: 'class' };
+
+  it('an older save\'s Shield of Faith is recorded with ac_spells_add, and its +2 then ends with the Concentration (SRD 5.2.1 Shield of Faith: "+2 bonus to AC")', async () => {
+    const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith', ...concentratingOn('Shield of Faith') }) });
+    const donned = await h.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }] });
+    expect(donned.content).toContain('If it counted Shield of Faith, record it with ac_spells_add ["Shield of Faith"] (the app adds and ends it).');
+    // Following it takes one call (D4): the hand-set 18 is what the gear alone gives now, so it is taken not to hold the
+    // +2 (E2), and the app adds it; its words name the spell, so the DM is told how to put 18 back should it have
+    // counted the spell beside a penalty the app doesn't count (F3; srd:spell:slow: "it takes a -2 penalty to AC").
+    const recorded = await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+    expect(recorded.content).toContain(
+      "Shield of Faith: AC 18 → 20\nWarning: AC 18, set by hand, names Shield of Faith, but gear and features alone give 18, so the app now counts Shield of Faith as well (AC 20): if 18 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 18.",
+    );
+    expect(recorded.content).not.toContain('was set by hand naming');
+    expect(h.sheet()).toMatchObject({ armorClass: 20, acFormula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    const ended = await h.run('update_character', { concentration: null });
+    expect(ended.content).toContain('No longer concentrating on Shield of Faith.\nShield of Faith ends: AC 20 → 18');
+    expect(h.sheet()).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield 2' });
+  });
+
+  it('never asks for an ac_spells_add the same call makes: the Shield donned and the spell recorded at once (RD2; srd:spell:shield-of-faith "a +2 bonus to AC")', async () => {
+    const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith', ...concentratingOn('Shield of Faith') }) });
+    const out = await h.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }], ac_spells_add: ['Shield of Faith'] });
+    expect(out.content).not.toContain('record it with ac_spells_add');
+    // Nothing else is left to name (the Haste example), and the record the call makes moves the AC next.
+    expect(out.content).toContain(
+      'Warning: AC 18 stays as set by hand; armor and features now give 18 too (Chain Mail 16 + Shield 2). If the hand-set AC counted an effect that still applies (such as Haste), set armor_class to include it.\nShield of Faith: AC 18 → 20',
+    );
+    // The hand-set 18 is what the gear alone gives now, so it is taken to hold no +2 (E2): the app adds it and ends it.
+    expect(h.sheet()).toMatchObject({ armorClass: 20, acFormula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    expect((await h.run('update_character', { concentration: null })).content).toContain('Shield of Faith ends: AC 20 → 18');
+    expect(h.sheet()).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield 2' });
+    // Only what the call records is left out (its names read as the AC spells they name): Mage Armor is still asked for.
+    const both = setup({ character: sampleCharacter({ abilityScores: { ...sampleCharacter().abilityScores, cha: 20 }, armorClass: 17, acFormula: 'set by the DM: Mage Armor and Shield of Faith' }) });
+    const one = await both.run('update_character', { features_add: [dragonBlooded], ac_spells_add: ['shield of faith'] });
+    expect(one.content).toContain('If it counted Mage Armor, record it with ac_spells_add ["Mage Armor"] (the app adds and ends it).');
+    expect(one.content).not.toContain('"Mage Armor", "Shield of Faith"');
+  });
+
+  it('never takes the app\'s own "Shield of Faith 2" part for the DM naming it: a recorded spell gets the Haste example', async () => {
+    // srd:spell:haste: "a +2 bonus to Armor Class", set by hand while Shield of Faith was recorded and counted.
+    const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 20, acFormula: 'set by the DM: Haste + Shield of Faith 2', acSpells: ['Shield of Faith'] }) });
+    const out = await h.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }] });
+    expect(out.content).toContain(
+      'AC 20 stays as set by hand; armor and features now give 20 too (Chain Mail 16 + Shield 2 + Shield of Faith 2). If the hand-set AC counted an effect that still applies (such as Haste), set armor_class to include it.',
+    );
+    expect(out.content).not.toContain('ac_spells_add ["Shield of Faith"]');
+    // An older save's words naming Shield of Faith, once the spell is recorded (its part kept beside them): nothing to record.
+    const kept = setup({
+      character: fighter4({ inventory: [mail, shield], armorClass: 20, acFormula: 'set by the DM: Shield of Faith + Shield of Faith 2', acSpells: ['Shield of Faith'] }),
+    });
+    const donned = await kept.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }] });
+    expect(donned.content).toContain('If the hand-set AC counted an effect that still applies (such as Haste), set armor_class to include it.');
+    expect(donned.content).not.toContain('ac_spells_add');
+  });
+
+  it('names Mage Armor only while no armor is worn (srd:spell:mage-armor: "The spell ends early if the target dons armor")', async () => {
+    // An older save's Mage Armor set by hand (13 + DEX 2), then Draconic Resilience recorded: 10 + DEX 2 + CHA 3 is 15 too.
+    const scaled = setup({ character: sampleCharacter({ abilityScores: { ...sampleCharacter().abilityScores, cha: 16 }, armorClass: 15, acFormula: 'set by the DM: Mage Armor' }) });
+    const out = await scaled.run('update_character', { features_add: [dragonBlooded] });
+    expect(out.content).toContain(
+      'AC 15 stays as set by hand; armor and features now give 15 too (Draconic Resilience: 10 + DEX 2 + CHA 3). If it counted Mage Armor, record it with ac_spells_add ["Mage Armor"] (the app adds and ends it).',
+    );
+    // Armor donned instead (a Chain Shirt: 13 + DEX 2): Mage Armor is over, so nothing to record.
+    const shirt = { id: 'cs', name: 'Chain Shirt', quantity: 1, equipped: false, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'medium' as const, baseAc: 13, dexCap: 2 } };
+    const armored = setup({ character: sampleCharacter({ inventory: [shirt], armorClass: 15, acFormula: 'set by the DM: Mage Armor' }) });
+    const donned = await armored.run('update_character', { inventory_update: [{ name: 'Chain Shirt', equipped: true }] });
+    expect(donned.content).toContain('If the hand-set AC counted an effect that still applies (such as Haste), set armor_class to include it.');
+    expect(donned.content).not.toContain('ac_spells_add');
+  });
+
+  it('names both spells when the hand-set AC names both, in one call', async () => {
+    // 13 + DEX 2 + Shield of Faith 2 set by hand; Draconic Resilience with CHA 20 gives 10 + DEX 2 + CHA 5, the same 17.
+    const h = setup({ character: sampleCharacter({ abilityScores: { ...sampleCharacter().abilityScores, cha: 20 }, armorClass: 17, acFormula: 'set by the DM: Mage Armor and Shield of Faith' }) });
+    const out = await h.run('update_character', { features_add: [dragonBlooded] });
+    expect(out.content).toContain('If it counted Mage Armor and Shield of Faith, record them with ac_spells_add ["Mage Armor", "Shield of Faith"] (the app adds and ends them).');
+  });
+});
+
+describe("a hand-set AC naming a spell the app now counts, and an older save's Concentration on Mage Armor (spell effects round 3)", () => {
+  const mail = { id: 'cm', name: 'Chain Mail', quantity: 1, equipped: true, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'heavy' as const, baseAc: 16, dexCap: 0 } };
+  const fighter4 = (extra: Partial<Character> = {}) => hero({ classId: FIGHTER.id, name: 'Fighter', level: 4, hitDie: 10 }, extra);
+  const concentratingOn = (spell: string) => ({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: spell } });
+
+  it('says how to put back an AC whose words named the spell it now counts, and following that keeps the spell counted (F3/TE1/TX1; srd:spell:slow: "it takes a -2 penalty to AC"; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration")', async () => {
+    // An older save in Chain Mail (16): AC 16 "set by the DM: Slow (-2) and Shield of Faith" (16 − 2 + 2), concentrating
+    // on Shield of Faith. Recording it gives 18 (no higher than the gear, the AC is taken not to hold it), with the warning.
+    const h = setup({ character: fighter4({ inventory: [mail], armorClass: 16, acFormula: 'set by the DM: Slow (-2) and Shield of Faith', ...concentratingOn('Shield of Faith') }) });
+    const recorded = await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+    expect(recorded.content).toContain(
+      "Shield of Faith: AC 16 → 18\nWarning: AC 16, set by hand, names Shield of Faith, but gear and features alone give 16, so the app now counts Shield of Faith as well (AC 18): if 16 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 16.",
+    );
+    expect(h.sheet()).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    // Following it: armor_class 16, and Shield of Faith stays counted in the DM's AC (its part kept).
+    const set = await h.run('update_character', { armor_class: 16, reason: 'Slow from the Stone Golem (-2)' });
+    expect(set.content).toContain('AC 18 → 16\nShield of Faith stays recorded, and this AC is taken to include it (ending it takes 2 off).');
+    expect(h.sheet()).toMatchObject({ armorClass: 16, acFormula: 'set by the DM: Slow from the Stone Golem (-2) + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    // Its end takes the 2 off once: 14, the hero still slowed, and nothing to warn of (H3 is for a base, not a bonus).
+    const ended = await h.run('update_character', { concentration: null });
+    expect(ended.content).toContain('No longer concentrating on Shield of Faith.\nShield of Faith ends: AC 16 → 14');
+    expect(ended.content).not.toContain('Warning');
+    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Slow from the Stone Golem (-2)' });
+    expect(h.sheet()).not.toHaveProperty('acSpells');
+  });
+
+  it("an older save's Concentration on Mage Armor ended in the call that records it: no line asks for the AC back (F1/TE2; srd:spell:mage-armor, Duration \"8 hours\"; srd:rule:concentration: \"Some spells and other effects require Concentration\")", async () => {
+    const wizard = () => sampleCharacter({ armorClass: 15, acFormula: 'set by the DM: Mage Armor', ...concentratingOn('Mage Armor') });
+    // One call, as start_combat's note for this save suggests (its concentration step runs before ac_spells_add, the
+    // call's last step).
+    const h = setup({ character: wizard() });
+    const out = await h.run('update_character', { ac_spells_add: ['Mage Armor'], concentration: null });
+    expect(out.content).toContain('No longer concentrating on Mage Armor.\nMage Armor: AC stays 15\n');
+    expect(out.content).not.toContain('set by hand');
+    expect(out.content).not.toContain('set the AC back');
+    expect(h.sheet()).toMatchObject({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'], spellcasting: { concentratingOn: null } });
+    // The end alone: nothing about the AC, which stays as set by hand.
+    const alone = setup({ character: wizard() });
+    const ended = await alone.run('update_character', { concentration: null });
+    expect(ended.content).not.toContain('set by hand');
+    expect(alone.sheet()).toMatchObject({ armorClass: 15, acFormula: 'set by the DM: Mage Armor', spellcasting: { concentratingOn: null } });
+  });
+});
+
+describe("F3's baseline in its own words, and Mage Armor's end on an AC set by hand that counted it (spell effects round 4)", () => {
+  const keptOnBase = 'Warning: AC 12, set by hand, counted Mage Armor, which has ended: if 12 still includes it, set the AC again (armor and abilities give 12).';
+
+  it('one ac_spells_add call recording both spells: the second warning names the Mage Armor its baseline counts, as the first line does (H2/HA1; srd:spell:mage-armor: "base AC becomes 13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration")', async () => {
+    // An older save: Mira Voss (DEX 14, no armor: gear 12) at 14 "set by the DM: Mage Armor and Shield of Faith; cursed (-3)".
+    const h = setup({ character: sampleCharacter({ armorClass: 14, acFormula: 'set by the DM: Mage Armor and Shield of Faith; cursed (-3)' }) });
+    const out = await h.run('update_character', { ac_spells_add: ['Mage Armor', 'Shield of Faith'] });
+    expect(out.content).toContain(
+      [
+        'Mage Armor: AC stays 14',
+        'Warning: AC 14 was set by hand naming Mage Armor: kept, and Mage Armor is now counted in it. Gear, features and spells give 15 (Mage Armor: 13 + DEX 2); update the AC if that is right.',
+        'Shield of Faith: AC 14 → 16',
+        "Warning: AC 14, set by hand, names Shield of Faith, but gear, features and Mage Armor give 15, so the app now counts Shield of Faith as well (AC 16): if 14 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 14.",
+      ].join('\n'),
+    );
+    expect(out.content).not.toContain('alone give');
+    expect(h.sheet()).toMatchObject({
+      armorClass: 16,
+      acFormula: 'set by the DM: Mage Armor and Shield of Faith; cursed (-3) + Mage Armor: 13 + Shield of Faith 2',
+      acSpells: ['Mage Armor', 'Shield of Faith'],
+    });
+  });
+
+  it("F3's advice followed for Mage Armor, then Mage Armor ends by ac_spells_end or a Long Rest: the DM hears the 12 may still hold it (H3/HA2; srd:spell:mage-armor: \"Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier\")", async () => {
+    const follow = async () => {
+      // An older save: 12 "set by the DM: Mage Armor; cursed (-3)" (13 + DEX 2 − 3). Recording Mage Armor gives 15, with
+      // F3's warning; following it sets 12 for the curse, Mage Armor still counted in it.
+      const h = setup({ character: sampleCharacter({ armorClass: 12, acFormula: 'set by the DM: Mage Armor; cursed (-3)' }) });
+      const recorded = await h.run('update_character', { ac_spells_add: ['Mage Armor'] });
+      expect(recorded.content).toContain(
+        "Mage Armor: AC 12 → 15\nWarning: AC 12, set by hand, names Mage Armor, but gear and features alone give 12, so the app now counts Mage Armor as well (AC 15): if 12 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 12.",
+      );
+      const set = await h.run('update_character', { armor_class: 12, reason: 'cursed (-3)' });
+      expect(set.content).toContain('AC 15 → 12\nMage Armor stays recorded, and this AC is taken to include it. If it has ended, use ac_spells_end.');
+      expect(h.sheet()).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13', acSpells: ['Mage Armor'] });
+      return h;
+    };
+    // Its end by ac_spells_end: the number stays, and the DM is told it may still hold Mage Armor's base.
+    const ended = await follow();
+    const end = await ended.run('update_character', { ac_spells_end: ['Mage Armor'] });
+    expect(end.content).toContain(`Mage Armor ends: AC stays 12\n${keptOnBase}`);
+    expect(ended.sheet()).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' });
+    expect(ended.sheet()).not.toHaveProperty('acSpells');
+    // By a Long Rest (Mage Armor's 8 hours are over): the same warning, after the rest's line.
+    const rested = await follow();
+    const rest = await rested.run('take_rest', { kind: 'long' });
+    expect(rest.content).toContain('Mage Armor ends: AC stays 12\n');
+    expect(rest.content).toContain(keptOnBase);
+    expect(rest.content.indexOf(keptOnBase)).toBeGreaterThan(rest.content.indexOf('\nLong rest: HP 12 → 17'));
+    expect(rested.sheet()).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' });
+  });
+
+  it("Mage Armor ended while Shield of Faith lasts, or both in one call: the warning's words name what its number counts, and one call ends them in the Long Rest's order (E5-1/A1, X5-2/A2; srd:spell:mage-armor: \"Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier\"; srd:spell:shield-of-faith: \"a +2 bonus to AC for the duration\"; srd:spell:dispel-magic: \"Any ongoing spell of level 3 or lower on the target ends\")", async () => {
+    // Mira Voss (DEX 14, no armor: 12): Mage Armor gives 15, a curse set by hand at 12 counts it, then Shield of Faith 14.
+    const cursed = async () => {
+      const h = setup();
+      await h.run('update_character', { ac_spells_add: ['Mage Armor'] });
+      await h.run('update_character', { armor_class: 12, reason: 'cursed (-3)' });
+      await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+      expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13 + Shield of Faith 2', acSpells: ['Mage Armor', 'Shield of Faith'] });
+      return h;
+    };
+    // Mage Armor ends first: the 14 the DM is told to work from holds Shield of Faith's +2, and the words say so.
+    const first = await cursed();
+    expect((await first.run('update_character', { ac_spells_end: ['Mage Armor'] })).content).toContain(
+      'Mage Armor ends: AC stays 14\nWarning: AC 14, set by hand, counted Mage Armor, which has ended: if 14 still includes it, set the AC again (armor, abilities and Shield of Faith give 14).\nStatus: ',
+    );
+    // Followed (14 less the curse's 3), the curse outlasts Shield of Faith.
+    await first.run('update_character', { armor_class: 11, reason: 'cursed (-3)' });
+    expect(first.sheet()).toMatchObject({ armorClass: 11, acFormula: 'set by the DM: cursed (-3) + Shield of Faith 2' });
+    expect((await first.run('update_character', { ac_spells_end: ['Shield of Faith'] })).content).toContain('Shield of Faith ends: AC 11 → 9');
+    expect(first.sheet()).toMatchObject({ armorClass: 9, acFormula: 'set by the DM: cursed (-3)' });
+    // Both in one call, in either order: Shield of Faith first, so the warning gives the AC the call leaves, as the Long
+    // Rest's does, and the curse stays in the formula.
+    const both = `Shield of Faith ends: AC 14 → 12\nMage Armor ends: AC stays 12\n${keptOnBase}`;
+    for (const ends of [
+      ['Mage Armor', 'Shield of Faith'],
+      ['Shield of Faith', 'Mage Armor'],
+    ]) {
+      const h = await cursed();
+      expect((await h.run('update_character', { ac_spells_end: ends })).content, ends.join(', ')).toContain(`${both}\nStatus: `);
+      expect(h.sheet()).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' });
+    }
+    // The Long Rest's own lines, with its summary between them.
+    const rested = await cursed();
+    const rest = (await rested.run('take_rest', { kind: 'long' })).content;
+    expect(rest).toContain('Shield of Faith ends: AC 14 → 12\nMage Armor ends: AC stays 12\n');
+    expect(rest).toContain(keptOnBase);
+    expect(rested.sheet()).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' });
+  });
+
+  it("one ac_spells_end naming both spells when only Mage Armor is recorded: the unrecorded Shield of Faith's reminder comes after Mage Armor's end, worked out on the AC the call leaves, in either order, as the Long Rest's does (A6-1; srd:spell:dispel-magic: \"Any ongoing spell of level 3 or lower on the target ends\"; srd:spell:mage-armor: \"Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier\"; srd:spell:shield-of-faith: \"a +2 bonus to AC for the duration\")", async () => {
+    // An older save: Mira Voss (DEX 14, no armor: 12) at 17 "set by the DM: Mage Armor and Shield of Faith", then Mage
+    // Armor recorded (kept: the 17 is taken to include it); Dispel Magic then ends both.
+    const both =
+      "Mage Armor ends: AC stays 17\nWarning: AC kept at 17: it differs from the 15 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 12 (10 + DEX 2); update the AC if that is right.\nWarning: Shield of Faith isn't recorded.\nWarning: AC 17 was set by hand for Shield of Faith: if it counted Shield of Faith, set the AC back to 12 (armor and abilities).\nStatus: ";
+    for (const ends of [
+      ['Mage Armor', 'Shield of Faith'],
+      ['Shield of Faith', 'Mage Armor'],
+    ]) {
+      const h = setup({ character: sampleCharacter({ armorClass: 17, acFormula: 'set by the DM: Mage Armor and Shield of Faith' }) });
+      await h.run('update_character', { ac_spells_add: ['Mage Armor'] });
+      expect(h.sheet()).toMatchObject({ armorClass: 17, acFormula: 'set by the DM: Mage Armor and Shield of Faith + Mage Armor: 13', acSpells: ['Mage Armor'] });
+      const out = (await h.run('update_character', { ac_spells_end: ends })).content;
+      expect(out, ends.join(', ')).toContain(both);
+      expect(out, ends.join(', ')).not.toContain('set the AC back to 15');
+      expect(h.sheet()).toMatchObject({ armorClass: 17, acFormula: 'set by the DM: Mage Armor and Shield of Faith' });
+    }
+  });
+
+  it("one ac_spells_end with a name the app doesn't count, or on a hero with no records: the DM's order, as before round 5 (A6-2; srd:spell:mage-armor: \"Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier\")", async () => {
+    const h = setup({ character: sampleCharacter() });
+    await h.run('update_character', { ac_spells_add: ['Mage Armor'] });
+    expect((await h.run('update_character', { ac_spells_end: ['Mage Armor', 'Barkskin'] })).content).toContain(
+      'Mage Armor ends: AC 15 → 12\nWarning: The app counts AC only for Mage Armor and Shield of Faith, not Barkskin.\nCount Barkskin yourself: for a lasting effect set armor_class and set it back when it ends.\nStatus: ',
+    );
+    const none = setup({ character: sampleCharacter() });
+    expect((await none.run('update_character', { ac_spells_end: ['Mage Armor', 'Shield of Faith'] })).content).toContain(
+      "Warning: Mage Armor isn't recorded.\nWarning: Shield of Faith isn't recorded.\nStatus: ",
+    );
+    expect((await none.run('update_character', { ac_spells_end: ['Mage Armor', 'Barkskin'] })).content).toContain(
+      "Warning: Mage Armor isn't recorded.\nWarning: The app counts AC only for Mage Armor and Shield of Faith, not Barkskin.\n",
+    );
+  });
+
+  it("an AC set by hand while Mage Armor is recorded but not counted isn't taken to include it: Mage Armor's end says nothing when gear and features give that same number, and gives the kept-AC warning otherwise (X6-1; srd:spell:mage-armor: \"Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier\"; srd:spell:slow: \"it takes a -2 penalty to AC\")", async () => {
+    // Mira Voss (DEX 14, no armor: 12) under a penalty set by hand; Mage Armor recorded beside it (kept, not counted); the
+    // DM then folds Mage Armor in by hand (13 + DEX 2 + the penalty), and the formula still doesn't count it.
+    const folded = async (start: number, reason: string, ac: number) => {
+      const h = setup({ character: sampleCharacter({ armorClass: start, acFormula: `set by the DM: ${reason}` }) });
+      expect((await h.run('update_character', { ac_spells_add: ['Mage Armor'] })).content).toContain(`Mage Armor: AC stays ${start}\nWarning: AC kept at ${start}`);
+      expect((await h.run('update_character', { armor_class: ac, reason })).content).not.toContain('taken to include');
+      expect(h.sheet()).toMatchObject({ armorClass: ac, acFormula: `set by the DM: ${reason}`, acSpells: ['Mage Armor'] });
+      return h;
+    };
+    // Slow's 13: another number than the 12 gear and features give once Mage Armor ends, so the kept-AC warning.
+    const slowed = await folded(10, 'Slow (-2)', 13);
+    expect((await slowed.run('update_character', { ac_spells_end: ['Mage Armor'] })).content).toContain(
+      "Mage Armor ends: AC stays 13\nWarning: AC kept at 13: it differs from the 15 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 12 (10 + DEX 2); update the AC if that is right.\nStatus: ",
+    );
+    // A -3 curse's 12: what gear and features give, so nothing is said (the curse's 9 is the DM's to set).
+    const cursed = await folded(9, 'cursed (-3)', 12);
+    const end = (await cursed.run('update_character', { ac_spells_end: ['Mage Armor'] })).content;
+    expect(end).toContain('Mage Armor ends: AC stays 12\nStatus: ');
+    expect(end).not.toContain('Warning');
+    expect(cursed.sheet()).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' });
+  });
+});
+
+describe("a spell that needs no Concentration never becomes the hero's (D5)", () => {
+  it('refuses Shield and Mage Armor before anything is written, saying where their AC goes (srd:spell:shield, srd:spell:mage-armor)', async () => {
+    const h = setup();
+    const start = h.sheet();
+    // srd:spell:shield: "Duration: 1 round", "Until the start of your next turn, you have a +5 bonus to AC".
+    expect(await h.run('update_character', { concentration: 'Shield' })).toEqual({
+      isError: true,
+      content: "Shield doesn't require Concentration (Duration: 1 round). Fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn.",
+    });
+    // srd:spell:mage-armor: "Duration: 8 hours". The slot this call spends isn't spent either.
+    expect(await h.run('update_character', { spell_slots_spend: [{ level: 1 }], concentration: 'mage armor' })).toEqual({
+      isError: true,
+      content: 'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"].',
+    });
+    expect(h.sheet()).toBe(start);
+    expect(h.s().log).toHaveLength(0);
+  });
+
+  it("never refuses a spell the rules data doesn't know, or doesn't flag", async () => {
+    const unknown = setup();
+    expect((await unknown.run('update_character', { concentration: 'Shadow Lash' })).content).toContain('Concentrating on Shadow Lash.');
+    // Fireball's entry here gives no Concentration flag: only the data's own "no" refuses.
+    const unflagged = setup();
+    expect((await unflagged.run('update_character', { concentration: 'Fireball' })).content).toContain('Concentrating on Fireball.');
+    const faith = setup();
+    expect((await faith.run('update_character', { concentration: 'Shield of Faith' })).content).toContain('Concentrating on Shield of Faith.');
+  });
+});
+
+describe("the hero's no-Concentration refusal reads the name as given, never a namesake on the sheet (RD1, on SRD 5.2.1's own entries)", () => {
+  /** The real rules index over the SRD 5.2.1 spells (its own name lookup) and `extra`, in place of the test's few entries. */
+  function withSrdSpells(opts: HarnessOptions = {}, extra: CompendiumEntry[] = []) {
+    const h = setup(opts);
+    const index = createRulesIndex([...SRD_SPELLS, ...extra]);
+    setDmDeps({ rulesIndex: async () => index });
+    const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+    return { ...h, ctx, run: (name: string, input: unknown) => runTool(name, input, ctx) };
+  }
+  /** Mira Voss's Wizard spells and these SRD spells, as the builder records them. */
+  const wizardWith = (...names: string[]) => {
+    const sc = sampleCharacter().spellcasting!;
+    return sampleCharacter({ spellcasting: { ...sc, spells: [...sc.spells, ...names.map((n) => held(n, 'Wizard'))] } });
+  };
+  /** A Cleric's spells: Shield of Faith and Bless, and no Shield. */
+  const cleric = (concentratingOn: string | null) =>
+    sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, ability: 'wis', spells: [held('Shield of Faith', 'Cleric'), held('Bless', 'Cleric')], concentratingOn } });
+
+  it('records Invisibility beside the sheet\'s See Invisibility, counted by its own hour (srd:spell:invisibility: "Concentration, up to 1 hour")', async () => {
+    const h = withSrdSpells({ character: wizardWith('See Invisibility'), state: { combat: sampleCombat() } });
+    const out = await h.run('update_character', { concentration: 'Invisibility' });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain('Concentrating on Invisibility.\nInvisibility: about 60 minutes left.');
+    expect(out.content).not.toContain('See Invisibility');
+    expect(h.sheet().spellcasting?.concentratingOn).toBe('Invisibility');
+    expect(h.s().combat?.combatants.find((c) => c.isPlayer)?.concentrationCountdown).toEqual({ spell: 'Invisibility', roundsLeft: 600 });
+    // With the spell recorded in the same call (cast from a Spell Scroll), too.
+    const scroll = withSrdSpells({ character: wizardWith('See Invisibility') });
+    expect((await scroll.run('update_character', { spells_add: [{ name: 'Invisibility', level: 2 }], concentration: 'Invisibility' })).content).toContain(
+      'Concentrating on Invisibility.',
+    );
+    // srd:spell:see-invisibility: "Duration: 1 hour": by its own name it is refused.
+    const see = withSrdSpells({ character: wizardWith('See Invisibility') });
+    expect((await see.run('update_character', { concentration: 'See Invisibility' })).content).toBe("See Invisibility doesn't require Concentration (Duration: 1 hour).");
+  });
+
+  it('refuses Shield beside the sheet\'s Shield of Faith, before anything is written (srd:spell:shield: "Duration: 1 round")', async () => {
+    const h = withSrdSpells({ character: cleric('Bless') });
+    const start = h.sheet();
+    expect(await h.run('update_character', { concentration: 'Shield' })).toEqual({
+      isError: true,
+      content: "Shield doesn't require Concentration (Duration: 1 round). Fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn.",
+    });
+    // Bless goes on.
+    expect(h.sheet()).toBe(start);
+    expect(h.s().log).toHaveLength(0);
+    // While the hero holds Shield of Faith, "Shield" is refused the same way, so it ends nothing (H9) and its +2 stays.
+    const held = withSrdSpells({ character: { ...cleric('Shield of Faith'), armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] } });
+    const holding = held.sheet();
+    expect((await held.run('update_character', { concentration: 'Shield' })).content).toBe(
+      "Shield doesn't require Concentration (Duration: 1 round). Fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn.",
+    );
+    expect(held.sheet()).toBe(holding);
+  });
+
+  it('reads a name the rules data doesn\'t know as the sheet\'s spell it matches: "Faith" for a held Shield of Faith changes nothing (H9)', async () => {
+    // srd:spell:shield-of-faith: "Concentration, up to 10 minutes".
+    const h = withSrdSpells({ character: cleric('Shield of Faith') });
+    const start = h.sheet();
+    const out = await h.run('update_character', { concentration: 'Faith' });
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toMatch(/^Status: [^\n]* · Concentrating: Shield of Faith · [^\n]*$/);
+    expect({ ...h.sheet(), updatedAt: start.updatedAt }).toEqual(start);
+    expect(h.s().log).toHaveLength(0);
+    // "Armor" for a held Mage Armor is refused as Mage Armor (srd:spell:mage-armor: "Duration: 8 hours").
+    const armored = withSrdSpells({ character: wizardWith('Mage Armor') });
+    expect((await armored.run('update_character', { concentration: 'Armor' })).content).toBe(
+      'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"].',
+    );
+  });
+
+  it('records a name the rules data doesn\'t know as the sheet\'s spell it matches, so "Faith" is Shield of Faith and its +2 ends with it', async () => {
+    // srd:spell:shield-of-faith: "Concentration, up to 10 minutes"; srd:rule:concentration: "If the effect's creator
+    // loses Concentration, the effect ends".
+    const h = withSrdSpells({ character: cleric(null), state: { combat: sampleCombat() } });
+    const ac = h.sheet().armorClass;
+    const out = await h.run('update_character', { concentration: 'Faith' });
+    expect(out.content).toContain('Concentrating on Shield of Faith.\nShield of Faith: about 10 minutes left.');
+    expect(h.sheet().spellcasting?.concentratingOn).toBe('Shield of Faith');
+    expect(h.s().combat?.combatants.find((c) => c.isPlayer)?.concentrationCountdown).toEqual({ spell: 'Shield of Faith', roundsLeft: 100 });
+    await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+    expect(h.sheet().armorClass).toBe(ac + 2);
+    // "Faith" again is the same spell again, a recast: nothing ends and the count restarts (as "Shield of Faith" would).
+    await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Shield of Faith', rounds: 3 });
+    await h.run('update_character', { concentration: 'Faith' });
+    expect(h.sheet()).toMatchObject({ armorClass: ac + 2, acSpells: ['Shield of Faith'] });
+    expect(h.s().combat?.combatants.find((c) => c.isPlayer)?.concentrationCountdown).toEqual({ spell: 'Shield of Faith', roundsLeft: 100 });
+    await h.run('update_character', { concentration: null });
+    expect(h.sheet().armorClass).toBe(ac);
+    expect(h.sheet().acSpells ?? []).toEqual([]);
+  });
+
+  it('records a spell the rules data finds by its own name, as an NPC\'s is (srd:spell:hold-person: "Concentration, up to 1 minute")', async () => {
+    const h = withSrdSpells({ character: wizardWith(), state: { combat: sampleCombat() } });
+    expect((await h.run('update_character', { concentration: 'hold person (3rd level)' })).content).toContain('Concentrating on Hold Person.\nHold Person: 10 rounds left.');
+    expect(h.sheet().spellcasting?.concentratingOn).toBe('Hold Person');
+    // srd:spell:invisibility: "Concentration, up to 1 hour".
+    const lower = withSrdSpells({ character: wizardWith() });
+    await lower.run('update_character', { concentration: 'invisibility' });
+    expect(lower.sheet().spellcasting?.concentratingOn).toBe('Invisibility');
+    // A name neither the rules data nor the sheet knows is recorded as given.
+    const homebrew = withSrdSpells({ character: wizardWith() });
+    await homebrew.run('update_character', { concentration: 'Veil of Thorns' });
+    expect(homebrew.sheet().spellcasting?.concentratingOn).toBe('Veil of Thorns');
+  });
+
+  it("uses the sheet's link to its entry for a spell of exactly the name given (srd:spell:mage-armor: \"Duration: 8 hours\")", async () => {
+    // A copy spelled "Mage Armour" on the sheet, linked to the SRD's Mage Armor (KnownSpell.id is the entry's id).
+    const sc = sampleCharacter().spellcasting!;
+    const armour = { ...held('Mage Armor', 'Wizard'), name: 'Mage Armour' };
+    const h = withSrdSpells({ character: sampleCharacter({ spellcasting: { ...sc, spells: [...sc.spells, armour] } }) });
+    expect((await h.run('update_character', { concentration: 'Mage Armour' })).content).toBe(
+      'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"].',
+    );
+  });
+
+  it('refuses Mage Armor without asking for its record once the hero holds it (srd:spell:mage-armor: "Duration: 8 hours")', async () => {
+    const h = withSrdSpells({ character: sampleCharacter({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'] }) });
+    expect(await h.run('update_character', { concentration: 'Mage Armor' })).toEqual({ isError: true, content: "Mage Armor doesn't require Concentration (Duration: 8 hours)." });
+  });
+
+  describe("one rule for the hero's spell and its name, in both tools (F5)", () => {
+    /** A result's lines above its Status line. */
+    const said = (content: string) => content.split('\n').filter((l) => !l.startsWith('Status: ')).join('\n');
+    const heroCountdown = (h: ReturnType<typeof withSrdSpells>) => h.s().combat?.combatants.find((c) => c.isPlayer)?.concentrationCountdown;
+    /** A copy of an SRD spell the sheet holds under its own name, linked to no entry (a scroll's, recorded by the DM). */
+    const copy = (name: string, id: string): KnownSpell => ({ id, name, level: 2, prepared: true, source: 'Granted in play' });
+    /** Mira Voss's Wizard spells and these, concentrating on `concentratingOn`. */
+    const holding = (spells: KnownSpell[], concentratingOn: string | null = null) => {
+      const sc = sampleCharacter().spellcasting!;
+      return sampleCharacter({ spellcasting: { ...sc, spells: [...sc.spells, ...spells], concentratingOn } });
+    };
+    /** An invented book's name for the SRD's Hideous Laughter (its creator's name before it, as such books name spells). */
+    const LAUGHTER = "Ysolde's Hideous Laughter";
+    const laughterEntry = (data: Record<string, unknown>) => entry('lib:gloam:spell:ysoldes-hideous-laughter', LAUGHTER, 'spell', { level: 1, ...data });
+    /** The book's own entry, with the SRD spell's Concentration and duration (srd:spell:hideous-laughter). */
+    const LAUGHTER_ENTRY = laughterEntry({ concentration: true, duration: 'Concentration, up to 1 minute' });
+    /** The sheet's copy, linked to the book's entry as the builder links it. */
+    const LAUGHTER_COPY: KnownSpell = { id: LAUGHTER_ENTRY.id, name: LAUGHTER, level: 1, prepared: true, source: 'Wizard', concentration: true };
+
+    it('records a sheet copy with a note by the sheet\'s own name, in one call or two, and takes it again with or without the note for a recast (TD1; srd:spell:hold-person: "Concentration, up to 1 minute"; srd:rule:concentration)', async () => {
+      for (const calls of [1, 2]) {
+        const h = withSrdSpells({ character: holding([]), state: { combat: sampleCombat() } });
+        // Cast from a Spell Scroll: the copy recorded and concentrated on, in one call or one after the other.
+        const scroll = { name: 'Hold Person (scroll)', level: 2 };
+        const out =
+          calls === 1
+            ? await h.run('update_character', { spells_add: [scroll], concentration: 'Hold Person (scroll)' })
+            : (await h.run('update_character', { spells_add: [scroll] }), await h.run('update_character', { concentration: 'Hold Person (scroll)' }));
+        expect(said(out.content)).toBe(
+          calls === 1
+            ? 'Concentrating on Hold Person (scroll).\nAdded spell: Hold Person (scroll) (level 2, prepared)\nHold Person (scroll): 10 rounds left.'
+            : 'Concentrating on Hold Person (scroll).\nHold Person (scroll): 10 rounds left.',
+        );
+        // Recorded as the sheet's row is named, so the Spells tab shows it held (it compares the two exactly).
+        expect(h.sheet().spellcasting?.spells.filter((s) => s.name.startsWith('Hold Person')).map((s) => s.name)).toEqual(['Hold Person (scroll)']);
+        expect(h.sheet().spellcasting?.concentratingOn).toBe('Hold Person (scroll)');
+        await h.run('update_combat', { action: 'conditions', target: 'Bandit 1', conditions_add: [{ condition: 'Paralyzed', source: 'Hold Person' }] });
+        // The same spell again, with its note, without it or with another note: a recast, so nothing ends, Bandit 1's
+        // Paralyzed isn't named for removal, and the count restarts.
+        for (const again of ['Hold Person (scroll)', 'Hold Person', 'Hold Person (3rd level)']) {
+          await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Hold Person (scroll)', rounds: 3 });
+          expect(said((await h.run('update_character', { concentration: again })).content)).toBe('Hold Person (scroll): 10 rounds left.');
+          expect(h.sheet().spellcasting?.concentratingOn).toBe('Hold Person (scroll)');
+          expect(heroCountdown(h)).toEqual({ spell: 'Hold Person (scroll)', roundsLeft: 10 });
+        }
+      }
+      // The sheet holding the copy and the DM naming the spell without its note: the copy.
+      const holder = withSrdSpells({ character: holding([copy('Hold Person (scroll)', 'copy-1')]) });
+      expect(said((await holder.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Concentrating on Hold Person (scroll).');
+      // So too when the same call adds the copy again (to change it): the sheet holds it once.
+      const readded = withSrdSpells({ character: holding([copy('Hold Person (scroll)', 'copy-1')]) });
+      const changed = await readded.run('update_character', { spells_add: [{ name: 'Hold Person (scroll)', level: 2, prepared: false }], concentration: 'Hold Person' });
+      expect(said(changed.content)).toBe('Concentrating on Hold Person (scroll).\nUpdated spell: Hold Person (scroll) (level 2)');
+    });
+
+    it("records the SRD spell the sheet holds under a book's longer name by the sheet's name, counting its minute with or without the book in the Library (TS1; srd:spell:hideous-laughter: \"Concentration, up to 1 minute\")", async () => {
+      for (const library of [[LAUGHTER_ENTRY], []]) {
+        const h = withSrdSpells({ character: holding([LAUGHTER_COPY]), state: { combat: sampleCombat() } }, library);
+        const out = await h.run('update_character', { concentration: 'Hideous Laughter' });
+        expect(said(out.content)).toBe(`Concentrating on ${LAUGHTER}.\n${LAUGHTER}: 10 rounds left.`);
+        expect(heroCountdown(h)).toEqual({ spell: LAUGHTER, roundsLeft: 10 });
+        // The Spells tab's toggle shows it held, and pressing it changes nothing (the sheet's concentrationChange).
+        expect(h.sheet().spellcasting?.concentratingOn).toBe(LAUGHTER);
+        expect(concentrationChange(h.sheet(), LAUGHTER)).toEqual({ character: h.sheet(), notice: null, warning: null });
+      }
+      // The same duration however the book writes it; a book entry with another duration or without Concentration is
+      // another spell by the rules data, so the SRD's name is recorded.
+      for (const [data, recorded] of [
+        [{ concentration: true, duration: 'concentration, up to 1 Minute' }, LAUGHTER],
+        [{ concentration: true, duration: 'Concentration, up to 10 minutes' }, 'Hideous Laughter'],
+        [{ concentration: false, duration: 'Concentration, up to 1 minute' }, 'Hideous Laughter'],
+      ] as const) {
+        const h = withSrdSpells({ character: holding([LAUGHTER_COPY]) }, [laughterEntry(data)]);
+        expect(said((await h.run('update_character', { concentration: 'Hideous Laughter' })).content)).toBe(`Concentrating on ${recorded}.`);
+      }
+    });
+
+    it('takes no looser name for a sheet spell without the rules data: the name given is recorded (TD3; E5; srd:spell:invisibility: "Concentration, up to 1 hour"; srd:spell:see-invisibility: "Duration: 1 hour")', async () => {
+      const offline = (character: Character) => {
+        const h = setup({ character });
+        setDmDeps({
+          rulesIndex: async () => {
+            throw new Error('offline');
+          },
+        });
+        const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+        return { ...h, run: (name: string, input: unknown) => runTool(name, input, ctx) };
+      };
+      const cases: [Character, string, string][] = [
+        [wizardWith('See Invisibility'), 'Invisibility', 'Concentrating on Invisibility.'],
+        [wizardWith('Delayed Blast Fireball'), 'Fireball', 'Concentrating on Fireball.'],
+        [cleric('Bless'), 'Shield', 'Concentration on Bless ends (started concentrating on Shield).\nConcentrating on Shield.'],
+      ];
+      for (const [character, spell, lines] of cases) {
+        const h = offline(character);
+        expect(said((await h.run('update_character', { concentration: spell })).content)).toBe(lines);
+        expect(h.sheet().spellcasting?.concentratingOn).toBe(spell);
+      }
+      // A note still makes no other spell: holding a scroll's copy, "Hold Person" is the same spell again.
+      const scroll = offline(holding([copy('Hold Person (scroll)', 'copy-1')], 'Hold Person (scroll)'));
+      expect((await scroll.run('update_character', { concentration: 'Hold Person' })).content).toMatch(/^Status: [^\n]*$/);
+      expect(scroll.sheet().spellcasting?.concentratingOn).toBe('Hold Person (scroll)');
+    });
+
+    it('gives rounds to the spell update_character recorded by the same name in update_combat concentrate, on the real engine (TX3; srd:spell:hold-person: "Concentration, up to 1 minute"; srd:spell:shield-of-faith: "Concentration, up to 10 minutes")', async () => {
+      const h = withSrdSpells({ character: holding([]), state: { combat: sampleCombat() } });
+      await h.run('update_character', { concentration: 'Hold Person (3rd level)' });
+      expect(h.sheet().spellcasting?.concentratingOn).toBe('Hold Person');
+      const out = await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Hold Person (3rd level)', rounds: 4 });
+      expect(out.content.split('\n')[0]).toBe("Mira Voss's Hold Person: 4 rounds left.");
+      expect(heroCountdown(h)).toEqual({ spell: 'Hold Person', roundsLeft: 4 });
+      const faith = withSrdSpells({ character: cleric('Shield of Faith'), state: { combat: sampleCombat() } });
+      const counted = await faith.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Faith', rounds: 3 });
+      expect(counted.content.split('\n')[0]).toBe("Mira Voss's Shield of Faith: 3 rounds left.");
+      expect(heroCountdown(faith)).toEqual({ spell: 'Shield of Faith', roundsLeft: 3 });
+    });
+
+    it('ends Greater Invisibility for Invisibility: once the name is resolved, only the very name held is the same spell (F4; srd:spell:greater-invisibility: "Concentration, up to 1 minute"; srd:spell:invisibility: "Concentration, up to 1 hour"; srd:rule:concentration, Another Concentration Effect)', async () => {
+      const h = withSrdSpells({ character: holding([held('Greater Invisibility', 'Wizard')], 'Greater Invisibility'), state: { combat: sampleCombat() } });
+      const out = await h.run('update_character', { concentration: 'Invisibility' });
+      expect(said(out.content)).toBe(
+        'Concentration on Greater Invisibility ends (started concentrating on Invisibility).\nConcentrating on Invisibility.\nInvisibility: about 60 minutes left.',
+      );
+      expect(h.sheet().spellcasting?.concentratingOn).toBe('Invisibility');
+      expect(heroCountdown(h)).toEqual({ spell: 'Invisibility', roundsLeft: 600 });
+    });
+
+    it("takes the same spell again for a recast however the record names it, and a sheet copy's name only for the one copy that is the spell (srd:spell:hold-person; srd:rule:concentration)", async () => {
+      // An older save's record kept with its note, the sheet holding no copy: "Hold Person" is that spell again.
+      const older = withSrdSpells({ character: holding([], 'Hold Person (3rd level)'), state: { combat: sampleCombat() } });
+      expect(said((await older.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Hold Person (3rd level): 10 rounds left.');
+      expect(older.sheet().spellcasting?.concentratingOn).toBe('Hold Person (3rd level)');
+      // A copy the sheet linked to the entry under another name (KnownSpell.id is the entry's id) is that spell: held, the
+      // same spell again; not held, recorded by the sheet's name.
+      const renamed = { ...held('Hold Person', 'Wizard'), name: 'Paralyzing Word' };
+      const holder = withSrdSpells({ character: holding([renamed], 'Paralyzing Word') });
+      expect((await holder.run('update_character', { concentration: 'Hold Person' })).content).toMatch(/^Status: [^\n]*$/);
+      expect(holder.sheet().spellcasting?.concentratingOn).toBe('Paralyzing Word');
+      const caster = withSrdSpells({ character: holding([renamed]) });
+      expect(said((await caster.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Concentrating on Paralyzing Word.');
+      // The sheet's spell of exactly the name given comes before another copy of it.
+      const both = withSrdSpells({ character: holding([held('Hold Person', 'Wizard'), copy('Hold Person (scroll)', 'copy-1')]) });
+      expect(said((await both.run('update_character', { concentration: 'Hold Person (scroll)' })).content)).toBe('Concentrating on Hold Person (scroll).');
+      // Two copies with notes, neither of that name: the data's name.
+      const two = withSrdSpells({ character: holding([copy('Hold Person (scroll)', 'copy-1'), copy('Hold Person (Wizard)', 'copy-2')]) });
+      expect(said((await two.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Concentrating on Hold Person.');
+      // A spell the same call adds (no entry yet) is never the spell of a name the data doesn't know.
+      const veil = withSrdSpells({ character: holding([]) });
+      const out = await veil.run('update_character', { spells_add: [{ name: 'Hold Person (scroll)', level: 2 }], concentration: 'Veil of Thorns' });
+      expect(said(out.content)).toBe('Concentrating on Veil of Thorns.\nAdded spell: Hold Person (scroll) (level 2, prepared)');
+    });
+
+    it('gives the rounds of the name it records, else of the name given (srd:spell:shield-of-faith: "Concentration, up to 10 minutes"; srd:spell:hideous-laughter: "Concentration, up to 1 minute")', async () => {
+      // "Faith" is no spell of the rules data: the sheet's Shield of Faith, and its 10 minutes.
+      const faith = withSrdSpells({ character: cleric(null) });
+      expect(await heroConcentration(faith.ctx, faith.sheet(), 'Faith')).toEqual({ refused: null, label: 'Shield of Faith', rounds: 100 });
+      // A book's copy the Library doesn't hold: the SRD spell's minute.
+      const laughter = withSrdSpells({ character: holding([LAUGHTER_COPY]) });
+      expect(await heroConcentration(laughter.ctx, laughter.sheet(), 'Hideous Laughter')).toEqual({ refused: null, label: LAUGHTER, rounds: 10 });
+      // Neither the data nor the sheet knows it: nothing to count.
+      expect(await heroConcentration(laughter.ctx, laughter.sheet(), 'Veil of Thorns')).toEqual({ refused: null, label: 'Veil of Thorns' });
+    });
+
+    describe('a noted name read as its spell, the sheet\'s exact name, the call\'s spells_remove and the label\'s refusal (spell effects round 4)', () => {
+      /** The fight with the hero's countdown already running on `spell`. */
+      const counting = (spell: string, roundsLeft: number): CombatState => {
+        const combat = sampleCombat();
+        combat.combatants[0] = { ...combat.combatants[0], concentrationCountdown: { spell, roundsLeft } };
+        return combat;
+      };
+
+      it('ends the +2 of a Shield of Faith recorded under a sheet copy\'s noted name on every end, taking it to be the hero\'s own casting (H1/HN1/HX1; srd:spell:shield-of-faith: "Concentration, up to 10 minutes", "a +2 bonus to AC for the duration"; srd:rule:concentration: "If the effect\'s creator loses Concentration, the effect ends")', async () => {
+        const scroll = { name: 'Shield of Faith (scroll)', level: 1 };
+        const added = 'Concentrating on Shield of Faith (scroll).\nAdded spell: Shield of Faith (scroll) (level 1, prepared)\nShield of Faith (scroll): about 10 minutes left.';
+        // The copy the sheet holds, read by the spell's name; TD1's one call, naming the spell or the copy.
+        const starts: [string, Character, Record<string, unknown>, string][] = [
+          ['the sheet\'s copy', holding([copy('Shield of Faith (scroll)', 'copy-sof')]), { concentration: 'Shield of Faith' }, 'Concentrating on Shield of Faith (scroll).\nShield of Faith (scroll): about 10 minutes left.'],
+          ['one call', holding([]), { spells_add: [scroll], concentration: 'Shield of Faith' }, added],
+          ['one call, the copy named', holding([]), { spells_add: [scroll], concentration: 'Shield of Faith (scroll)' }, added],
+        ];
+        const ended = 'Shield of Faith ends: AC 14 → 12';
+        type Run = ReturnType<typeof withSrdSpells>;
+        const ends: [string, (h: Run) => Promise<{ text: string; after: Character }>, string][] = [
+          ['null', async (h) => ({ text: said((await h.run('update_character', { concentration: null })).content), after: h.sheet() }), `No longer concentrating on Shield of Faith (scroll).\n${ended}`],
+          [
+            '40 damage',
+            async (h) => ({ text: said((await h.run('update_character', { hp: { amount: 40, kind: 'damage' } })).content), after: h.sheet() }),
+            `HP 12 → 0 (40 damage) — massive damage: 28 left over is at least the HP maximum (17). Dies instantly.\nConcentration on Shield of Faith (scroll) ends (death).\n${ended}`,
+          ],
+          [
+            'another spell',
+            async (h) => ({ text: said((await h.run('update_character', { concentration: 'Detect Magic' })).content), after: h.sheet() }),
+            `Concentration on Shield of Faith (scroll) ends (started concentrating on Detect Magic).\n${ended}\nConcentrating on Detect Magic.\nDetect Magic: about 10 minutes left.`,
+          ],
+          [
+            "the sheet's Stop",
+            async (h) => {
+              const r = concentrationChange(h.sheet(), null);
+              return { text: r.notice ?? '', after: r.character };
+            },
+            `Player ended concentration on Shield of Faith (scroll); ${ended}; if Shield of Faith still protects the hero, record it again with ac_spells_add`,
+          ],
+          [
+            'the countdown',
+            async (h) => {
+              await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Shield of Faith', rounds: 1 });
+              let text = '';
+              // Bandit 1's turn now: Bandit 2's, Old Tam's, then the hero's, whose start finds the round used up.
+              for (let i = 0; i < 3; i++) text = (await h.run('update_combat', { action: 'next_turn' })).content;
+              return { text: text.split('\n').slice(0, 3).join('\n'), after: h.sheet() };
+            },
+            `Round 3: Mira Voss's turn.\nMira Voss's Shield of Faith (scroll) ends: its duration is up.\n${ended}`,
+          ],
+        ];
+        for (const [start, character, call, startText] of starts) {
+          for (const [end, run, endText] of ends) {
+            const h = withSrdSpells({ character, state: { combat: sampleCombat() } });
+            expect(said((await h.run('update_character', call)).content), start).toBe(startText);
+            const recorded = said((await h.run('update_character', { ac_spells_add: ['Shield of Faith'] })).content);
+            expect(recorded, start).toBe(
+              "Shield of Faith: AC 12 → 14\nMira Voss is concentrating on Shield of Faith, so the app takes this +2 to be that casting: it ends with Mira Voss's Concentration.",
+            );
+            expect(recorded).not.toContain("isn't concentrating");
+            expect(h.sheet()).toMatchObject({ armorClass: 14, acSpells: ['Shield of Faith'], spellcasting: { concentratingOn: 'Shield of Faith (scroll)' } });
+            const { text, after } = await run(h);
+            expect(text, `${start}, ${end}`).toBe(endText);
+            expect(after, `${start}, ${end}`).toMatchObject({ armorClass: 12, acFormula: '10 + DEX 2' });
+            expect(after).not.toHaveProperty('acSpells');
+          }
+        }
+      });
+
+      it('reminds the DM of an AC set by hand for Haste when a Concentration on a sheet copy\'s "Haste (scroll)" ends, from the DM\'s end and the sheet\'s, whose area clause names Haste (H1/HX2; srd:spell:haste: "it gains a +2 bonus to Armor Class")', async () => {
+        const h = withSrdSpells({ character: holding([copy('Haste (scroll)', 'copy-haste')]) });
+        expect(said((await h.run('update_character', { concentration: 'Haste' })).content)).toBe('Concentrating on Haste (scroll).');
+        expect(said((await h.run('update_character', { armor_class: 14, reason: 'Haste' })).content)).toBe('AC 12 → 14');
+        expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Haste' });
+        const reminder = 'AC 14 was set by hand for Haste (scroll): if it counted Haste (scroll), set the AC back to 12 (armor and abilities).';
+        expect(concentrationChange(h.sheet(), null).notice).toBe(
+          `Player ended concentration on Haste (scroll); if it left an area on the map, end it with update_map effects_end ["Haste"] (it ends every area of that name) — ${reminder}`,
+        );
+        expect(said((await h.run('update_character', { concentration: null })).content)).toBe(`No longer concentrating on Haste (scroll).\nWarning: ${reminder}`);
+        expect(h.sheet().armorClass).toBe(14);
+      });
+
+      it('names a Bandit\'s Paralyzed sourced "Hold Person" and an area labelled "Hold Person" when a Concentration on a sheet copy\'s "Hold Person (scroll)" ends, never removing them (H1; srd:spell:hold-person: "The target must succeed on a Wisdom saving throw or have the Paralyzed condition for the duration"; srd:rule:concentration: "If the effect\'s creator loses Concentration, the effect ends")', async () => {
+        const base = sampleMappedCombat({ heroTurn: true });
+        const map = base.map as NonNullable<CombatState['map']>;
+        // An area the DM placed on Bandit 1's square (F4) and labelled after the spell.
+        const area: MapEffect = {
+          id: 'e20',
+          label: 'Hold Person',
+          spec: { shape: 'squares', rects: [{ x0: 5, y0: 3, x1: 5, y1: 3 }], fromId: 'c-1' },
+          rects: [{ x0: 5, y0: 3, x1: 5, y1: 3 }],
+          terrain: [],
+          duration: 'lasting',
+          round: 2,
+          turnOfId: 'c-1',
+        };
+        const paralyzed = [{ id: 'paralyzed', source: 'Hold Person' }];
+        const combat = { ...base, combatants: base.combatants.map((c) => (c.name === 'Bandit 1' ? { ...c, conditions: paralyzed } : c)), map: { ...map, effects: [area] } };
+        const h = withSrdSpells({ character: holding([copy('Hold Person (scroll)', 'copy-1')]), state: { combat } });
+        expect(said((await h.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Concentrating on Hold Person (scroll).\nHold Person (scroll): 10 rounds left.');
+        // The sheet's Stop: the area clause names the spell without the note (the sheet sees no fight).
+        expect(concentrationChange(h.sheet(), null).notice).toBe(
+          'Player ended concentration on Hold Person (scroll); if it left an area on the map, end it with update_map effects_end ["Hold Person"] (it ends every area of that name)',
+        );
+        expect(said((await h.run('update_character', { concentration: null })).content)).toBe(
+          [
+            'No longer concentrating on Hold Person (scroll).',
+            'Still on the map: Hold Person (F4) — if it was this spell\'s, end it with update_map effects_end ["Hold Person"].',
+            'Bandit 1 is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_combat conditions.',
+          ].join('\n'),
+        );
+        expect(h.s().combat?.map?.effects).toHaveLength(1);
+        expect(h.s().combat?.combatants.find((c) => c.name === 'Bandit 1')?.conditions).toEqual(paralyzed);
+      });
+
+      it('matches a noted name to the sheet copy under a book\'s longer name: recorded as the copy, and while it is held a recast (H4/HN3; srd:spell:hideous-laughter: "Concentration, up to 1 minute", "Using a Higher-Level Spell Slot")', async () => {
+        for (const library of [[LAUGHTER_ENTRY], []]) {
+          // Bandit 1 laughing (srd:spell:hideous-laughter: "it has the Prone and Incapacitated conditions for the duration").
+          const combat = sampleCombat();
+          combat.combatants[1] = { ...combat.combatants[1], conditions: [{ id: 'incapacitated', source: LAUGHTER }] };
+          const h = withSrdSpells({ character: holding([LAUGHTER_COPY]), state: { combat } }, library);
+          expect(said((await h.run('update_character', { concentration: 'Hideous Laughter' })).content)).toBe(`Concentrating on ${LAUGHTER}.\n${LAUGHTER}: 10 rounds left.`);
+          await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: LAUGHTER, rounds: 3 });
+          // Cast again with a 2nd-level slot: nothing ends, no condition is named, the count restarts.
+          expect(said((await h.run('update_character', { concentration: 'Hideous Laughter (2nd level)' })).content)).toBe(`${LAUGHTER}: 10 rounds left.`);
+          expect(h.sheet().spellcasting?.concentratingOn).toBe(LAUGHTER);
+          expect(heroCountdown(h)).toEqual({ spell: LAUGHTER, roundsLeft: 10 });
+          // update_combat reads the noted name the same way.
+          const rounds = await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Hideous Laughter (2nd level)', rounds: 4 });
+          expect(rounds.content.split('\n')[0]).toBe(`Mira Voss's ${LAUGHTER}: 4 rounds left.`);
+          // The noted name alone records the copy, so the Spells tab's toggle shows it held.
+          const first = withSrdSpells({ character: holding([LAUGHTER_COPY]) }, library);
+          expect(said((await first.run('update_character', { concentration: 'Hideous Laughter (2nd level)' })).content)).toBe(`Concentrating on ${LAUGHTER}.`);
+          expect(concentrationChange(first.sheet(), LAUGHTER)).toEqual({ character: first.sheet(), notice: null, warning: null });
+        }
+      });
+
+      it('casts the sheet\'s spell of exactly the name given when the rules data finds it and the spell held as two entries, so the held one ends; the documented merge and a scroll\'s copy stay recasts (H5/HN5/HX3; srd:rule:concentration: "You lose Concentration on an effect the moment you start casting a spell that requires Concentration"; srd:spell:polymorph and srd:spell:true-polymorph: "Concentration, up to 1 hour"; srd:spell:conjure-elemental and srd:spell:conjure-minor-elementals: "Concentration, up to 10 minutes")', async () => {
+        const poly = withSrdSpells({ character: holding([held('True Polymorph', 'Wizard'), held('Polymorph', 'Wizard')], 'True Polymorph'), state: { combat: counting('True Polymorph', 7) } });
+        expect(said((await poly.run('update_character', { concentration: 'Polymorph' })).content)).toBe(
+          'Concentration on True Polymorph ends (started concentrating on Polymorph).\nConcentrating on Polymorph.\nPolymorph: about 60 minutes left.',
+        );
+        expect(poly.sheet().spellcasting?.concentratingOn).toBe('Polymorph');
+        expect(heroCountdown(poly)).toEqual({ spell: 'Polymorph', roundsLeft: 600 });
+        // The Conjure pair, and update_combat afterwards counts the spell now held.
+        const conjure = withSrdSpells({
+          character: holding([held('Conjure Minor Elementals', 'Wizard'), held('Conjure Elemental', 'Wizard')], 'Conjure Minor Elementals'),
+          state: { combat: counting('Conjure Minor Elementals', 7) },
+        });
+        expect(said((await conjure.run('update_character', { concentration: 'Conjure Elemental' })).content)).toBe(
+          'Concentration on Conjure Minor Elementals ends (started concentrating on Conjure Elemental).\nConcentrating on Conjure Elemental.\nConjure Elemental: about 10 minutes left.',
+        );
+        const counted = await conjure.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Conjure Elemental', rounds: 5 });
+        expect(counted.content.split('\n')[0]).toBe("Mira Voss's Conjure Elemental: 5 rounds left.");
+        expect(heroCountdown(conjure)).toEqual({ spell: 'Conjure Elemental', roundsLeft: 5 });
+        // A spell the same call adds is the sheet's too: Polymorph copied into the spellbook and cast at once.
+        const copied = withSrdSpells({ character: holding([held('True Polymorph', 'Wizard')], 'True Polymorph'), state: { combat: counting('True Polymorph', 7) } });
+        const cast = await copied.run('update_character', { spells_add: [{ name: 'Polymorph', level: 4 }], concentration: 'Polymorph' });
+        expect(said(cast.content)).toBe(
+          'Concentration on True Polymorph ends (started concentrating on Polymorph).\nConcentrating on Polymorph.\nAdded spell: Polymorph (level 4, prepared)\nPolymorph: about 60 minutes left.',
+        );
+        // Only the longer on the sheet: the documented merge, a recast of the spell held.
+        const merged = withSrdSpells({ character: holding([held('True Polymorph', 'Wizard')], 'True Polymorph'), state: { combat: counting('True Polymorph', 7) } });
+        expect(said((await merged.run('update_character', { concentration: 'Polymorph' })).content)).toBe('True Polymorph: about 60 minutes left.');
+        expect(merged.sheet().spellcasting?.concentratingOn).toBe('True Polymorph');
+        // A scroll's copy held beside the spell it copies (TD1), its name resolving to that spell's entry or the copy
+        // linked to it: one entry, so the spell's name is a recast.
+        const linkedCopy = { ...held('Hold Person', 'Granted in play'), name: 'Hold Person (scroll)' };
+        for (const spells of [
+          [held('Hold Person', 'Wizard'), copy('Hold Person (scroll)', 'copy-1')],
+          [{ ...copy('Hold Person', 'copy-0'), source: 'Wizard' }, linkedCopy],
+        ]) {
+          const scroll = withSrdSpells({ character: holding(spells, 'Hold Person (scroll)'), state: { combat: counting('Hold Person (scroll)', 3) } });
+          expect(said((await scroll.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Hold Person (scroll): 10 rounds left.');
+          expect(scroll.sheet().spellcasting?.concentratingOn).toBe('Hold Person (scroll)');
+        }
+      });
+
+      it('reads the sheet without the rows the same call removes: a used scroll removed as it is read records the spell, which goes on (H6/HN2; srd:magic-item:spell-scroll: "Once the spell is cast, the scroll crumbles to dust"; srd:rule:concentration)', async () => {
+        const linked = { ...held('Hold Person', 'Granted in play'), name: 'Hold Person (scroll)' };
+        // The scroll removed by its row's name, or by a looser one that row is the only match for (as removeSpell finds it).
+        for (const removed of ['Hold Person (scroll)', 'Hold Person']) {
+          for (const row of [copy('Hold Person (scroll)', 'copy-1'), linked]) {
+            for (const given of ['Hold Person', 'Hold Person (3rd level)', 'Hold Person (scroll)']) {
+              const h = withSrdSpells({ character: holding([row]), state: { combat: sampleCombat() } });
+              const out = await h.run('update_character', { spells_remove: [removed], concentration: given });
+              expect(said(out.content), `${removed}, ${given}`).toBe('Concentrating on Hold Person.\nRemoved spell: Hold Person (scroll)\nHold Person: 10 rounds left.');
+              expect(h.sheet().spellcasting?.concentratingOn).toBe('Hold Person');
+              expect(h.sheet().spellcasting?.spells.some((s) => s.name.startsWith('Hold Person'))).toBe(false);
+              expect(heroCountdown(h)).toEqual({ spell: 'Hold Person', roundsLeft: 10 });
+            }
+          }
+        }
+      });
+
+      it('refuses a loose name that resolves to the spell the same call adds when that spell needs no Concentration, as two calls do, before anything is written (H7/HN6; srd:spell:mage-armor: "Duration: 8 hours")', async () => {
+        const refusal = 'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"].';
+        for (const fight of [false, true]) {
+          const h = withSrdSpells({ character: holding([]), ...(fight ? { state: { combat: sampleCombat() } } : {}) });
+          const start = h.sheet();
+          const combat = h.s().combat;
+          expect(await h.run('update_character', { spells_add: [{ name: 'Mage Armor', level: 1 }], concentration: 'Armor' })).toEqual({ isError: true, content: refusal });
+          expect(h.sheet()).toBe(start);
+          expect(h.s().combat).toBe(combat);
+          expect(h.s().log).toHaveLength(0);
+          // The same two parts in two calls.
+          await h.run('update_character', { spells_add: [{ name: 'Mage Armor', level: 1 }] });
+          expect(await h.run('update_character', { concentration: 'Armor' })).toEqual({ isError: true, content: refusal });
+        }
+        // The resolved name's own refusal; a name resolved to a spell that needs Concentration goes on ("Faith").
+        const fresh = withSrdSpells({ character: holding([]) });
+        expect((await heroConcentration(fresh.ctx, fresh.sheet(), 'Armor', ['Mage Armor'])).refused).toBe(refusal);
+        expect(await heroConcentration(fresh.ctx, fresh.sheet(), 'Faith', ['Shield of Faith'])).toEqual({ refused: null, label: 'Shield of Faith', rounds: 100 });
+      });
+    });
+
+    describe("a scroll's copy beside the spell it copies, the sheet's spell named with a note, and the call's own removals (spell effects round 5)", () => {
+      /** The fight with the hero's countdown already running on `spell`. */
+      const counting = (spell: string, roundsLeft: number): CombatState => {
+        const combat = sampleCombat();
+        combat.combatants[0] = { ...combat.combatants[0], concentrationCountdown: { spell, roundsLeft } };
+        return combat;
+      };
+      /** An invented book's entry of an SRD spell's name: reviewed (data.recordId), it outranks the SRD's by name. */
+      const bookSpell = (name: string, level: number, duration: string, reviewed: boolean) =>
+        entry(`lib:gloam:spell:${name.toLowerCase().replace(/ /g, '-')}`, name, 'spell', {
+          ...(reviewed ? { recordId: `rec:gloam:spell:${name}` } : {}),
+          level,
+          concentration: true,
+          duration,
+        });
+      const CONJURED = 'Concentration on Conjure Minor Elementals ends (started concentrating on Conjure Elemental).\nConcentrating on Conjure Elemental.';
+
+      it('keeps a scroll\'s copy and the spell it copies one spell, whichever entries the rules data finds for them by link and by name (N1/N5-1; FIXES3 TD1; srd:spell:shield-of-faith: "Concentration, up to 10 minutes", "granting it a +2 bonus to AC for the duration"; srd:spell:hold-person: "Concentration, up to 1 minute"; srd:rule:concentration: "If the effect\'s creator loses Concentration, the effect ends")', async () => {
+        // Reviewed book entries of the SRD's names outrank, by name, the SRD entries the builder linked the sheet's rows to.
+        const library = [bookSpell('Shield of Faith', 1, 'Concentration, up to 10 minutes', true), bookSpell('Hold Person', 2, 'Concentration, up to 1 minute', true)];
+        const cleric = (spells: KnownSpell[], concentratingOn: string) =>
+          sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, ability: 'wis', spells, concentratingOn } });
+        // Holding either copy of Shield of Faith with its +2 recorded, the DM names the other: the same spell again, so the
+        // +2 stays and the count restarts.
+        for (const [holds, given] of [
+          ['Shield of Faith', 'Shield of Faith (scroll)'],
+          ['Shield of Faith (scroll)', 'Shield of Faith'],
+        ] as const) {
+          const spells = [held('Shield of Faith', 'Cleric'), { ...copy('Shield of Faith (scroll)', 'copy-sof'), level: 1 }];
+          const h = withSrdSpells({ character: cleric(spells, holds), state: { combat: counting(holds, 3) } }, library);
+          await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+          expect(said((await h.run('update_character', { concentration: given })).content), holds).toBe(`${holds}: about 10 minutes left.`);
+          expect(h.sheet()).toMatchObject({ armorClass: 14, acSpells: ['Shield of Faith'], spellcasting: { concentratingOn: holds } });
+          expect(heroCountdown(h)).toEqual({ spell: holds, roundsLeft: 100 });
+        }
+        // Holding a scroll's "Hold Person (scroll)", the DM names the spell, in both tools; and TD1's one call while the
+        // spell is held.
+        const scroll = () =>
+          withSrdSpells({ character: holding([held('Hold Person', 'Wizard'), copy('Hold Person (scroll)', 'copy-1')], 'Hold Person (scroll)'), state: { combat: counting('Hold Person (scroll)', 3) } }, library);
+        const again = scroll();
+        expect(said((await again.run('update_character', { concentration: 'Hold Person' })).content)).toBe('Hold Person (scroll): 10 rounds left.');
+        expect(again.sheet().spellcasting?.concentratingOn).toBe('Hold Person (scroll)');
+        const rounds = await scroll().run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Hold Person', rounds: 4 });
+        expect(rounds.content.split('\n')[0]).toBe("Mira Voss's Hold Person (scroll): 4 rounds left.");
+        const one = withSrdSpells({ character: holding([held('Hold Person', 'Wizard')], 'Hold Person'), state: { combat: counting('Hold Person', 3) } }, library);
+        const read = await one.run('update_character', { spells_add: [{ name: 'Hold Person (scroll)', level: 2 }], concentration: 'Hold Person (scroll)' });
+        expect(said(read.content)).toBe('Added spell: Hold Person (scroll) (level 2, prepared)\nHold Person: 10 rounds left.');
+        // The held row linked to a book's own entry (unreviewed, so the SRD's answers the copy's name), the copy beside it.
+        const own = bookSpell('Hold Person', 2, 'Concentration, up to 1 minute', false);
+        for (const given of ['Hold Person (scroll)', 'Hold Person (3rd level)']) {
+          const spells = [copy('Hold Person (scroll)', 'copy-1'), { ...copy('Hold Person', own.id), source: 'Wizard' }];
+          const linked = withSrdSpells({ character: holding(spells, 'Hold Person'), state: { combat: counting('Hold Person', 3) } }, [own]);
+          expect(said((await linked.run('update_character', { concentration: given })).content), given).toBe('Hold Person: 10 rounds left.');
+          expect(linked.sheet().spellcasting?.concentratingOn).toBe('Hold Person');
+        }
+      });
+
+      it('casts the sheet\'s spell named with a note while the hero holds the longer of a pair, as its plain name does, recording a sheet copy under its own name (N2/N5-2/X5-1; srd:rule:concentration: "You lose Concentration on an effect the moment you start casting a spell that requires Concentration"; srd:spell:conjure-elemental: "The damage increases by 1d8 for each spell slot level above 5"; srd:spell:polymorph and srd:spell:true-polymorph: "Concentration, up to 1 hour")', async () => {
+        const both = () =>
+          withSrdSpells({
+            character: holding([held('Conjure Minor Elementals', 'Wizard'), held('Conjure Elemental', 'Wizard')], 'Conjure Minor Elementals'),
+            state: { combat: counting('Conjure Minor Elementals', 7) },
+          });
+        // Cast with a 6th-level slot, or read from a scroll.
+        for (const given of ['Conjure Elemental (6th level)', 'Conjure Elemental (scroll)']) {
+          const upcast = both();
+          expect(said((await upcast.run('update_character', { concentration: given })).content), given).toBe(`${CONJURED}\nConjure Elemental: about 10 minutes left.`);
+          expect(upcast.sheet().spellcasting?.concentratingOn).toBe('Conjure Elemental');
+          expect(heroCountdown(upcast)).toEqual({ spell: 'Conjure Elemental', roundsLeft: 100 });
+        }
+        // update_combat reads the name the same way: no rounds for the spell held.
+        const counted = both();
+        const combat = counted.s().combat;
+        expect(await counted.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Conjure Elemental (6th level)', rounds: 5 })).toEqual({
+          isError: true,
+          content:
+            'Mira Voss is concentrating on Conjure Minor Elementals, not Conjure Elemental (6th level): for the hero, concentrate only sets rounds (spell "Conjure Minor Elementals" with rounds); update_character concentration starts or ends the hero\'s Concentration.',
+        });
+        expect(counted.s().combat).toBe(combat);
+        // The spell added in the same call; Polymorph with a note beside a held True Polymorph.
+        const added = withSrdSpells({ character: holding([held('Conjure Minor Elementals', 'Wizard')], 'Conjure Minor Elementals'), state: { combat: counting('Conjure Minor Elementals', 7) } });
+        expect(said((await added.run('update_character', { spells_add: [{ name: 'Conjure Elemental', level: 5 }], concentration: 'Conjure Elemental (6th level)' })).content)).toBe(
+          `${CONJURED}\nAdded spell: Conjure Elemental (level 5, prepared)\nConjure Elemental: about 10 minutes left.`,
+        );
+        const poly = withSrdSpells({ character: holding([held('True Polymorph', 'Wizard'), held('Polymorph', 'Wizard')], 'True Polymorph'), state: { combat: counting('True Polymorph', 7) } });
+        expect(said((await poly.run('update_character', { concentration: 'Polymorph (4th level)' })).content)).toBe(
+          'Concentration on True Polymorph ends (started concentrating on Polymorph).\nConcentrating on Polymorph.\nPolymorph: about 60 minutes left.',
+        );
+        // A scroll's copy of the shorter spell, linked to no entry: recorded under the copy's own name (so the Spells tab
+        // shows it held), named plainly or with a note.
+        for (const given of ['Conjure Elemental', 'Conjure Elemental (6th level)']) {
+          const spells = [held('Conjure Minor Elementals', 'Wizard'), { ...copy('Conjure Elemental (scroll)', 'copy-ce'), level: 5 }];
+          const copied = withSrdSpells({ character: holding(spells, 'Conjure Minor Elementals'), state: { combat: counting('Conjure Minor Elementals', 7) } });
+          expect(said((await copied.run('update_character', { concentration: given })).content), given).toBe(
+            'Concentration on Conjure Minor Elementals ends (started concentrating on Conjure Elemental (scroll)).\nConcentrating on Conjure Elemental (scroll).\nConjure Elemental (scroll): about 10 minutes left.',
+          );
+        }
+        // Only the longer on the sheet: the documented merge stays a recast, with a note or without.
+        for (const given of ['Polymorph', 'Polymorph (scroll)']) {
+          const merged = withSrdSpells({ character: holding([held('True Polymorph', 'Wizard')], 'True Polymorph'), state: { combat: counting('True Polymorph', 7) } });
+          expect(said((await merged.run('update_character', { concentration: given })).content), given).toBe('True Polymorph: about 60 minutes left.');
+        }
+      });
+
+      it('reads a scroll the same call removes as the spell it names, and never ends the Concentration the call names for what it removes (N2/N3; srd:magic-item:spell-scroll: "Once the spell is cast, the scroll crumbles to dust"; srd:rule:concentration: "You lose Concentration on an effect the moment you start casting a spell that requires Concentration"; srd:spell:hold-person: "Concentration, up to 1 minute")', async () => {
+        // Holding Conjure Minor Elementals, the hero reads a scroll of Conjure Elemental, removed in the same call.
+        for (const given of ['Conjure Elemental', 'Conjure Elemental (6th level)']) {
+          const spells = [held('Conjure Minor Elementals', 'Wizard'), { ...copy('Conjure Elemental (scroll)', 'copy-ce'), level: 5 }];
+          const h = withSrdSpells({ character: holding(spells, 'Conjure Minor Elementals'), state: { combat: counting('Conjure Minor Elementals', 7) } });
+          const out = await h.run('update_character', { spells_remove: ['Conjure Elemental (scroll)'], concentration: given });
+          expect(said(out.content), given).toBe(`${CONJURED}\nRemoved spell: Conjure Elemental (scroll)\nConjure Elemental: about 10 minutes left.`);
+          expect(h.sheet().spellcasting?.concentratingOn).toBe('Conjure Elemental');
+          expect(heroCountdown(h)).toEqual({ spell: 'Conjure Elemental', roundsLeft: 100 });
+        }
+        // A scroll row named as its spell, read and removed in one call: the spell goes on.
+        const named = withSrdSpells({ character: holding([{ ...copy('Hold Person', 'copy-hp'), source: 'Spell Scroll' }]), state: { combat: sampleCombat() } });
+        const read = await named.run('update_character', { spells_remove: ['Hold Person'], concentration: 'Hold Person' });
+        expect(said(read.content)).toBe('Concentrating on Hold Person.\nRemoved spell: Hold Person\nHold Person: 10 rounds left.');
+        expect(named.sheet().spellcasting?.concentratingOn).toBe('Hold Person');
+        expect(heroCountdown(named)).toEqual({ spell: 'Hold Person', roundsLeft: 10 });
+        // The held copy removed while the same call names its spell again: a recast, which goes on.
+        const restated = withSrdSpells({ character: holding([copy('Hold Person (scroll)', 'copy-1')], 'Hold Person (scroll)'), state: { combat: counting('Hold Person (scroll)', 3) } });
+        const again = await restated.run('update_character', { spells_remove: ['Hold Person (scroll)'], concentration: 'Hold Person' });
+        expect(said(again.content)).toBe('Removed spell: Hold Person (scroll)\nHold Person (scroll): 10 rounds left.');
+        expect(restated.sheet().spellcasting?.concentratingOn).toBe('Hold Person (scroll)');
+        // A call that removes the copy and names no Concentration ends it, as removing any sheet spell does.
+        const later = withSrdSpells({ character: holding([copy('Hold Person (scroll)', 'copy-1')], 'Hold Person (scroll)'), state: { combat: counting('Hold Person (scroll)', 3) } });
+        expect(said((await later.run('update_character', { spells_remove: ['Hold Person (scroll)'] })).content)).toBe(
+          'Removed spell: Hold Person (scroll)\nConcentration on Hold Person (scroll) ends.',
+        );
+        expect(later.sheet().spellcasting?.concentratingOn).toBeNull();
+      });
+    });
   });
 });
 
@@ -2052,5 +3005,290 @@ describe('Hit Point maximum adjustments (update_character hp_max, hp.drain, hp_m
     const fight = setup({ character: fighter4(), state: { combat: sampleCombat() } });
     const during = await fight.run('update_character', { initiative_change: 1 });
     expect(during.content).toContain('The initiative already rolled for this fight stays; the new bonus counts from the next Initiative roll.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spell effects (SPEC §3.3, §3.5): the hero's countdown in a fight, what ends with her Concentration, AC from spells
+// ---------------------------------------------------------------------------
+
+describe("update_character in a fight: the hero's countdown follows the sheet (srd:rule:casting-spells-duration)", () => {
+  const heroCombatant = (h: ReturnType<typeof setup>) => h.s().combat?.combatants.find((c) => c.isPlayer);
+  const concentrating = (spell: string, extra: Partial<Character> = {}) =>
+    sampleCharacter({ ...extra, spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: spell } });
+  const counting = (spell: string, roundsLeft: number) => ({
+    ...sampleCombat(),
+    combatants: sampleCombat().combatants.map((c) => (c.isPlayer ? { ...c, concentrationCountdown: { spell, roundsLeft } } : c)),
+  });
+
+  it('counts a spell the call starts from its full duration (srd:spell:bless: up to 1 minute), and says so', async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    const out = await h.run('update_character', { spell_slots_spend: [{ level: 1 }], concentration: 'Bless' });
+    expect(out.content).toContain('Concentrating on Bless.\nBless: 10 rounds left.\nStatus: ');
+    expect(heroCombatant(h)?.concentrationCountdown).toEqual({ spell: 'Bless', roundsLeft: 10 });
+  });
+
+  it('restarts the count on a recast, though the sheet stays as it was (srd:rule:casting-spells-effects-combining-spell-effects)', async () => {
+    const h = setup({ character: concentrating('Bless'), state: { combat: counting('Bless', 3) } });
+    const out = await h.run('update_character', { concentration: 'Bless' });
+    expect(out.content).toContain('Bless: 10 rounds left.');
+    expect(heroCombatant(h)?.concentrationCountdown).toEqual({ spell: 'Bless', roundsLeft: 10 });
+  });
+
+  it("drops the count when the sheet's Concentration ends: null, another spell, 0 HP", async () => {
+    const h = setup({ character: concentrating('Bless'), state: { combat: counting('Bless', 6) } });
+    const out = await h.run('update_character', { concentration: null });
+    expect(heroCombatant(h)).not.toHaveProperty('concentrationCountdown');
+    expect(out.content).not.toContain('rounds left');
+    const other = setup({ character: concentrating('Bless'), state: { combat: counting('Bless', 6) } });
+    expect((await other.run('update_character', { concentration: 'Web' })).content).toContain('Web: about 60 minutes left.');
+    expect(heroCombatant(other)?.concentrationCountdown).toEqual({ spell: 'Web', roundsLeft: 600 });
+    // srd:rule:concentration: "Your Concentration ends if you have the Incapacitated condition or you die" (0 HP: Unconscious).
+    const felled = setup({ character: concentrating('Bless'), state: { combat: counting('Bless', 6) } });
+    await felled.run('update_character', { hp: { amount: 30, kind: 'damage' } });
+    expect(felled.sheet().spellcasting?.concentratingOn).toBeNull();
+    expect(heroCombatant(felled)).not.toHaveProperty('concentrationCountdown');
+  });
+
+  it("says when it can't count a spell, and gives the call that does", async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    const out = await h.run('update_character', { concentration: 'Shadow Lash' });
+    expect(out.content).toContain('No countdown for Shadow Lash: give rounds with update_combat concentrate target "Mira Voss" spell "Shadow Lash".');
+    expect(heroCombatant(h)).not.toHaveProperty('concentrationCountdown');
+  });
+
+  it('writes nothing to a fight that is not there, and leaves the count alone when the call keeps the spell', async () => {
+    const idle = setup();
+    expect((await idle.run('update_character', { concentration: 'Bless' })).content).not.toContain('rounds left');
+    const h = setup({ character: concentrating('Bless'), state: { combat: counting('Bless', 6) } });
+    const combat = h.s().combat;
+    await h.run('update_character', { hp: { amount: 2, kind: 'damage' } });
+    expect(h.s().combat).toBe(combat);
+  });
+});
+
+describe("what may end with the hero's Concentration (§3.5), named for the DM and never removed", () => {
+  it('names the conditions its spell may hold, except those the call itself added', async () => {
+    // Mira Voss holds Bandit 1 with Hold Person; an enemy's Hold Person paralyzes her in turn (srd:spell:hold-person).
+    const combat = sampleCombat();
+    combat.combatants[1] = { ...combat.combatants[1], conditions: [{ id: 'paralyzed', source: 'Hold Person' }] };
+    const holder = sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Hold Person' } });
+    const h = setup({ character: holder, state: { combat } });
+    const out = await h.run('update_character', { conditions_add: [{ condition: 'Paralyzed', source: 'Hold Person' }] });
+    expect(out.content).toContain('Concentration on Hold Person ends (Paralyzed).');
+    expect(out.content).toContain('Bandit 1 is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_combat conditions.');
+    expect(out.content).not.toContain('Mira Voss is Paralyzed (source: Hold Person)');
+    expect(h.s().combat?.combatants[1].conditions).toEqual([{ id: 'paralyzed', source: 'Hold Person' }]);
+  });
+
+  it("names the hero's own area on the map with the exact call (srd:spell:spirit-guardians)", async () => {
+    const base = sampleMappedCombat({ heroTurn: true });
+    const guardians: MapEffect = {
+      id: 'e20',
+      label: 'Spirit Guardians',
+      spec: { shape: 'emanation', sizeFt: 15, fromId: 'c-1' },
+      rects: [],
+      terrain: ['difficult'],
+      duration: 'lasting',
+      round: 2,
+      turnOfId: 'c-1',
+    };
+    const map = base.map as NonNullable<CombatState['map']>;
+    const holder = sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Spirit Guardians' } });
+    const h = setup({ character: holder, state: { combat: { ...base, map: { ...map, effects: [guardians] } } } });
+    const out = await h.run('update_character', { concentration: null });
+    expect(out.content).toContain(
+      'Still on the map: Spirit Guardians (15-ft Emanation around Mira Voss) — if it was this spell\'s, end it with update_map effects_end ["Spirit Guardians"].',
+    );
+    expect(h.s().combat?.map?.effects).toHaveLength(1);
+  });
+});
+
+describe('AC from spells: ac_spells_add and ac_spells_end, the call\'s last step', () => {
+  const mail = { id: 'cm', name: 'Chain Mail', quantity: 1, equipped: true, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'heavy' as const, baseAc: 16, dexCap: 0 } };
+  const fighter = (extra: Partial<Character> = {}) => hero({ classId: FIGHTER.id, name: 'Fighter', level: 4, hitDie: 10 }, extra);
+  const mageArmored = (extra: Partial<Character> = {}) => sampleCharacter({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'], ...extra });
+  const statusAc = (text: string) => /· (AC \d+(?: \([^)]*\))?)/.exec(text.split('Status: ')[1] ?? '')?.[1];
+
+  it("Mage Armor: base AC 13 + Dexterity (srd:spell:mage-armor), its term for the DM only, and repeats that change nothing", async () => {
+    const h = setup();
+    const out = await h.run('update_character', { ac_spells_add: ['Mage Armor'] });
+    expect(out.isError).toBeUndefined();
+    expect(h.sheet()).toMatchObject({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'] });
+    expect(out.content).toContain('Mage Armor: AC 12 → 15\nMage Armor counts until a Long Rest (8 hours; no game clock) or ac_spells_end; not while armor is worn.');
+    expect(statusAc(out.content)).toBe('AC 15 (Mage Armor)');
+    const logged = JSON.stringify(h.s().log);
+    expect(logged).toContain('Mage Armor: AC 12 → 15');
+    expect(logged).not.toContain('ac_spells');
+    const again = await h.run('update_character', { ac_spells_add: ['mage armor'] });
+    expect(again.content).toContain('Warning: Mage Armor is already recorded.');
+    expect(h.sheet().armorClass).toBe(15);
+    const ended = await h.run('update_character', { ac_spells_end: ['Mage Armor'] });
+    expect(ended.content).toContain('Mage Armor ends: AC 15 → 12');
+    expect(h.sheet()).not.toHaveProperty('acSpells');
+    expect((await h.run('update_character', { ac_spells_end: ['Mage Armor'] })).content).toContain("Warning: Mage Armor isn't recorded.");
+  });
+
+  it("Shield of Faith: +2 (srd:spell:shield-of-faith), with a nudge when the hero isn't concentrating on it", async () => {
+    const h = setup();
+    const out = await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+    expect(out.content).toContain('Shield of Faith: AC 12 → 14');
+    expect(out.content).toContain(
+      'Mira Voss isn\'t concentrating on Shield of Faith: if Mira Voss cast it, set concentration: "Shield of Faith" so it ends with Mira Voss\'s Concentration; if another caster did, end it with ac_spells_end when that caster\'s Concentration ends.',
+    );
+    const own = setup();
+    const cast = await own.run('update_character', { spell_slots_spend: [{ level: 1 }], concentration: 'Shield of Faith', ac_spells_add: ['Shield of Faith'] });
+    expect(cast.content).not.toContain("isn't concentrating on Shield of Faith");
+    expect(statusAc(cast.content)).toBe('AC 14 (Shield of Faith)');
+    // Its Concentration ends: so does the +2, and the record this call ended isn't "not recorded".
+    const ended = await own.run('update_character', { concentration: null, ac_spells_end: ['Shield of Faith'] });
+    expect(ended.content).toContain('No longer concentrating on Shield of Faith.\nShield of Faith ends: AC 14 → 12');
+    expect(ended.content).not.toContain("isn't recorded");
+    expect(own.sheet().armorClass).toBe(12);
+  });
+
+  it("never fails the call for a name the app doesn't count, and tells the DM how to count it (srd:spell:shield)", async () => {
+    const h = setup();
+    const out = await h.run('update_character', { spell_slots_spend: [{ level: 1 }], ac_spells_add: ['Shield'] });
+    expect(out.isError).toBeUndefined();
+    expect(h.sheet().spellcasting?.slots[1]?.used).toBe(2);
+    expect(h.sheet()).not.toHaveProperty('acSpells');
+    expect(out.content).toContain(
+      "Warning: The app counts AC only for Mage Armor and Shield of Faith, not Shield.\n",
+    );
+    expect(out.content).toContain(
+      "Count Shield yourself: fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn; for another lasting effect (Haste, Barkskin) set armor_class and set it back when it ends.",
+    );
+  });
+
+  it("refuses Mage Armor over armor, and says why it adds nothing under a higher base AC (srd:rule:armor-class)", async () => {
+    const armored = setup({ character: fighter({ inventory: [mail], armorClass: 16, acFormula: 'Chain Mail 16' }) });
+    const refused = await armored.run('update_character', { ac_spells_add: ['Mage Armor'] });
+    expect(refused.content).toContain("Warning: Mage Armor needs a target who isn't wearing armor: Mira Voss wears Chain Mail.");
+    expect(armored.sheet()).not.toHaveProperty('acSpells');
+    // A Barbarian's Unarmored Defense: 10 + DEX 2 + CON 4 = 16 beats Mage Armor's 15.
+    const barbarian = hero(
+      { classId: 'srd:class:barbarian', name: 'Barbarian', level: 2, hitDie: 12 },
+      { abilityScores: { str: 16, dex: 14, con: 18, int: 8, wis: 12, cha: 8 }, armorClass: 16, acFormula: 'Unarmored Defense: 10 + DEX 2 + CON 4' },
+    );
+    const h = setup({ character: barbarian });
+    const out = await h.run('update_character', { ac_spells_add: ['Mage Armor'] });
+    expect(out.content).toContain("Mage Armor gives 15, less than Unarmored Defense's 16: AC stays 16.");
+    expect(h.sheet()).toMatchObject({ armorClass: 16, acSpells: ['Mage Armor'] });
+    expect(statusAc(out.content)).toBe('AC 16');
+  });
+
+  it("pins an old save's hand-set Shield of Faith: 18 on gear that gives 16 turns counted at 18, with no set-armor_class line", async () => {
+    const h = setup({ character: fighter({ inventory: [mail], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }) });
+    const out = await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+    expect(h.sheet()).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    expect(statusAc(out.content)).toBe('AC 18 (Shield of Faith)');
+    expect(out.content).toContain('Shield of Faith: AC stays 18');
+    expect(out.content).not.toContain('set armor_class');
+    expect(out.content).not.toContain('stays as set by hand');
+  });
+
+  it('keeps counted spells in an AC set by hand, so their end takes their bonus off', async () => {
+    const h = setup({ character: sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] }) });
+    // srd:spell:haste: "a +2 bonus to Armor Class", set by hand.
+    const out = await h.run('update_character', { armor_class: 16, reason: 'Haste' });
+    expect(h.sheet()).toMatchObject({ armorClass: 16, acFormula: 'set by the DM: Haste + Shield of Faith 2' });
+    expect(statusAc(out.content)).toBe('AC 16 (Shield of Faith)');
+    expect(out.content).toContain('Shield of Faith stays recorded, and this AC is taken to include it (ending it takes 2 off). If it has ended, use ac_spells_end.');
+    const ended = await h.run('update_character', { ac_spells_end: ['Shield of Faith'] });
+    expect(ended.content).toContain('Shield of Faith ends: AC 16 → 14');
+    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Haste' });
+    // An AC the gear gives takes the gear's formula, spells and all: nothing to say.
+    const derived = setup({ character: sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] }) });
+    expect((await derived.run('update_character', { armor_class: 14 })).content).not.toContain('stays recorded');
+  });
+
+  it("keeps a counted spell's part when the DM restates the AC kept for armor the app can't identify (srd:spell:shield-of-faith)", async () => {
+    // srd:spell:shield-of-faith: "a +2 bonus to AC for the duration", whatever armor is worn; Elven Chain has no stats here.
+    const h = setup({ character: sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] }) });
+    await h.run('update_character', { inventory_add: [{ name: 'Elven Chain', quantity: 1, category: 'armor' }] });
+    await h.run('update_character', { inventory_update: [{ name: 'Elven Chain', equipped: true }] });
+    // The armor's part keeps the AC less the counted +2 (E3): 12 + 2 reads as the 14 stored.
+    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'Elven Chain (stats unknown — AC kept at 12) + Shield of Faith 2' });
+    const restated = await h.run('update_character', { armor_class: 14, reason: 'Elven Chain' });
+    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Elven Chain + Shield of Faith 2' });
+    expect(statusAc(restated.content)).toBe('AC 14 (Shield of Faith)');
+    expect(restated.content).toContain('Shield of Faith stays recorded, and this AC is taken to include it (ending it takes 2 off). If it has ended, use ac_spells_end.');
+    expect((await h.run('update_character', { ac_spells_end: ['Shield of Faith'] })).content).toContain('Shield of Faith ends: AC 14 → 12');
+    // With no spell counted, the AC restated there keeps the armor's formula, as before.
+    const plain = setup();
+    await plain.run('update_character', { inventory_add: [{ name: 'Elven Chain', quantity: 1, category: 'armor' }] });
+    await plain.run('update_character', { inventory_update: [{ name: 'Elven Chain', equipped: true }] });
+    await plain.run('update_character', { armor_class: 12, reason: 'Elven Chain' });
+    expect(plain.sheet()).toMatchObject({ armorClass: 12, acFormula: 'Elven Chain (stats unknown — AC kept at 12)' });
+  });
+
+  it("tells the DM when armor goes on over Mage Armor, which the app doesn't end (srd:rule:armor: donning takes minutes)", async () => {
+    const leather = { id: 'la', name: 'Leather Armor', quantity: 1, category: 'armor' as const, weight: 10 };
+    const h = setup({ character: mageArmored({ inventory: [...sampleCharacter().inventory, leather] }) });
+    const out = await h.run('update_character', { inventory_update: [{ name: 'Leather Armor', equipped: true }] });
+    expect(out.content).toContain('Mage Armor isn\'t counted while Mira Voss wears armor: if Mira Voss really put it on, end it with ac_spells_end ["Mage Armor"].');
+    expect(h.sheet().acSpells).toEqual(['Mage Armor']);
+  });
+
+  it('a Long Rest ends them, and the result says so (srd:spell:mage-armor: Duration 8 hours)', async () => {
+    const h = setup({ character: mageArmored() });
+    const out = await h.run('take_rest', { kind: 'long' });
+    expect(out.content).toContain('Mage Armor ends: AC 15 → 12');
+    expect(h.sheet()).toMatchObject({ armorClass: 12 });
+    expect(h.sheet()).not.toHaveProperty('acSpells');
+  });
+
+  it('refuses armor_class beside ac_spells_add or ac_spells_end before anything changes (H3): the spells move the AC themselves', async () => {
+    const refusal =
+      'Send ac_spells_add / ac_spells_end and armor_class in separate calls: the spells first (the app moves the AC for them), then armor_class for anything else.';
+    // srd:spell:haste ("a +2 bonus to Armor Class") set by hand as an ally's Shield of Faith ends: two calls, never one.
+    const h = setup({ character: sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] }) });
+    const start = h.sheet();
+    expect(await h.run('update_character', { armor_class: 14, reason: 'Haste from the bard', ac_spells_end: ['Shield of Faith'] })).toEqual({ isError: true, content: refusal });
+    expect(await h.run('update_character', { armor_class: 16, ac_spells_add: ['Mage Armor'], spell_slots_spend: [{ level: 1 }] })).toEqual({ isError: true, content: refusal });
+    expect(h.sheet()).toBe(start);
+    expect(h.s().log).toHaveLength(0);
+    // In two calls, the spells first: the DM's AC is final.
+    await h.run('update_character', { ac_spells_end: ['Shield of Faith'] });
+    await h.run('update_character', { armor_class: 14, reason: 'Haste from the bard' });
+    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Haste from the bard' });
+  });
+
+  it('says a spell "stays recorded" only while it is still recorded after the call (H3)', () => {
+    // The tool refuses armor_class beside ac_spells_end; the line itself reads the records after the call too.
+    const before = sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    const ended = sampleCharacter({ armorClass: 14, acFormula: 'set by the DM' });
+    const input = { armor_class: 16, ac_spells_end: ['Shield of Faith'] };
+    expect(acSpellLines(input, before, ended, ['Shield of Faith'], []).join('\n')).not.toContain('stays recorded');
+    expect(acSpellLines({ armor_class: 16 }, before, { ...ended, acFormula: 'set by the DM + Shield of Faith 2', acSpells: ['Shield of Faith'] }, ['Shield of Faith'], [])).toContain(
+      'Shield of Faith stays recorded, and this AC is taken to include it (ending it takes 2 off). If it has ended, use ac_spells_end.',
+    );
+  });
+
+  it('tells the DM how to count a name the app doesn\'t, by that name; Shield\'s +5 only for Shield (srd:spell:barkskin, srd:spell:shield)', async () => {
+    // srd:spell:barkskin: "the target has an Armor Class of 17 if its AC is lower than that" (Duration: 1 hour).
+    const h = setup();
+    const bark = await h.run('update_character', { ac_spells_add: ['Barkskin'] });
+    expect(bark.content).toContain('Count Barkskin yourself: for a lasting effect set armor_class and set it back when it ends.');
+    expect(bark.content).not.toContain('Count Shield yourself');
+    const both = await h.run('update_character', { ac_spells_add: ['Shield', 'barkskin'], ac_spells_end: ['Barkskin'] });
+    expect(both.content).toContain(
+      "Count Shield yourself: fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn; for another lasting effect (Haste, Barkskin) set armor_class and set it back when it ends.",
+    );
+    expect(both.content.match(/Count barkskin yourself|Count Barkskin yourself/g)).toEqual(['Count barkskin yourself']);
+    expect(both.content).not.toContain('Count Shield yourself: for a lasting effect');
+  });
+
+  it('takes a Shield of Faith recorded while the hero concentrates on it to be that casting, and says so (H4; srd:rule:concentration)', async () => {
+    const faithful = sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Shield of Faith' } });
+    const h = setup({ character: faithful });
+    const out = await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+    expect(out.content).toContain('Shield of Faith: AC 12 → 14');
+    expect(out.content).toContain("Mira Voss is concentrating on Shield of Faith, so the app takes this +2 to be that casting: it ends with Mira Voss's Concentration.");
+    expect(out.content).not.toContain("isn't concentrating on Shield of Faith");
+    // Not concentrating on it: the nudge instead.
+    const other = setup();
+    expect((await other.run('update_character', { ac_spells_add: ['Shield of Faith'] })).content).not.toContain('so the app takes this +2 to be that casting');
   });
 });

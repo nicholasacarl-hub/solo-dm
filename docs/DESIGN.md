@@ -106,7 +106,8 @@ Ring and Cloak of Protection, Bracers of Defense and a "+N" armor or shield by n
 DC it passes (extra damage goes in the damage roll's `expression`; a die such as Bless's is rolled first) and told to
 the player in a line; the order of truth says an item's own text (or a recorded ruling) beats a number the app worked
 out from it, and the player's inventory says the DM adds those bonuses, so nobody adds them twice. An AC the DM sets
-by hand (`armor_class`, for Mage Armor) gets the formula "set by the DM: <reason>" rather than keeping the old one's
+by hand (`armor_class`, for Haste or a homebrew effect; Mage Armor and Shield of Faith are `ac_spells_add`) gets the
+formula "set by the DM: <reason>" rather than keeping the old one's
 items, and a change in what every save includes is announced in the tool's result and in the player's equip and
 attune notices ("saving throws now include …"), since the frozen sheet's line dates from the start of the session.
 Those notices, and removing an item from the sheet (which keeps the AC in step as unequipping it would), end with
@@ -166,11 +167,11 @@ tool_result so Claude can correct itself.
 |---|---|
 | `roll_dice` | DM rolls (NPC attacks, damage, random tables, secret checks). `secret` hides it unless the campaign shows DM rolls. On a battle map, `attacker` and `target` add distance, reach, line of sight and cover, and warn when a melee attacker is out of reach. |
 | `request_player_roll` | Ask the player to roll a check/save/attack/damage/initiative/death save. Uses the sheet's modifiers; resolves per roll mode (auto / tap / physical). Returns total, natural, success vs DC. An unarmed strike by another name (`isUnarmedStrikeName`: "Kick", "Punch", a fist named alone such as "Bare Fists"; never a spell or weapon that names one, such as Arcane Hand's "Clenched Fist") rolls the engine's damage for it (`unarmedDamageExpression`: the sheet's Unarmed Strike, else 1 + STR, with a Monk's Martial Arts die and Dexterity). A roll with no dice (a flat 1 + STR) resolves without the dialog: nothing to roll, no die for Heroic Inspiration. |
-| `update_character` | Batched sheet changes: HP (damage/healing/temp), the HP maximum (`hp_max`, `hp.drain`, `hp_max_end`), conditions, exhaustion, slots, feature uses, inventory, currency, XP, inspiration, features, spells, concentration, AC/speed and the Initiative bonus (`initiative_change`). Returns a summary and warnings. |
+| `update_character` | Batched sheet changes: HP (damage/healing/temp), the HP maximum (`hp_max`, `hp.drain`, `hp_max_end`), conditions, exhaustion, slots, feature uses, inventory, currency, XP, inspiration, features, spells, concentration, AC/speed, AC from spells (`ac_spells_add`, `ac_spells_end`: Mage Armor and Shield of Faith) and the Initiative bonus (`initiative_change`). Returns a summary and warnings. |
 | `take_rest` | Short rest (player chooses hit dice in a dialog) or long rest; after a long rest the result says which classes may change prepared spells on the sheet. |
 | `level_up` | Apply a level (HP, hit dice, slots, proficiency, new features, always-prepared spells) and return reminders for choices, with the spell choices now open (the player makes them on the sheet). For an imported class or subclass the app adds that level's features with their text. |
 | `transform_character` | Begin, advance or end a **transformation** (vampirism, lycanthropy, a fey mark...): features, defenses, senses, speeds, size and ability changes applied atomically and recorded with what they granted, so ending one undoes exactly that. Enforces the campaign's transformations rule (see below). |
-| `start_combat` / `update_combat` / `end_combat` | Initiative tracker: add combatants (auto-numbered), roll NPC initiative, request the player's, advance turns, damage/heal/conditions on NPCs, end with a summary. AC, HP and initiative default to the stat block (SRD or reviewed import) when left out; `start_combat` can lay out a battle map (size, terrain, places, positions; size, speeds and reach default from the stat block); `update_combat` can `reveal` / `hide` creatures, and its `next_turn` result says where everyone stands. |
+| `start_combat` / `update_combat` / `end_combat` | Initiative tracker: add combatants (auto-numbered), roll NPC initiative, request the player's, advance turns, damage/heal/conditions on NPCs, end with a summary. AC, HP and initiative default to the stat block (SRD or reviewed import) when left out; `start_combat` can lay out a battle map (size, terrain, places, positions; size, speeds and reach default from the stat block); `update_combat` can `reveal` / `hide` creatures, its `concentrate` action records an NPC's or monster's Concentration (the app rolls its saves after damage and counts it down by round, as it counts the hero's), and its `next_turn` result says where everyone stands. |
 | `update_map` | Battle map: create, replace or remove it; add or clear terrain; open, close or lock doors; name places; set creatures' size, speeds and reach. |
 | `move_tokens` | Every position change on the map: moves on the creature's own turn (turn guard), off-turn moves, forced movement, teleports and placement. The engine prices the path (SRD grid rules), stops at Opportunity Attacks (asking the player in-tool when the hero can react), refuses illegal moves with the nearest reachable square, and records the turn's movement. |
 | `resolve_area` | Areas of effect (sphere, cylinder, cone, line, cube, emanation, listed squares): who is caught, with cover; lasting areas become terrain (difficult, obscured, hazard). |
@@ -321,6 +322,110 @@ Rest)"), which is what reminds the DM to end Aid or Heroes' Feast; the sheet's c
 text names lasting ones too. Without records nothing is printed, so the prompt and the sheet text of a hero without them
 are byte for byte as before. `initiative_change` adds to the Initiative bonus beyond Dexterity (a ruling, or an Alert the
 app didn't count), never sets a total, and keeps no record.
+
+**Spell effects.** The app ends what it can end exactly, in the same tool call as the trigger, and says so; what it can
+only guess at it names for the DM with the exact call, and prints nothing when nothing matches
+(src/engine/spellEffects.ts; the DM's lookups and lines in src/dm/tools/spellEffects.ts). *An NPC's or monster's
+Concentration* is `Combatant.concentration` (`update_combat` action `concentrate`, `spell` null to end it): one spell at
+a time (another ends the first, SRD Concentration), refused for a defeated creature, an Incapacitated one and a spell
+the rules data says needs no Concentration ("Shield doesn't require Concentration (Duration: 1 round)."; a spell the
+data doesn't know is never refused), and the same spell again is a recast that restarts its count. For the hero,
+`concentrate` only sets the rounds of the sheet's spell: the hero's Concentration is the sheet's, started and ended with
+`update_character concentration`, which refuses a spell that needs none in the same words and says where its effect goes
+(Mage Armor and Shield of Faith to `ac_spells_add`, Shield's +5 into the dc of attacks on the hero). The refusal looks
+the name up as given, so a namesake on the sheet never decides it for a name the data knows (Invisibility beside See
+Invisibility isn't refused; Shield beside Shield of Faith is), and only a name the data doesn't know is read as the
+sheet's spell it matches ("Armor" is refused as Mage Armor); the name it would be recorded under (below) is refused the
+same way, so "Armor" is refused beside the same call's `spells_add` of Mage Armor too. Both tools then read the DM's
+name by one rule (`heroConcentration`): it is the same spell as another name when the two agree without a trailing note
+("Hold Person (3rd level)", "Hold Person (scroll)" and "Hold Person"), when a sheet copy is linked to the entry the data
+finds for it, or when its words, without a trailing note, are within the other's and the data doesn't find two spells
+whose Concentration or duration differ ("Faith" is Shield of Faith, and a book's longer name for an SRD spell is that
+spell, named with a note or without, while Invisibility is neither See Invisibility nor Greater Invisibility). The same
+spell as the one held is a recast (nothing ends; in a fight its count restarts), unless the two names differ without
+their trailing notes, the sheet holds a spell of the given name, either name's note aside (a row the same call's
+`spells_remove` removes counts: a scroll read as it is removed), and the data finds the given name and the held spell as
+two entries (Polymorph, or "Polymorph (4th level)", beside a held True Polymorph switches; a scroll's "Hold Person
+(scroll)" beside a held Hold Person never does, whatever entries the data finds by link and by name); otherwise the
+spell is recorded under the sheet's own name for it (once the held spell ends, not under that one's), counting the
+spells the same call's `spells_add` adds and not those its `spells_remove` removes (so the Spells tab's toggle shows it,
+and a used-up scroll's copy isn't recorded), else under the data's name, as an NPC's is, else as given, and the engine
+takes that name as final (`setConcentration`'s `exact`, so "Invisibility" while holding Greater Invisibility ends it);
+the same call's `spells_remove` never ends the Concentration the call names. Whatever reads a recorded Concentration as
+a spell reads its name with a trailing note or without (`withoutNote`): a "Shield of Faith (scroll)" copy's +2 ends with
+it and `ac_spells_add` takes the +2 to be that casting, `ac_spells_add` and `ac_spells_end` read "Shield of Faith
+(scroll)" as Shield of Faith, and the areas, conditions and AC set by hand named when "Haste (scroll)" ends include
+those that name Haste. Without the rules data only names that agree without their notes count as one.
+`update_combat concentrate` on the hero accepts any name `update_character` reads as the sheet's spell. Damage to a
+concentrating NPC or monster rolls its Constitution save with the app's dice (DC 10 or half the damage, at most 30:
+`concentrationSaveDC`) before the one combat write, from the SRD stat block's save; reviewed imports and homebrew stat
+blocks carry no saves, so the DM is told to roll it with `roll_dice` and the purpose the app's own card uses, which
+keeps the spell out. A creature with Legendary Resistance (read from its stat block's text) is told a failure, never
+ended, since using one is the DM's choice. 0 HP and an Incapacitating condition end it; `defeat` and `remove` only note
+it (a creature that fled still concentrates). It is DM-only (SRD Targets: "a creature doesn't know it was targeted"): no
+player log line, tracker chip or map mark names the spell, the save card (logged as a save and read as one, vs DC with
+Success or Failure, whatever the creature is called; so is a `roll_dice` card without `is_attack` whose purpose names a
+save) is secret for a hidden creature or one whose HP are hidden, and an ally's visible card says "Constitution save to
+keep concentration" without the spell. *Durations* count rounds: `durationRounds` reads the SRD duration
+("Concentration, up to 1 minute" is 10 rounds, a round being about 6 seconds; a name with a trailing note, "Hold Person
+(3rd level)", is looked up without it, and an NPC's is recorded under the data's name), the DM's `rounds` overrides it,
+and the count is the caster's turn starts left, from round 2 (none counts down at a turn start in round 1, so a count
+given before the caster's first turn lasts that many of its turns whatever the initiative order); the spell ends at the
+start of the caster's turn when it reaches 0 (`concentrationTurnStart`, run on `next_turn` and on removing the current
+creature: the hero's ending is written to the sheet first, then the one combat write, with a visible log line after the
+turn line). The hero's count is `concentrationCountdown` on the hero's combatant, for the sheet's spell only:
+`update_character` starts it in full when the call starts or recasts the spell, else it starts at the hero's next turn
+start, in full in round 1 (a spell running when the fight starts ends at the hero's round-11 turn start, whatever the
+initiative order, as does one given 10 rounds then) and at the duration less one later; outside a fight nothing counts,
+and a saved count reads at most 14,400 rounds (a day). `start_combat` says what it counts for the sheet's spell, with
+the call that gives fewer rounds, or, for one the data says needs no Concentration (an older save's Mage Armor), the
+refusal and the call that ends it. `end_combat` ends the hero's spell with a minute or less left ("runs out after the
+fight") and names a longer one, and NPCs still concentrating, for the DM. When a spell ends in a DM tool's result, the
+DM is told which map areas share its name (with the `update_map effects_end` call, each label once; a label more than
+one area carries is flagged, since the call ends them all and any that isn't the spell's is placed again with
+`resolve_area` as a lasting area, rolling no saves for it; the app never removes one), which conditions name it in their
+source or duration (skipping those the same call added), a Shield of Faith on the hero another caster may have held, and
+an AC set by hand that may have counted it, with the AC to set back and the AC spells that number counts (not for a
+spell the hero holds a record of, nor for Mage Armor, which a Concentration never carries: an older save's Concentration
+on it, or an NPC's recorded without the rules data, ends nothing). For an NPC removed from the fight or still
+concentrating when it ends, the DM is told the conditions to remove, and the hero's Shield of Faith to end, when that
+spell ends. A sheet-side end (the toggle, the chip's ×, 0 HP, an Incapacitating condition, death by Exhaustion or by a
+Hit Point maximum of 0, lowered or when Aid ends) names the hero's own conditions that name the spell and adds one
+conditional `effects_end` clause for the spell's name without a trailing note, which says it ends every area of that
+name, since the sheet can't see the fight to tell the hero's area from another caster's (none for Shield of Faith or
+Mage Armor). *AC from spells* is `Character.acSpells` (Mage Armor, Shield of Faith; `ac_spells_add` / `ac_spells_end`,
+and the sheet's chips), counted inside `computeArmorClass`: Mage Armor is one more unarmored base (13 + DEX, never while
+armor is worn, and not ended by putting armor on: the DM ends it), Shield of Faith a +2 part after the items'.
+`armorClass` stays the AC in force, so every reader and older devices read one number, and the formula's whole ` + `
+parts ("Mage Armor: 13", "Shield of Faith 2") say which spells it counts. One rule in `syncArmorClass` handles every
+change: the spells' change in AC is worked out first, from the spells added and the ended ones the AC counted. A spell
+added that a hand-set formula already names in the DM's own words (an older save's "set by the DM: Shield of Faith and
+Haste") is taken to be in it while that AC is above what gear, features and the AC spells its formula counts gave, or
+the armor is unknown; one no higher is taken not to hold it, so the spell is added as below, and when that moves the AC
+the DM is warned how to set it back (naming the AC spells that baseline counts), since the DM's words may have counted
+the spell beside a penalty the app doesn't count (Slow). Taken to be in it, the AC becomes derived when the armor is
+known and the computed AC equals it, else it is kept, the spell's part is added and the DM is warned (with the computed
+AC when the armor is known). When the app takes a counted Shield of Faith off a formula whose DM words still name it, it
+leaves the part "Shield of Faith ended", so those words stop counting it: the next casting adds the +2 again and its end
+takes it off once. Unknown armor or a hand-set AC moves by the change (armor it can't identify, put on or renamed, keeps
+the counted parts, its own part giving the AC less their bonuses: "Elven Chain (stats unknown — AC kept at 16) + Shield
+of Faith 2" at 18); otherwise the reworded warning. A hand-set or unknown-armor formula drops "Mage Armor: 13" once Mage
+Armor's record ends or armor goes on; since no change in number takes a base out, when Mage Armor's end leaves a
+hand-set AC that counted it where it was and gear, features and the AC spells still recorded give that same number, the
+DM is warned to set it again if it still includes Mage Armor, in words that name a Shield of Faith that number counts
+(another number gets the kept-AC warning); one `ac_spells_end` ends the recorded spells first, Shield of Faith before
+Mage Armor, then answers a name with no record (its reminder worked out on the AC the ends leave), as a Long Rest does.
+`armor_class` sent with `ac_spells_add` or `ac_spells_end` is refused (the spells first, then the AC), and restating the
+AC kept for unknown armor keeps the counted parts. The hero's Shield of Faith ends with the hero's Concentration on
+every path (`afterConcentrationEnds`: 0 HP, death, an Incapacitating condition, another spell, removing the spell, a
+Long Rest, the countdown), except the sheet's spell swaps (at a level-up, after a Long Rest), which keep the
+Concentration and the record: SRD Concentration lists what ends it, and a swap isn't among them. A Long Rest ends both,
+Shield of Faith first (Mage Armor's 8 hours), and reminds once about an AC set by hand for an unrecorded Mage Armor. The
+concentration chip folds in only Shield of Faith, and its × and the Spells tab's Stop ask twice while it carries the +2
+(the Stop's label adds "not counted" when the AC doesn't count it, as the chip does). The status line reads "AC 17 (Mage
+Armor, Shield of Faith)" and the DM's combat view "Concentrating: Hold Person (7 rounds left)" / "Bless: 7 rounds left";
+the player's view adds nothing. Without records, prompts, `<game_state>`, summaries and the sheet text are byte for byte
+as before.
 
 **Spell choices at a level-up.** What a class may still choose is never stored: `owedSpells`
 (src/data/options/spellPicks.ts) works it out whenever it is read, from the class table and the sheet, the SRD's way
@@ -916,7 +1021,14 @@ byte-identical. The second, with Hit Point maximum adjustments: `update_characte
 with every request, so sessions whose frozen prompt never mentions them learn them too; the DM instructions are
 unchanged). Its schema grows to about 8,300 characters, so `update_character` alone may reach 8,500
 (`definitions.test.ts`). The cost is the first one's: each session in progress rewrites its cached prefix once and
-drops its earlier thinking blocks, never a 400.
+drops its earlier thinking blocks, never a 400. The third, with spell effects: `update_combat` gains the `concentrate`
+action with `spell` and `rounds` (an NPC's or monster's Concentration, which the app counts down, saves for and ends),
+`update_character` gains `ac_spells_add` and `ac_spells_end` (Mage Armor and Shield of Faith), the `armor_class`,
+`concentration` and condition `source` describes change, and the `update_combat` and `update_character` descriptions
+say how both work (sessions whose frozen prompt never mentions them learn them there; new sessions' DM instructions
+also gain a sentence in the Concentration and Bonuses lines). `update_character`'s schema grows to about 8,660 characters, so it alone
+may reach 8,750 (`definitions.test.ts`). The cost is the first one's: each session in progress rewrites its cached
+prefix once and drops its earlier thinking blocks, never a 400.
 
 **Provenance, export redaction, restore.** Every copy of book text onto a character (features, traits,
 lineages, feats, a background's feature; the DM's words about an imported entry) carries an
@@ -980,8 +1092,9 @@ Invariants, checked in CI (the definition of done):
   and said aloud, and the Dying line's stabilization by another creature (`update_character` conditions_add "Stable",
   then 1 HP after 1d4 hours); and the Saving throws line names what every save includes (a Ring or Cloak of Protection, Aura of
   Protection), so those sheets and the prompt differ.
-- **Deliberate `DM_TOOLS` changes** only (above: this release's, and the Hit Point maximum adjustments' since), each
-  reviewed with its cost; otherwise `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json` (25 tools, same order).
+- **Deliberate `DM_TOOLS` changes** only (above: this release's, and the Hit Point maximum adjustments' and spell
+  effects' since), each reviewed with its cost; otherwise `DM_TOOLS` equals `src/dm/tools/__snapshots__/dm-tools.json`
+  (25 tools, same order).
 - **Privacy.** No marker sentence of the test book appears in any exported bundle (the e2e test). Every
   copy of book text onto a character carries an `ImportedRef`; exports replace that text with a
   placeholder, and a device that has the book fills it back in.

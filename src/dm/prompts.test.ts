@@ -132,13 +132,18 @@ describe('buildSystemPrompt', () => {
       'not a death saving throw: its DC stays 10',
       "or a monster's against the hero's spell",
       'roll a die the hero adds (Bless) first, with request_player_roll roll_type "custom", and lower the dc by it',
-      'set armor_class for a lasting change (Mage Armor)',
+      // srd:spell:mage-armor and srd:spell:shield-of-faith are counted by the app; srd:spell:shield's +5 stays the DM's.
+      // D13: exact about what the app ends (srd:spell:shield-of-faith "Concentration, up to 10 minutes"; srd:spell:mage-armor
+      // "Duration: 8 hours", over by a Long Rest's end) and what the DM ends (another caster's Shield of Faith).
+      "Mage Armor and Shield of Faith: record them with update_character ac_spells_add (the app applies them, and ends the hero's own Shield of Faith with the hero's Concentration and Mage Armor at a Long Rest; end another caster's Shield of Faith with ac_spells_end); fold Shield's +5 into the dc; set armor_class for other lasting changes.",
       'without giving away a hidden DC or AC',
       'get_entry',
     ]) {
       expect(bonuses, phrase).toContain(phrase);
     }
     expect(DM_INSTRUCTIONS).not.toContain('- Magic items:');
+    expect(bonuses).not.toContain('set armor_class for a lasting change (Mage Armor)');
+    expect(bonuses).not.toContain('the app applies and ends them');
     // The order of truth and table talk leave a number the app worked out to the text it came from.
     expect(DM_INSTRUCTIONS).toContain("When sources disagree, the earlier one wins, except that a rule's, feature's or item's own text, or a ruling you recorded, beats a number the app worked out from it (see Bonuses).");
     expect(section(DM_INSTRUCTIONS, '## Table talk')).toContain('A number the app worked out is different: if they point to a condition it missed');
@@ -158,6 +163,25 @@ describe('buildSystemPrompt', () => {
     );
     expect(advantage).toContain("A Blinded or Deafened hero's sight or hearing checks are only noted after the roll: call those failed without rolling.");
     expect(advantage).not.toMatch(/already applies their own conditions, armor and traits/);
+  });
+
+  it("has NPCs' Concentration recorded, so the app rolls their saves and counts durations (srd:rule:concentration)", () => {
+    const concentration = section(DM_INSTRUCTIONS, '## 2024 rules reminders').split('\n').find((line) => line.startsWith('- Concentration:')) ?? '';
+    expect(concentration).toBe(
+      "- Concentration: one spell at a time. Taking damage requires a Constitution saving throw against DC 10 or half the damage taken (round down), whichever is higher, up to DC 30. Record an NPC's or monster's with update_combat concentrate: the app rolls their saves and counts durations.",
+    );
+  });
+
+  it("freezes an NPC's Concentration and the hero's countdown into \"Combat in progress\" (the DM's view)", () => {
+    const combat = sampleCombat();
+    combat.combatants[0] = { ...combat.combatants[0], concentrationCountdown: { spell: 'Bless', roundsLeft: 7 } };
+    combat.combatants[1] = { ...combat.combatants[1], concentration: { spell: 'Hold Person', roundsLeft: 4 } };
+    const blessing = sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Bless' } });
+    const fight = section(buildSystemPrompt(input({ character: blessing, combat })), '## Combat in progress');
+    expect(fight).toContain('Mira Voss · AC 12 · Bless: 7 rounds left');
+    expect(fight).toContain('Bandit 1 · HP 4/11 · Concentrating: Hold Person (4 rounds left)');
+    // Without the records the section is as before.
+    expect(section(buildSystemPrompt(input({ combat: sampleCombat() })), '## Combat in progress')).not.toContain('Concentrating');
   });
 
   it('has the DM mark a hero another creature stabilized, so the saves stop (SRD 5.2.1 Stabilizing a Character)', () => {

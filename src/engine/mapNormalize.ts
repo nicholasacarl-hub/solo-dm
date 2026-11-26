@@ -496,6 +496,40 @@ function mapFields(raw: Raw, dims: Dims | null): Partial<Combatant> {
   return fields;
 }
 
+/** The most of a spell's name a Concentration record keeps. */
+const SPELL_NAME_MAX = 80;
+
+/** The most rounds a countdown keeps: a day (14,400 rounds), the DM tools' cap on update_combat's `rounds`. */
+const ROUNDS_MAX = 14_400;
+
+/** A positive whole number of rounds, at most ROUNDS_MAX (a hand-edited 1e21 still counts down), or undefined. */
+function roundsLeftOf(value: unknown): number | undefined {
+  return isFiniteNumber(value) && Number.isInteger(value) && value > 0 ? Math.min(value, ROUNDS_MAX) : undefined;
+}
+
+/**
+ * The Concentration fields of one combatant: `concentration` on NPCs and monsters only (the spell as trimmed text of
+ * 1–80 characters, else no record; `roundsLeft` a positive integer, at most 14,400, else left out),
+ * `concentrationCountdown` on the hero only (isPlayer), with both its fields, else left out.
+ */
+function concentrationFields(raw: Raw): Partial<Combatant> {
+  const fields: Partial<Combatant> = {};
+  if (raw.isPlayer === true) {
+    const countdown = isRecord(raw.concentrationCountdown) ? raw.concentrationCountdown : null;
+    const spell = countdown ? text(countdown.spell, SPELL_NAME_MAX) : undefined;
+    const roundsLeft = countdown ? roundsLeftOf(countdown.roundsLeft) : undefined;
+    if (spell && roundsLeft !== undefined) fields.concentrationCountdown = { spell, roundsLeft };
+    return fields;
+  }
+  const held = isRecord(raw.concentration) ? raw.concentration : null;
+  const spell = held ? text(held.spell, SPELL_NAME_MAX) : undefined;
+  if (held && spell) {
+    const roundsLeft = roundsLeftOf(held.roundsLeft);
+    fields.concentration = roundsLeft === undefined ? { spell } : { spell, roundsLeft };
+  }
+  return fields;
+}
+
 function combatant(raw: Raw & { id: string }, dims: Dims | null): Combatant {
   const {
     position: _position,
@@ -506,6 +540,8 @@ function combatant(raw: Raw & { id: string }, dims: Dims | null): Combatant {
     speedChangeFt: _speedChange,
     hidden: _hidden,
     reactionUsed: _reaction,
+    concentration: _concentration,
+    concentrationCountdown: _countdown,
     ...rest
   } = raw;
   // The other fields (side, HP, AC, notes…) pass through as before; conditions must be a list (the tracker maps it).
@@ -514,6 +550,7 @@ function combatant(raw: Raw & { id: string }, dims: Dims | null): Combatant {
     name: typeof raw.name === 'string' ? raw.name : 'Unnamed',
     conditions: conditions(raw.conditions),
     ...mapFields(raw, dims),
+    ...concentrationFields(raw),
   };
 }
 
@@ -525,7 +562,8 @@ function hasId(value: unknown): value is Raw & { id: string } {
  * A CombatState from a stored row or an import: copies the known fields; per combatant keeps `position` only as
  * integer {x, y} inside the map, `elevationFt` 0–500 (multiple of 5), `size` in CREATURE_SIZES, `speeds` with
  * non-negative integer fields and a boolean `hover`, `reachFt` 5–60, `speedChangeFt` −120–120, boolean `hidden` /
- * `reactionUsed`, and `conditions` as an array; drops every `position` when the map is missing;
+ * `reactionUsed`, `concentration` only on non-player combatants and `concentrationCountdown` only on the hero (see
+ * concentrationFields), and `conditions` as an array; drops every `position` when the map is missing;
  * `map: normalizeBattleMap(raw.map, ids)`. Never throws. Idempotent.
  */
 export function normalizeCombatState(raw: unknown): CombatState {

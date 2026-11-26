@@ -34,7 +34,7 @@ import { clipRect, cornerLabel, footprint, rectInBounds, rectsOverlap, sizeSquar
 import { CELL, combatantSize, mapCells, occupants, type MapCells, type Occupant } from './mapCells';
 import { areHostile, currentTurn, inReach, moverStats, teamOf, turnBudget, type MoverStats, type TurnBudget } from './movement';
 import { coverAgainst, lineOfSight, type CoverResult } from './sight';
-import { toInt } from './util';
+import { containsPhrase, phraseWords, toInt } from './util';
 
 // ---------------------------------------------------------------------------
 // Small helpers
@@ -955,26 +955,13 @@ const viewMemo = new WeakMap<CombatState, CombatState>();
 /** What the player sees for an effect label that names a hidden creature: what an unlabelled area is called. */
 const NEUTRAL_EFFECT_LABEL = 'Area';
 
-/** Lower-case words of a name or a label ("Cutthroat's smoke" → cutthroat, s, smoke). */
-function nameWords(text: string): string[] {
-  return text.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-}
-
-/** Does the word list `label` contain `phrase` as a run of whole words (its last word also as a plural)? */
-function containsPhrase(label: readonly string[], phrase: readonly string[]): boolean {
-  const last = phrase.length - 1;
-  const same = (word: string, w: string, j: number) => word === w || (j === last && (word === `${w}s` || word === `${w}es`));
-  for (let i = 0; i + phrase.length <= label.length; i++) if (phrase.every((w, j) => same(label[i + j], w, j))) return true;
-  return false;
-}
-
 /**
  * The words that single out a hidden creature in DM text: its name, its name without the number duplicates get
  * ("Goblin 2" → "Goblin") and its stat block name — except words a visible creature also answers to (they say
  * nothing the player doesn't know).
  */
 function hiddenNamePhrases(state: CombatState): string[][] {
-  const phrasesOf = (c: Combatant) => [c.name, c.name.replace(/\s+\d+$/, ''), c.statBlockName ?? ''].map(nameWords).filter((w) => w.length > 0);
+  const phrasesOf = (c: Combatant) => [c.name, c.name.replace(/\s+\d+$/, ''), c.statBlockName ?? ''].map(phraseWords).filter((w) => w.length > 0);
   const visible = new Set(state.combatants.filter((c) => !c.hidden).flatMap(phrasesOf).map((w) => w.join(' ')));
   const out = new Map<string, string[]>();
   for (const c of state.combatants) {
@@ -986,7 +973,7 @@ function hiddenNamePhrases(state: CombatState): string[][] {
 
 function shownLabel(label: string, phrases: readonly string[][]): string {
   if (phrases.length === 0) return label;
-  const words = nameWords(label);
+  const words = phraseWords(label);
   return phrases.some((p) => containsPhrase(words, p)) ? NEUTRAL_EFFECT_LABEL : label;
 }
 

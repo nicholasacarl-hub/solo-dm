@@ -155,6 +155,10 @@ export interface HpMaxAdjustment {
   ends: HpMaxEnds;
 }
 
+/** Spells whose AC the app works out (srd:spell:mage-armor, srd:spell:shield-of-faith). */
+export const AC_SPELL_NAMES = ['Mage Armor', 'Shield of Faith'] as const;
+export type AcSpellName = (typeof AC_SPELL_NAMES)[number];
+
 export interface HitDiceEntry {
   die: HitDie;
   total: number;
@@ -468,6 +472,8 @@ export interface Character {
   armorClass: number;
   /** Human-readable note such as "Chain mail 16 + Shield 2". */
   acFormula?: string;
+  /** Spells on the hero whose AC the app counts (absent when none). armorClass includes those the formula uses. */
+  acSpells?: AcSpellName[];
   /** Walking speed in feet (before exhaustion penalties). */
   speed: number;
   otherSpeeds?: Partial<Record<OtherSpeed, number>>;

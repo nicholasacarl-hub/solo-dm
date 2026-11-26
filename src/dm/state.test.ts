@@ -48,6 +48,20 @@ describe('buildGameState', () => {
     expect(buildGameState(input({ combat: sampleCombat() }))).toMatch(/Combat:\nRound 2/);
   });
 
+  it("shows the DM an NPC's Concentration and the countdown of the hero's own spell, and nothing new without them", () => {
+    const combat = sampleCombat();
+    combat.combatants[0] = { ...combat.combatants[0], concentrationCountdown: { spell: 'Bless', roundsLeft: 7 } };
+    combat.combatants[2] = { ...combat.combatants[2], concentration: { spell: 'Web', roundsLeft: 593 } };
+    const blessing = sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Bless' } });
+    const block = buildGameState(input({ character: blessing, combat }));
+    expect(block).toContain('  17 Mira Voss · AC 12 · Bless: 7 rounds left\n');
+    expect(block).toContain('Bandit 2 · HP 11/11 · Concentrating: Web (about 60 minutes left)');
+    // A countdown for a spell the sheet no longer holds (a reload between the two writes) shows nothing.
+    const moved = buildGameState(input({ character: sampleCharacter(), combat }));
+    expect(moved).toContain('  17 Mira Voss · AC 12\n');
+    expect(buildGameState(input({ combat: sampleCombat() }))).not.toContain('Concentrating');
+  });
+
   it("gives the hero's AC in the combat summary from the sheet, not the tracker's copy from the start of the fight", () => {
     // The fight's copy of the hero says AC 12; armor_class 15 (Mage Armor) changed the sheet mid-fight.
     const block = buildGameState(input({ character: sampleCharacter({ armorClass: 15 }), combat: sampleCombat() }));

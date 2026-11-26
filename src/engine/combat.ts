@@ -8,6 +8,7 @@ import type { Combatant, CombatState, GameEvent, HitPoints } from '@/types';
 import { nameKey } from '@/lib/id';
 import { playerTurnIndex } from './battleMap';
 import { conditionDetails, conditionName } from './conditions';
+import { roundsLeftText } from './spellEffects';
 import { gameEvent, matchByName, toInt, warning } from './util';
 
 function compareCombatants(a: Combatant, b: Combatant): number {
@@ -234,15 +235,34 @@ function conditionText(c: Combatant, forPlayer: boolean): string {
   return c.conditions.map((x) => `${conditionName(x.id)}${x.level ? ` ${x.level}` : ''}${forPlayer ? '' : conditionDetails(x)}`).join(', ');
 }
 
-function combatantLine(c: Combatant, position: number, current: boolean, forPlayer: boolean, heroAc: number | undefined): string {
+/**
+ * The DM's view of a spell's time: an NPC's Concentration ("Concentrating: Hold Person (7 rounds left)"), or the
+ * hero's countdown when it is for the sheet's spell ("Bless: 7 rounds left"; her status line already says
+ * Concentrating). Never in the player's view: a creature doesn't know it was targeted by a spell with no perceptible
+ * effect (srd:rule:casting-spells-effects-targets).
+ */
+function concentrationText(c: Combatant, heroConcentration: string | null | undefined): string | null {
+  if (!c.isPlayer) {
+    const held = c.concentration;
+    if (!held) return null;
+    return `Concentrating: ${held.spell}${held.roundsLeft !== undefined ? ` (${roundsLeftText(held.roundsLeft)})` : ''}`;
+  }
+  const countdown = c.concentrationCountdown;
+  if (!countdown || !heroConcentration?.trim() || nameKey(countdown.spell) !== nameKey(heroConcentration)) return null;
+  return `${heroConcentration.trim()}: ${roundsLeftText(countdown.roundsLeft)}`;
+}
+
+function combatantLine(c: Combatant, position: number, current: boolean, forPlayer: boolean, opts: SummaryOptions): string {
   const bits = [`Init ${c.initiative}`];
   // The hero's AC is the sheet's: the copy start_combat stored goes stale when a spell or a shield changes it mid-fight.
-  const ac = c.isPlayer ? heroAc : c.ac;
+  const ac = c.isPlayer ? opts.heroAc : c.ac;
   // A creature whose HP the DM hides keeps its AC hidden from the player too.
   if (ac !== undefined && !(forPlayer && c.hideHp && !c.isPlayer)) bits.push(`AC ${ac}`);
   if (c.hp) bits.push(hpText(c, c.hp, forPlayer));
   const conditions = conditionText(c, forPlayer);
   if (conditions) bits.push(conditions);
+  const concentration = forPlayer ? null : concentrationText(c, opts.heroConcentration);
+  if (concentration) bits.push(concentration);
   if (c.defeated) bits.push('defeated');
   // The stat block behind a name is DM knowledge (a "Hooded Stranger" may be a Vampire Spawn).
   const showKind = !forPlayer && c.statBlockName && nameKey(c.statBlockName) !== nameKey(c.name.replace(/\s+\d+$/, ''));
@@ -253,15 +273,26 @@ function combatantLine(c: Combatant, position: number, current: boolean, forPlay
   return `${current ? '→' : ' '} ${position}. ${c.name} (${sideLabel(c, forPlayer)})${hidden}${kind} · ${bits.join(' · ')}${notes}`;
 }
 
+export interface SummaryOptions {
+  /** The player's view (see summarizeCombat). */
+  forPlayer?: boolean;
+  /** The hero's AC from the sheet (character.armorClass); without it the hero's line shows no AC. */
+  heroAc?: number;
+  /** The sheet's Concentration (Spellcasting.concentratingOn): the DM's view shows its countdown on the hero's line. */
+  heroConcentration?: string | null;
+}
+
 /**
  * Text summary of the tracker: round, turn order with initiative, HP, AC, conditions.
  * forPlayer = true is safe to show the player: no stat block names or DM notes, for hideHp
- * combatants a health descriptor instead of exact HP and no AC, no conditions' durations or sources, and no hidden
- * combatants at all — during a hidden creature's turn the last visible creature before it reads as current (D42).
- * The DM's view tags hidden combatants "[hidden]".
+ * combatants a health descriptor instead of exact HP and no AC, no conditions' durations or sources, no Concentration,
+ * and no hidden combatants at all — during a hidden creature's turn the last visible creature before it reads as
+ * current (D42).
+ * The DM's view tags hidden combatants "[hidden]", and shows an NPC's Concentration ("Concentrating: Hold Person (7
+ * rounds left)") and the countdown of the hero's ("Bless: 7 rounds left", with heroConcentration).
  * heroAc is the hero's AC from the sheet (character.armorClass); without it the hero's line shows no AC.
  */
-export function summarizeCombat(state: CombatState, opts: { forPlayer?: boolean; heroAc?: number } = {}): string {
+export function summarizeCombat(state: CombatState, opts: SummaryOptions = {}): string {
   if (!state.active) return `Combat ended${state.encounterName ? `: ${state.encounterName}` : ''}.`;
   const forPlayer = !!opts.forPlayer;
   let current = currentCombatant(state);
@@ -272,6 +303,6 @@ export function summarizeCombat(state: CombatState, opts: { forPlayer?: boolean;
   }
   const header = `Combat${state.encounterName ? `: ${state.encounterName}` : ''} — round ${state.round}${current ? `, ${current.name}'s turn` : ''}`;
   const shown = state.combatants.map((c, i) => ({ c, i })).filter(({ c }) => !(forPlayer && c.hidden));
-  const lines = shown.map(({ c, i }, n) => combatantLine(c, n + 1, i === currentIndex, forPlayer, opts.heroAc));
+  const lines = shown.map(({ c, i }, n) => combatantLine(c, n + 1, i === currentIndex, forPlayer, opts));
   return [header, ...lines].join('\n');
 }

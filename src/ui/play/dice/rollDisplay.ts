@@ -19,8 +19,12 @@ export const TONE_TEXT: Record<OutcomeTone, string> = {
   neutral: 'text-accent',
 };
 
+/**
+ * A roll logged without its kind, read from its purpose: "Goblin attack" is an attack, but a purpose that names a save
+ * or saving throw never is, whatever the creature is called ("Attack Dog's Constitution save to keep concentration").
+ */
 export function isAttackPurpose(purpose: string): boolean {
-  return /\battack/i.test(purpose);
+  return /\battack/i.test(purpose) && !/\bsav(e|es|ing throws?)\b/i.test(purpose);
 }
 
 /** Attack rolls are compared against AC; everything else against a DC. */

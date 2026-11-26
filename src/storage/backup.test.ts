@@ -234,6 +234,43 @@ describe('importCampaignBundle', () => {
     expect((await loadCampaignRecords('a-camp'))?.combat).toEqual(graph.combat);
   });
 
+  // srd:spell:mage-armor, srd:spell:shield-of-faith (Character.acSpells); srd:rule:concentration (an NPC's spell and the
+  // hero's countdown on the fight's combatants).
+  it('round-trips the AC spells on the sheet and the Concentration records in a fight: they come back equal', async () => {
+    const graph = campaignGraph('a', {
+      character: { acSpells: ['Mage Armor', 'Shield of Faith'], armorClass: 17, acFormula: 'Mage Armor: 13 + DEX 2 + Shield of Faith 2' },
+    });
+    const fight = graph.combat as CombatState;
+    const saved: CampaignData = {
+      ...graph,
+      combat: {
+        ...fight,
+        combatants: fight.combatants.map((c) =>
+          c.isPlayer
+            ? { ...c, concentrationCountdown: { spell: 'Shield of Faith', roundsLeft: 87 } }
+            : c.id === 'c-2'
+              ? { ...c, concentration: { spell: 'Hold Person', roundsLeft: 7 } }
+              : c.id === 'c-4'
+                ? { ...c, concentration: { spell: 'Spirit Guardians' } }
+                : c,
+        ),
+      },
+    };
+    await writeCampaignData(saved);
+    const bundle = parseCampaignBundle(roundTrip(await exportCampaignBundle('a-camp')));
+    expect(bundle.character?.acSpells).toEqual(['Mage Armor', 'Shield of Faith']);
+    expect(bundle.combat).toEqual(saved.combat);
+    // Played on after the backup: Shield of Faith ended, the fight moved on.
+    await db.characters.update('a-char', { acSpells: ['Mage Armor'], armorClass: 15 });
+    await db.combat.put({ campaignId: 'a-camp', state: { ...fight, round: 9 } });
+
+    await importCampaignBundle(bundle, 'replace');
+
+    const { exportedAt: _e, format: _f, version: _v, ...data } = await exportCampaignBundle('a-camp');
+    expect(data).toEqual(saved);
+    expect((await loadCampaignRecords('a-camp'))?.combat).toEqual(saved.combat);
+  });
+
   it('imports a mapped fight as a copy with every map reference intact (combatant ids are kept)', async () => {
     const graph = mappedGraph('a');
     await writeCampaignData(graph);
@@ -517,6 +554,46 @@ describe('parseCampaignBundle', () => {
     expect(read('Aid +5')?.hpMaxAdjustments).toBeUndefined();
     // An old save gains no such key.
     expect(parseCampaignBundle(data).character).not.toHaveProperty('hpMaxAdjustments');
+  });
+
+  it('reads the AC spells on the sheet in their stored form, leaving out a name the app does not count', () => {
+    const data = valid();
+    const read = (acSpells: unknown) => parseCampaignBundle({ ...data, character: { ...(data.character as object), acSpells } }).character;
+    expect(read(['Mage Armor', 'Shield of Faith'])?.acSpells).toEqual(['Mage Armor', 'Shield of Faith']);
+    // Each once, in the app's order; a name it doesn't count (a later version's, a hand edit) is left out, never the file.
+    expect(read(['Shield of Faith', 'Barkskin', 3, { name: 'Haste' }, 'Mage Armor', 'Shield of Faith'])?.acSpells).toEqual(['Mage Armor', 'Shield of Faith']);
+    // Nothing it counts, or no list at all: no key, as the engine writes it; an old save gains none.
+    for (const odd of [['Barkskin'], [], 'Mage Armor', null]) expect(read(odd), JSON.stringify(odd)).not.toHaveProperty('acSpells');
+    expect(parseCampaignBundle(data).character).not.toHaveProperty('acSpells');
+  });
+
+  it("reads a fight's Concentration records through the shared normalizer: an NPC's spell, the hero's countdown", () => {
+    const data = valid();
+    const combat = data.combat as Record<string, unknown> & { combatants: Record<string, unknown>[] };
+    const [mira, bandit1, bandit2, tam] = combat.combatants;
+    const parsed = parseCampaignBundle({
+      ...data,
+      combat: {
+        ...combat,
+        combatants: [
+          // The hero's Concentration is the sheet's: a record of her own is dropped, her countdown kept.
+          { ...mira, concentration: { spell: 'Bless' }, concentrationCountdown: { spell: 'Bless', roundsLeft: 7 } },
+          { ...bandit1, concentration: { spell: 'Hold Person', roundsLeft: 7 } },
+          // A countdown is the hero's only; an odd count is left out, the spell kept.
+          { ...bandit2, concentration: { spell: 'Hold Person', roundsLeft: 2.5 }, concentrationCountdown: { spell: 'Hold Person', roundsLeft: 3 } },
+          { ...tam, concentration: { spell: '' } },
+        ],
+      },
+    }).combat;
+    const [hero, holder, other, ally] = parsed?.combatants ?? [];
+    expect(hero).toMatchObject({ concentrationCountdown: { spell: 'Bless', roundsLeft: 7 } });
+    expect(hero).not.toHaveProperty('concentration');
+    expect(holder.concentration).toEqual({ spell: 'Hold Person', roundsLeft: 7 });
+    expect(other.concentration).toEqual({ spell: 'Hold Person' });
+    expect(other).not.toHaveProperty('concentrationCountdown');
+    expect(ally).not.toHaveProperty('concentration');
+    // A fight without them reads as before.
+    expect(parseCampaignBundle(data).combat).toEqual(campaignGraph('a').combat);
   });
 
   it("reads a class's open spell choices, setting aside what it cannot read", () => {

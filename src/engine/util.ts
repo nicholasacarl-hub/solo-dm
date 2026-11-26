@@ -1,5 +1,6 @@
 /**
- * Small helpers shared by the engine modules (not part of the public engine API).
+ * Small helpers shared by the engine modules (not part of the public engine API, except withoutNote, which index.ts
+ * exports so the DM tools read a noted name by the engine's one rule).
  */
 import type { GameEvent, GameEventType } from '@/types';
 import { nameKey } from '@/lib/id';
@@ -36,6 +37,47 @@ export function formatInt(n: number): string {
 export function listJoin(items: readonly string[]): string {
   if (items.length <= 1) return items.join('');
   return `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`;
+}
+
+/** Lower-case words of a name or a label ("Cutthroat's smoke" → cutthroat, s, smoke). */
+export function phraseWords(text: string): string[] {
+  return text.normalize('NFKC').toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/** Does the word list `label` contain `phrase` as a run of whole words (its last word also as a plural)? */
+export function containsPhrase(label: readonly string[], phrase: readonly string[]): boolean {
+  if (phrase.length === 0) return false;
+  const last = phrase.length - 1;
+  const same = (word: string, w: string, j: number) => word === w || (j === last && (word === `${w}s` || word === `${w}es`));
+  for (let i = 0; i + phrase.length <= label.length; i++) if (phrase.every((w, j) => same(label[i + j], w, j))) return true;
+  return false;
+}
+
+/** Does `text` name `name` as whole words, case-insensitively ("Hold Person (Cultist Fanatic)" names Hold Person; "Webs" names Web)? */
+export function namesPhrase(text: unknown, name: string): boolean {
+  return typeof text === 'string' && typeof name === 'string' && containsPhrase(phraseWords(text), phraseWords(name));
+}
+
+/** A name's one trailing parenthetical, as stat blocks, DMs and sheet copies write it: "Hold Person (3rd level)". */
+const NOTED = /^(.*\S)\s*\([^()]*\)\s*$/;
+
+/**
+ * A name less its one trailing parenthetical note: "Hold Person (3rd level)" and a sheet copy's "Hold Person (scroll)"
+ * are "Hold Person". A name with none, or that is only a parenthetical ("(scroll)"), is returned as it is.
+ */
+export function withoutNote(name: string): string {
+  return (typeof name === 'string' && NOTED.exec(name)?.[1]) || name;
+}
+
+/**
+ * Does `text` name `spell` as whole words (namesPhrase), or name it without its trailing note (withoutNote)? A
+ * Concentration recorded under a sheet copy's "Haste (scroll)" is named by "set by the DM: Haste", and one on "Hold
+ * Person (scroll)" by a condition sourced "Hold Person".
+ */
+export function namesSpell(text: unknown, spell: string): boolean {
+  if (namesPhrase(text, spell)) return true;
+  const bare = withoutNote(spell);
+  return bare !== spell && namesPhrase(text, bare);
 }
 
 // ---------------------------------------------------------------------------

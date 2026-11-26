@@ -13,6 +13,7 @@ import {
   attackBonus,
   attackDamageExpression,
   characterLevel,
+  countedAcSpells,
   eldritchBlastBeams,
   exhaustionLevel,
   formatModifier,
@@ -157,7 +158,8 @@ function conditionsText(c: Character): string | null {
 /**
  * One- or two-line status, e.g.
  * "Mira (Wizard 3) · HP 14/20 (+5 temp) · AC 12 · Slots 1st 2/4, 2nd 1/2 · Hit Dice 2/3 d6 ·
- *  Conditions: Poisoned · Exhaustion 1 · Concentrating: Fly · Inspiration"
+ *  Conditions: Poisoned · Exhaustion 1 · Concentrating: Fly · Inspiration"; with AC spells counted, "AC 17 (Mage Armor,
+ *  Shield of Faith)"
  */
 export function characterStatusLine(c: Character): string {
   const parts = [`${c.name.trim() || 'Unnamed hero'} (${classText(c)})`, hpText(c)];
@@ -166,7 +168,9 @@ export function characterStatusLine(c: Character): string {
   // Effects that end (no game clock): this line is what reminds the DM to end Aid or Heroes' Feast. Lasting ones are in the sheet.
   const effects = hpMaxAdjustments(c).filter((a) => a.ends !== 'never');
   if (effects.length) parts.push(`HP max includes ${effects.map(hpMaxAdjustmentLabel).join(', ')}`);
-  parts.push(`AC ${c.armorClass}`);
+  // The spells the AC counts ("AC 17 (Mage Armor, Shield of Faith)"): what the DM must not count again.
+  const inAc = countedAcSpells(c);
+  parts.push(`AC ${c.armorClass}${inAc.length ? ` (${inAc.join(', ')})` : ''}`);
   const speed = speedDetails(c);
   if (speed.speed !== speed.base) parts.push(`Speed ${speed.speed} ft`);
   const slots = slotsText(c);

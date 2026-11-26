@@ -17,3 +17,5 @@ export * from './sight';
 export * from './areas';
 export * from './battleMap';
 export * from './mapNormalize';
+export * from './spellEffects';
+export { withoutNote } from './util';

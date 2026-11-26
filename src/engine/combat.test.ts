@@ -217,6 +217,44 @@ describe('summarizeCombat', () => {
   });
 });
 
+describe('summarizeCombat and Concentration (srd:rule:concentration; srd:rule:casting-spells-effects-targets)', () => {
+  const concentrating = (): CombatState => {
+    const state = sampleCombat();
+    state.combatants[0] = { ...state.combatants[0], concentrationCountdown: { spell: 'Bless', roundsLeft: 7 } };
+    state.combatants[1] = { ...state.combatants[1], concentration: { spell: 'Hold Person', roundsLeft: 7 } };
+    state.combatants[2] = { ...state.combatants[2], concentration: { spell: 'Zyxwvut Glamour' } };
+    state.combatants[3] = { ...state.combatants[3], concentration: { spell: 'Spirit Guardians', roundsLeft: 85 } };
+    return state;
+  };
+
+  it("gives the DM each NPC's Concentration with what is left, and the countdown of the hero's", () => {
+    const dm = summarizeCombat(concentrating(), { heroAc: 12, heroConcentration: 'Bless' }).split('\n');
+    expect(dm).toEqual([
+      "Combat: Ambush on the docks — round 2, Bandit 1's turn",
+      '  1. Mira Voss (PC) · Init 17 · AC 12 · Bless: 7 rounds left',
+      '→ 2. Bandit 1 (enemy) · Init 14 · AC 12 · HP 4/11 · Concentrating: Hold Person (7 rounds left)',
+      '  3. Bandit 2 (enemy) · Init 9 · AC 12 · HP 11/11 · Prone · Concentrating: Zyxwvut Glamour',
+      '  4. Old Tam (ally) · Init 5 · AC 11 · HP 9/9 · Concentrating: Spirit Guardians (about 9 minutes left)',
+    ]);
+    // The hero's countdown shows only while it is for the sheet's Concentration (her status line says Concentrating).
+    for (const heroConcentration of [null, undefined, 'Haste']) {
+      expect(summarizeCombat(concentrating(), { heroAc: 12, heroConcentration }).split('\n')[1]).toBe('  1. Mira Voss (PC) · Init 17 · AC 12');
+    }
+    expect(summarizeCombat(concentrating(), { heroAc: 12, heroConcentration: 'bless' }).split('\n')[1]).toBe('  1. Mira Voss (PC) · Init 17 · AC 12 · bless: 7 rounds left');
+    // A defeated caster keeps its spell (the DM decides whether it fell or fled).
+    const fled = concentrating();
+    fled.combatants[1] = { ...fled.combatants[1], defeated: true, concentration: { spell: 'Hold Person' } };
+    expect(summarizeCombat(fled)).toContain('2. Bandit 1 (enemy) · Init 14 · AC 12 · HP 4/11 · Concentrating: Hold Person · defeated');
+  });
+
+  it("never shows the player a Concentration (srd:rule:casting-spells-effects-targets: \"Unless a spell has a perceptible effect, a creature doesn't know it was targeted by the spell\")", () => {
+    const player = summarizeCombat(concentrating(), { forPlayer: true, heroAc: 12, heroConcentration: 'Bless' });
+    expect(player).not.toMatch(/Zyxwvut|Glamour|Concentrating|Hold Person|Spirit Guardians|rounds? left|minutes left/);
+    // The player's view reads exactly as it does without the records.
+    expect(player).toBe(summarizeCombat(sampleCombat(), { forPlayer: true, heroAc: 12 }));
+  });
+});
+
 describe('Reactions come back when a turn starts (SRD 5.2.1 srd:rule:reaction: "until the start of your next turn")', () => {
   const spent = (state: CombatState, ids: string[]): CombatState => ({
     ...state,

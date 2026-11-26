@@ -60,7 +60,24 @@ export {
 } from '@/engine/transform';
 // Condition names run the real matchers (pure): the DM tools decide by them whether a name is a standard condition.
 import { matchStandardCondition } from '@/engine/conditions';
-export { conditionKey, matchStandardCondition, normalizeConditionId } from '@/engine/conditions';
+export { conditionKey, INCAPACITATING_CONDITIONS, matchStandardCondition, normalizeConditionId } from '@/engine/conditions';
+// Spell effects run the real engine (pure, SPEC §6): NPC Concentration, durations and the turn-start countdowns, what the
+// DM is told to end with a spell, the AC spells, the hero's Concentration running out, and the Constitution save's DC.
+export {
+  concentrationAreas,
+  concentrationTurnStart,
+  conditionsNaming,
+  durationRounds,
+  endNpcConcentration,
+  handSetAcNaming,
+  roundsLeftText,
+  setNpcConcentration,
+} from '@/engine/spellEffects';
+export { addAcSpell, concentrationSaveDC, endAcSpell, expireConcentration } from '@/engine/character';
+export { AC_SPELLS, acSpellNamed, acSpells, countedAcSpells, handSetNames } from '@/engine/rules';
+// A name less its trailing note ("Hold Person (scroll)" is Hold Person): the engine's one rule, as the DM tools read it.
+export { withoutNote } from '@/engine/util';
+import { roundsLeftText } from '@/engine/spellEffects';
 // get_entry's budget is the sheet's real field limit.
 export { SHEET_TEXT_MAX } from '@/engine/summary';
 // The battle-map modules run the real engine too (pure; they use the real ./combat and ./conditions inside).
@@ -583,9 +600,20 @@ export const damageCombatant: typeof Engine.damageCombatant = (s, id, amount) =>
 export const healCombatant: typeof Engine.healCombatant = (s, id, amount) => changeHp(s, id, amount);
 export const healthDescriptor: typeof Engine.healthDescriptor = (hp: HitPoints) =>
   hp.current <= 0 ? 'down' : hp.current <= hp.max / 4 ? 'critical' : hp.current <= hp.max / 2 ? 'bloodied' : hp.current < hp.max ? 'scratched' : 'unhurt';
+/** Like the real one, the DM's view only: an NPC's Concentration, or the hero's countdown for the sheet's spell. */
+function concentrationBit(c: Combatant, heroConcentration: string | null | undefined): string {
+  if (!c.isPlayer) {
+    const held = c.concentration;
+    return held ? ` · Concentrating: ${held.spell}${held.roundsLeft !== undefined ? ` (${roundsLeftText(held.roundsLeft)})` : ''}` : '';
+  }
+  const countdown = c.concentrationCountdown;
+  return countdown && heroConcentration && key(countdown.spell) === key(heroConcentration) ? ` · ${heroConcentration}: ${roundsLeftText(countdown.roundsLeft)}` : '';
+}
+
 /**
- * A simplified format; like the real one, the player's view leaves hidden creatures out and the DM's tags them, and
- * the hero's line shows the AC the caller passes (the sheet's), never the tracker's copy.
+ * A simplified format; like the real one, the player's view leaves hidden creatures out and the DM's tags them, the
+ * hero's line shows the AC the caller passes (the sheet's), never the tracker's copy, and only the DM's view shows
+ * Concentration.
  */
 export const summarizeCombat: typeof Engine.summarizeCombat = (s, opts) =>
   [
@@ -595,7 +623,8 @@ export const summarizeCombat: typeof Engine.summarizeCombat = (s, opts) =>
       const ac = c.isPlayer && opts?.heroAc !== undefined ? ` · AC ${opts.heroAc}` : '';
       const hp = c.hp ? (opts?.forPlayer && c.hideHp ? healthDescriptor(c.hp) : `HP ${c.hp.current}/${c.hp.max}`) : '';
       const hidden = !opts?.forPlayer && c.hidden ? ' [hidden]' : '';
-      return [`${i === s.turnIndex ? '▶' : ' '} ${c.initiative} ${c.name}${hidden}${ac}${hp ? ` · ${hp}` : ''}${c.defeated ? ' (down)' : ''}`];
+      const concentration = opts?.forPlayer ? '' : concentrationBit(c, opts?.heroConcentration);
+      return [`${i === s.turnIndex ? '▶' : ' '} ${c.initiative} ${c.name}${hidden}${ac}${hp ? ` · ${hp}` : ''}${concentration}${c.defeated ? ' (down)' : ''}`];
     }),
   ].join('\n');
 

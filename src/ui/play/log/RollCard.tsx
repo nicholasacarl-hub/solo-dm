@@ -86,7 +86,7 @@ function VisibleRoll({ entry }: { entry: RollLogEntry }) {
             </span>
             {roll.dc !== undefined && (
               <span className="ml-1 text-xs whitespace-nowrap">
-                vs {targetLabel({ purpose: entry.purpose })} {roll.dc}
+                vs {targetLabel({ rollType: entry.rollType, purpose: entry.purpose })} {roll.dc}
               </span>
             )}
           </p>

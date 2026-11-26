@@ -1,10 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { Attack, Character, EquipmentOption, Feature, ImportedRef, InventoryItem, PlayerRollRequest, SkillBonus } from '@/types';
+import type { AcSpellName, Attack, Character, EquipmentOption, Feature, ImportedRef, InventoryItem, PlayerRollRequest, SkillBonus } from '@/types';
 import { sampleCharacter } from '@/test/fixtures';
+import * as engine from '@/engine';
 import { applyAttackRollRules, manualD20Result } from './dice';
 import {
+  AC_SPELLS,
   abilityCheckModifier,
   abilityModifier,
+  acSpellNamed,
+  acSpells,
   attackAbilityModifier,
   attackBonus,
   attackCritRange,
@@ -12,6 +16,8 @@ import {
   attackScaling,
   characterLevel,
   computeArmorClass,
+  countedAcSpells,
+  handSetNames,
   isFightingStyle,
   deathSaveModifier,
   effectiveSpeed,
@@ -34,6 +40,7 @@ import {
   spellcastingAbility,
   syncArmorClass,
   weaponCritRange,
+  workedOutWords,
 } from './rules';
 
 const mira = (overrides: Partial<Character> = {}) => sampleCharacter(overrides);
@@ -613,13 +620,17 @@ describe('syncArmorClass (SRD 5.2.1 Armor table, Armor Class; Ring of Protection
     expect(r.events).toEqual([{ type: 'combat', message: 'AC 12 → 16 (Chain Mail 16)' }]);
   });
 
-  it('keeps an AC set by hand (e.g. Mage Armor) and reports the computed value', () => {
-    const mageArmor = { ...fighter, armorClass: 15 };
-    const r = syncArmorClass(mageArmor, wearing(mageArmor, { name: 'Ring of Protection', category: 'magic-item', attuned: true }));
+  it("keeps an AC set by hand (an effect the app doesn't count, such as Haste) and reports the computed value", () => {
+    const hasted = { ...fighter, armorClass: 15 };
+    const r = syncArmorClass(hasted, wearing(hasted, { name: 'Ring of Protection', category: 'magic-item', attuned: true }));
     expect(r.character.armorClass).toBe(15);
-    expect(r.events).toHaveLength(1);
-    expect(r.events[0].type).toBe('warning');
-    expect(r.events[0].message).toMatch(/^AC kept at 15: .*Gear and features now give AC 13 \(10 \+ DEX 2 \+ Ring of Protection 1\)/);
+    expect(r.events).toEqual([
+      {
+        type: 'warning',
+        message:
+          "AC kept at 15: it differs from the 12 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 13 (10 + DEX 2 + Ring of Protection 1); update the AC if that is right.",
+      },
+    ]);
   });
 
   it("is silent when the computed AC doesn't change, and flags armor it can't identify", () => {
@@ -634,6 +645,748 @@ describe('syncArmorClass (SRD 5.2.1 Armor table, Armor Class; Ring of Protection
     const worn = wearing(fighter, { name: 'Mithral Plate', category: 'armor', compendiumId: 'hb:armor:mithral' });
     expect(syncArmorClass(fighter, worn, catalog).character.armorClass).toBe(18);
     expect(syncArmorClass(fighter, worn).character.armorClass).toBe(12); // unknown without the catalog: kept
+  });
+});
+
+describe('AC from spells: Mage Armor and Shield of Faith (srd:spell:mage-armor; srd:spell:shield-of-faith; srd:rule:armor-class)', () => {
+  const fighter = mira({ armorTraining: ['Light armor', 'Medium armor', 'Heavy armor', 'Shields'] });
+  /** In Chain Mail, AC 16 worked out from it. */
+  const mailed = (patch: Partial<Character> = {}) => wearing({ ...fighter, armorClass: 16, acFormula: 'Chain Mail 16', ...patch }, { name: 'Chain Mail', category: 'armor' });
+  const withSpells = (c: Character, ...names: AcSpellName[]): Character => ({ ...c, acSpells: names });
+
+  it('counts each spell as its text says, by its exact name, or that name with a trailing note (H1/HN1/HX1)', () => {
+    // srd:spell:mage-armor: "Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier."
+    // srd:spell:shield-of-faith: "granting it a +2 bonus to AC for the duration".
+    expect(AC_SPELLS).toEqual({ 'Mage Armor': { base: 13 }, 'Shield of Faith': { bonus: 2 } });
+    expect(['mage armor', 'MAGE-ARMOR', ' Shield of Faith '].map(acSpellNamed)).toEqual(['Mage Armor', 'Mage Armor', 'Shield of Faith']);
+    // A sheet copy's note, or a casting's, is left off (withoutNote): a Spell Scroll's copy, a multiclass sheet's copy.
+    expect(['Shield of Faith (scroll)', 'Shield of Faith (Paladin)', 'shield of faith (2nd level)', 'Mage Armor (scroll)'].map(acSpellNamed)).toEqual([
+      'Shield of Faith',
+      'Shield of Faith',
+      'Shield of Faith',
+      'Mage Armor',
+    ]);
+    // Never a looser match: "Shield" (the spell) isn't Shield of Faith, a note alone is no spell, and one note only is
+    // left off.
+    for (const name of ['Shield', 'Shield (scroll)', '(scroll)', 'Faith (scroll)', 'Shield of Faith (scroll) (2nd level)', 'Haste', 'Barkskin', '']) {
+      expect(acSpellNamed(name), name).toBeUndefined();
+    }
+    expect(acSpellNamed(3 as unknown as string)).toBeUndefined();
+  });
+
+  it('reads the records leniently: known names once each, in a fixed order', () => {
+    const stored = ['Shield of Faith', 'mage armor', 'Mage Armor', 'Haste', 3, null] as unknown as AcSpellName[];
+    expect(acSpells({ acSpells: stored })).toEqual(['Mage Armor', 'Shield of Faith']);
+    expect(acSpells({ acSpells: 'Mage Armor' as unknown as AcSpellName[] })).toEqual([]);
+    expect(acSpells({})).toEqual([]);
+  });
+
+  it('Mage Armor is one more base AC, used without armor (srd:spell:mage-armor: "who isn\'t wearing armor")', () => {
+    expect(computeArmorClass(withSpells(mira(), 'Mage Armor'))).toEqual({ ac: 15, formula: 'Mage Armor: 13 + DEX 2' });
+    // Armor worn: not counted (and not ended: the record stays, and counts again once the armor is off).
+    expect(computeArmorClass(withSpells(mailed(), 'Mage Armor'))).toEqual({ ac: 16, formula: 'Chain Mail 16' });
+    expect(countedAcSpells({ acSpells: ['Mage Armor'], acFormula: 'Chain Mail 16' })).toEqual([]);
+  });
+
+  it('Mage Armor competes with Unarmored Defense and Draconic Resilience: one base AC only, the best (srd:rule:armor-class: "you choose which calculation to use; you can\'t use more than one")', () => {
+    // srd:rule:barbarian-unarmored-defense: 10 + DEX + CON, "You can use a Shield and still gain this benefit."
+    const barbarian = (con: number, ...items: Array<Partial<InventoryItem> & { name: string }>) =>
+      wearing(
+        withSpells(
+          mira({
+            abilityScores: { str: 16, dex: 14, con, int: 8, wis: 10, cha: 10 },
+            armorTraining: ['Light armor', 'Medium armor', 'Shields'],
+            classes: [{ classId: 'srd:class:barbarian', name: 'Barbarian', level: 1, hitDie: 12, casterType: 'none' }],
+          }),
+          'Mage Armor',
+        ),
+        ...items,
+      );
+    // CON 16: Unarmored Defense 15 ties with Mage Armor 15, and the feature keeps the AC (the spell adds nothing).
+    expect(computeArmorClass(barbarian(16))).toEqual({ ac: 15, formula: 'Unarmored Defense: 10 + DEX 2 + CON 3' });
+    expect(computeArmorClass(barbarian(18)).formula).toBe('Unarmored Defense: 10 + DEX 2 + CON 4');
+    expect(computeArmorClass(barbarian(12))).toEqual({ ac: 15, formula: 'Mage Armor: 13 + DEX 2' });
+    expect(computeArmorClass(barbarian(12, { name: 'Shield', category: 'shield' }))).toEqual({ ac: 17, formula: 'Mage Armor: 13 + DEX 2 + Shield 2' });
+    // srd:rule:monk-unarmored-defense: 10 + DEX + WIS "While you aren't wearing armor or wielding a Shield".
+    const monk = (wis: number, ...items: Array<Partial<InventoryItem> & { name: string }>) =>
+      wearing(
+        mira({
+          abilityScores: { str: 10, dex: 16, con: 12, int: 8, wis, cha: 10 },
+          classes: [{ classId: 'srd:class:monk', name: 'Monk', level: 2, hitDie: 8, casterType: 'none' }],
+          armorTraining: ['Shields'],
+        }),
+        ...items,
+      );
+    expect(computeArmorClass(withSpells(monk(16), 'Mage Armor'))).toEqual({ ac: 16, formula: 'Unarmored Defense: 10 + DEX 3 + WIS 3' });
+    expect(computeArmorClass(withSpells(monk(12), 'Mage Armor'))).toEqual({ ac: 16, formula: 'Mage Armor: 13 + DEX 3' });
+    // With a Shield the Monk's Unarmored Defense goes, and Mage Armor (which allows one) is the best base left.
+    const shield = { name: 'Shield', category: 'shield' as const };
+    expect(computeArmorClass(monk(16, shield)).ac).toBe(15);
+    expect(computeArmorClass(withSpells(monk(16, shield), 'Mage Armor'))).toEqual({ ac: 18, formula: 'Mage Armor: 13 + DEX 3 + Shield 2' });
+    // srd:rule:sorcerer-draconic-sorcery-draconic-resilience: 10 + DEX + CHA "While you aren't wearing armor".
+    const sorcerer = (cha: number) =>
+      withSpells(
+        mira({
+          classes: [{ classId: 'srd:class:sorcerer', name: 'Sorcerer', level: 3, hitDie: 6, casterType: 'full', spellcastingAbility: 'cha', subclass: 'Draconic Sorcery', subclassId: 'srd:subclass:draconic-sorcery' }],
+          features: [],
+          inventory: [],
+          abilityScores: { str: 8, dex: 14, con: 13, int: 10, wis: 12, cha },
+        }),
+        'Mage Armor',
+      );
+    expect(computeArmorClass(sorcerer(18))).toEqual({ ac: 16, formula: 'Draconic Resilience: 10 + DEX 2 + CHA 4' });
+    expect(computeArmorClass(sorcerer(16)).formula).toBe('Draconic Resilience: 10 + DEX 2 + CHA 3');
+    expect(computeArmorClass(sorcerer(10))).toEqual({ ac: 15, formula: 'Mage Armor: 13 + DEX 2' });
+  });
+
+  it('items still add to Mage Armor: Bracers of Defense without a Shield, a Ring of Protection (srd:magic-item:bracers-of-defense; srd:magic-item:ring-of-protection)', () => {
+    const bracers = { name: 'Bracers of Defense', category: 'magic-item' as const, attuned: true };
+    const ring = { name: 'Ring of Protection', category: 'magic-item' as const, attuned: true };
+    const trained = withSpells(mira({ armorTraining: ['Shields'] }), 'Mage Armor');
+    expect(computeArmorClass(wearing(trained, bracers))).toEqual({ ac: 17, formula: 'Mage Armor: 13 + DEX 2 + Bracers of Defense 2' });
+    expect(computeArmorClass(wearing(trained, bracers, { name: 'Shield', category: 'shield' })).formula).toBe('Mage Armor: 13 + DEX 2 + Shield 2');
+    expect(computeArmorClass(wearing(trained, ring))).toEqual({ ac: 16, formula: 'Mage Armor: 13 + DEX 2 + Ring of Protection 1' });
+  });
+
+  it('Shield of Faith adds 2 to whatever the AC is worked out from, after the items', () => {
+    expect(computeArmorClass(withSpells(mailed(), 'Shield of Faith'))).toEqual({ ac: 18, formula: 'Chain Mail 16 + Shield of Faith 2' });
+    const shielded = wearing(withSpells(fighter, 'Shield of Faith'), { name: 'Chain Mail', category: 'armor' }, { name: 'Shield', category: 'shield' });
+    expect(computeArmorClass(shielded)).toEqual({ ac: 20, formula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2' });
+    const ring: InventoryItem = { id: 'r', name: 'Ring of Protection', quantity: 1, magic: true, attuned: true, bonuses: { ac: 1 } };
+    const both = withSpells(mira({ inventory: [ring], features: [] }), 'Mage Armor', 'Shield of Faith');
+    expect(computeArmorClass(both)).toEqual({ ac: 18, formula: 'Mage Armor: 13 + DEX 2 + Ring of Protection 1 + Shield of Faith 2' });
+    expect(countedAcSpells({ ...both, acFormula: computeArmorClass(both).formula })).toEqual(['Mage Armor', 'Shield of Faith']);
+    // Armor the app can't identify: the stored AC stands, records or not (syncArmorClass moves it by the bonus).
+    const elven = wearing({ ...withSpells(fighter, 'Shield of Faith'), armorClass: 17 }, { name: 'Elven Chain', category: 'armor' });
+    expect(computeArmorClass(elven).ac).toBe(17);
+  });
+
+  it('counts a spell as in the AC only when its part is in the formula', () => {
+    expect(countedAcSpells({ acSpells: ['Mage Armor', 'Shield of Faith'], acFormula: 'set by the DM: Haste + Shield of Faith 2' })).toEqual(['Shield of Faith']);
+    // An old save's hand-set formula names a spell without its part; a part without a record isn't one.
+    expect(countedAcSpells({ acSpells: ['Mage Armor'], acFormula: 'set by the DM: Mage Armor' })).toEqual([]);
+    expect(countedAcSpells({ acFormula: 'Mage Armor: 13 + DEX 2' })).toEqual([]);
+    expect(countedAcSpells({ acSpells: ['Shield of Faith'] })).toEqual([]);
+  });
+
+  it('reads whole ` + ` parts only, never a piece of one: the DM\'s words are no marker (engine-lens note)', () => {
+    const both: AcSpellName[] = ['Mage Armor', 'Shield of Faith'];
+    for (const acFormula of [
+      'set by the DM: Shield of Faith 2nd casting',
+      'set by the DM: Haste + Shield of Faith 2 from a ring',
+      'set by the DM: Mage Armor: 13 from the scroll',
+      'set by the DM: Shield of Faith 2',
+      'Mage Armor:13 + DEX 2',
+    ]) {
+      expect(countedAcSpells({ acSpells: both, acFormula }), acFormula).toEqual([]);
+    }
+    // A worked-out formula's notes follow its last part, and that part still counts.
+    expect(countedAcSpells({ acSpells: both, acFormula: 'Chain Mail 16 + Shield of Faith 2 (untrained in heavy armor: Disadvantage on STR/DEX D20 Tests and no spellcasting)' })).toEqual(['Shield of Faith']);
+    expect(countedAcSpells({ acSpells: both, acFormula: 'Mage Armor: 13 + DEX 2 (no Shield training: the Shield gives no AC)' })).toEqual(['Mage Armor']);
+    expect(countedAcSpells({ acSpells: both, acFormula: 'Elven Chain (stats unknown — AC kept at 17) + Shield of Faith 2' })).toEqual(['Shield of Faith']);
+  });
+
+  it("handSetNames: an AC set by hand names a spell in the DM's words, never in the app's own parts (E2)", () => {
+    // srd:spell:slow: "it takes a -2 penalty to AC"; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration".
+    const slowed = 'set by the DM: Slow from the Stone Golem + Shield of Faith 2';
+    expect(handSetNames(slowed, 'Slow')).toBe(true);
+    expect(handSetNames(slowed, 'Shield of Faith')).toBe(false);
+    expect(handSetNames('set by the DM: Haste + Mage Armor: 13 + Shield of Faith 2', 'Mage Armor')).toBe(false);
+    // An old save's words do name it, the app's part beside them or not.
+    expect(handSetNames('set by the DM: Shield of Faith', 'Shield of Faith')).toBe(true);
+    expect(handSetNames('set by the DM: Shield of Faith and Haste + Shield of Faith 2', 'Shield of Faith')).toBe(true);
+    expect(handSetNames('set by the DM: Shield of Faith from Brother Aldo', 'Shield of Faith')).toBe(true);
+    // Whole words only, and only an AC set by hand with the DM's reason.
+    expect(handSetNames('set by the DM: Hasted', 'Haste')).toBe(false);
+    expect(handSetNames('Chain Mail 16 + Shield of Faith 2', 'Shield of Faith')).toBe(false);
+    expect(handSetNames('set by the DM', 'Haste')).toBe(false);
+    expect(handSetNames(undefined, 'Haste')).toBe(false);
+    expect(handSetNames(18 as unknown as string, 'Haste')).toBe(false);
+    // The DM tools and the sheet read it from the engine barrel.
+    expect(engine.handSetNames).toBe(handSetNames);
+  });
+
+  it('handSetNames reads a noted name as its spell: the DM\'s "Haste" names a sheet copy\'s "Haste (scroll)" (H1/HX2; srd:spell:haste: "it gains a +2 bonus to Armor Class")', () => {
+    expect(handSetNames('set by the DM: Haste', 'Haste (scroll)')).toBe(true);
+    expect(handSetNames('set by the DM: Haste (scroll)', 'Haste (scroll)')).toBe(true);
+    expect(handSetNames('set by the DM: Haste', 'Haste')).toBe(true);
+    // An AC spell's copy: an old save's words name it, until the app has taken the spell off them.
+    expect(handSetNames('set by the DM: Shield of Faith', 'Shield of Faith (scroll)')).toBe(true);
+    expect(handSetNames('set by the DM: Shield of Faith + Shield of Faith ended', 'Shield of Faith (scroll)')).toBe(false);
+    // Still whole words only, and the app's own parts are never the DM's words.
+    expect(handSetNames('set by the DM: Hasted', 'Haste (scroll)')).toBe(false);
+    expect(handSetNames('set by the DM: Slow from the Stone Golem + Shield of Faith 2', 'Shield of Faith (scroll)')).toBe(false);
+  });
+
+  describe("syncArmorClass's one AC rule for a spell recorded or ended", () => {
+    it('a derived AC becomes the AC worked out: Shield of Faith adds 2, and ending it takes them off', () => {
+      const up = syncArmorClass(mailed(), withSpells(mailed(), 'Shield of Faith'));
+      expect(up.character).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield of Faith 2' });
+      expect(up.events).toEqual([{ type: 'combat', message: 'AC 16 → 18 (Chain Mail 16 + Shield of Faith 2)' }]);
+      const down = syncArmorClass(up.character, withSpells(up.character));
+      expect(down.character).toMatchObject({ armorClass: 16, acFormula: 'Chain Mail 16' });
+    });
+
+    it('an AC set by hand moves by +2 and −2, its formula keeping the part ("set by the DM: Haste + Shield of Faith 2")', () => {
+      // A hand-set Haste 18 on gear that gives 16 (srd:spell:haste: "+2 bonus to Armor Class"), then Shield of Faith: 20.
+      const hasted = mailed({ armorClass: 18, acFormula: 'set by the DM: Haste' });
+      const up = syncArmorClass(hasted, withSpells(hasted, 'Shield of Faith'));
+      expect(up.character).toMatchObject({ armorClass: 20, acFormula: 'set by the DM: Haste + Shield of Faith 2' });
+      expect(up.events).toEqual([{ type: 'combat', message: 'AC 18 → 20 (Shield of Faith +2)' }]);
+      expect(countedAcSpells(up.character)).toEqual(['Shield of Faith']);
+      const down = syncArmorClass(up.character, withSpells(up.character));
+      expect(down.character).toMatchObject({ armorClass: 18, acFormula: 'set by the DM: Haste' });
+      expect(down.events).toEqual([{ type: 'combat', message: 'AC 20 → 18 (Shield of Faith −2)' }]);
+    });
+
+    it('armor the app can\'t identify moves by +2 and −2 too, though computeArmorClass keeps the stored AC', () => {
+      const elven = wearing({ ...fighter, armorClass: 17, acFormula: 'Elven Chain (stats unknown — AC kept at 17)' }, { name: 'Elven Chain', category: 'armor' });
+      const up = syncArmorClass(elven, withSpells(elven, 'Shield of Faith'));
+      expect(up.character).toMatchObject({ armorClass: 19, acFormula: 'Elven Chain (stats unknown — AC kept at 17) + Shield of Faith 2' });
+      expect(up.events).toEqual([{ type: 'combat', message: 'AC 17 → 19 (Shield of Faith +2)' }]);
+      const down = syncArmorClass(up.character, withSpells(up.character));
+      expect(down.character).toMatchObject({ armorClass: 17, acFormula: 'Elven Chain (stats unknown — AC kept at 17)' });
+      expect(down.events).toEqual([{ type: 'combat', message: 'AC 19 → 17 (Shield of Faith −2)' }]);
+      // Mage Armor adds no bonus, and doesn't count in armor: nothing moves.
+      expect(syncArmorClass(elven, withSpells(elven, 'Mage Armor'))).toEqual({ character: withSpells(elven, 'Mage Armor'), events: [] });
+    });
+
+    it("an old save's hand-set AC that already counted the spell is kept, once (srd:rule:casting-spells-effects-combining-spell-effects: the same spell's effects \"don't combine\")", () => {
+      // AC 18 "set by the DM: Shield of Faith" on gear that gives 16: recording the spell keeps 18 and makes it derived.
+      const old = mailed({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith' });
+      const r = syncArmorClass(old, withSpells(old, 'Shield of Faith'));
+      expect(r).toEqual({ character: { ...withSpells(old, 'Shield of Faith'), acFormula: 'Chain Mail 16 + Shield of Faith 2' }, events: [] });
+      expect(countedAcSpells(r.character)).toEqual(['Shield of Faith']);
+      // From then on ending it takes the 2 off once.
+      expect(syncArmorClass(r.character, withSpells(r.character)).character).toMatchObject({ armorClass: 16, acFormula: 'Chain Mail 16' });
+      // An old save's Mage Armor 15 (base 13 + DEX 2) is kept the same way.
+      const robe = mira({ armorClass: 15, acFormula: 'set by the DM: Mage Armor' });
+      expect(syncArmorClass(robe, withSpells(robe, 'Mage Armor'))).toEqual({ character: { ...withSpells(robe, 'Mage Armor'), acFormula: 'Mage Armor: 13 + DEX 2' }, events: [] });
+    });
+
+    it('Mage Armor over an AC set by hand for something else: kept, with what gear, features and spells now give', () => {
+      const hasted = mira({ armorClass: 14, acFormula: 'set by the DM: Haste' });
+      const r = syncArmorClass(hasted, withSpells(hasted, 'Mage Armor'));
+      expect(r.character.armorClass).toBe(14);
+      expect(r.events).toEqual([
+        {
+          type: 'warning',
+          message:
+            "AC kept at 14: it differs from the 12 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 15 (Mage Armor: 13 + DEX 2); update the AC if that is right.",
+        },
+      ]);
+    });
+
+    it('equipping armor over Mage Armor leaves the record: it stops counting, and counts again when the armor comes off', () => {
+      const robe = withSpells(mira({ armorTraining: ['Heavy armor'], armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2' }), 'Mage Armor');
+      const armored = syncArmorClass(robe, wearing(robe, { name: 'Chain Mail', category: 'armor' }));
+      expect(armored.character).toMatchObject({ armorClass: 16, acFormula: 'Chain Mail 16', acSpells: ['Mage Armor'] });
+      expect(countedAcSpells(armored.character)).toEqual([]);
+      const off = syncArmorClass(armored.character, { ...armored.character, inventory: [] });
+      expect(off.character).toMatchObject({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2' });
+    });
+
+    it('a Shield of Faith a hand-set AC counted ends by its 2, whatever the rest adds up to (E1; srd:spell:slow: "it takes a -2 penalty to AC")', () => {
+      // Slowed in Chain Mail (16): the DM sets 14, then Shield of Faith (srd:spell:shield-of-faith: "+2 bonus to AC").
+      const slowed = mailed({ armorClass: 14, acFormula: 'set by the DM: Slow from the Stone Golem' });
+      const up = syncArmorClass(slowed, withSpells(slowed, 'Shield of Faith'));
+      expect(up.character).toMatchObject({ armorClass: 16, acFormula: 'set by the DM: Slow from the Stone Golem + Shield of Faith 2' });
+      expect(up.events).toEqual([{ type: 'combat', message: 'AC 14 → 16 (Shield of Faith +2)' }]);
+      // 16 is what Chain Mail alone gives, but the AC isn't Chain Mail's: ending the spell takes its 2 off, Slow stays.
+      const down = syncArmorClass(up.character, withSpells(up.character));
+      expect(down.character).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Slow from the Stone Golem' });
+      expect(down.events).toEqual([{ type: 'combat', message: 'AC 16 → 14 (Shield of Faith −2)' }]);
+    });
+
+    it("an old save's hand-set AC naming the spell keeps its number when gear doesn't add up to it: never counted twice (E3/H2; srd:rule:casting-spells-effects-combining-spell-effects: the same spell's effects \"don't combine\")", () => {
+      // 20 "set by the DM: Shield of Faith and Haste" on Chain Mail 16: recording Shield of Faith keeps 20, now counted.
+      const two = mailed({ armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste' });
+      const r = syncArmorClass(two, withSpells(two, 'Shield of Faith'));
+      expect(r.character).toMatchObject({ armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste + Shield of Faith 2' });
+      expect(countedAcSpells(r.character)).toEqual(['Shield of Faith']);
+      expect(r.events).toEqual([
+        {
+          type: 'warning',
+          message:
+            'AC 20 was set by hand naming Shield of Faith: kept, and Shield of Faith is now counted in it (ending Shield of Faith takes 2 off). Gear, features and spells give 18 (Chain Mail 16 + Shield of Faith 2); update the AC if that is right.',
+        },
+      ]);
+      // Ending it later takes the 2 off once (Haste's +2 stays: srd:spell:haste, "+2 bonus to Armor Class"), and the
+      // DM's words stop counting it (E1: "Shield of Faith ended").
+      expect(syncArmorClass(r.character, withSpells(r.character)).character).toMatchObject({
+        armorClass: 18,
+        acFormula: 'set by the DM: Shield of Faith and Haste + Shield of Faith ended',
+      });
+
+      // 18 "set by the DM: Shield of Faith" on Chain Mail 16, with a Ring of Protection attuned since (the AC was kept at
+      // 18 then): kept at 18, counted, and the warning gives 19 (srd:magic-item:ring-of-protection: "+1 bonus to Armor Class").
+      const ringed = wearing(
+        { ...fighter, armorClass: 18, acFormula: 'set by the DM: Shield of Faith' },
+        { name: 'Chain Mail', category: 'armor' },
+        { name: 'Ring of Protection', category: 'magic-item', attuned: true },
+      );
+      const kept = syncArmorClass(ringed, withSpells(ringed, 'Shield of Faith'));
+      expect(kept.character).toMatchObject({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith + Shield of Faith 2' });
+      expect(countedAcSpells(kept.character)).toEqual(['Shield of Faith']);
+      expect(kept.events.map((e) => e.message)).toEqual([
+        'AC 18 was set by hand naming Shield of Faith: kept, and Shield of Faith is now counted in it (ending Shield of Faith takes 2 off). Gear, features and spells give 19 (Chain Mail 16 + Ring of Protection 1 + Shield of Faith 2); update the AC if that is right.',
+      ]);
+
+      // A wizard (gear 12) with an old 17 "set by the DM: Shield of Faith from Brother Aldo" (Mage Armor and an ally's
+      // Shield of Faith, both by hand): either order of recording the two never gives 19.
+      const wizard = mira({ armorClass: 17, acFormula: 'set by the DM: Shield of Faith from Brother Aldo' });
+      const faithFirst = syncArmorClass(wizard, withSpells(wizard, 'Shield of Faith')).character;
+      expect(faithFirst).toMatchObject({ armorClass: 17, acFormula: 'set by the DM: Shield of Faith from Brother Aldo + Shield of Faith 2' });
+      const thenArmor = syncArmorClass(faithFirst, withSpells(faithFirst, 'Mage Armor', 'Shield of Faith'));
+      expect(thenArmor).toEqual({ character: withSpells(faithFirst, 'Mage Armor', 'Shield of Faith'), events: [] }); // 13 + 2 + 2: 17 already
+      const armorFirst = syncArmorClass(wizard, withSpells(wizard, 'Mage Armor')).character;
+      expect(armorFirst.armorClass).toBe(17);
+      const thenFaith = syncArmorClass(armorFirst, withSpells(armorFirst, 'Mage Armor', 'Shield of Faith'));
+      expect(thenFaith).toEqual({ character: { ...withSpells(armorFirst, 'Mage Armor', 'Shield of Faith'), acFormula: 'Mage Armor: 13 + DEX 2 + Shield of Faith 2' }, events: [] });
+
+      // Under armor the app can't identify, the second sentence is left out (it can't work the AC out).
+      const elven = wearing({ ...fighter, armorClass: 19, acFormula: 'set by the DM: Elven Chain and Shield of Faith' }, { name: 'Elven Chain', category: 'armor' });
+      const unknown = syncArmorClass(elven, withSpells(elven, 'Shield of Faith'));
+      expect(unknown.character).toMatchObject({ armorClass: 19, acFormula: 'set by the DM: Elven Chain and Shield of Faith + Shield of Faith 2' });
+      expect(unknown.events.map((e) => e.message)).toEqual([
+        'AC 19 was set by hand naming Shield of Faith: kept, and Shield of Faith is now counted in it (ending Shield of Faith takes 2 off).',
+      ]);
+    });
+
+    it('armor the app can\'t identify, newly worn, keeps the parts of the bonus spells the AC counted (E4/S1; srd:spell:shield-of-faith)', () => {
+      const faithful = withSpells(mailed({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield of Faith 2' }), 'Shield of Faith');
+      // Chain Mail off, Elven Chain on (srd:magic-item:elven-chain, whose entry gives the engine no armor stats). The
+      // armor's part keeps the AC less the +2 its parts add (E3), so it reads as 18.
+      const swapped = syncArmorClass(faithful, wearing(faithful, { name: 'Elven Chain', category: 'armor' }));
+      expect(swapped.character).toMatchObject({ armorClass: 18, acFormula: 'Elven Chain (stats unknown — AC kept at 16) + Shield of Faith 2' });
+      expect(countedAcSpells(swapped.character)).toEqual(['Shield of Faith']);
+      expect(swapped.events).toEqual([{ type: 'warning', message: "AC kept at 18: Elven Chain's armor stats are unknown, so set the AC by hand." }]);
+      // So ending it takes its 2 off, and the number and the words agree (16).
+      const ended = syncArmorClass(swapped.character, withSpells(swapped.character));
+      expect(ended.character).toMatchObject({ armorClass: 16, acFormula: 'Elven Chain (stats unknown — AC kept at 16)' });
+      expect(ended.events).toEqual([{ type: 'combat', message: 'AC 18 → 16 (Shield of Faith −2)' }]);
+      // The same armor, not newly worn (renamed): the same text from the AC less the +2, and no warning (E3).
+      const renamed = syncArmorClass(swapped.character, {
+        ...swapped.character,
+        inventory: swapped.character.inventory.map((i) => (i.name === 'Elven Chain' ? { ...i, name: 'Dragonhide Coat' } : i)),
+      });
+      expect(renamed.character).toMatchObject({ armorClass: 18, acFormula: 'Dragonhide Coat (stats unknown — AC kept at 16) + Shield of Faith 2' });
+      expect(renamed.events).toEqual([]);
+      // A recorded Shield of Faith whose part isn't in the formula isn't in the stored AC: ending it moves nothing.
+      const bare = { ...swapped.character, acFormula: 'Elven Chain (stats unknown — AC kept at 18)' };
+      expect(syncArmorClass(bare, withSpells(bare))).toEqual({ character: withSpells(bare), events: [] });
+      const handSet = { ...swapped.character, armorClass: 20, acFormula: 'set by the DM: Elven Chain 18 + 2' };
+      expect(syncArmorClass(handSet, withSpells(handSet))).toEqual({ character: withSpells(handSet), events: [] });
+      // Under armor it knows, the AC set by hand stays too; the warning gives what gear and features give.
+      const hasted = withSpells(mailed({ armorClass: 20, acFormula: 'set by the DM: Haste and the shrine' }), 'Shield of Faith');
+      const kept = syncArmorClass(hasted, withSpells(hasted));
+      expect(kept.character).toEqual(withSpells(hasted));
+      expect(kept.events.map((e) => e.message)).toEqual([
+        "AC kept at 20: it differs from the 18 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 16 (Chain Mail 16); update the AC if that is right.",
+      ]);
+    });
+
+    it('a hand-set formula drops Mage Armor\'s part once armor goes on or the record ends: never counted then (E5/H7/S7; srd:spell:mage-armor: "a willing creature who isn\'t wearing armor"; srd:rule:armor-class)', () => {
+      const robe = (patch: Partial<Character> = {}) =>
+        withSpells(mira({ armorTraining: ['Light armor'], armorClass: 17, acFormula: 'set by the DM: Haste + Mage Armor: 13', ...patch }), 'Mage Armor');
+      expect(countedAcSpells(robe())).toEqual(['Mage Armor']);
+      // Leather Armor on: the stored AC stays (a base isn't a delta) and the warning says what gear gives.
+      const leather = syncArmorClass(robe(), wearing(robe(), { name: 'Leather Armor', category: 'armor' }));
+      expect(leather.character).toMatchObject({ armorClass: 17, acFormula: 'set by the DM: Haste', acSpells: ['Mage Armor'] });
+      expect(countedAcSpells(leather.character)).toEqual([]);
+      expect(leather.events.map((e) => e.message)).toEqual([
+        "AC kept at 17: it differs from the 15 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 13 (Leather Armor 11 + DEX 2); update the AC if that is right.",
+      ]);
+      // Armor it can't identify, too.
+      const elven = syncArmorClass(robe(), wearing(robe(), { name: 'Elven Chain', category: 'armor' }));
+      expect(elven.character.acFormula).toBe('set by the DM: Haste');
+      // The record ends: the part goes with it, even when nothing else changed (armor already on).
+      const worn = wearing(robe(), { name: 'Leather Armor', category: 'armor' });
+      expect(syncArmorClass(worn, withSpells(worn)).character.acFormula).toBe('set by the DM: Haste');
+      const ended = syncArmorClass(robe(), withSpells(robe()));
+      expect(ended.character).toMatchObject({ armorClass: 17, acFormula: 'set by the DM: Haste' });
+      expect(ended.events.map((e) => e.message)).toEqual([
+        "AC kept at 17: it differs from the 15 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 12 (10 + DEX 2); update the AC if that is right.",
+      ]);
+      // While it applies, the part stays; Shield of Faith's part stays under armor.
+      const shield = { name: 'Shield', category: 'shield' as const };
+      expect(syncArmorClass(robe({ armorTraining: ['Shields'] }), wearing(robe({ armorTraining: ['Shields'] }), shield)).character.acFormula).toBe(
+        'set by the DM: Haste + Mage Armor: 13',
+      );
+      const faith = { ...withSpells(robe(), 'Mage Armor', 'Shield of Faith'), armorClass: 19, acFormula: 'set by the DM: Haste + Mage Armor: 13 + Shield of Faith 2' };
+      expect(syncArmorClass(faith, wearing(faith, { name: 'Leather Armor', category: 'armor' })).character.acFormula).toBe('set by the DM: Haste + Shield of Faith 2');
+      // A hero without the records keeps a formula as it was (the DM's own words).
+      const plain = mira({ armorTraining: ['Light armor'], armorClass: 17, acFormula: 'set by the DM: Haste + Mage Armor: 13' });
+      expect(syncArmorClass(plain, wearing(plain, { name: 'Leather Armor', category: 'armor' })).character.acFormula).toBe('set by the DM: Haste + Mage Armor: 13');
+    });
+
+    it('the app\'s "ended" part: once the app has taken a spell off an AC set by hand, the DM\'s words naming it no longer count it (E1; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration")', () => {
+      const ended = 'set by the DM: Shield of Faith and Haste + Shield of Faith ended';
+      expect(handSetNames(ended, 'Shield of Faith')).toBe(false);
+      expect(handSetNames(ended, 'shield of faith')).toBe(false);
+      // The rest of the DM's words still count (srd:spell:haste: "a +2 bonus to Armor Class").
+      expect(handSetNames(ended, 'Haste')).toBe(true);
+      // An "ended" part is the app's own, never the DM's words, for either AC spell.
+      expect(handSetNames('set by the DM: Haste + Shield of Faith ended', 'Faith')).toBe(false);
+      expect(handSetNames('set by the DM: Haste + Mage Armor ended', 'Mage Armor')).toBe(false);
+      // Only a whole part is the app's: the DM's own "(Shield of Faith ended)" inside a reason stays the DM's words.
+      expect(handSetNames('set by the DM: Haste (Shield of Faith ended)', 'Shield of Faith')).toBe(true);
+      // Never a counted part, and a formula the app worked out has none.
+      expect(countedAcSpells({ acSpells: ['Shield of Faith'], acFormula: ended })).toEqual([]);
+      expect(handSetNames('Chain Mail 16 + Shield of Faith ended', 'Haste')).toBe(false);
+    });
+
+    it("each casting adds Shield of Faith's 2 and each end takes it off, under the DM's words naming it: never counted in twice, never taken off twice (E1; srd:spell:shield-of-faith: \"a +2 bonus to AC for the duration\"; srd:rule:casting-spells-effects-combining-spell-effects: \"the effects of the same spell cast multiple times don't combine\" only \"while their durations overlap\")", () => {
+      type Sync = ReturnType<typeof syncArmorClass>;
+      const others = (c: Character) => acSpells(c).filter((n) => n !== 'Shield of Faith');
+      /** Shield of Faith recorded (a casting) or ended, the other records kept: what addAcSpell and endAcSpell sync. */
+      const cast = (c: Character): Sync => syncArmorClass(c, withSpells(c, ...others(c), 'Shield of Faith'));
+      const end = (c: Character): Sync => syncArmorClass(c, withSpells(c, ...others(c)));
+      /** The steps in turn (a casting, an end…), each from where the one before left the hero. */
+      const run = (start: Character, ...steps: Array<(c: Character) => Sync>) => {
+        let c = start;
+        return steps.map((step) => {
+          const r = step(c);
+          c = r.character;
+          return r;
+        });
+      };
+      const cycle = (start: Character) => run(start, cast, end, cast, end);
+      const acs = (runs: Sync[]) => runs.map((r) => [r.character.armorClass, r.character.acFormula]);
+
+      // FIXES' kept examples: an old save's 20 "set by the DM: Shield of Faith and Haste" on Chain Mail 16 (Haste from
+      // an ally, srd:spell:haste) goes 20/18/20/18, never turning derived; the marker is exactly "Shield of Faith ended".
+      const haste = cycle(mailed({ armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste' }));
+      expect(acs(haste)).toEqual([
+        [20, 'set by the DM: Shield of Faith and Haste + Shield of Faith 2'],
+        [18, 'set by the DM: Shield of Faith and Haste + Shield of Faith ended'],
+        [20, 'set by the DM: Shield of Faith and Haste + Shield of Faith 2'],
+        [18, 'set by the DM: Shield of Faith and Haste + Shield of Faith ended'],
+      ]);
+      // The second casting is a plain +2 (nothing "already counted"), and each end a plain −2.
+      expect(haste.slice(1).map((r) => r.events)).toEqual([
+        [{ type: 'combat', message: 'AC 20 → 18 (Shield of Faith −2)' }],
+        [{ type: 'combat', message: 'AC 18 → 20 (Shield of Faith +2)' }],
+        [{ type: 'combat', message: 'AC 20 → 18 (Shield of Faith −2)' }],
+      ]);
+
+      // 18 "set by the DM: Shield of Faith" on Chain Mail 16 with a Ring of Protection attuned since
+      // (srd:magic-item:ring-of-protection: "a +1 bonus to Armor Class"): 18/16/18/16.
+      const ringed = wearing(
+        { ...fighter, armorClass: 18, acFormula: 'set by the DM: Shield of Faith' },
+        { name: 'Chain Mail', category: 'armor' },
+        { name: 'Ring of Protection', category: 'magic-item', attuned: true },
+      );
+      expect(acs(cycle(ringed))).toEqual([
+        [18, 'set by the DM: Shield of Faith + Shield of Faith 2'],
+        [16, 'set by the DM: Shield of Faith + Shield of Faith ended'],
+        [18, 'set by the DM: Shield of Faith + Shield of Faith 2'],
+        [16, 'set by the DM: Shield of Faith + Shield of Faith ended'],
+      ]);
+
+      // The wizard (gear 12) with an old 17 "set by the DM: Shield of Faith from Brother Aldo": never 19, and 17 again
+      // after an end and a recast, alone or beside Mage Armor recorded first or last.
+      const wizard = mira({ armorClass: 17, acFormula: 'set by the DM: Shield of Faith from Brother Aldo' });
+      expect(acs(cycle(wizard))).toEqual([
+        [17, 'set by the DM: Shield of Faith from Brother Aldo + Shield of Faith 2'],
+        [15, 'set by the DM: Shield of Faith from Brother Aldo + Shield of Faith ended'],
+        [17, 'set by the DM: Shield of Faith from Brother Aldo + Shield of Faith 2'],
+        [15, 'set by the DM: Shield of Faith from Brother Aldo + Shield of Faith ended'],
+      ]);
+      const armorLast = syncArmorClass(cast(wizard).character, withSpells(cast(wizard).character, 'Mage Armor', 'Shield of Faith')).character;
+      const armorFirst = cast(syncArmorClass(wizard, withSpells(wizard, 'Mage Armor')).character).character;
+      for (const both of [armorLast, armorFirst]) {
+        expect(both.armorClass).toBe(17);
+        const off = end(both).character;
+        expect(off.armorClass).toBe(15);
+        expect(cast(off).character.armorClass).toBe(17);
+      }
+
+      // A new save: the DM's reason names the spell while it is recorded and counted (statSteps keeps the part).
+      // srd:spell:slow: "it takes a -2 penalty to AC": 16, then 14/16/14.
+      const slowed = withSpells(mailed({ armorClass: 16, acFormula: 'set by the DM: Slow from the Stone Golem (-2); Shield of Faith still up + Shield of Faith 2' }), 'Shield of Faith');
+      expect(acs(run(slowed, end, cast, end))).toEqual([
+        [14, 'set by the DM: Slow from the Stone Golem (-2); Shield of Faith still up + Shield of Faith ended'],
+        [16, 'set by the DM: Slow from the Stone Golem (-2); Shield of Faith still up + Shield of Faith 2'],
+        [14, 'set by the DM: Slow from the Stone Golem (-2); Shield of Faith still up + Shield of Faith ended'],
+      ]);
+      // And Haste: 20, then 18/20/18.
+      const hasted = withSpells(mailed({ armorClass: 20, acFormula: 'set by the DM: Haste from Lyra, on top of Shield of Faith + Shield of Faith 2' }), 'Shield of Faith');
+      expect(acs(run(hasted, end, cast, end))).toEqual([
+        [18, 'set by the DM: Haste from Lyra, on top of Shield of Faith + Shield of Faith ended'],
+        [20, 'set by the DM: Haste from Lyra, on top of Shield of Faith + Shield of Faith 2'],
+        [18, 'set by the DM: Haste from Lyra, on top of Shield of Faith + Shield of Faith ended'],
+      ]);
+      // Under armor the app can't identify, the same: 19, then 17/19.
+      const elven = wearing({ ...fighter, armorClass: 19, acFormula: 'set by the DM: Elven Chain and Shield of Faith' }, { name: 'Elven Chain', category: 'armor' });
+      expect(acs(cycle(elven)).map(([ac]) => ac)).toEqual([19, 17, 19, 17]);
+      expect(end(cast(elven).character).character.acFormula).toBe('set by the DM: Elven Chain and Shield of Faith + Shield of Faith ended');
+    });
+
+    it("a hand-set AC no higher than what gear and features give is taken not to hold a spell its words name: the spell is added, with F3's warning (E2/F3; srd:spell:shield-of-faith: \"a +2 bonus to AC\"; srd:rule:armor-class)", () => {
+      // The D1 state: an old save's 18 "set by the DM: Shield of Faith" in Chain Mail, and a Shield donned since, so the
+      // gear gives 18 too. Recording the spell adds its 2 through the derived branch: 20, and its end 18. The words name
+      // the spell, so the DM is told how to put 18 back if it counted it beside a penalty (F3).
+      const shielded = wearing(
+        { ...fighter, armorClass: 18, acFormula: 'set by the DM: Shield of Faith' },
+        { name: 'Chain Mail', category: 'armor' },
+        { name: 'Shield', category: 'shield' },
+      );
+      const up = syncArmorClass(shielded, withSpells(shielded, 'Shield of Faith'));
+      expect(up.character).toMatchObject({ armorClass: 20, acFormula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2' });
+      expect(up.events).toEqual([
+        { type: 'combat', message: 'AC 18 → 20 (Chain Mail 16 + Shield 2 + Shield of Faith 2)' },
+        {
+          type: 'warning',
+          message:
+            "AC 18, set by hand, names Shield of Faith, but gear and features alone give 18, so the app now counts Shield of Faith as well (AC 20): if 18 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 18.",
+        },
+      ]);
+      const down = syncArmorClass(up.character, withSpells(up.character));
+      expect(down.character).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield 2' });
+      // Below the gear: "set by the DM: Slow, without Shield of Faith" 14 on Chain Mail 16 (srd:spell:slow: "a -2 penalty
+      // to AC") gives 16, never "AC stays 14"; its words name the spell, so the warning too (F3).
+      const slowed = mailed({ armorClass: 14, acFormula: 'set by the DM: Slow, without Shield of Faith' });
+      const r = syncArmorClass(slowed, withSpells(slowed, 'Shield of Faith'));
+      expect(r.character).toMatchObject({ armorClass: 16, acFormula: 'set by the DM: Slow, without Shield of Faith + Shield of Faith 2' });
+      expect(r.events).toEqual([
+        { type: 'combat', message: 'AC 14 → 16 (Shield of Faith +2)' },
+        {
+          type: 'warning',
+          message:
+            "AC 14, set by hand, names Shield of Faith, but gear and features alone give 16, so the app now counts Shield of Faith as well (AC 16): if 14 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 14.",
+        },
+      ]);
+      // Mage Armor's base too (srd:spell:mage-armor: "base AC becomes 13 plus its Dexterity modifier"): a hand-set 12 that
+      // gear gives (10 + DEX 2) is taken to hold no Mage Armor, so recording it gives 15, and the words name it (F3).
+      const robe = mira({ armorClass: 12, acFormula: 'set by the DM: Mage Armor dispelled' });
+      const armored = syncArmorClass(robe, withSpells(robe, 'Mage Armor'));
+      expect(armored.character).toMatchObject({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2' });
+      expect(armored.events).toEqual([
+        { type: 'combat', message: 'AC 12 → 15 (Mage Armor: 13 + DEX 2)' },
+        {
+          type: 'warning',
+          message:
+            "AC 12, set by hand, names Mage Armor, but gear and features alone give 12, so the app now counts Mage Armor as well (AC 15): if 12 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 12.",
+        },
+      ]);
+    });
+
+    it('the gear guard\'s baseline counts only the AC spells the formula counts: a recorded Mage Armor the DM\'s words never claimed isn\'t in it (F2/TX2; srd:spell:mage-armor: "base AC becomes 13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration"; srd:rule:casting-spells-effects-combining-spell-effects: "the effects of the same spell cast multiple times don\'t combine")', () => {
+      // A wizard (DEX 14, no armor: gear 12) with an old 14 "set by the DM: Shield of Faith from Brother Aldo" (10 + DEX 2
+      // + an ally's Shield of Faith 2, by hand).
+      const wizard = mira({ armorClass: 14, acFormula: 'set by the DM: Shield of Faith from Brother Aldo' });
+      expect(computeArmorClass(wizard)).toEqual({ ac: 12, formula: '10 + DEX 2' });
+      // Mage Armor recorded first: kept at 14 (above the gear's 12), its record beside the DM's words, not counted in them.
+      const armor = syncArmorClass(wizard, withSpells(wizard, 'Mage Armor'));
+      expect(armor.character).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Shield of Faith from Brother Aldo', acSpells: ['Mage Armor'] });
+      expect(countedAcSpells(armor.character)).toEqual([]);
+      // Then Shield of Faith: 14 is still above what gear, features and the counted spells (none) give, so the words hold
+      // it: kept at 14, now counted, and the warning names the 17 gear and spells give. Never 16 (the +2 twice).
+      const faith = syncArmorClass(armor.character, withSpells(armor.character, 'Mage Armor', 'Shield of Faith'));
+      expect(faith.character).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Shield of Faith from Brother Aldo + Shield of Faith 2' });
+      expect(countedAcSpells(faith.character)).toEqual(['Shield of Faith']);
+      expect(faith.events).toEqual([
+        {
+          type: 'warning',
+          message:
+            'AC 14 was set by hand naming Shield of Faith: kept, and Shield of Faith is now counted in it (ending Shield of Faith takes 2 off). Gear, features and spells give 17 (Mage Armor: 13 + DEX 2 + Shield of Faith 2); update the AC if that is right.',
+        },
+      ]);
+      // Ending it then takes its 2 off once.
+      expect(syncArmorClass(faith.character, withSpells(faith.character, 'Mage Armor')).character.armorClass).toBe(12);
+      // The other order: Shield of Faith first makes the AC derived (10 + DEX 2 + Shield of Faith 2), and Mage Armor
+      // then gives 17, as before.
+      const faithFirst = syncArmorClass(wizard, withSpells(wizard, 'Shield of Faith'));
+      expect(faithFirst).toEqual({ character: { ...withSpells(wizard, 'Shield of Faith'), acFormula: '10 + DEX 2 + Shield of Faith 2' }, events: [] });
+      const thenArmor = syncArmorClass(faithFirst.character, withSpells(faithFirst.character, 'Mage Armor', 'Shield of Faith'));
+      expect(thenArmor.character).toMatchObject({ armorClass: 17, acFormula: 'Mage Armor: 13 + DEX 2 + Shield of Faith 2' });
+      expect(thenArmor.events).toEqual([{ type: 'combat', message: 'AC 14 → 17 (Mage Armor: 13 + DEX 2 + Shield of Faith 2)' }]);
+      // A formula that does carry Mage Armor's part counts it in the baseline. The DM set 15 "Shield of Faith dispelled"
+      // while Mage Armor was counted (the part kept): 15 is what Mage Armor gives, so it holds no Shield of Faith, and the
+      // spell cast again is added (17), with the warning (F3), never "kept at 15". The warning says what its 15 counts:
+      // Mage Armor, not gear and features alone (H2/HA1).
+      const dispelled = withSpells(mira({ armorClass: 15, acFormula: 'set by the DM: Shield of Faith dispelled + Mage Armor: 13' }), 'Mage Armor');
+      expect(countedAcSpells(dispelled)).toEqual(['Mage Armor']);
+      const recast = syncArmorClass(dispelled, withSpells(dispelled, 'Mage Armor', 'Shield of Faith'));
+      expect(recast.character).toMatchObject({ armorClass: 17, acFormula: 'Mage Armor: 13 + DEX 2 + Shield of Faith 2' });
+      expect(recast.events.map((e) => e.message)).toEqual([
+        'AC 15 → 17 (Mage Armor: 13 + DEX 2 + Shield of Faith 2)',
+        "AC 15, set by hand, names Shield of Faith, but gear, features and Mage Armor give 15, so the app now counts Shield of Faith as well (AC 17): if 15 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 15.",
+      ]);
+    });
+
+    it('a spell the DM\'s words name, counted on a hand-set AC no higher than the baseline: one warning with how to put the AC back, only when the AC moved (F3/TE1/TX1; srd:spell:slow: "it takes a -2 penalty to AC"; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration")', () => {
+      // An older save: Chain Mail 16 with 16 "set by the DM: Slow (-2) and Shield of Faith" (16 − 2 + 2). The guard takes
+      // 16 not to hold the spell (it is no higher than Chain Mail's 16): the AC becomes derived at 18, and the warning
+      // says how to put 16 back.
+      const slowed = mailed({ armorClass: 16, acFormula: 'set by the DM: Slow (-2) and Shield of Faith' });
+      const r = syncArmorClass(slowed, withSpells(slowed, 'Shield of Faith'));
+      expect(r.character).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+      expect(r.events).toEqual([
+        { type: 'combat', message: 'AC 16 → 18 (Chain Mail 16 + Shield of Faith 2)' },
+        {
+          type: 'warning',
+          message:
+            "AC 16, set by hand, names Shield of Faith, but gear and features alone give 16, so the app now counts Shield of Faith as well (AC 18): if 16 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 16.",
+        },
+      ]);
+      // Two spells at once, both named: "them", the names joined as elsewhere.
+      const both = mira({ armorClass: 12, acFormula: 'set by the DM: Mage Armor and Shield of Faith' });
+      const two = syncArmorClass(both, withSpells(both, 'Mage Armor', 'Shield of Faith'));
+      expect(two.character).toMatchObject({ armorClass: 17, acFormula: 'Mage Armor: 13 + DEX 2 + Shield of Faith 2' });
+      expect(two.events.map((e) => e.message)).toEqual([
+        'AC 12 → 17 (Mage Armor: 13 + DEX 2 + Shield of Faith 2)',
+        "AC 12, set by hand, names Mage Armor and Shield of Faith, but gear and features alone give 12, so the app now counts Mage Armor and Shield of Faith as well (AC 17): if 12 already counted them beside a penalty the app doesn't count (such as Slow), set the AC to 12.",
+      ]);
+      // None above the baseline: the kept warning as before (20 "Shield of Faith and Haste" on Chain Mail 16).
+      const hasted = mailed({ armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste' });
+      expect(syncArmorClass(hasted, withSpells(hasted, 'Shield of Faith')).events.map((e) => e.message)).toEqual([
+        'AC 20 was set by hand naming Shield of Faith: kept, and Shield of Faith is now counted in it (ending Shield of Faith takes 2 off). Gear, features and spells give 18 (Chain Mail 16 + Shield of Faith 2); update the AC if that is right.',
+      ]);
+      // None when the words don't name the spell (srd:spell:slow alone): +2, as before.
+      const slow = mailed({ armorClass: 14, acFormula: 'set by the DM: Slow from the Stone Golem' });
+      expect(syncArmorClass(slow, withSpells(slow, 'Shield of Faith')).events).toEqual([{ type: 'combat', message: 'AC 14 → 16 (Shield of Faith +2)' }]);
+      // None when the AC didn't move. A Barbarian's Unarmored Defense (10 + DEX 2 + CON 3) ties Mage Armor's 15 and keeps
+      // the AC (srd:rule:armor-class: "you can't use more than one"): nothing changes.
+      const barbarian = mira({
+        abilityScores: { str: 16, dex: 14, con: 16, int: 8, wis: 10, cha: 10 },
+        classes: [{ classId: 'srd:class:barbarian', name: 'Barbarian', level: 1, hitDie: 12, casterType: 'none' }],
+        armorClass: 15,
+        acFormula: 'set by the DM: Mage Armor',
+      });
+      expect(syncArmorClass(barbarian, withSpells(barbarian, 'Mage Armor'))).toEqual({ character: withSpells(barbarian, 'Mage Armor'), events: [] });
+      // A hand-set 10 below the gear naming Mage Armor: Mage Armor (a base, no delta) leaves the stored AC, with the
+      // kept-AC warning only.
+      const dispelled = mira({ armorClass: 10, acFormula: 'set by the DM: Mage Armor dispelled; Slow (-2)' });
+      const kept = syncArmorClass(dispelled, withSpells(dispelled, 'Mage Armor'));
+      expect(kept.character.armorClass).toBe(10);
+      expect(kept.events.map((e) => e.message)).toEqual([
+        "AC kept at 10: it differs from the 12 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 15 (Mage Armor: 13 + DEX 2); update the AC if that is right.",
+      ]);
+    });
+
+    it('F3\'s warning names what its baseline counts: "gear, features and Mage Armor give 15", never "alone" (H2/HA1; srd:spell:mage-armor: "base AC becomes 13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration")', () => {
+      // An older save: the wizard (DEX 14, no armor: gear 12) at 14 "set by the DM: Mage Armor and Shield of Faith; cursed
+      // (-3)" (13 + 2 + 2 − 3). Both recorded in one call, in its order (update_character's ac_spells_add records one at
+      // a time): Mage Armor first, kept at 14 and now counted, then Shield of Faith on a baseline of 15 that counts it.
+      const cursed = mira({ armorClass: 14, acFormula: 'set by the DM: Mage Armor and Shield of Faith; cursed (-3)' });
+      expect(computeArmorClass(cursed)).toEqual({ ac: 12, formula: '10 + DEX 2' });
+      const armor = syncArmorClass(cursed, withSpells(cursed, 'Mage Armor'));
+      expect(armor.character).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Mage Armor and Shield of Faith; cursed (-3) + Mage Armor: 13' });
+      expect(armor.events.map((e) => e.message)).toEqual([
+        'AC 14 was set by hand naming Mage Armor: kept, and Mage Armor is now counted in it. Gear, features and spells give 15 (Mage Armor: 13 + DEX 2); update the AC if that is right.',
+      ]);
+      const faith = syncArmorClass(armor.character, withSpells(armor.character, 'Mage Armor', 'Shield of Faith'));
+      expect(faith.character).toMatchObject({
+        armorClass: 16,
+        acFormula: 'set by the DM: Mage Armor and Shield of Faith; cursed (-3) + Mage Armor: 13 + Shield of Faith 2',
+      });
+      expect(faith.events.map((e) => e.message)).toEqual([
+        'AC 14 → 16 (Shield of Faith +2)',
+        "AC 14, set by hand, names Shield of Faith, but gear, features and Mage Armor give 15, so the app now counts Shield of Faith as well (AC 16): if 14 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 14.",
+      ]);
+      // A counted Shield of Faith in the baseline: 14 "Mage Armor + Shield of Faith 2" (10 + DEX 2 + its 2), then Mage Armor.
+      const faithful = withSpells(mira({ armorClass: 14, acFormula: 'set by the DM: Mage Armor + Shield of Faith 2' }), 'Shield of Faith');
+      expect(syncArmorClass(faithful, withSpells(faithful, 'Mage Armor', 'Shield of Faith')).events.map((e) => e.message)).toEqual([
+        'AC 14 → 17 (Mage Armor: 13 + DEX 2 + Shield of Faith 2)',
+        "AC 14, set by hand, names Mage Armor, but gear, features and Shield of Faith give 14, so the app now counts Mage Armor as well (AC 17): if 14 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 14.",
+      ]);
+      // A Mage Armor recorded beside the DM's words, which the formula doesn't count, isn't in the baseline (F2), nor in
+      // its words: 12 "set by the DM: Shield of Faith", then Shield of Faith.
+      const beside = withSpells(mira({ armorClass: 12, acFormula: 'set by the DM: Shield of Faith' }), 'Mage Armor');
+      expect(countedAcSpells(beside)).toEqual([]);
+      expect(syncArmorClass(beside, withSpells(beside, 'Mage Armor', 'Shield of Faith')).events.map((e) => e.message)).toEqual([
+        'AC 12 → 14 (Shield of Faith +2)',
+        "AC 12, set by hand, names Shield of Faith, but gear and features alone give 12, so the app now counts Shield of Faith as well (AC 14): if 12 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 12.",
+      ]);
+      // Nothing counted: the words as before (srd:spell:slow: "it takes a -2 penalty to AC"; Chain Mail 16).
+      const slowed = mailed({ armorClass: 16, acFormula: 'set by the DM: Slow (-2) and Shield of Faith' });
+      expect(syncArmorClass(slowed, withSpells(slowed, 'Shield of Faith')).events.map((e) => e.message)).toEqual([
+        'AC 16 → 18 (Chain Mail 16 + Shield of Faith 2)',
+        "AC 16, set by hand, names Shield of Faith, but gear and features alone give 16, so the app now counts Shield of Faith as well (AC 18): if 16 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 16.",
+      ]);
+    });
+
+    it("an AC set by hand that counted Mage Armor is flagged when Mage Armor ends and the number stays (H3/HA2; srd:spell:mage-armor: \"Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier\")", () => {
+      // F3's advice followed: the wizard (gear 12) at 12 "set by the DM: cursed (-3) + Mage Armor: 13" (13 + 2 − 3), Mage
+      // Armor recorded. Its end leaves 12, what gear gives too, though the curse goes on: the DM is told.
+      const note = 'AC 12, set by hand, counted Mage Armor, which has ended: if 12 still includes it, set the AC again (armor and abilities give 12).';
+      const cursed = withSpells(mira({ armorClass: 12, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13' }), 'Mage Armor');
+      expect(countedAcSpells(cursed)).toEqual(['Mage Armor']);
+      const ended = syncArmorClass(cursed, withSpells(cursed));
+      expect(ended.character).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' });
+      expect(ended.events).toEqual([{ type: 'warning', message: note }]);
+      // Set by hand without a reason ("set by the DM"): the same.
+      const bare = withSpells(mira({ armorClass: 12, acFormula: 'set by the DM + Mage Armor: 13' }), 'Mage Armor');
+      expect(syncArmorClass(bare, withSpells(bare))).toEqual({ character: { ...withSpells(bare), acFormula: 'set by the DM' }, events: [{ type: 'warning', message: note }] });
+      // Another warning already says the AC stays (13 "cursed (-2)"): that one only.
+      const kept = withSpells(mira({ armorClass: 13, acFormula: 'set by the DM: cursed (-2) + Mage Armor: 13' }), 'Mage Armor');
+      expect(syncArmorClass(kept, withSpells(kept)).events.map((e) => e.message)).toEqual([
+        "AC kept at 13: it differs from the 15 that gear and features gave, so it may include an effect the app doesn't count or a manual change. Gear and features now give AC 12 (10 + DEX 2); update the AC if that is right.",
+      ]);
+      // A derived AC goes back to what gear gives, with no warning.
+      const derived = withSpells(mira({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2' }), 'Mage Armor');
+      expect(syncArmorClass(derived, withSpells(derived)).events).toEqual([{ type: 'combat', message: 'AC 15 → 12 (10 + DEX 2)' }]);
+      // Nothing for a formula not set by hand, nor for a Mage Armor the hand-set AC never counted (its part isn't in it).
+      const stale = withSpells(mira({ armorClass: 12, acFormula: 'Mage Armor: 13 + DEX 2' }), 'Mage Armor');
+      expect(syncArmorClass(stale, withSpells(stale)).events).toEqual([]);
+      const beside = withSpells(mira({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' }), 'Mage Armor');
+      expect(syncArmorClass(beside, withSpells(beside)).events).toEqual([]);
+      // Nor while Mage Armor is still recorded: a Dexterity raise (14 → 16) makes the AC worked out the DM's 16.
+      const blessed = withSpells(mira({ armorClass: 16, acFormula: 'set by the DM: blessed (+1) + Mage Armor: 13' }), 'Mage Armor');
+      const raised = { ...blessed, abilityScores: { ...blessed.abilityScores, dex: 16 } };
+      expect(computeArmorClass(raised).ac).toBe(16);
+      expect(syncArmorClass(blessed, raised)).toEqual({ character: raised, events: [] });
+      // Shield of Faith's +2 comes off (F3's follow-through under Slow, 16 then 14): no new warning.
+      const slowed = withSpells(mailed({ armorClass: 16, acFormula: 'set by the DM: Slow from the Stone Golem (-2) + Shield of Faith 2' }), 'Shield of Faith');
+      const off = syncArmorClass(slowed, withSpells(slowed));
+      expect(off.character).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Slow from the Stone Golem (-2)' });
+      expect(off.events.filter((e) => e.type === 'warning')).toEqual([]);
+    });
+
+    it('names a Shield of Faith still counted in the AC the warning gives when Mage Armor ends first (E5-1; srd:spell:mage-armor: "Until the spell ends, the target\'s base AC becomes 13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration")', () => {
+      // 14 "cursed (-3)" with both spells counted (13 + 2 + 2 − 3). Mage Armor ends while Shield of Faith lasts: the 14
+      // the DM is told to work from holds the +2, so the words say so (armor and abilities alone give 12).
+      const faithful = withSpells(mira({ armorClass: 14, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13 + Shield of Faith 2' }), 'Mage Armor', 'Shield of Faith');
+      expect(countedAcSpells(faithful)).toEqual(['Mage Armor', 'Shield of Faith']);
+      const first = syncArmorClass(faithful, withSpells(faithful, 'Shield of Faith'));
+      expect(first.character).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: cursed (-3) + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+      expect(first.events).toEqual([
+        {
+          type: 'warning',
+          message: 'AC 14, set by hand, counted Mage Armor, which has ended: if 14 still includes it, set the AC again (armor, abilities and Shield of Faith give 14).',
+        },
+      ]);
+      expect(computeArmorClass(withSpells(faithful)).ac).toBe(12);
+      // The words describe the number given, the AC worked out: a Shield of Faith recorded whose part the hand-set formula
+      // lacks (an older save's) is in that 14 all the same.
+      const older = withSpells(mira({ armorClass: 14, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13' }), 'Mage Armor', 'Shield of Faith');
+      expect(countedAcSpells(older)).toEqual(['Mage Armor']);
+      expect(syncArmorClass(older, withSpells(older, 'Shield of Faith')).events).toEqual([
+        {
+          type: 'warning',
+          message: 'AC 14, set by hand, counted Mage Armor, which has ended: if 14 still includes it, set the AC again (armor, abilities and Shield of Faith give 14).',
+        },
+      ]);
+    });
+
+    it('workedOutWords: what an AC worked out holds, in words, with the recorded AC spells its formula counts (E5-1; srd:spell:mage-armor: "13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2 bonus to AC")', () => {
+      const robed = withSpells(mira(), 'Mage Armor', 'Shield of Faith');
+      expect(workedOutWords(mira(), computeArmorClass(mira()).formula)).toBe('armor and abilities');
+      expect(computeArmorClass(robed).formula).toBe('Mage Armor: 13 + DEX 2 + Shield of Faith 2');
+      expect(workedOutWords(robed, computeArmorClass(robed).formula)).toBe('armor, abilities, Mage Armor and Shield of Faith');
+      // Only what the formula counts: Mage Armor under Chain Mail isn't (srd:spell:mage-armor: "who isn't wearing armor").
+      const armored = withSpells(mailed(), 'Mage Armor', 'Shield of Faith');
+      expect(workedOutWords(armored, computeArmorClass(armored).formula)).toBe('armor, abilities and Shield of Faith');
+      // A record whose part isn't in the formula given isn't named.
+      expect(workedOutWords(robed, '10 + DEX 2')).toBe('armor and abilities');
+      // Only AC spells are named: an item's part is in the number unnamed (X6-2; srd:magic-item:ring-of-protection: "You
+      // gain a +1 bonus to Armor Class and saving throws while wearing this ring").
+      const ringed = withSpells(wearing(mira(), { name: 'Ring of Protection', category: 'magic-item', attuned: true }), 'Shield of Faith');
+      expect(computeArmorClass(ringed)).toEqual({ ac: 15, formula: '10 + DEX 2 + Ring of Protection 1 + Shield of Faith 2' });
+      expect(workedOutWords(ringed, computeArmorClass(ringed).formula)).toBe('armor, abilities and Shield of Faith');
+    });
   });
 });
 

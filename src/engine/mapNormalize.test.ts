@@ -298,6 +298,77 @@ describe('normalizeCombatState (app convention: lenient saves)', () => {
     expect(normalizeCombatState(reloaded)).toEqual(reloaded);
   });
 
+  it('reads Concentration only where it belongs: an NPC\'s record, the hero\'s countdown (spec §2.4)', () => {
+    const state = sampleCombat();
+    const [mira, bandit1, bandit2, oldTam] = state.combatants;
+    const valid: CombatState = {
+      ...state,
+      combatants: [
+        { ...mira, concentrationCountdown: { spell: 'Bless', roundsLeft: 7 } },
+        { ...bandit1, concentration: { spell: 'Hold Person', roundsLeft: 3 } },
+        { ...bandit2, concentration: { spell: 'Fog Cloud' } },
+        oldTam,
+      ],
+    };
+    // Valid records come back as they were; normalizing twice changes nothing.
+    const once = normalizeCombatState(JSON.parse(JSON.stringify(valid)));
+    expect(once).toEqual(valid);
+    expect(normalizeCombatState(once)).toEqual(once);
+
+    const raw = {
+      ...state,
+      combatants: [
+        // The hero: no NPC record (her Concentration is the sheet's), and a countdown needs both of its fields.
+        { ...mira, concentration: { spell: 'Bless' }, concentrationCountdown: { spell: '  Bless  ', roundsLeft: 7 } },
+        // An NPC: no countdown; the spell trimmed and kept to 80 characters; a count that isn't a positive integer goes.
+        { ...bandit1, concentration: { spell: `  ${'x'.repeat(90)}`, roundsLeft: 2.5 }, concentrationCountdown: { spell: 'Bless', roundsLeft: 3 } },
+        { ...bandit2, concentration: { spell: 'Web', roundsLeft: 0 } },
+        { ...oldTam, concentration: { spell: '   ', roundsLeft: 4 } },
+      ],
+    };
+    const [a, b, c, d] = normalizeCombatState(raw).combatants;
+    expect(a).not.toHaveProperty('concentration');
+    expect(a.concentrationCountdown).toEqual({ spell: 'Bless', roundsLeft: 7 });
+    expect(b).not.toHaveProperty('concentrationCountdown');
+    expect(b.concentration).toEqual({ spell: 'x'.repeat(80) });
+    expect(c.concentration).toEqual({ spell: 'Web' });
+    expect(d).not.toHaveProperty('concentration');
+    for (const broken of [{ spell: 'Bless' }, { roundsLeft: 3 }, { spell: 'Bless', roundsLeft: -1 }, 'Bless', null]) {
+      const hero = normalizeCombatState({ ...state, combatants: [{ ...mira, concentrationCountdown: broken }] }).combatants[0];
+      expect(hero, JSON.stringify(broken)).not.toHaveProperty('concentrationCountdown');
+    }
+    for (const broken of [{ roundsLeft: 3 }, { spell: 7 }, 'Hold Person', null, []]) {
+      const npc = normalizeCombatState({ ...state, combatants: [{ ...bandit1, concentration: broken }] }).combatants[0];
+      expect(npc, JSON.stringify(broken)).not.toHaveProperty('concentration');
+    }
+  });
+
+  it('keeps a count of rounds to a day at most, so a hand-edited one still counts down (14,400 rounds: the DM tools\' cap; srd:rule:combat-the-order-of-combat: "A round represents about 6 seconds")', () => {
+    const state = sampleCombat();
+    const [mira, bandit1] = state.combatants;
+    const read = (roundsLeft: number) =>
+      normalizeCombatState({
+        ...state,
+        combatants: [
+          { ...mira, concentrationCountdown: { spell: 'Bless', roundsLeft } },
+          { ...bandit1, concentration: { spell: 'Hold Person', roundsLeft } },
+        ],
+      }).combatants;
+    for (const [given, kept] of [
+      [1e21, 14_400],
+      [14_401, 14_400],
+      [14_400, 14_400],
+      [600, 600],
+    ] as const) {
+      const [hero, npc] = read(given);
+      expect(hero.concentrationCountdown, String(given)).toEqual({ spell: 'Bless', roundsLeft: kept });
+      expect(npc.concentration, String(given)).toEqual({ spell: 'Hold Person', roundsLeft: kept });
+    }
+    // Idempotent: the clamped state reads the same again.
+    const once = normalizeCombatState({ ...state, combatants: [{ ...bandit1, concentration: { spell: 'Hold Person', roundsLeft: 1e21 } }] });
+    expect(normalizeCombatState(once)).toEqual(once);
+  });
+
   it('keeps the rest of the combat as it was, unknown fields included', () => {
     const state = { ...sampleCombat(), futureField: { keep: true } };
     state.combatants[0] = { ...state.combatants[0], notes: 'Lucky.', futureNote: 1 } as CombatState['combatants'][number];

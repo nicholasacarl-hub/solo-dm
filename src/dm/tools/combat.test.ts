@@ -4,11 +4,12 @@ vi.mock('@/engine', () => import('../testing/fakeEngine'));
 vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
+import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import { createRulesIndex } from '@/data/search';
 import { materializeEntries } from '@/data/structured/materialize';
-import { sampleCombat, sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
+import { sampleCharacter, sampleCombat, sampleMappedCombat, sampleStopCombat } from '@/test/fixtures';
 import { gloamwoodEntries, gloamwoodEntryId, gloamwoodRecords, gloamwoodSource, GLOAMWOOD_TITLE } from '@/test/structuredFixtures';
-import type { CombatState, CompendiumEntry, LogEntry, MapEffect, ToolLogEntry } from '@/types';
+import type { Character, Combatant, CombatState, CompendiumEntry, KnownSpell, LogEntry, MapEffect, RollLogEntry, ToolLogEntry } from '@/types';
 import { deps, resetDmDeps, setDmDeps } from '../deps';
 import { createFakeRulesIndex, SAMPLE_RULES } from '../testing/fakeData';
 import { fakeDice } from '../testing/fakeEngine';
@@ -27,6 +28,25 @@ function setup(opts: HarnessOptions = {}): Harness & { run: (name: string, input
 
 const toolLines = (log: LogEntry[]) => log.filter((e): e is ToolLogEntry => e.kind === 'tool');
 const named = (state: CombatState | null, name: string) => state?.combatants.find((c) => c.name === name);
+
+const SRD_SPELLS = (JSON.parse(compendiumRaw) as CompendiumEntry[]).filter((e) => e.kind === 'spell');
+/** The setup with the real rules index over the SRD 5.2.1 spells (its own name lookup) in place of the few test entries. */
+function withSrdSpells(opts: HarnessOptions = {}) {
+  const h = setup(opts);
+  const index = createRulesIndex(SRD_SPELLS);
+  setDmDeps({ rulesIndex: async () => index });
+  const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+  return { ...h, run: (name: string, input: unknown) => runTool(name, input, ctx) };
+}
+/** A sheet spell as the builder links it to its SRD entry (KnownSpell.id is the entry's id). */
+const srdKnown = (id: string, name: string, level: number, source: string, concentration?: boolean): KnownSpell => ({
+  id,
+  name,
+  level,
+  prepared: true,
+  source,
+  ...(concentration ? { concentration } : {}),
+});
 
 /** The warehouse of spec §4.5 (its loading door is A5:B7, as in the fixture). */
 const WAREHOUSE = {
@@ -467,5 +487,832 @@ describe('end_combat', () => {
       'Final positions: Mira Voss B6 (the loading door) · Bandit 1 F4 · Bandit 2 F3 · Old Tam B5 (the loading door) · Dock Ogre H10:I11',
     );
     expect(JSON.stringify(h.s().log)).not.toContain('Cutthroat');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Spell effects (SPEC §3.2, §3.4, §3.5): NPC Concentration, the app's Constitution saves, countdowns, the end cascade
+// ---------------------------------------------------------------------------
+
+const rollLines = (log: LogEntry[]) => log.filter((e): e is RollLogEntry => e.kind === 'roll');
+
+/**
+ * sampleCombat() (round 2, Bandit 1's turn) with a Cultist Fanatic after Bandit 1: SRD stat block, Constitution save +1
+ * (srd:monster:cultist-fanatic), numbers hidden from the player as an enemy's are by default. Order: Mira Voss 17,
+ * Bandit 1 14, Cultist Fanatic 12, Bandit 2 9, Old Tam 5.
+ */
+function fanaticFight(fanatic: Partial<Combatant> = {}, more: (state: CombatState) => CombatState = (s) => s): CombatState {
+  const base = sampleCombat();
+  const cultist: Combatant = {
+    id: 'c-7',
+    name: 'Cultist Fanatic',
+    side: 'enemy',
+    isPlayer: false,
+    initiative: 12,
+    initiativeBonus: 2,
+    ac: 13,
+    hp: { max: 44, current: 44, temp: 0 },
+    conditions: [],
+    defeated: false,
+    hideHp: true,
+    statBlockName: 'Cultist Fanatic',
+    statBlockId: 'srd:monster:cultist-fanatic',
+    ...fanatic,
+  };
+  const [mira, bandit1, bandit2, oldTam] = base.combatants;
+  return more({ ...base, combatants: [mira, bandit1, cultist, bandit2, oldTam] });
+}
+
+const holding = (spell: string, roundsLeft?: number): Partial<Combatant> => ({ concentration: roundsLeft === undefined ? { spell } : { spell, roundsLeft } });
+const paralyzedMira = (source = 'Hold Person') => sampleCharacter({ conditions: [{ id: 'paralyzed', source }] });
+const fanaticOf = (h: Harness) => named(h.s().combat, 'Cultist Fanatic');
+const firstLine = (text: string) => text.split('\n')[0];
+
+describe('update_combat concentrate: an NPC or monster (srd:rule:concentration)', () => {
+  it('starts it with the countdown from the rules data, and writes no player log line', async () => {
+    const h = setup({ state: { combat: fanaticFight() } });
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Hold Person' });
+    expect(out.isError).toBeUndefined();
+    // srd:spell:hold-person "Concentration, up to 1 minute": 10 rounds (srd:rule:combat-the-order-of-combat, about 6 seconds each).
+    expect(firstLine(out.content)).toBe('Cultist Fanatic is concentrating on Hold Person (10 rounds left).');
+    expect(fanaticOf(h)?.concentration).toEqual({ spell: 'Hold Person', roundsLeft: 10 });
+    expect(out.content).toContain('Cultist Fanatic · HP 44/44 · Concentrating: Hold Person (10 rounds left)');
+    expect(h.s().log).toHaveLength(0);
+  });
+
+  it("counts long spells in minutes, the DM's own count as given, and says when nothing counts it", async () => {
+    const h = setup({ state: { combat: fanaticFight() } });
+    // srd:spell:web "Concentration, up to 1 hour": 600 rounds.
+    expect(firstLine((await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Web' })).content)).toBe(
+      'Cultist Fanatic is concentrating on Web (about 60 minutes left).',
+    );
+    expect(fanaticOf(h)?.concentration).toEqual({ spell: 'Web', roundsLeft: 600 });
+    const given = setup({ state: { combat: fanaticFight() } });
+    expect(firstLine((await given.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Web', rounds: 20 })).content)).toBe(
+      'Cultist Fanatic is concentrating on Web (20 rounds left).',
+    );
+    const unknown = setup({ state: { combat: fanaticFight() } });
+    const lash = await unknown.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Shadow Lash' });
+    expect(firstLine(lash.content)).toBe(
+      "Cultist Fanatic is concentrating on Shadow Lash (no countdown: Shadow Lash isn't a spell in the rules data — give rounds to count it).",
+    );
+    expect(named(unknown.s().combat, 'Cultist Fanatic')?.concentration).toEqual({ spell: 'Shadow Lash' });
+  });
+
+  it('refuses a spell that needs no Concentration (srd:spell:shield, Duration: 1 round)', async () => {
+    const h = setup({ state: { combat: fanaticFight() } });
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Shield' });
+    expect(out).toEqual({ isError: true, content: "Shield doesn't require Concentration (Duration: 1 round)." });
+    expect(fanaticOf(h)).not.toHaveProperty('concentration');
+  });
+
+  it('reads a stat block\'s qualified spell without its qualifier, and records the spell\'s own name (srd:spell:hold-person, srd:spell:mind-spike)', async () => {
+    // srd:spell:mind-spike: "Duration: Concentration, up to 1 hour".
+    const mindSpike: CompendiumEntry = {
+      id: 'srd:spell:mind-spike',
+      sourceId: 'srd-5.2.1',
+      sourceName: 'SRD 5.2.1',
+      kind: 'spell',
+      name: 'Mind Spike',
+      text: 'You drive a spike of psionic energy into the mind of one creature you can see within range.',
+      data: { level: 2, concentration: true, duration: 'Concentration, up to 1 hour' },
+    };
+    const h = setup({ character: paralyzedMira(), rules: [...SAMPLE_RULES, mindSpike], state: { combat: fanaticFight() } });
+    // srd:spell:hold-person: "Using a Higher-Level Spell Slot. You can target one additional Humanoid" — the same spell.
+    const held = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Hold Person (3rd level)' });
+    expect(firstLine(held.content)).toBe('Cultist Fanatic is concentrating on Hold Person (10 rounds left).');
+    expect(fanaticOf(h)?.concentration).toEqual({ spell: 'Hold Person', roundsLeft: 10 });
+    // So its end names the conditions sourced "Hold Person".
+    const ended = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null });
+    expect(ended.content).toContain('Mira Voss is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_character conditions_remove.');
+    const spike = await h.run('update_combat', { action: 'concentrate', target: 'Bandit 2', spell: 'Mind Spike (level 4 version)' });
+    expect(firstLine(spike.content)).toBe('Bandit 2 is concentrating on Mind Spike (about 60 minutes left).');
+    // A qualified name the rules data doesn't know stays as typed, with no countdown.
+    const lash = await h.run('update_combat', { action: 'concentrate', target: 'Bandit 1', spell: 'Shadow Lash (empowered)' });
+    expect(firstLine(lash.content)).toBe(
+      "Bandit 1 is concentrating on Shadow Lash (empowered) (no countdown: Shadow Lash (empowered) isn't a spell in the rules data — give rounds to count it).",
+    );
+  });
+
+  it('restarts the count on a recast (srd:rule:casting-spells-effects-combining-spell-effects), and a repeat changes nothing', async () => {
+    const h = setup({ state: { combat: fanaticFight(holding('Hold Person', 3)) } });
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Hold Person' });
+    expect(firstLine(out.content)).toBe('Cultist Fanatic recasts Hold Person: 10 rounds left.');
+    expect(fanaticOf(h)?.concentration).toEqual({ spell: 'Hold Person', roundsLeft: 10 });
+    const combat = h.s().combat;
+    const again = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'hold person' });
+    expect(firstLine(again.content)).toBe('Cultist Fanatic recasts Hold Person: 10 rounds left.');
+    expect(h.s().combat).toBe(combat);
+    // A bonus the app couldn't see (an ally's Bless on the save) is put right with the rounds that were left.
+    expect(firstLine((await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Hold Person', rounds: 3 })).content)).toBe(
+      'Cultist Fanatic recasts Hold Person: 3 rounds left.',
+    );
+    expect(h.s().log).toHaveLength(0);
+  });
+
+  it('ends the spell it held when it starts another (srd:rule:concentration, Another Concentration Effect), naming what that spell held', async () => {
+    const h = setup({ character: paralyzedMira(), state: { combat: fanaticFight(holding('Hold Person', 7)) } });
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Web' });
+    expect(out.content).toContain(
+      [
+        'Cultist Fanatic is concentrating on Web (about 60 minutes left).',
+        "Cultist Fanatic's Hold Person ends: it started concentrating on Web.",
+        'Mira Voss is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_character conditions_remove.',
+      ].join('\n'),
+    );
+    // Named, never removed: the app can't tell which Paralyzed the spell caused.
+    expect(h.s().character?.conditions).toEqual([{ id: 'paralyzed', source: 'Hold Person' }]);
+  });
+
+  it('ends it with spell null, and says so when there is nothing to end, defeated or not', async () => {
+    const h = setup({ character: paralyzedMira(), state: { combat: fanaticFight(holding('Hold Person', 7)) } });
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null });
+    expect(out.content.split('\n').slice(0, 2)).toEqual([
+      'Cultist Fanatic stops concentrating on Hold Person.',
+      'Mira Voss is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_character conditions_remove.',
+    ]);
+    expect(fanaticOf(h)).not.toHaveProperty('concentration');
+    const again = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null });
+    expect(firstLine(again.content)).toBe("Cultist Fanatic isn't concentrating on anything.");
+    const defeated = setup({ state: { combat: fanaticFight({ ...holding('Hold Person'), defeated: true }) } });
+    expect(firstLine((await defeated.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null })).content)).toBe(
+      'Cultist Fanatic stops concentrating on Hold Person.',
+    );
+    expect(h.s().log).toHaveLength(0);
+  });
+
+  it("refuses what can't concentrate, and spell or rounds with another action", async () => {
+    const h = setup({ state: { combat: fanaticFight() } });
+    expect(await h.run('update_combat', { action: 'damage', target: 'Bandit 1', amount: 2, spell: 'Bless' })).toEqual({
+      isError: true,
+      content: '`spell` and `rounds` go with action concentrate.',
+    });
+    expect((await h.run('update_combat', { action: 'next_turn', rounds: 3 })).isError).toBe(true);
+    expect((await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic' })).content).toBe(
+      'update_combat concentrate needs `spell`: what Cultist Fanatic concentrates on, or null when that ends.',
+    );
+    const defeated = setup({ state: { combat: fanaticFight({ defeated: true }) } });
+    expect((await defeated.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Bless' })).content).toBe(
+      "Cultist Fanatic is defeated and can't start concentrating.",
+    );
+    // srd:rule:concentration: "Your Concentration ends if you have the Incapacitated condition".
+    const held = setup({ state: { combat: fanaticFight({ conditions: [{ id: 'paralyzed' }] }) } });
+    expect((await held.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: 'Bless' })).content).toBe(
+      "Cultist Fanatic can't concentrate while Paralyzed.",
+    );
+    expect(h.s().combat).toEqual(fanaticFight());
+  });
+});
+
+describe("update_combat concentrate on the hero: only the countdown of the sheet's spell", () => {
+  const blessing = () => sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Bless' } });
+
+  it('sets the rounds left of the spell the sheet holds (Extended Spell, a higher-level slot)', async () => {
+    const h = setup({ character: blessing(), state: { combat: sampleCombat() } });
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Bless', rounds: 20 });
+    expect(firstLine(out.content)).toBe("Mira Voss's Bless: 20 rounds left.");
+    expect(named(h.s().combat, 'Mira Voss')?.concentrationCountdown).toEqual({ spell: 'Bless', roundsLeft: 20 });
+    expect(out.content).toContain('Mira Voss · AC 12 · Bless: about 2 minutes left');
+    expect(h.s().log).toHaveLength(0);
+  });
+
+  it("names update_character for starting or ending the hero's Concentration", async () => {
+    const h = setup({ character: blessing(), state: { combat: sampleCombat() } });
+    expect((await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: null })).content).toBe(
+      "Mira Voss's Concentration is on the character sheet: end it with update_character concentration: null.",
+    );
+    expect((await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Web', rounds: 5 })).content).toBe(
+      'Mira Voss is concentrating on Bless, not Web: for the hero, concentrate only sets rounds (spell "Bless" with rounds); update_character concentration starts or ends the hero\'s Concentration.',
+    );
+    expect((await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Bless' })).content).toBe(
+      "Give rounds: how long Mira Voss's Bless still lasts (1 minute = 10 rounds).",
+    );
+    const idle = setup({ state: { combat: sampleCombat() } });
+    expect((await idle.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Bless', rounds: 5 })).content).toBe(
+      'Mira Voss isn\'t concentrating on anything: start it with update_character concentration "Bless".',
+    );
+    expect(named(h.s().combat, 'Mira Voss')).not.toHaveProperty('concentrationCountdown');
+  });
+
+  it('refuses a spell that needs no Concentration for the hero too, before anything is written (srd:spell:shield, srd:spell:mage-armor)', async () => {
+    const h = setup({ state: { combat: sampleCombat() } });
+    const combat = h.s().combat;
+    const character = h.s().character;
+    // srd:spell:shield "Duration: 1 round": its +5 is the DM's to fold in, never a Concentration to record.
+    expect(await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Shield', rounds: 1 })).toEqual({
+      isError: true,
+      content: "Shield doesn't require Concentration (Duration: 1 round). Fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn.",
+    });
+    // srd:spell:mage-armor "Duration: 8 hours": its AC the app records.
+    expect(await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Mage Armor', rounds: 4800 })).toEqual({
+      isError: true,
+      content: 'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"].',
+    });
+    expect(h.s().combat).toBe(combat);
+    expect(h.s().character).toBe(character);
+    expect(h.s().log).toHaveLength(0);
+    // A spell the rules data doesn't know is never refused for it: the sheet's Shadow Lash gets its rounds.
+    const lashing = sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Shadow Lash' } });
+    const lash = setup({ character: lashing, state: { combat: sampleCombat() } });
+    const counted = await lash.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Shadow Lash', rounds: 3 });
+    expect(firstLine(counted.content)).toBe("Mira Voss's Shadow Lash: 3 rounds left.");
+  });
+
+  it("reads the name as given, never a namesake on the sheet (RD1, on SRD 5.2.1's own entries)", async () => {
+    const sc = sampleCharacter().spellcasting!;
+    // A Wizard's sheet with See Invisibility and not Invisibility (srd:spell:invisibility: "Concentration, up to 1 hour").
+    const seeing = (concentratingOn: string | null) =>
+      sampleCharacter({ spellcasting: { ...sc, spells: [...sc.spells, srdKnown('srd:spell:see-invisibility', 'See Invisibility', 2, 'Wizard')], concentratingOn } });
+    const h = withSrdSpells({ character: seeing('Invisibility'), state: { combat: sampleCombat() } });
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Invisibility', rounds: 300 });
+    expect(firstLine(out.content)).toBe("Mira Voss's Invisibility: 300 rounds left.");
+    expect(named(h.s().combat, 'Mira Voss')?.concentrationCountdown).toEqual({ spell: 'Invisibility', roundsLeft: 300 });
+    // Not concentrating yet: the call that starts it, never See Invisibility's refusal.
+    const idle = withSrdSpells({ character: seeing(null), state: { combat: sampleCombat() } });
+    expect((await idle.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Invisibility', rounds: 300 })).content).toBe(
+      'Mira Voss isn\'t concentrating on anything: start it with update_character concentration "Invisibility".',
+    );
+    // A Cleric's sheet with Shield of Faith and not Shield: Shield is refused, before anything is written (srd:spell:shield:
+    // "Duration: 1 round").
+    const cleric = (concentratingOn: string) =>
+      sampleCharacter({
+        spellcasting: {
+          ...sc,
+          ability: 'wis',
+          spells: [srdKnown('srd:spell:shield-of-faith', 'Shield of Faith', 1, 'Cleric', true), srdKnown('srd:spell:bless', 'Bless', 1, 'Cleric', true)],
+          concentratingOn,
+        },
+      });
+    const blessing = withSrdSpells({ character: cleric('Bless'), state: { combat: sampleCombat() } });
+    const combat = blessing.s().combat;
+    const character = blessing.s().character;
+    expect(await blessing.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Shield', rounds: 1 })).toEqual({
+      isError: true,
+      content: "Shield doesn't require Concentration (Duration: 1 round). Fold its +5 into the dc of attacks on Mira Voss until the start of Mira Voss's next turn.",
+    });
+    expect(blessing.s().combat).toBe(combat);
+    expect(blessing.s().character).toBe(character);
+    expect(blessing.s().log).toHaveLength(0);
+    // "Faith" for a held Shield of Faith isn't refused (the rules data has no "Faith"; the sheet's spell needs Concentration),
+    // and it is the sheet's spell, as update_character reads it (TX3): its rounds, by the sheet's name.
+    const faithful = withSrdSpells({ character: cleric('Shield of Faith'), state: { combat: sampleCombat() } });
+    expect(firstLine((await faithful.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Faith', rounds: 3 })).content)).toBe(
+      "Mira Voss's Shield of Faith: 3 rounds left.",
+    );
+    expect(named(faithful.s().combat, 'Mira Voss')?.concentrationCountdown).toEqual({ spell: 'Shield of Faith', roundsLeft: 3 });
+  });
+
+  it('reads the name as update_character does: the spell it recorded, by its note or a looser name (TX3; srd:spell:hold-person: "Concentration, up to 1 minute"; srd:spell:bless: "Concentration, up to 1 minute")', async () => {
+    for (const [given, recorded] of [
+      ['Hold Person (3rd level)', 'Hold Person'],
+      ['Bless (upcast)', 'Bless'],
+    ]) {
+      const h = withSrdSpells({ state: { combat: sampleCombat() } });
+      await h.run('update_character', { concentration: given });
+      expect(h.s().character?.spellcasting?.concentratingOn).toBe(recorded);
+      expect(firstLine((await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: given, rounds: 4 })).content)).toBe(
+        `Mira Voss's ${recorded}: 4 rounds left.`,
+      );
+      expect(named(h.s().combat, 'Mira Voss')?.concentrationCountdown).toEqual({ spell: recorded, roundsLeft: 4 });
+    }
+    // Another spell by the rules data is still refused, quoting the name as given (srd:spell:greater-invisibility:
+    // "Concentration, up to 1 minute"; srd:spell:invisibility: "Concentration, up to 1 hour").
+    const sc = sampleCharacter().spellcasting!;
+    const greater = sampleCharacter({
+      spellcasting: { ...sc, spells: [...sc.spells, srdKnown('srd:spell:greater-invisibility', 'Greater Invisibility', 4, 'Wizard', true)], concentratingOn: 'Greater Invisibility' },
+    });
+    const h = withSrdSpells({ character: greater, state: { combat: sampleCombat() } });
+    const combat = h.s().combat;
+    expect((await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Invisibility', rounds: 4 })).content).toBe(
+      'Mira Voss is concentrating on Greater Invisibility, not Invisibility: for the hero, concentrate only sets rounds (spell "Greater Invisibility" with rounds); update_character concentration starts or ends the hero\'s Concentration.',
+    );
+    expect(h.s().combat).toBe(combat);
+  });
+
+  it('refuses Mage Armor for the hero without asking for its record once the hero holds it (srd:spell:mage-armor: "Duration: 8 hours")', async () => {
+    const recorded = sampleCharacter({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'] });
+    const h = withSrdSpells({ character: recorded, state: { combat: sampleCombat() } });
+    expect(await h.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Mage Armor', rounds: 4800 })).toEqual({
+      isError: true,
+      content: "Mage Armor doesn't require Concentration (Duration: 8 hours).",
+    });
+  });
+
+  it("never gives the rounds of the sheet's other spell of exactly the name given to the spell held (H5/HX3; srd:spell:conjure-elemental and srd:spell:conjure-minor-elementals: \"Concentration, up to 10 minutes\"; srd:rule:concentration: \"You lose Concentration on an effect the moment you start casting a spell that requires Concentration\")", async () => {
+    const sc = sampleCharacter().spellcasting!;
+    const minor = srdKnown('srd:spell:conjure-minor-elementals', 'Conjure Minor Elementals', 4, 'Wizard', true);
+    const conjurer = (spells: KnownSpell[]) => sampleCharacter({ spellcasting: { ...sc, spells: [...sc.spells, ...spells], concentratingOn: 'Conjure Minor Elementals' } });
+    const both = withSrdSpells({ character: conjurer([minor, srdKnown('srd:spell:conjure-elemental', 'Conjure Elemental', 5, 'Wizard', true)]), state: { combat: sampleCombat() } });
+    const combat = both.s().combat;
+    expect((await both.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Conjure Elemental', rounds: 2 })).content).toBe(
+      'Mira Voss is concentrating on Conjure Minor Elementals, not Conjure Elemental: for the hero, concentrate only sets rounds (spell "Conjure Minor Elementals" with rounds); update_character concentration starts or ends the hero\'s Concentration.',
+    );
+    expect(both.s().combat).toBe(combat);
+    // With only the longer on the sheet the two are read as one, as documented: its rounds.
+    const only = withSrdSpells({ character: conjurer([minor]), state: { combat: sampleCombat() } });
+    expect(firstLine((await only.run('update_combat', { action: 'concentrate', target: 'Mira Voss', spell: 'Conjure Elemental', rounds: 2 })).content)).toBe(
+      "Mira Voss's Conjure Minor Elementals: 2 rounds left.",
+    );
+  });
+});
+
+describe('update_combat damage: the Constitution save the app rolls (srd:rule:concentration, Damage)', () => {
+  it("rolls the stat block's save against DC 10 or half the damage, after the damage line, behind the screen for hidden numbers", async () => {
+    fakeDice.queue(13);
+    const h = setup({ state: { combat: fanaticFight(holding('Hold Person', 3)) } });
+    const out = await h.run('update_combat', { action: 'damage', target: 'Cultist Fanatic', amount: 7 });
+    expect(out.content).toContain('Cultist Fanatic: HP 37/44\n');
+    expect(out.content).toContain('\nConcentration: Constitution save 14 (1d20+1) vs DC 10 — Cultist Fanatic keeps Hold Person.\n');
+    expect(fanaticOf(h)?.concentration).toEqual({ spell: 'Hold Person', roundsLeft: 3 });
+    const [damage, save] = h.s().log;
+    expect(damage).toMatchObject({ kind: 'tool', summary: 'Cultist Fanatic takes 7 damage (scratched)' });
+    // The card never names the spell, and an enemy's hidden numbers keep it secret.
+    expect(save).toMatchObject({ kind: 'roll', actor: 'dm', purpose: "Cultist Fanatic's Constitution save to keep concentration", secret: true, roll: { total: 14, dc: 10 } });
+  });
+
+  it('ends the spell on a failure, with the rounds that were left and what it held', async () => {
+    fakeDice.queue(4);
+    const h = setup({ character: paralyzedMira(), state: { combat: fanaticFight(holding('Hold Person', 3)) } });
+    // 30 damage: DC 15, half the damage taken.
+    const out = await h.run('update_combat', { action: 'damage', target: 'Cultist Fanatic', amount: 30 });
+    expect(out.content).toContain(
+      [
+        "Concentration: Constitution save 5 (1d20+1) vs DC 15 — fails: Cultist Fanatic's Hold Person ends (3 rounds were left).",
+        'Mira Voss is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_character conditions_remove.',
+      ].join('\n'),
+    );
+    expect(fanaticOf(h)).not.toHaveProperty('concentration');
+    expect(rollLines(h.s().log)).toHaveLength(1);
+  });
+
+  it('lets a creature with Legendary Resistance decide before anything ends (srd:monster:mummy-lord)', async () => {
+    fakeDice.queue(4);
+    const lord = { name: 'Mummy Lord', statBlockName: 'Mummy Lord', statBlockId: 'srd:monster:mummy-lord', hp: { max: 187, current: 187, temp: 0 }, ...holding('Insect Plague', 83) };
+    const h = setup({ state: { combat: fanaticFight(lord) } });
+    const out = await h.run('update_combat', { action: 'damage', target: 'Mummy Lord', amount: 24 });
+    expect(out.content).toContain(
+      'Concentration: Constitution save 7 (1d20+3) vs DC 12 — fails. Mummy Lord has Legendary Resistance: if it uses one it keeps Insect Plague (nothing to do); otherwise update_combat concentrate target "Mummy Lord" spell null.',
+    );
+    expect(named(h.s().combat, 'Mummy Lord')?.concentration).toEqual({ spell: 'Insect Plague', roundsLeft: 83 });
+  });
+
+  it('leaves the roll to the DM when the stat block gives no saves (an imported, reviewed stat block)', async () => {
+    const witch = { name: 'Bog Witch', statBlockName: 'Bog Witch', statBlockId: 'lib:lib-phb:7', ...holding('Hold Person', 5) };
+    const h = setup({ state: { combat: fanaticFight(witch) } });
+    const out = await h.run('update_combat', { action: 'damage', target: 'Bog Witch', amount: 7 });
+    // D10: the purpose the app's own card uses, which never names the spell (srd:rule:casting-spells-effects-targets).
+    expect(out.content).toContain(
+      'Concentration check: Bog Witch must make a DC 10 Constitution saving throw to keep Hold Person — roll it with roll_dice (purpose "Bog Witch\'s Constitution save to keep concentration", secret: true); on a failure call update_combat concentrate target "Bog Witch" spell null.',
+    );
+    expect(rollLines(h.s().log)).toHaveLength(0);
+    // An ally whose numbers show (and no stat block): no secret, and still no spell in the purpose.
+    const combat = sampleCombat();
+    combat.combatants[3] = { ...combat.combatants[3], concentration: { spell: 'Bless', roundsLeft: 4 } };
+    const ally = setup({ state: { combat } });
+    expect((await ally.run('update_combat', { action: 'damage', target: 'Old Tam', amount: 3 })).content).toContain(
+      'Concentration check: Old Tam must make a DC 10 Constitution saving throw to keep Bless — roll it with roll_dice (purpose "Old Tam\'s Constitution save to keep concentration"); on a failure call update_combat concentrate target "Old Tam" spell null.',
+    );
+  });
+
+  it("shows an ally's save card when its numbers show, without the spell", async () => {
+    fakeDice.queue(15);
+    const combat = sampleCombat();
+    combat.combatants[3] = { ...combat.combatants[3], statBlockId: 'srd:monster:cultist-fanatic', concentration: { spell: 'Shield of Faith', roundsLeft: 40 } };
+    const h = setup({ state: { combat } });
+    await h.run('update_combat', { action: 'damage', target: 'Old Tam', amount: 4 });
+    expect(rollLines(h.s().log)[0]).toMatchObject({ purpose: "Old Tam's Constitution save to keep concentration", secret: false });
+    expect(JSON.stringify(h.s().log)).not.toContain('Shield of Faith');
+  });
+
+  it("logs the save as a save, so a creature named like an attack never gets an attack's card (srd:rule:concentration: a Constitution saving throw)", async () => {
+    fakeDice.queue(15);
+    const h = setup({ state: { combat: fanaticFight({ name: 'Attack Dog', hideHp: false, ...holding('Hold Person', 3) }) } });
+    await h.run('update_combat', { action: 'damage', target: 'Attack Dog', amount: 4 });
+    // The roll card reads rollType before guessing from the purpose (an "attack" in it would read as an attack roll).
+    expect(rollLines(h.s().log)).toEqual([
+      expect.objectContaining({ actor: 'dm', purpose: "Attack Dog's Constitution save to keep concentration", rollType: 'save', secret: false, roll: expect.objectContaining({ dc: 10 }) }),
+    ]);
+  });
+
+  it('ends it at 0 HP without a roll (srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death)', async () => {
+    fakeDice.queue(20);
+    const h = setup({ character: paralyzedMira(), state: { combat: fanaticFight(holding('Hold Person', 3)) } });
+    const out = await h.run('update_combat', { action: 'damage', target: 'Cultist Fanatic', amount: 50 });
+    expect(out.content).toContain(
+      "Cultist Fanatic's Hold Person ends: it drops to 0 HP.\nMira Voss is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_character conditions_remove.",
+    );
+    expect(fanaticOf(h)).toMatchObject({ defeated: true });
+    expect(fanaticOf(h)).not.toHaveProperty('concentration');
+    expect(fakeDice.remaining()).toBe(1);
+    expect(rollLines(h.s().log)).toHaveLength(0);
+  });
+
+  it("rolls nothing for 0 damage or a creature that isn't concentrating", async () => {
+    const h = setup({ state: { combat: fanaticFight(holding('Hold Person', 3)) } });
+    expect((await h.run('update_combat', { action: 'damage', target: 'Cultist Fanatic', amount: 0 })).content).not.toContain('Concentration');
+    expect((await h.run('update_combat', { action: 'damage', target: 'Bandit 2', amount: 3 })).content).not.toContain('Concentration');
+    expect(rollLines(h.s().log)).toHaveLength(0);
+  });
+
+  it("keeps a hidden creature's damage, save and spell out of the player's view (D41)", async () => {
+    fakeDice.queue(2);
+    const h = setup({ state: { combat: fanaticFight({ ...holding('Hold Person', 3), hidden: true }) } });
+    await h.run('update_combat', { action: 'damage', target: 'Cultist Fanatic', amount: 7 });
+    expect(toolLines(h.s().log)).toHaveLength(0);
+    expect(rollLines(h.s().log)).toMatchObject([{ secret: true }]);
+  });
+});
+
+describe('update_combat conditions, defeat and remove on a concentrating creature', () => {
+  it('ends it on an Incapacitating condition, never naming back the condition the call added (srd:condition:incapacitated)', async () => {
+    const h = setup({ character: paralyzedMira(), state: { combat: fanaticFight(holding('Hold Person', 5)) } });
+    // An ally's Hold Person paralyzes the Cultist Fanatic that holds Mira Voss with its own.
+    const out = await h.run('update_combat', { action: 'conditions', target: 'Cultist Fanatic', conditions_add: [{ condition: 'Paralyzed', source: 'Hold Person' }] });
+    expect(out.content).toContain(
+      [
+        'Cultist Fanatic: +paralyzed',
+        "Cultist Fanatic's Hold Person ends: it is Paralyzed.",
+        'Mira Voss is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_character conditions_remove.',
+      ].join('\n'),
+    );
+    expect(out.content).not.toContain('Cultist Fanatic is Paralyzed');
+    expect(fanaticOf(h)).not.toHaveProperty('concentration');
+    expect(toolLines(h.s().log).map((l) => l.summary)).toEqual(['Cultist Fanatic: +paralyzed']);
+  });
+
+  it('keeps the spell on defeat but stops counting it: a creature that fled can still concentrate', async () => {
+    const h = setup({ state: { combat: fanaticFight(holding('Hold Person', 5)) } });
+    const out = await h.run('update_combat', { action: 'defeat', target: 'Cultist Fanatic' });
+    expect(out.content).toContain(
+      'Cultist Fanatic is out of the fight\nCultist Fanatic was concentrating on Hold Person: if it fell, end it with update_combat concentrate target "Cultist Fanatic" spell null; if it fled still concentrating, the spell goes on (the app no longer counts it).',
+    );
+    expect(fanaticOf(h)?.concentration).toEqual({ spell: 'Hold Person' });
+    expect(JSON.stringify(h.s().log)).not.toContain('Hold Person');
+  });
+
+  it('names the conditions its spell may hold when it leaves the fight', async () => {
+    const h = setup({ character: paralyzedMira(), state: { combat: fanaticFight(holding('Hold Person', 7)) } });
+    const out = await h.run('update_combat', { action: 'remove', target: 'Cultist Fanatic' });
+    expect(out.content).toContain(
+      [
+        'Cultist Fanatic leaves the fight',
+        'Cultist Fanatic was concentrating on Hold Person (7 rounds left): the app no longer tracks it.',
+        'Mira Voss is Paralyzed (source: Hold Person): remove it when that spell ends.',
+      ].join('\n'),
+    );
+  });
+
+  it("names the hero's Shield of Faith record its caster's spell may be, when the caster leaves the fight or the fight ends (srd:spell:shield-of-faith)", async () => {
+    // srd:spell:shield-of-faith: "granting it a +2 bonus to AC for the duration" (Concentration, up to 10 minutes).
+    const recorded = () => sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    const tamHolds = (): CombatState => {
+      const combat = sampleCombat();
+      combat.combatants[3] = { ...combat.combatants[3], concentration: { spell: 'Shield of Faith', roundsLeft: 90 } };
+      return combat;
+    };
+    const line = 'Mira Voss\'s Shield of Faith +2: if it is Old Tam\'s, end it with update_character ac_spells_end ["Shield of Faith"] when that spell ends.';
+    const h = setup({ character: recorded(), state: { combat: tamHolds() } });
+    const removed = await h.run('update_combat', { action: 'remove', target: 'Old Tam' });
+    expect(removed.content).toContain(['Old Tam was concentrating on Shield of Faith (about 9 minutes left): the app no longer tracks it.', line].join('\n'));
+    const ends = setup({ character: recorded(), state: { combat: tamHolds() } });
+    const ended = await ends.run('end_combat', { summary: 'The bandits fled.' });
+    expect(ended.content).toContain(['Still concentrating as the fight ends: Old Tam (Shield of Faith) — the app no longer tracks it.', line].join('\n'));
+    // Named, never ended: the record stays until the DM ends it.
+    expect(ends.s().character).toMatchObject({ armorClass: 14, acSpells: ['Shield of Faith'] });
+    // The hero concentrating on Shield of Faith: the app takes the record to be the hero's own casting.
+    const own = setup({
+      character: sampleCharacter({ ...recorded(), spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Shield of Faith' } }),
+      state: { combat: tamHolds() },
+    });
+    expect((await own.run('update_combat', { action: 'remove', target: 'Old Tam' })).content).not.toContain("Mira Voss's Shield of Faith +2");
+  });
+});
+
+describe('the countdowns at a turn start (srd:rule:casting-spells-duration)', () => {
+  it("ends an NPC's spell as its turn starts with no rounds left, and the player's log never names it", async () => {
+    const h = setup({ character: paralyzedMira(), state: { combat: fanaticFight(holding('Hold Person', 2)) } });
+    const first = await h.run('update_combat', { action: 'next_turn' }); // Bandit 1 → the Cultist Fanatic
+    expect(firstLine(first.content)).toBe("Round 2: Cultist Fanatic's turn.");
+    expect(fanaticOf(h)?.concentration).toEqual({ spell: 'Hold Person', roundsLeft: 1 });
+    for (let i = 0; i < 4; i++) await h.run('update_combat', { action: 'next_turn' }); // … round 3: Mira Voss, Bandit 1
+    const out = await h.run('update_combat', { action: 'next_turn' }); // round 3: the Cultist Fanatic again
+    expect(out.content).toContain(
+      [
+        "Round 3: Cultist Fanatic's turn.",
+        "Cultist Fanatic's Hold Person ends: its duration is up.",
+        'Mira Voss is Paralyzed (source: Hold Person): if the spell caused it, remove it with update_character conditions_remove.',
+      ].join('\n'),
+    );
+    expect(fanaticOf(h)).not.toHaveProperty('concentration');
+    expect(JSON.stringify(h.s().log)).not.toContain('Hold Person');
+  });
+
+  it("removing the creature whose turn it is starts the next one's turn, and counts it", async () => {
+    const webbed = (s: CombatState): CombatState => ({
+      ...s,
+      turnIndex: 2,
+      combatants: s.combatants.map((c) => (c.name === 'Bandit 2' ? { ...c, concentration: { spell: 'Web', roundsLeft: 1 } } : c)),
+    });
+    const h = setup({ state: { combat: fanaticFight(holding('Bless', 4), webbed) } });
+    const out = await h.run('update_combat', { action: 'remove', target: 'Cultist Fanatic' });
+    expect(out.content).toContain("Bandit 2's Web ends: its duration is up.");
+    expect(named(h.s().combat, 'Bandit 2')).not.toHaveProperty('concentration');
+  });
+
+  it("starts the hero's countdown at the hero's turn start, and ends the spell when it runs out, sheet first", async () => {
+    // Bless with no countdown yet at a turn start after round 1 (round 3): cast on an earlier turn, so the count starts
+    // at rounds − 1 (a spell already running at start_combat starts at the full count in round 1).
+    const blessing = sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Bless' } });
+    const h = setup({ character: blessing, state: { combat: { ...sampleCombat(), turnIndex: 3 } } });
+    const out = await h.run('update_combat', { action: 'next_turn' }); // Old Tam → Mira Voss, round 3
+    expect(named(h.s().combat, 'Mira Voss')?.concentrationCountdown).toEqual({ spell: 'Bless', roundsLeft: 9 });
+    expect(out.content).toContain('Mira Voss · AC 12 · Bless: 9 rounds left');
+
+    const counted = sampleCombat().combatants.map((c) => (c.isPlayer ? { ...c, concentrationCountdown: { spell: 'Bless', roundsLeft: 1 } } : c));
+    const ending = setup({ character: blessing, state: { combat: { ...sampleCombat(), turnIndex: 3, combatants: counted } } });
+    const ended = await ending.run('update_combat', { action: 'next_turn' });
+    expect(ended.content).toContain("Round 3: Mira Voss's turn.\nMira Voss's Bless ends: its duration is up.");
+    expect(ending.s().character?.spellcasting?.concentratingOn).toBeNull();
+    expect(named(ending.s().combat, 'Mira Voss')).not.toHaveProperty('concentrationCountdown');
+    // The player is told, after the turn line.
+    expect(toolLines(ending.s().log).map((l) => l.summary)).toEqual(["Round 3: Mira Voss's turn.", 'Your concentration on Bless ends: its duration is up']);
+  });
+
+  it("takes Shield of Faith's +2 off with the hero's spell, and says so in the player's log", async () => {
+    // srd:spell:shield-of-faith: "a +2 bonus to AC for the duration" (Concentration, up to 10 minutes).
+    const faithful: Character = sampleCharacter({
+      armorClass: 14,
+      acFormula: '10 + DEX 2 + Shield of Faith 2',
+      acSpells: ['Shield of Faith'],
+      spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Shield of Faith' },
+    });
+    const counted = sampleCombat().combatants.map((c) => (c.isPlayer ? { ...c, concentrationCountdown: { spell: 'Shield of Faith', roundsLeft: 1 } } : c));
+    const h = setup({ character: faithful, state: { combat: { ...sampleCombat(), turnIndex: 3, combatants: counted } } });
+    const out = await h.run('update_combat', { action: 'next_turn' });
+    expect(out.content).toContain("Mira Voss's Shield of Faith ends: its duration is up.\nShield of Faith ends: AC 14 → 12");
+    expect(h.s().character).toMatchObject({ armorClass: 12 });
+    expect(h.s().character).not.toHaveProperty('acSpells');
+    expect(toolLines(h.s().log).at(-1)?.summary).toBe('Your concentration on Shield of Faith ends: its duration is up — AC 14 → 12');
+  });
+});
+
+describe("what the app names with a spell's end (§3.5), never removing it", () => {
+  /** The warehouse fight with a Cultist Fanatic (c-7) on G4 and a Web of its own on G7:J10. */
+  function webFight(fanatic: Partial<Combatant>): CombatState {
+    const base = sampleMappedCombat();
+    const map = base.map as NonNullable<CombatState['map']>;
+    const web: MapEffect = {
+      id: 'e20',
+      label: 'Web',
+      spec: { shape: 'squares', rects: [{ x0: 6, y0: 6, x1: 9, y1: 9 }], fromId: 'c-7' },
+      rects: [{ x0: 6, y0: 6, x1: 9, y1: 9 }],
+      terrain: ['difficult', 'obscured'],
+      duration: 'lasting',
+      round: 2,
+      turnOfId: 'c-7',
+    };
+    const cultist: Combatant = { ...fanaticFight().combatants[2], position: { x: 6, y: 3 }, ...fanatic };
+    return { ...base, combatants: [...base.combatants, cultist], map: { ...map, effects: [web] } };
+  }
+
+  it("names a lasting area that may be the spell's with the exact call, later for a hidden caster", async () => {
+    const h = setup({ state: { combat: webFight(holding('Web', 300)) } });
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null });
+    expect(out.content).toContain('Cultist Fanatic stops concentrating on Web.\nStill on the map: Web (G7:J10) — if it was this spell\'s, end it with update_map effects_end ["Web"].');
+    expect(h.s().combat?.map?.effects).toHaveLength(1);
+    const hidden = setup({ state: { combat: webFight({ ...holding('Web', 300), hidden: true }) } });
+    const quiet = await hidden.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null });
+    expect(quiet.content).toContain(
+      'Still on the map: Web (G7:J10) — if it was this spell\'s, end it with update_map effects_end ["Web"] once the player can see it go (not during a hidden creature\'s turn).',
+    );
+  });
+
+  it("names the hero's Shield of Faith when an NPC's ends, and an AC set by hand for an NPC's spell", async () => {
+    const recorded = sampleCharacter({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    const h = setup({ character: recorded, state: { combat: fanaticFight(holding('Shield of Faith', 30)) } });
+    expect((await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null })).content).toContain(
+      'Mira Voss\'s Shield of Faith +2: if it was Cultist Fanatic\'s, end it with update_character ac_spells_end ["Shield of Faith"].',
+    );
+    // A Stone Golem's Slow set by hand on the hero (srd:spell:slow: "a -2 penalty to AC").
+    const slowed = sampleCharacter({ armorClass: 10, acFormula: 'set by the DM: Slow' });
+    const golem = setup({ character: slowed, state: { combat: fanaticFight({ name: 'Stone Golem', ...holding('Slow', 6) }) } });
+    expect((await golem.run('update_combat', { action: 'concentrate', target: 'Stone Golem', spell: null })).content).toContain(
+      "Mira Voss's AC 10 was set by hand for Slow: if it counted Slow, set armor_class back to 12 (armor and abilities).",
+    );
+    // With a Shield of Faith recorded, the AC to set back holds its +2, and the words say so (A1/E5-1;
+    // srd:spell:shield-of-faith: "a +2 bonus to AC for the duration"; srd:spell:haste: "+2 bonus to Armor Class").
+    const faithful = sampleCharacter({ armorClass: 16, acFormula: 'set by the DM: Haste + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    const hasted = setup({ character: faithful, state: { combat: fanaticFight(holding('Haste', 6)) } });
+    expect((await hasted.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null })).content).toContain(
+      "Cultist Fanatic stops concentrating on Haste.\nMira Voss's AC 16 was set by hand for Haste: if it counted Haste, set armor_class back to 14 (armor, abilities and Shield of Faith).",
+    );
+    // Nothing matches: nothing is printed.
+    const plain = setup({ state: { combat: fanaticFight(holding('Bless', 3)) } });
+    const out = await plain.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null });
+    expect(out.content.split('\n').slice(0, 2)).toEqual(['Cultist Fanatic stops concentrating on Bless.', '']);
+  });
+
+  it("says what else a shared label's call ends: an NPC's Spirit Guardians beside the hero's (srd:rule:concentration)", async () => {
+    // srd:rule:concentration: "If the effect's creator loses Concentration, the effect ends": that creator's effect only.
+    const base = sampleMappedCombat();
+    const zealot: Combatant = { ...fanaticFight().combatants[2], id: 'z-1', name: 'Zealot', position: { x: 11, y: 3 }, ...holding('Spirit Guardians', 50) };
+    const guarded = sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: 'Spirit Guardians' } });
+    const h = setup({ character: guarded, state: { combat: { ...base, combatants: [...base.combatants, zealot] } } });
+    for (const from of ['Mira Voss', 'Zealot']) {
+      expect((await h.run('resolve_area', { label: 'Spirit Guardians', shape: 'emanation', size_ft: 15, from, lasting: true })).isError).toBeUndefined();
+    }
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Zealot', spell: null });
+    // Only the Zealot's emanation is named, and the line says its call ends the hero's too. The hero's spell goes on, so
+    // its area is only placed again (lasting), with no saves rolled for it (D5: resolve_area's own result asks for saves).
+    expect(out.content).toContain(
+      'Still on the map: Spirit Guardians (15-ft Emanation around Zealot) — if it was this spell\'s, end it with update_map effects_end ["Spirit Guardians"] — effects_end ends every area named "Spirit Guardians" (2 on the map): place again with resolve_area (lasting) any that isn\'t this spell\'s, rolling no saves for it.',
+    );
+    expect(h.s().combat?.map?.effects).toHaveLength(2);
+    // Followed: both go, and the hero's is placed again as a lasting area, around the hero as before.
+    expect((await h.run('update_map', { effects_end: ['Spirit Guardians'] })).isError).toBeUndefined();
+    expect((await h.run('resolve_area', { label: 'Spirit Guardians', shape: 'emanation', size_ft: 15, from: 'Mira Voss', lasting: true })).isError).toBeUndefined();
+    const left = h.s().combat?.map?.effects ?? [];
+    expect(left.map((e) => [e.label, e.duration, e.spec.fromId])).toEqual([['Spirit Guardians', 'lasting', named(h.s().combat, 'Mira Voss')?.id]]);
+  });
+
+  it('names a repeated label once, so the named call is never refused, and says it ends every area of that name (srd:spell:darkness)', async () => {
+    // Two Drow each concentrating on Darkness placed at a point (no caster on either area): either may be the spell's.
+    const base = sampleMappedCombat();
+    const drow = (id: string, name: string, x: number, y: number): Combatant => ({ ...fanaticFight().combatants[2], id, name, position: { x, y }, ...holding('Darkness', 90) });
+    const h = setup({ state: { combat: { ...base, combatants: [...base.combatants, drow('d-1', 'Drow 1', 11, 1), drow('d-2', 'Drow 2', 3, 10)] } } });
+    for (const at of ['C3', 'M10']) {
+      expect((await h.run('resolve_area', { label: 'Darkness', shape: 'sphere', size_ft: 15, at, lasting: true })).isError).toBeUndefined();
+    }
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Drow 1', spell: null });
+    const line = out.content.split('\n').find((l) => l.startsWith('Still on the map: Darkness (')) ?? '';
+    expect(line).toMatch(/\) · Darkness \(/);
+    expect(line).toContain(
+      ' — if they were this spell\'s, end them with update_map effects_end ["Darkness"] — effects_end ends every area named "Darkness" (2 on the map): place again with resolve_area (lasting) any that isn\'t this spell\'s, rolling no saves for it.',
+    );
+    // The named call does what the line says: it isn't refused, and both areas go.
+    const call = JSON.parse(/effects_end (\[[^\]]*\])/.exec(line)?.[1] ?? 'null') as string[];
+    expect(call).toEqual(['Darkness']);
+    const ended = await h.run('update_map', { effects_end: call });
+    expect(ended.isError).toBeUndefined();
+    expect(h.s().combat?.map?.effects).toEqual([]);
+  });
+
+  it("names an NPC's Shield of Faith once, never as an AC set by hand, when the hero holds its record (srd:spell:shield-of-faith)", async () => {
+    // An older save's hand-set AC naming Shield of Faith, kept and counted when the record was added (its part appended).
+    const kept = sampleCharacter({ armorClass: 20, acFormula: 'set by the DM: Shield of Faith and Haste + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    const h = setup({ character: kept, state: { combat: fanaticFight(holding('Shield of Faith', 30)) } });
+    const out = await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: null });
+    expect(out.content).toContain('Mira Voss\'s Shield of Faith +2: if it was Cultist Fanatic\'s, end it with update_character ac_spells_end ["Shield of Faith"].');
+    expect(out.content).not.toContain('was set by hand for Shield of Faith');
+  });
+
+  it("gives no AC set by hand line when an NPC's Concentration on Mage Armor, recorded without the rules data, ends: the spell needs none (H8/HX5; srd:spell:mage-armor: \"Duration: 8 hours\")", async () => {
+    /** The rules index is down when the Concentration is recorded, so nothing refuses it. */
+    const offline = (opts: HarnessOptions) => {
+      const h = setup(opts);
+      setDmDeps({
+        rulesIndex: async () => {
+          throw new Error('offline');
+        },
+      });
+      const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+      return { ...h, run: (name: string, input: unknown) => runTool(name, input, ctx) };
+    };
+    for (const spell of ['Mage Armor', 'Mage Armor (scroll)']) {
+      const h = offline({ character: sampleCharacter({ armorClass: 15, acFormula: `set by the DM: ${spell} from Old Tam` }), state: { combat: sampleCombat() } });
+      expect(firstLine((await h.run('update_combat', { action: 'concentrate', target: 'Old Tam', spell })).content)).toBe(
+        `Old Tam is concentrating on ${spell} (no countdown: ${spell} isn't a spell in the rules data — give rounds to count it).`,
+      );
+      const out = await h.run('update_combat', { action: 'concentrate', target: 'Old Tam', spell: null });
+      expect(out.content.split('\n').slice(0, 2)).toEqual([`Old Tam stops concentrating on ${spell}.`, '']);
+      expect(out.content).not.toContain('set by hand');
+    }
+    // Another spell the AC was set by hand for keeps its line (srd:spell:haste: "it gains a +2 bonus to Armor Class").
+    const hasted = offline({ character: sampleCharacter({ armorClass: 15, acFormula: 'set by the DM: Haste from Old Tam' }), state: { combat: sampleCombat() } });
+    await hasted.run('update_combat', { action: 'concentrate', target: 'Old Tam', spell: 'Haste' });
+    expect((await hasted.run('update_combat', { action: 'concentrate', target: 'Old Tam', spell: null })).content).toContain(
+      "Old Tam stops concentrating on Haste.\nMira Voss's AC 15 was set by hand for Haste: if it counted Haste, set armor_class back to 12 (armor and abilities).",
+    );
+  });
+});
+
+describe('NPC Concentration never reaches the player (srd:rule:casting-spells-effects-targets)', () => {
+  it("keeps a distinctive spell out of the player's log through a whole fight", async () => {
+    const ward = "Zorblax's Murmuring Ward";
+    fakeDice.queue(2);
+    const h = setup({ character: paralyzedMira(ward), state: { combat: fanaticFight() } });
+    await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: ward, rounds: 2 });
+    await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: ward, rounds: 2 });
+    expect(h.s().log).toHaveLength(0);
+    const failed = await h.run('update_combat', { action: 'damage', target: 'Cultist Fanatic', amount: 3 }); // 2 + 1 < 10
+    expect(failed.content).toContain(`fails: Cultist Fanatic's ${ward} ends (2 rounds were left).`);
+    await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: ward, rounds: 1 });
+    const expired = await h.run('update_combat', { action: 'next_turn' }); // its turn: the count runs out
+    expect(expired.content).toContain(`Cultist Fanatic's ${ward} ends: its duration is up.`);
+    await h.run('update_combat', { action: 'concentrate', target: 'Cultist Fanatic', spell: ward });
+    const stunned = await h.run('update_combat', { action: 'conditions', target: 'Cultist Fanatic', conditions_add: [{ condition: 'Stunned', source: 'Stunning Strike' }] });
+    expect(stunned.content).toContain(`Cultist Fanatic's ${ward} ends: it is Stunned.`);
+    await h.run('update_combat', { action: 'concentrate', target: 'Bandit 2', spell: ward, rounds: 4 });
+    await h.run('update_combat', { action: 'defeat', target: 'Bandit 2' });
+    const ended = await h.run('end_combat', { summary: 'The cultist fled.' });
+    expect(ended.content).toContain(`Still concentrating as the fight ends: Bandit 2 (${ward}) — the app no longer tracks it.`);
+    expect(toolLines(h.s().log).map((l) => l.summary)).toEqual([
+      'Cultist Fanatic takes 3 damage (scratched)',
+      "Round 2: Cultist Fanatic's turn.",
+      'Cultist Fanatic: +stunned',
+      'Bandit 2 is out of the fight',
+      'Combat ended: The cultist fled.',
+    ]);
+    expect(rollLines(h.s().log)).toMatchObject([{ purpose: "Cultist Fanatic's Constitution save to keep concentration", secret: true }]);
+    expect(JSON.stringify(h.s().log)).not.toContain('Murmuring');
+  });
+});
+
+describe('start_combat and end_combat with Concentration running (SPEC §3.4)', () => {
+  const concentrating = (spell: string) => sampleCharacter({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: spell } });
+  const withCountdown = (spell: string, roundsLeft: number): CombatState => ({
+    ...sampleCombat(),
+    combatants: sampleCombat().combatants.map((c) => (c.isPlayer ? { ...c, concentrationCountdown: { spell, roundsLeft } } : c)),
+  });
+
+  it('start_combat says how the app counts a spell already running', async () => {
+    const h = setup({ character: concentrating('Bless') });
+    const out = await h.run('start_combat', { combatants: [OLD_TAM] });
+    expect(out.content).toContain(
+      'Mira Voss is concentrating on Bless: the app counts its 1 minute from Mira Voss\'s first turn; if less is left, give rounds with update_combat concentrate target "Mira Voss" spell "Bless".',
+    );
+    const unknown = setup({ character: concentrating('Shadow Lash') });
+    expect((await unknown.run('start_combat', { combatants: [OLD_TAM] })).content).toContain(
+      'Mira Voss is concentrating on Shadow Lash: the app has no duration for it, so it isn\'t counted; give rounds with update_combat concentrate target "Mira Voss" spell "Shadow Lash" to count it.',
+    );
+    const idle = setup();
+    expect((await idle.run('start_combat', { combatants: [OLD_TAM] })).content).not.toContain('concentrating');
+  });
+
+  it("names the hero by the sheet's name trimmed, or as The hero when it is blank (D7)", async () => {
+    const padded = setup({ character: { ...concentrating('Bless'), name: '  Mira Voss  ' } });
+    expect((await padded.run('start_combat', { combatants: [OLD_TAM] })).content).toContain(
+      'Mira Voss is concentrating on Bless: the app counts its 1 minute from Mira Voss\'s first turn; if less is left, give rounds with update_combat concentrate target "Mira Voss" spell "Bless".',
+    );
+    const blank = setup({ character: { ...concentrating('Bless'), name: '   ' } });
+    expect((await blank.run('start_combat', { combatants: [OLD_TAM] })).content).toContain("The hero is concentrating on Bless: the app counts its 1 minute from The hero's first turn");
+  });
+
+  it('names the end of a sheet Concentration on a spell that needs none, never a concentrate call it would refuse (RD3)', async () => {
+    // An older save's Mage Armor (srd:spell:mage-armor: "Duration: 8 hours"), on SRD 5.2.1's own entry.
+    const h = withSrdSpells({ character: concentrating('Mage Armor') });
+    const out = await h.run('start_combat', { combatants: [OLD_TAM] });
+    expect(out.content).toContain(
+      'Mage Armor doesn\'t require Concentration (Duration: 8 hours). Record its AC with update_character ac_spells_add ["Mage Armor"]. End it with update_character concentration: null.',
+    );
+    expect(out.content).not.toContain('update_combat concentrate');
+    // The call it names is accepted.
+    expect((await h.run('update_character', { concentration: null })).isError).toBeUndefined();
+    expect(h.s().character?.spellcasting?.concentratingOn).toBeNull();
+    // Mage Armor already recorded: the refusal alone, then the end (nothing left to record).
+    const recorded = withSrdSpells({ character: { ...concentrating('Mage Armor'), armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'] } });
+    expect((await recorded.run('start_combat', { combatants: [OLD_TAM] })).content).toContain(
+      "Mage Armor doesn't require Concentration (Duration: 8 hours). End it with update_character concentration: null.",
+    );
+    // A mis-flagged Shield (srd:spell:shield: "Duration: 1 round"): its refusal names the hero, "The hero" when blank (D7).
+    const blank = withSrdSpells({ character: { ...concentrating('Shield'), name: '   ' } });
+    expect((await blank.run('start_combat', { combatants: [OLD_TAM] })).content).toContain(
+      "Shield doesn't require Concentration (Duration: 1 round). Fold its +5 into the dc of attacks on The hero until the start of The hero's next turn. End it with update_character concentration: null.",
+    );
+  });
+
+  it("ends the hero's spell with a minute or less left: it runs out after the fight", async () => {
+    const h = setup({ character: concentrating('Bless'), state: { combat: withCountdown('Bless', 4) } });
+    const out = await h.run('end_combat', { summary: 'The bandits fled.' });
+    expect(out.content).toBe("Combat ended: The bandits fled.\nMira Voss's Bless runs out after the fight (4 rounds were left).");
+    expect(h.s().character?.spellcasting?.concentratingOn).toBeNull();
+    expect(toolLines(h.s().log).map((l) => l.summary)).toEqual(['Combat ended: The bandits fled.', 'Your concentration on Bless runs out after the fight']);
+    // No count yet, but a spell of a minute: it ends too.
+    const uncounted = setup({ character: concentrating('Bless'), state: { combat: sampleCombat() } });
+    expect((await uncounted.run('end_combat', { summary: 'Done.' })).content).toContain("Mira Voss's Bless runs out after the fight.");
+  });
+
+  it('names a longer one with the call that ends it', async () => {
+    const h = setup({ character: concentrating('Web'), state: { combat: withCountdown('Web', 90) } });
+    const out = await h.run('end_combat', { summary: 'The bandits fled.' });
+    expect(out.content).toContain('Mira Voss is still concentrating on Web (about 9 minutes left): end it with update_character concentration: null when it runs out.');
+    expect(h.s().character?.spellcasting?.concentratingOn).toBe('Web');
+    expect(toolLines(h.s().log)).toHaveLength(1);
+    const uncounted = setup({ character: concentrating('Web'), state: { combat: sampleCombat() } });
+    expect((await uncounted.run('end_combat', { summary: 'Done.' })).content).toContain(
+      'Mira Voss is still concentrating on Web (at most about 60 minutes left): end it with update_character concentration: null when it runs out.',
+    );
+  });
+
+  it('names NPCs still concentrating, and the conditions their spells may hold on the hero', async () => {
+    const h = setup({ character: paralyzedMira(), state: { combat: fanaticFight(holding('Hold Person', 6)) } });
+    const out = await h.run('end_combat', { summary: 'Mira broke free.' });
+    expect(out.content).toContain(
+      [
+        'Still concentrating as the fight ends: Cultist Fanatic (Hold Person) — the app no longer tracks it.',
+        'Mira Voss is Paralyzed (source: Hold Person): remove it when that spell ends.',
+      ].join('\n'),
+    );
+    expect(JSON.stringify(h.s().log)).not.toContain('Hold Person');
   });
 });

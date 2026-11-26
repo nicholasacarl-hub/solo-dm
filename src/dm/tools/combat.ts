@@ -6,32 +6,48 @@
  * Hidden creatures (the hero hasn't noticed them) work with or without a map: nothing they do writes a player log
  * line, and the player-facing summaries leave them out (D41). The DM's results name them, tagged "[hidden]".
  *
- * Writes: every handler does its awaiting first (the initiative roll, the rules index), then writes once — combat
- * changes through mutateCombat against the latest state. Only start_combat creates the row with setCombat (there is
- * no combat yet to update), and end_combat deletes it with setCombat(null).
+ * Concentration (spell effects, SPEC §3.2): an NPC's or monster's is DM knowledge, recorded with `concentrate` and
+ * counted down at its turn starts; the app rolls its Constitution save against damage and ends it at 0 HP, on an
+ * Incapacitating condition, a failed save or when its time is up, naming (never removing) what may end with it. No
+ * player log line names its spell. The hero's Concentration is the sheet's: the tracker only counts it down.
+ *
+ * Writes: every handler does its awaiting first (the initiative roll, the rules index, a save), then writes once —
+ * combat changes through mutateCombat against the latest state. Only start_combat creates the row with setCombat
+ * (there is no combat yet to update), and end_combat deletes it with setCombat(null). A turn start that ends the
+ * hero's spell, and end_combat ending it, write the sheet first, then the combat.
  */
 import {
   addCombatant,
+  concentrationSaveDC,
+  concentrationTurnStart,
   conditionKey,
+  conditionName,
   createBattleMap,
   createCombat,
   currentCombatant,
   damageCombatant,
+  endNpcConcentration,
+  expireConcentration,
   findCombatant,
   gainXp,
   healCombatant,
   healthDescriptor,
+  INCAPACITATING_CONDITIONS,
   initiativeModifier,
   matchStandardCondition,
   nextTurn,
   placeCombatants,
   removeCombatant,
   rollD20Test,
+  roundsLeftText,
+  setNpcConcentration,
   squareLabel,
   statBlockMapStats,
   summarizeCombat,
   updateCombatant,
   xpToNextLevel,
+  type AddedCondition,
+  type ConcentrationEnd,
   type PlacementAnchor,
   type PlacementRequest,
   type PlacementResult,
@@ -47,6 +63,8 @@ import {
   type CompendiumEntry,
   type CreatureSize,
   type CreatureSpeeds,
+  type D20TestResult,
+  type GameEvent,
 } from '@/types';
 import { isReviewedImport } from '@/data/structured/materialize';
 import { nameKey } from '@/lib/id';
@@ -59,6 +77,7 @@ import {
   eventLines,
   fail,
   keptHomebrewLines,
+  logRoll,
   logTool,
   mutateCharacter,
   mutateCombat,
@@ -72,6 +91,23 @@ import {
 } from './context';
 import { parseMapSpec, parsePosition } from './map';
 import { performPlayerRoll } from './rolls';
+import {
+  cascadeLines,
+  concentrationSavePurpose,
+  heroConcentration,
+  heroConcentrationRefusal,
+  knownSpellId,
+  noConcentrationText,
+  npcSave,
+  roundsText,
+  spanText,
+  spellTiming,
+  untilSpellEndsLines,
+  wereLeftText,
+  withHeroCountdown,
+  type EndingCaster,
+  type SpellTiming,
+} from './spellEffects';
 
 type CombatantSpec = ToolInput<'start_combat'>['combatants'][number];
 
@@ -297,6 +333,7 @@ export async function startCombatTool(input: StartInput, ctx: ToolContext): Prom
   // So are the numbers: a creature without AC, HP or initiative (and no stat block for them) fails here.
   const resolved: ResolvedGroup[] = [];
   for (const spec of input.combatants) resolved.push(await resolveGroup(ctx, spec, campaign));
+  const concentrationNote = await heroConcentrationNote(ctx, character);
 
   const heroRoll = await performPlayerRoll(ctx, {
     rollType: 'initiative',
@@ -342,10 +379,36 @@ export async function startCombatTool(input: StartInput, ctx: ToolContext): Prom
   await logTool(ctx, 'start_combat', 'combat', `Combat started: ${title} (${visible} combatants)`, {
     detail: `${summarizeCombat(state, { forPlayer: true, heroAc })}${mapLine}`,
   });
-  const out = [`Combat started: ${title}.`, ...lines, '', summarizeCombat(state, { heroAc }), turnLine(state)];
+  const out = [
+    `Combat started: ${title}.`,
+    ...lines,
+    '',
+    summarizeCombat(state, { heroAc, heroConcentration: character.spellcasting?.concentratingOn }),
+    turnLine(state),
+  ];
   out.push(...plan.notes);
+  if (concentrationNote) out.push(concentrationNote);
   if (state.map) out.push('', describeMapSetup(state, character, { placed, stats: groups.map((g) => g.stats) }));
   return ok(out.join('\n'));
+}
+
+/**
+ * For the DM when a fight starts while the hero concentrates: the app counts the spell from the hero's first turn (a
+ * spell already running lasts the hero's first N turns whatever the initiative order: concentrationTurnStart), so a
+ * spell with less left needs its rounds given. The hero by name, or "The hero" when the sheet's name is blank. A sheet
+ * Concentration on a spell the rules data says needs none (an older save's Mage Armor, srd:spell:mage-armor: "Duration:
+ * 8 hours"; a mis-flagged import) gets the refusal update_combat concentrate would give, and the call that ends it.
+ */
+async function heroConcentrationNote(ctx: ToolContext, character: Character): Promise<string | null> {
+  const spell = character.spellcasting?.concentratingOn?.trim();
+  if (!spell) return null;
+  const refused = await heroConcentrationRefusal(ctx, character, spell);
+  if (refused) return `${refused} End it with update_character concentration: null.`;
+  const name = character.name.trim() || 'The hero';
+  const call = `update_combat concentrate target "${name}" spell "${spell}"`;
+  const { rounds } = await spellTiming(ctx, spell, knownSpellId(character, spell));
+  if (rounds === undefined) return `${name} is concentrating on ${spell}: the app has no duration for it, so it isn't counted; give rounds with ${call} to count it.`;
+  return `${name} is concentrating on ${spell}: the app counts its ${spanText(rounds)} from ${name}'s first turn; if less is left, give rounds with ${call}.`;
 }
 
 // ---------------------------------------------------------------------------
@@ -399,6 +462,98 @@ interface CombatChange {
   notes?: string[];
   /** Log the line behind the DM screen (combatant notes are DM-only). */
   secret?: boolean;
+  /** The Constitution save the app rolled to keep the target's Concentration: a DM roll logged after the damage line. */
+  save?: { purpose: string; result: D20TestResult; secret: boolean };
+  /** NPCs' and monsters' Concentration that ran out as the turn this action began started. */
+  ended?: ConcentrationEnd[];
+}
+
+/** A Concentration save worked out before the write: the creature, its spell, the DC and the app's roll. */
+interface PreparedSave {
+  id: string;
+  spell: string;
+  dc: number;
+  /** Absent when its stat block gives no Constitution save: the DM rolls it. */
+  roll?: D20TestResult;
+  /** Its stat block has Legendary Resistance: it decides before a failed save ends anything. */
+  legendary: boolean;
+  /** The card goes behind the screen: the creature is hidden, or its numbers are (hideHp). */
+  secret: boolean;
+}
+
+/** What update_combat looks up and rolls before its one combat write (the rules index, a stat block, the dice). */
+interface Prepared {
+  reinforcements: Reinforcements | null;
+  /** concentrate on an NPC: the spell in the rules data (its Concentration flag and duration). */
+  timing?: SpellTiming;
+  /** concentrate on the hero: the name the spell given resolves to, as update_character reads it (heroConcentration). */
+  heroLabel?: string;
+  /** damage to a concentrating NPC that stays above 0 HP. */
+  save?: PreparedSave;
+  /** next_turn and remove: the hero's spell's full duration, when the hero's combatant has no countdown for it. */
+  heroRounds?: number;
+}
+
+/** Whose Concentration ended, as the end cascade reads it. */
+const npcCaster = (end: ConcentrationEnd): EndingCaster => ({ id: end.id, name: end.name, hidden: end.hidden, isHero: false });
+
+/** An NPC's Concentration ended: the line saying so, then what may end with it (§3.5). */
+function endedLines(end: ConcentrationEnd | undefined, line: string, state: CombatState, hero: Character | null, skip: readonly AddedCondition[] = []): string[] {
+  return end ? [line, ...cascadeLines(end.spell, npcCaster(end), hero, state, skip)] : [];
+}
+
+/** "(10 rounds left)": the DM's own count as given, the app's in minutes past 10 rounds ("about 60 minutes left"). */
+function leftText(rounds: number, given: boolean): string {
+  return given ? `${roundsText(rounds)} left` : roundsLeftText(rounds);
+}
+
+/**
+ * The lookups and rolls an action needs, done before the write (as start_combat's): the rules data for a spell an NPC
+ * or the hero is given to concentrate on (one that needs no Concentration is refused: srd:spell:shield "Duration: 1
+ * round"; the hero's refusal says where its effect goes instead); a concentrating NPC's Constitution save against
+ * damage that leaves it standing (srd:rule:concentration: "The DC equals 10 or half the damage taken (round down),
+ * whichever number is higher, up to a maximum DC of 30"), from its stat block, with the app's dice; the duration of the
+ * hero's spell for a turn start that has to start its countdown.
+ */
+async function prepareEffects(ctx: ToolContext, state: CombatState, input: UpdateInput): Promise<Omit<Prepared, 'reinforcements'>> {
+  const target = input.target ? findCombatant(state, input.target) : undefined;
+  switch (input.action) {
+    case 'concentrate': {
+      if (!target || typeof input.spell !== 'string') return {};
+      if (target.isPlayer) {
+        const { refused, label } = await heroConcentration(ctx, ctx.deps.store().character, input.spell);
+        if (refused) throw new ToolInputError(refused);
+        return { heroLabel: label };
+      }
+      const timing = await spellTiming(ctx, input.spell);
+      const refused = noConcentrationText(timing, input.spell);
+      if (refused) throw new ToolInputError(refused);
+      return { timing };
+    }
+    case 'damage': {
+      const amount = input.amount ?? 0;
+      if (!target || target.isPlayer || !target.concentration || !target.hp || amount <= 0) return {};
+      const after = damageCombatant(state, target.id, amount).state.combatants.find((c) => c.id === target.id);
+      if (!after?.hp || after.hp.current <= 0) return {};
+      const dc = concentrationSaveDC(amount);
+      const { con, legendary } = await npcSave(ctx, target);
+      const roll = con !== undefined ? rollD20Test(con, { dc, rng: ctx.deps.rng }) : undefined;
+      const secret = target.hidden === true || target.hideHp === true;
+      return { save: { id: target.id, spell: target.concentration.spell, dc, ...(roll ? { roll } : {}), legendary, secret } };
+    }
+    case 'next_turn':
+    case 'remove': {
+      const hero = ctx.deps.store().character;
+      const spell = hero?.spellcasting?.concentratingOn?.trim();
+      if (!spell) return {};
+      const countdown = state.combatants.find((c) => c.isPlayer)?.concentrationCountdown;
+      if (countdown && nameKey(countdown.spell) === nameKey(spell)) return {};
+      const { rounds } = await spellTiming(ctx, spell, knownSpellId(hero, spell));
+      return rounds !== undefined ? { heroRounds: rounds } : {};
+    }
+    default:
+      return {};
+  }
 }
 
 /** Newcomers for `add`: built (stat blocks looked up, initiative rolled) before the write. */
@@ -453,7 +608,7 @@ function addReinforcements(state: CombatState, hero: Character | null, r: Reinfo
   };
 }
 
-function changeHp(state: CombatState, input: UpdateInput, kind: 'damage' | 'heal'): CombatChange {
+function changeHp(state: CombatState, hero: Character | null, input: UpdateInput, kind: 'damage' | 'heal', save?: PreparedSave): CombatChange {
   const target = requireTarget(state, input.target, kind);
   refuseHero(target, 'hit points');
   if (input.amount === undefined) throw new ToolInputError(`update_combat ${kind} needs an amount.`);
@@ -462,15 +617,70 @@ function changeHp(state: CombatState, input: UpdateInput, kind: 'damage' | 'heal
   const verb = kind === 'damage' ? `takes ${input.amount} damage` : `heals ${input.amount}`;
   const outcome = after?.defeated && !target.defeated ? ' — down!' : ` (${hpText(after, true)})`;
   const summary = `${target.name} ${verb}${outcome}`;
-  return {
+  const change: CombatChange = {
     state: r.state,
     summary,
     log: target.hidden ? null : summary,
     notes: [`${target.name}: ${hpText(after, false)}`, ...eventLines(r.events)],
   };
+  if (kind !== 'damage' || input.amount <= 0 || !after?.hp || !after.concentration) return change;
+  return { ...change, ...concentrationAfterDamage(r.state, hero, after, input.amount, save, change.notes ?? []) };
 }
 
-function changeConditions(state: CombatState, input: UpdateInput): CombatChange {
+/**
+ * A concentrating NPC took damage (srd:rule:concentration, Damage). At 0 HP its Concentration ends
+ * (srd:rule:damage-and-healing-dropping-to-0-hit-points-instant-death: "A monster dies the instant it drops to 0 Hit
+ * Points"). Otherwise the save the app rolled before the write decides: kept; failed, but a creature with Legendary
+ * Resistance decides first; or failed, and the spell ends with how many rounds were left. With no Constitution save in
+ * its stat block the DM rolls, behind the screen when the creature or its numbers are hidden.
+ */
+function concentrationAfterDamage(
+  state: CombatState,
+  hero: Character | null,
+  target: Combatant,
+  amount: number,
+  save: PreparedSave | undefined,
+  notes: string[],
+): Pick<CombatChange, 'state' | 'notes' | 'save'> {
+  const held = target.concentration as NonNullable<Combatant['concentration']>;
+  const name = target.name;
+  const endCall = `update_combat concentrate target "${name}" spell null`;
+  if ((target.hp?.current ?? 0) <= 0) {
+    const r = endNpcConcentration(state, target.id);
+    return { state: r.state, notes: [...notes, ...endedLines(r.ended, `${name}'s ${held.spell} ends: it drops to 0 HP.`, r.state, hero)] };
+  }
+  const prepared = save?.id === target.id && nameKey(save.spell) === nameKey(held.spell) ? save : undefined;
+  // The app's own card's purpose, for a roll the DM makes too: it never names the spell, whoever can see the roll.
+  const purpose = concentrationSavePurpose(name);
+  if (!prepared?.roll) {
+    const dc = prepared?.dc ?? concentrationSaveDC(amount);
+    const secret = target.hidden || target.hideHp ? ', secret: true' : '';
+    return {
+      state,
+      notes: [
+        ...notes,
+        `Concentration check: ${name} must make a DC ${dc} Constitution saving throw to keep ${held.spell} — roll it with roll_dice (purpose "${purpose}"${secret}); on a failure call ${endCall}.`,
+      ],
+    };
+  }
+  const { roll, dc } = prepared;
+  const card = { purpose, result: roll, secret: prepared.secret };
+  const head = `Concentration: Constitution save ${roll.total} (${roll.expression}) vs DC ${dc}`;
+  if (roll.success) return { state, notes: [...notes, `${head} — ${name} keeps ${held.spell}.`], save: card };
+  if (prepared.legendary) {
+    return {
+      state,
+      notes: [...notes, `${head} — fails. ${name} has Legendary Resistance: if it uses one it keeps ${held.spell} (nothing to do); otherwise ${endCall}.`],
+      save: card,
+    };
+  }
+  const r = endNpcConcentration(state, target.id);
+  const left = r.ended?.roundsLeft;
+  const line = `${head} — fails: ${name}'s ${held.spell} ends${left !== undefined ? ` (${wereLeftText(left)})` : ''}.`;
+  return { state: r.state, notes: [...notes, ...endedLines(r.ended, line, r.state, hero)], save: card };
+}
+
+function changeConditions(state: CombatState, hero: Character | null, input: UpdateInput): CombatChange {
   const target = requireTarget(state, input.target, 'conditions');
   refuseHero(target, 'conditions');
   if (!input.conditions_add?.length && !input.conditions_remove?.length) {
@@ -498,12 +708,18 @@ function changeConditions(state: CombatState, input: UpdateInput): CombatChange 
   const has = target.conditions.length ? ` (it has ${target.conditions.map((c) => c.id).join(', ')})` : '';
   const misses = missed.map((name) => `Not removed: ${target.name} has no "${name}"${has}.`);
   const summary = parts.length ? `${target.name}: ${parts.join(' ')}` : `${target.name}: no change`;
-  return {
-    state: parts.length ? updateCombatant(state, target.id, { conditions }) : state,
-    summary,
-    log: target.hidden || !parts.length ? null : summary,
-    notes: [...misses, ...keptHomebrewLines(input.conditions_add, conditions)],
-  };
+  let next = parts.length ? updateCombatant(state, target.id, { conditions }) : state;
+  const notes = [...misses, ...keptHomebrewLines(input.conditions_add, conditions)];
+  // srd:rule:concentration: "Your Concentration ends if you have the Incapacitated condition" (or one that includes it).
+  const incapacitated = added.map((c) => conditionKey(c.id)).find((key) => INCAPACITATING_CONDITIONS.has(key));
+  if (incapacitated && target.concentration) {
+    const r = endNpcConcentration(next, target.id);
+    next = r.state;
+    // What this call added isn't named back (an ally's Hold Person that broke this one).
+    const skip: AddedCondition[] = added.map((c) => ({ combatantId: target.id, condition: c.id }));
+    notes.push(...endedLines(r.ended, `${target.name}'s ${target.concentration.spell} ends: it is ${conditionName(incapacitated)}.`, next, hero, skip));
+  }
+  return { state: next, summary, log: target.hidden || !parts.length ? null : summary, notes };
 }
 
 /** Removing a creature drops a stop it made or reacted to (the move can't be repeated any more). */
@@ -546,7 +762,62 @@ function hide(state: CombatState, input: UpdateInput): CombatChange {
   return { state: setHidden(state, target.id, true), summary: `${target.name} is now hidden from the player.`, log: null };
 }
 
-function applyAction(state: CombatState, hero: Character | null, input: UpdateInput, reinforcements: Reinforcements | null): CombatChange {
+/**
+ * update_combat concentrate on an NPC or monster: start (with its countdown: `rounds`, else the spell's duration in the
+ * rules data), recast (the count restarts: srd:rule:casting-spells-effects-combining-spell-effects), switch (the spell
+ * it held ends: srd:rule:concentration, Another Concentration Effect) or end it (spell null). DM knowledge only: no
+ * player log line (srd:rule:casting-spells-effects-targets).
+ */
+function concentrate(state: CombatState, hero: Character | null, input: UpdateInput, prepared: Prepared): CombatChange {
+  const { timing } = prepared;
+  const target = requireTarget(state, input.target, 'concentrate');
+  if (target.isPlayer) return heroConcentrate(state, target, hero, input, prepared.heroLabel);
+  const name = target.name;
+  if (input.spell === undefined) throw new ToolInputError(`update_combat concentrate needs \`spell\`: what ${name} concentrates on, or null when that ends.`);
+  if (input.spell === null) {
+    if (input.rounds !== undefined) throw new ToolInputError('`rounds` counts a spell: give it with `spell`, or leave it out with spell null.');
+    const r = endNpcConcentration(state, target.id);
+    if (!r.ended) return { state, summary: `${name} isn't concentrating on anything.`, log: null };
+    return { state: r.state, summary: `${name} stops concentrating on ${r.ended.spell}.`, log: null, notes: cascadeLines(r.ended.spell, npcCaster(r.ended), hero, r.state) };
+  }
+  const given = input.rounds !== undefined;
+  const rounds = input.rounds ?? timing?.rounds;
+  // A spell in the rules data is recorded as the data spells it ("hold person" is Hold Person).
+  const r = setNpcConcentration(state, target.id, timing?.found && timing.name ? timing.name : input.spell, rounds);
+  if (r.refused) throw new ToolInputError(r.refused);
+  const spell = r.state.combatants.find((c) => c.id === target.id)?.concentration?.spell ?? input.spell;
+  const why = timing?.found ? `the rules data gives ${spell} no duration in rounds` : `${spell} isn't a spell in the rules data`;
+  const none = `no countdown: ${why} — give rounds to count it`;
+  const count = rounds !== undefined ? leftText(rounds, given) : undefined;
+  if (r.recast) return { state: r.state, summary: count ? `${name} recasts ${spell}: ${count}.` : `${name} recasts ${spell} (${none}).`, log: null };
+  const notes = r.previous ? endedLines(r.previous, `${name}'s ${r.previous.spell} ends: it started concentrating on ${spell}.`, r.state, hero) : [];
+  return { state: r.state, summary: `${name} is concentrating on ${spell} (${count ?? none}).`, log: null, notes };
+}
+
+/**
+ * update_combat concentrate on the hero: only how long the sheet's spell still lasts (Extended Spell, a higher-level
+ * slot), on the hero's countdown. The sheet holds the hero's Concentration: update_character starts and ends it. The
+ * spell is named as update_character reads it (`label`, heroConcentration's): "Hold Person (3rd level)" and "Bless
+ * (upcast)" are the sheet's Hold Person and Bless (srd:spell:hold-person, "Concentration, up to 1 minute"), "Faith" its
+ * Shield of Faith; the line names the sheet's spell, and every refusal quotes the name as given.
+ */
+function heroConcentrate(state: CombatState, target: Combatant, hero: Character | null, input: UpdateInput, label?: string): CombatChange {
+  const name = target.name;
+  const sheet = hero?.spellcasting?.concentratingOn?.trim() || null;
+  if (input.spell === null) throw new ToolInputError(`${name}'s Concentration is on the character sheet: end it with update_character concentration: null.`);
+  if (!sheet) {
+    throw new ToolInputError(`${name} isn't concentrating on anything: start it with update_character concentration${input.spell ? ` "${input.spell}"` : ''}.`);
+  }
+  if (input.spell === undefined || nameKey(label ?? input.spell) !== nameKey(sheet)) {
+    throw new ToolInputError(
+      `${name} is concentrating on ${sheet}${input.spell ? `, not ${input.spell}` : ''}: for the hero, concentrate only sets rounds (spell "${sheet}" with rounds); update_character concentration starts or ends the hero's Concentration.`,
+    );
+  }
+  if (input.rounds === undefined) throw new ToolInputError(`Give rounds: how long ${name}'s ${sheet} still lasts (1 minute = 10 rounds).`);
+  return { state: withHeroCountdown(state, { spell: sheet, roundsLeft: input.rounds }), summary: `${name}'s ${sheet}: ${roundsText(input.rounds)} left.`, log: null };
+}
+
+function applyAction(state: CombatState, hero: Character | null, input: UpdateInput, prepared: Prepared): CombatChange {
   switch (input.action) {
     case 'next_turn': {
       const next = nextTurn(state);
@@ -555,24 +826,43 @@ function applyAction(state: CombatState, hero: Character | null, input: UpdateIn
       return { state: next, summary, log: current?.hidden ? null : summary };
     }
     case 'damage':
+      return changeHp(state, hero, input, 'damage', prepared.save);
     case 'heal':
-      return changeHp(state, input, input.action);
+      return changeHp(state, hero, input, 'heal');
     case 'add':
-      return addReinforcements(state, hero, reinforcements as Reinforcements);
+      return addReinforcements(state, hero, prepared.reinforcements as Reinforcements);
     case 'remove': {
       const target = requireTarget(state, input.target, 'remove');
       refuseHero(target, 'place in the fight (end_combat ends it)');
       const summary = `${target.name} leaves the fight`;
-      return { state: removeCombatant(withoutStopOf(state, target.id), target.id), summary, log: target.hidden ? null : summary };
+      const next = removeCombatant(withoutStopOf(state, target.id), target.id);
+      // Leaving the fight doesn't end a spell (srd:rule:concentration): the app only stops counting it.
+      const held = target.concentration;
+      const notes = held
+        ? [
+            `${target.name} was concentrating on ${held.spell}${held.roundsLeft !== undefined ? ` (${roundsLeftText(held.roundsLeft)})` : ''}: the app no longer tracks it.`,
+            ...untilSpellEndsLines(held.spell, target.name, hero, next),
+          ]
+        : [];
+      return { state: next, summary, log: target.hidden ? null : summary, notes };
     }
     case 'conditions':
-      return changeConditions(state, input);
+      return changeConditions(state, hero, input);
     case 'defeat': {
       const target = requireTarget(state, input.target, 'defeat');
       refuseHero(target, 'status');
       const summary = `${target.name} is out of the fight`;
-      return { state: updateCombatant(state, target.id, { defeated: true }), summary, log: target.hidden ? null : summary };
+      let next = updateCombatant(state, target.id, { defeated: true });
+      // A creature that fled can keep concentrating (srd:rule:concentration ends it on damage, Incapacitated or death):
+      // the spell stays, but a defeated creature's turn never starts, so the app stops counting it.
+      const held = target.concentration;
+      if (!held) return { state: next, summary, log: target.hidden ? null : summary };
+      if (held.roundsLeft !== undefined) next = updateCombatant(next, target.id, { concentration: { spell: held.spell } });
+      const note = `${target.name} was concentrating on ${held.spell}: if it fell, end it with update_combat concentrate target "${target.name}" spell null; if it fled still concentrating, the spell goes on (the app no longer counts it).`;
+      return { state: next, summary, log: target.hidden ? null : summary, notes: [note] };
     }
+    case 'concentrate':
+      return concentrate(state, hero, input, prepared);
     case 'note': {
       const target = requireTarget(state, input.target, 'note');
       if (!input.note) throw new ToolInputError('update_combat note needs `note`.');
@@ -592,20 +882,84 @@ function applyAction(state: CombatState, hero: Character | null, input: UpdateIn
 
 const ICON: Partial<Record<UpdateInput['action'], 'hp' | 'heal'>> = { damage: 'hp', heal: 'heal' };
 
+/** The hero's Concentration that ran out at the hero's turn start, ended on the sheet before the combat write. */
+interface HeroExpiry {
+  spell: string;
+  /** expireConcentration's events: the end, then what ended with it (Shield of Faith's +2, a hand-set AC reminder). */
+  events: GameEvent[];
+  acBefore: number;
+  acAfter: number;
+}
+
+/**
+ * A turn start ends the hero's spell when its countdown runs out (concentrationTurnStart). Worked out first on a peek
+ * of the action, so the sheet is written before the combat (expireConcentration; a no-op when the sheet moved on): a
+ * reload between the two writes leaves a countdown the next turn start drops, never a spell the sheet still holds.
+ */
+async function expireHeroSpell(ctx: ToolContext, input: UpdateInput, prepared: Prepared): Promise<HeroExpiry | null> {
+  const state = ctx.deps.store().combat;
+  const hero = ctx.deps.store().character;
+  const spell = hero?.spellcasting?.concentratingOn ?? null;
+  if (!state || !hero || !spell) return null;
+  const peek = concentrationTurnStart(state, applyAction(state, hero, input, prepared).state, { spell, rounds: prepared.heroRounds });
+  const ended = peek.heroEnded;
+  if (!ended) return null;
+  let was = hero;
+  const r = await mutateCharacter(ctx, (c) => {
+    was = c;
+    return expireConcentration(c, ended, 'its duration is up');
+  });
+  return r.events.length ? { spell: ended, events: r.events, acBefore: was.armorClass, acAfter: r.character.armorClass } : null;
+}
+
+/** " — AC 18 → 16" when the end changed the hero's AC (Shield of Faith's record). */
+const acChangeText = (from: number, to: number): string => (from !== to ? ` — AC ${from} → ${to}` : '');
+
 export async function updateCombatTool(input: UpdateInput, ctx: ToolContext): Promise<ToolOutcome> {
   const store = ctx.deps.store();
   const start = store.combat;
   if (!start?.active) return fail(NO_COMBAT);
+  if (input.action !== 'concentrate' && (input.spell !== undefined || input.rounds !== undefined)) {
+    throw new ToolInputError('`spell` and `rounds` go with action concentrate.');
+  }
   const reinforcements = input.action === 'add' ? await prepareReinforcements(ctx, start, input) : null;
+  const prepared: Prepared = { reinforcements, ...(await prepareEffects(ctx, ctx.deps.store().combat ?? start, input)) };
+  // A turn start (next_turn, or removing the creature whose turn it is) counts Concentration down: the sheet first.
+  const turns = input.action === 'next_turn' || input.action === 'remove';
+  const heroExpiry = turns ? await expireHeroSpell(ctx, input, prepared) : null;
   const hero = ctx.deps.store().character;
   const before = ctx.deps.store().combat ?? start;
-  const change = await mutateCombat(ctx, (c) => applyAction(c, hero, input, reinforcements));
+  const change = await mutateCombat(ctx, (c): CombatChange => {
+    const r = applyAction(c, hero, input, prepared);
+    if (!turns) return r;
+    const tick = concentrationTurnStart(c, r.state, { spell: hero?.spellcasting?.concentratingOn ?? null, rounds: prepared.heroRounds });
+    return { ...r, state: tick.state, ended: tick.ended };
+  });
   const log = change.log === undefined ? change.summary : change.log;
   if (log) await logTool(ctx, 'update_combat', ICON[input.action] ?? 'combat', log, { secret: change.secret });
+  // The app's Concentration save, after the damage line; its purpose never names the spell, and its roll type says it
+  // is a save (compared to a DC), whatever the creature is called ("Attack Dog").
+  if (change.save) await logRoll(ctx, { actor: 'dm', purpose: change.save.purpose, result: change.save.result, secret: change.save.secret, rollType: 'save' });
+  if (heroExpiry) {
+    await logTool(ctx, 'update_combat', 'spell', `Your concentration on ${heroExpiry.spell} ends: its duration is up${acChangeText(heroExpiry.acBefore, heroExpiry.acAfter)}`);
+  }
 
-  const lines = [change.summary, ...(change.notes ?? []), '', summarizeCombat(change.state, { heroAc: hero?.armorClass })];
+  const heroNow = ctx.deps.store().character;
+  const heroName = heroNow?.name.trim() || 'The hero';
+  const notes = [...(change.notes ?? [])];
+  for (const end of change.ended ?? []) notes.push(...endedLines(end, `${end.name}'s ${end.spell} ends: its duration is up.`, change.state, heroNow));
+  if (heroExpiry) {
+    const heroC = change.state.combatants.find((c) => c.isPlayer);
+    notes.push(
+      `${heroName}'s ${heroExpiry.spell} ends: its duration is up.`,
+      ...eventLines(heroExpiry.events.slice(1)),
+      ...cascadeLines(heroExpiry.spell, { id: heroC?.id, name: heroName, hidden: false, isHero: true }, heroNow, change.state),
+    );
+  }
+  const summary = summarizeCombat(change.state, { heroAc: heroNow?.armorClass, heroConcentration: heroNow?.spellcasting?.concentratingOn });
+  const lines = [change.summary, ...notes, '', summary];
   if (input.action !== 'next_turn') lines.push(turnLine(change.state));
-  const mapLine = turnStartLine(before, change.state, hero);
+  const mapLine = turnStartLine(before, change.state, heroNow);
   if (mapLine) lines.push(mapLine);
   const standing = change.state.combatants.filter((c) => !c.isPlayer && !c.defeated && c.side === 'enemy');
   if (before.combatants.some((c) => c.side === 'enemy') && standing.length === 0) {
@@ -618,6 +972,58 @@ export async function updateCombatTool(input: UpdateInput, ctx: ToolContext): Pr
 // end_combat
 // ---------------------------------------------------------------------------
 
+/** What the end of a fight does to Concentration: DM lines, and the player's log line when the hero's ran out. */
+interface FightEndConcentration {
+  lines: string[];
+  log?: string;
+}
+
+/**
+ * Concentration as a fight ends (no game clock counts it afterwards). The hero's, with a minute or less left (a
+ * countdown of 10 or less, or no countdown yet and a spell of at most a minute), runs out after the fight: ended on the
+ * sheet (expireConcentration), so a forgotten Bless never restarts its count in the next fight. A longer one is named
+ * with the call that ends it. NPCs still concentrating are named, with the hero's conditions their spells may hold.
+ */
+async function concentrationAsFightEnds(ctx: ToolContext, combat: CombatState): Promise<FightEndConcentration> {
+  const lines: string[] = [];
+  let log: string | undefined;
+  const hero = ctx.deps.store().character;
+  const spell = hero?.spellcasting?.concentratingOn?.trim();
+  if (hero && spell) {
+    const name = hero.name.trim() || 'The hero';
+    const countdown = combat.combatants.find((c) => c.isPlayer)?.concentrationCountdown;
+    const left = countdown && nameKey(countdown.spell) === nameKey(spell) ? countdown.roundsLeft : undefined;
+    const full = left === undefined ? (await spellTiming(ctx, spell, knownSpellId(hero, spell))).rounds : undefined;
+    const rounds = left ?? full;
+    if (rounds !== undefined && rounds <= 10) {
+      let was = hero;
+      const r = await mutateCharacter(ctx, (c) => {
+        was = c;
+        return expireConcentration(c, spell, 'it runs out after the fight');
+      });
+      if (r.events.length) {
+        log = `Your concentration on ${spell} runs out after the fight${acChangeText(was.armorClass, r.character.armorClass)}`;
+        lines.push(
+          `${name}'s ${spell} runs out after the fight${left !== undefined ? ` (${wereLeftText(left)})` : ''}.`,
+          ...eventLines(r.events.slice(1)),
+          ...cascadeLines(spell, { name, hidden: false, isHero: true }, r.character, null),
+        );
+      }
+    } else {
+      const time = left !== undefined ? ` (${roundsLeftText(left)})` : full !== undefined ? ` (at most ${roundsLeftText(full)})` : '';
+      lines.push(`${name} is still concentrating on ${spell}${time}: end it with update_character concentration: null when it runs out.`);
+    }
+  }
+  const npcs = combat.combatants.filter((c) => !c.isPlayer && c.concentration);
+  if (npcs.length) {
+    const held = npcs.map((c) => `${c.name} (${c.concentration?.spell})`).join(', ');
+    lines.push(`Still concentrating as the fight ends: ${held} — the app no longer tracks ${npcs.length === 1 ? 'it' : 'them'}.`);
+    const heroNow = ctx.deps.store().character;
+    for (const c of npcs) lines.push(...untilSpellEndsLines(c.concentration?.spell ?? '', c.name, heroNow, null));
+  }
+  return { lines, ...(log ? { log } : {}) };
+}
+
 export async function endCombatTool(input: ToolInput<'end_combat'>, ctx: ToolContext): Promise<ToolOutcome> {
   const store = ctx.deps.store();
   const campaign = requireCampaign(store);
@@ -625,10 +1031,13 @@ export async function endCombatTool(input: ToolInput<'end_combat'>, ctx: ToolCon
   if (!combat) return fail('No combat is active.');
   // Where everyone ended, for the log (the player's view: hidden creatures left out). The map goes with the row.
   const positions = combat.map ? finalPositions(combat, store.character) : null;
+  // Before the row goes: the sheet first, then the combat.
+  const concentration = await concentrationAsFightEnds(ctx, combat);
   await store.setCombat(null);
   await logTool(ctx, 'end_combat', 'combat', `Combat ended: ${input.summary}`, positions ? { detail: positions } : {});
+  if (concentration.log) await logTool(ctx, 'end_combat', 'spell', concentration.log);
 
-  const lines = [`Combat ended: ${input.summary}`];
+  const lines = [`Combat ended: ${input.summary}`, ...concentration.lines];
   if (input.xp_award) {
     if (campaign.settings.milestoneLeveling) {
       lines.push('XP not awarded: this campaign uses milestone leveling.');
