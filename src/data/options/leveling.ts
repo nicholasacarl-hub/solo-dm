@@ -132,7 +132,7 @@ function findSpecies(c: Character, data: LevelingData | null | undefined): Speci
 }
 
 /** The chosen lineage, read from the lineage trait's feature ("Giant Ancestry (Stone Giant)"). */
-function chosenLineage(c: Character, species: SpeciesOption | undefined): LineageOption | undefined {
+export function chosenLineage(c: Character, species: SpeciesOption | undefined): LineageOption | undefined {
   const choices = speciesChoices(species);
   if (!choices.lineageTrait) return undefined;
   const key = nameKey(choices.lineageTrait.name);

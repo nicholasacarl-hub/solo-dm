@@ -139,6 +139,47 @@ export function lineageEffects(description: string): LineageEffects {
   return effects;
 }
 
+/** A spell a lineage's table gives at a character level, as the lineage's text holds it. */
+export interface LineageSpellTag {
+  /** The character level the table's column names (3 and 5 in SRD 5.2.1). */
+  level: number;
+  /** The cell as written: usually a spell's name, but a book's table laid out otherwise can put anything here. */
+  cell: string;
+}
+
+/** The run of "Level N: X." tags the app writes at the end of a lineage's text, one per column. */
+const LINEAGE_SPELL_TAG = /(?:^|\s)Level (\d{1,2}): ([^.\n]+)\.(?=(?:\s+Level \d{1,2}: [^.\n]+\.)*\s*$)/g;
+
+/**
+ * The spells a lineage's table gives at later character levels (SRD 5.2.1 srd:species:elf, Elven Lineage: "When you reach
+ * character levels 3 and 5, you learn a higher-level spell, as shown on the table"; srd:species:tiefling alike), read
+ * from the "Level 3: Faerie Fire. Level 5: Darkness." the app writes after the Level 1 text from the table's columns
+ * (scripts/build-srd.mjs lineagesFrom; a book's table row, lineageRowText). Only that run at the end of the text counts,
+ * so a sentence of the Level 1 text never does; a lineage written in paragraphs (an older book's subrace) has none.
+ */
+export function lineageSpellTags(description: string): LineageSpellTag[] {
+  return [...description.matchAll(LINEAGE_SPELL_TAG)].map((m) => ({ level: Number(m[1]), cell: m[2].trim() }));
+}
+
+/** A cell that reads as a spell's name once its emphasis is stripped: letters, digits, apostrophes, hyphens, slashes. */
+const NAME_LIKE = /^[\p{L}\p{N}][\p{L}\p{N}'’/ -]*$/u;
+
+/** A table cell without its emphasis ("_Faerie Fire_" -> "Faerie Fire"). */
+export function withoutEmphasis(cell: string): string {
+  return cell.replace(/[*_]+/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * A lineage spell the rules here can't find, as DM text may name it: the cell without its emphasis when it reads as a
+ * name (at most five words, no sentence punctuation), else the app's own words, so a book's sentence never reaches the
+ * transcript: "a spell the app couldn't read from Ashwing's table".
+ */
+export function lineageSpellLabel(cell: string, lineage: string): string {
+  const name = withoutEmphasis(cell);
+  const words = name.split(' ').filter(Boolean).length;
+  return words >= 1 && words <= 5 && NAME_LIKE.test(name) ? name : `a spell the app couldn't read from ${lineage}'s table`;
+}
+
 /** "You know the _Mending_ and _Prestidigitation_ cantrips" -> ["Mending", "Prestidigitation"]. */
 export function cantripNames(text: string): string[] {
   const names: string[] = [];

@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
+import { applyLongRest, useFeature } from '@/engine';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
-import { SRD_BUILDER_DATA } from '@/test/structuredFixtures';
-import type { Character, ClassLevel, ClassOption, CompendiumEntry, Feature, KnownSpell } from '@/types';
+import { EXPECTED_MERGED, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
+import type { BuilderData, Character, ClassLevel, ClassOption, CompendiumEntry, Feature, KnownSpell, SpeciesOption } from '@/types';
+import { lineageRowText, splitRow } from '../structured/parse/srdRulesOptions';
 import { cantripsKnown, preparedSpellCount } from './classFeatures';
 import {
   alwaysPreparedGained,
@@ -14,9 +16,13 @@ import {
   classSpellRules,
   closeSpellPicks,
   fitsBookCaps,
+  freeCastingLines,
+  freeCastingNoticeParts,
+  freeCastingRuling,
   keepsBookExtra,
   keptBookExtraLines,
   levelSpellsEdit,
+  lineageSpellGrants,
   openSpellPicks,
   owedSpells,
   owedSpellsLine,
@@ -24,6 +30,7 @@ import {
   recordingHint,
   settleSpellPicks,
   spellPicksAfterLevel,
+  withLineageCastings,
   withoutSpellReview,
 } from './spellPicks';
 
@@ -531,5 +538,327 @@ describe('spells the DM records settle the open choices (update_character, as th
     const settled = settleSpellPicks(open, after, SRD_BUILDER_DATA.classes).character;
     expect(settled.spellcasting).not.toHaveProperty('spellPicks');
     expect(openSpellPicks(withSpells(settled, settled.spellcasting!.spells.slice(2)), SRD_BUILDER_DATA.classes)).toEqual([]);
+  });
+});
+
+describe("a lineage's spells at character levels 3 and 5 (srd:species:elf, srd:species:tiefling)", () => {
+  // srd:species:elf, Elven Lineage (srd:species:tiefling, Fiendish Legacy, alike): "When you reach character levels 3 and 5,
+  // you learn a higher-level spell, as shown on the table. You always have that spell prepared. You can cast it once without
+  // a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest. You can also cast the spell
+  // using any spell slots you have of the appropriate level." and "Intelligence, Wisdom, or Charisma is your spellcasting
+  // ability for the spells you cast with this trait (choose the ability when you select the lineage)."
+  const classes = SRD_BUILDER_DATA.classes;
+  const NOTE = 'Spellcasting ability: Wisdom. Once per Long Rest without a spell slot';
+  const TRAIT = { Elf: 'Elven Lineage', Tiefling: 'Fiendish Legacy' } as const;
+  const LINEAGES = {
+    Drow: { species: 'Elf', cantrip: 'Dancing Lights', spells: ['Faerie Fire', 'Darkness'] },
+    'High Elf': { species: 'Elf', cantrip: 'Prestidigitation', spells: ['Detect Magic', 'Misty Step'] },
+    'Wood Elf': { species: 'Elf', cantrip: 'Druidcraft', spells: ['Longstrider', 'Pass without Trace'] },
+    Abyssal: { species: 'Tiefling', cantrip: 'Poison Spray', spells: ['Ray of Sickness', 'Hold Person'] },
+    Chthonic: { species: 'Tiefling', cantrip: 'Chill Touch', spells: ['False Life', 'Ray of Enfeeblement'] },
+    Infernal: { species: 'Tiefling', cantrip: 'Fire Bolt', spells: ['Hellish Rebuke', 'Darkness'] },
+  } as const;
+  type Lineage = keyof typeof LINEAGES;
+  /**
+   * A hero of this lineage as the builder makes one: the lineage trait's feature named for it ("Elven Lineage (Drow)") and
+   * the lineage's cantrip under its name, noted with the ability chosen with the lineage (null: no note, an older sheet).
+   */
+  const lineageHero = (lineage: Lineage, classLevels: ClassLevel[], spells: KnownSpell[] = [], features: Feature[] = [], ability: string | null = 'Wisdom'): Character => {
+    const { species, cantrip } = LINEAGES[lineage];
+    const trait: Feature = { id: 'f-lineage', name: `${TRAIT[species]} (${lineage})`, source: 'species', sourceName: species, description: `The ${lineage} benefits.` };
+    return {
+      ...hero(classLevels, [spell(cantrip, 0, lineage, true, ability ? { notes: `Spellcasting ability: ${ability}` } : {}), ...spells], [trait, ...features]),
+      species: `${species} (${lineage} ${species === 'Elf' ? 'lineage' : 'legacy'})`,
+      speciesId: `srd:species:${species.toLowerCase()}`,
+    };
+  };
+  const classOptionOf = (cl: ClassLevel, data: BuilderData) => data.classes.find((o) => o.id === cl.classId) ?? cls(cl.name);
+  /** The level-up's own spell edit with the lineage's grants, then the free castings, as the dialog and the DM's level_up run them. */
+  const levelWithLineage = (c: Character, cl: ClassLevel, data: BuilderData = SRD_BUILDER_DATA) => {
+    const grants = lineageSpellGrants(c, data, findSpell);
+    const edit = levelSpellsEdit(c, cl, classOptionOf(cl, data), undefined, findSpell, data.classes, grants);
+    return { grants, edit, cast: withLineageCastings(edit.character, data, grants) };
+  };
+  const names = (c: Character, data: BuilderData = SRD_BUILDER_DATA) => lineageSpellGrants(c, data, findSpell).map((g) => g.name);
+  const sheetSpell = (c: Character, name: string) => c.spellcasting?.spells.find((s) => s.name === name);
+  const counters = (c: Character) => c.features.filter((f) => f.name.endsWith('(free casting)'));
+
+  it("grants none at character level 2, the Level 3 spell at 3 and 4, and both at 5: the table's column, not the spell's own level", () => {
+    for (const [lineage, { spells }] of Object.entries(LINEAGES) as [Lineage, (typeof LINEAGES)[Lineage]][]) {
+      const at = (level: number) => names(lineageHero(lineage, [entry('Fighter', level)]));
+      expect(at(2), lineage).toEqual([]);
+      expect(at(3), lineage).toEqual([spells[0]]);
+      expect(at(4), lineage).toEqual([spells[0]]);
+      expect(at(5), lineage).toEqual([...spells]);
+    }
+    // Named from the rules index, sourced to the lineage, noted with its ability and its free casting.
+    expect(lineageSpellGrants(lineageHero('Infernal', [entry('Warlock', 3)], [], [], 'Charisma'), SRD_BUILDER_DATA, findSpell)).toEqual([
+      { name: 'Hellish Rebuke', source: 'Infernal', notes: 'Spellcasting ability: Charisma. Once per Long Rest without a spell slot' },
+    ]);
+    // The dialog previews the hero before the level-up at the next character level.
+    expect(lineageSpellGrants(lineageHero('Drow', [entry('Fighter', 2)]), SRD_BUILDER_DATA, findSpell, 3).map((g) => g.name)).toEqual(['Faerie Fire']);
+  });
+
+  it('counts the character level across classes: a Fighter level that makes a Bard 2 character level 3 (srd:rule:multiclassing-experience-points)', () => {
+    // "your total character level, not your level in a particular class": the Fighter level reaches character level 3, so
+    // Faerie Fire, a Bard pick until now, is always prepared and no longer counts among the Bard's prepared spells
+    // (srd:rule:gaining-spells: "a spell that you always have prepared doesn't count against the number of spells on that
+    // list"); the Bard, which gained no level, has that place to fill again (no swaps).
+    const picks = [...fill('Bard', 2, 0), spell('Faerie Fire', 1, 'Bard'), ...fill('Bard', preparedSpellCount(cls('Bard'), 2) - 1, 1)];
+    expect(names(lineageHero('Drow', [entry('Bard', 2)], picks))).toEqual([]);
+    const c = lineageHero('Drow', [entry('Bard', 2), entry('Fighter', 1)], picks);
+    const { edit, cast } = levelWithLineage(c, c.classes[1]);
+    expect(edit.gain).toEqual({ add: [], flip: [{ id: 'id-faerie-fire', name: 'Faerie Fire', source: 'Drow', owner: 'Bard', counted: true, notes: NOTE }], missing: [] });
+    const target = preparedSpellCount(cls('Bard'), 2);
+    expect(edit.others).toEqual([{ cl: c.classes[0], owed: expect.objectContaining({ prepared: { target, held: target - 1, owed: 1 } }), entry: { classId: 'srd:class:bard' } }]);
+    expect(edit.owed).toBeNull();
+    expect(sheetSpell(edit.character, 'Faerie Fire')).toMatchObject({ source: 'Drow', alwaysPrepared: true, prepared: true, notes: NOTE });
+    expect(cast.added).toEqual(['Faerie Fire']);
+  });
+
+  it('adds the Level 3 spell always prepared, with its free casting as a counter that a Long Rest resets', () => {
+    const c = lineageHero('Drow', [entry('Fighter', 3)]);
+    const { edit, cast } = levelWithLineage(c, c.classes[0]);
+    expect(edit.gain).toEqual({
+      add: [{ id: 'srd:spell:faerie-fire', name: 'Faerie Fire', level: 1, prepared: true, concentration: true, alwaysPrepared: true, source: 'Drow', notes: NOTE }],
+      flip: [],
+      missing: [],
+    });
+    expect(counters(cast.character)).toEqual([
+      {
+        id: expect.any(String),
+        name: 'Faerie Fire (free casting)',
+        source: 'species',
+        sourceName: 'Drow',
+        description: 'Faerie Fire once without a spell slot, using Wisdom; regained on a Long Rest (Elven Lineage: Drow). A spell slot of its level or higher also casts it.',
+        uses: { max: 1, used: 0, recharge: 'long' },
+      },
+    ]);
+    expect(cast).toMatchObject({ lineage: 'Drow', added: ['Faerie Fire'], withheldBy: null });
+    expect(freeCastingLines(cast)).toEqual(['Free casting now, once per Long Rest without a spell slot: Faerie Fire (Drow); spend it with update_character features_use "Faerie Fire (free casting)".']);
+    expect(freeCastingNoticeParts(cast)).toEqual(['free casting once per Long Rest: Faerie Fire (Drow)']);
+    // The DM spends it with features_use, by the counter's name or the spell's; "you regain the ability to cast it in that
+    // way when you finish a Long Rest".
+    const spent = useFeature(cast.character, 'Faerie Fire (free casting)');
+    expect(spent.events.map((e) => e.message)).toEqual(['Used Faerie Fire (free casting) (0/1 left; recharges on a Long Rest)']);
+    expect(useFeature(cast.character, 'Faerie Fire').events.map((e) => e.message)).toEqual(['Used Faerie Fire (free casting) (0/1 left; recharges on a Long Rest)']);
+    expect(counters(applyLongRest(spent.character).character)[0].uses).toEqual({ max: 1, used: 0, recharge: 'long' });
+  });
+
+  it('adds only the Level 5 spell to a hero who has the Level 3 one, and both to one who has neither (catch-up); again, nothing', () => {
+    const faerie = spell('Faerie Fire', 1, 'Drow', true, { alwaysPrepared: true, notes: NOTE });
+    const counter: Feature = { id: 'f-ff', name: 'Faerie Fire (free casting)', source: 'species', sourceName: 'Drow', description: '', uses: { max: 1, used: 1, recharge: 'long' } };
+    const at5 = lineageHero('Drow', [entry('Fighter', 5)], [faerie], [counter]);
+    const five = levelWithLineage(at5, at5.classes[0]);
+    expect(five.edit.gain.add.map((s) => [s.name, s.source])).toEqual([['Darkness', 'Drow']]);
+    expect(five.edit.gain.flip).toEqual([]);
+    expect(five.cast.added).toEqual(['Darkness']);
+    expect(counters(five.cast.character).map((f) => [f.name, f.uses?.used])).toEqual([
+      ['Faerie Fire (free casting)', 1],
+      ['Darkness (free casting)', 0],
+    ]);
+    expect(freeCastingLines(five.cast)).toEqual(['Free casting now, once per Long Rest without a spell slot: Darkness (Drow); spend it with update_character features_use "Darkness (free casting)".']);
+    // An older save past character level 5 with neither: its next level-up, in any class, catches both up.
+    const older = lineageHero('Drow', [entry('Fighter', 7)]);
+    const caught = levelWithLineage(older, older.classes[0]);
+    expect(caught.edit.gain.add.map((s) => s.name)).toEqual(['Faerie Fire', 'Darkness']);
+    expect(caught.cast.added).toEqual(['Faerie Fire', 'Darkness']);
+    expect(freeCastingLines(caught.cast)).toEqual([
+      'Free castings now, each once per Long Rest without a spell slot: Faerie Fire, Darkness (Drow); spend one with update_character features_use and "<Spell> (free casting)".',
+    ]);
+    expect(freeCastingNoticeParts(caught.cast)).toEqual(['free casting once per Long Rest: Faerie Fire, Darkness (Drow)']);
+    // The next level-up finds both kept and counted: nothing changes, nothing is said.
+    const next: Character = { ...caught.cast.character, classes: [entry('Fighter', 8)] };
+    const again = levelWithLineage(next, next.classes[0]);
+    expect(again.edit.gain).toEqual({ add: [], flip: [], missing: [] });
+    expect(again.cast.added).toEqual([]);
+    expect(again.cast.character).toBe(again.edit.character);
+    expect(freeCastingLines(again.cast)).toEqual([]);
+  });
+
+  it("turns the levelled class's own pick always prepared, counted after it (srd:rule:gaining-spells)", () => {
+    // A Drow Bard 2 → 3 whose Faerie Fire is a Bard pick: it no longer counts among the Bard's prepared spells, so the Bard
+    // 3 owes one more ("doesn't count against the number of spells on that list").
+    const target = preparedSpellCount(cls('Bard'), 3);
+    const picks = [...fill('Bard', 2, 0), spell('Faerie Fire', 1, 'Bard'), ...fill('Bard', preparedSpellCount(cls('Bard'), 2) - 1, 1)];
+    const c = lineageHero('Drow', [entry('Bard', 3)], picks);
+    const today = levelSpellsEdit(c, c.classes[0], cls('Bard'), undefined, findSpell, classes);
+    expect(today.owed?.prepared).toEqual({ target, held: target - 1, owed: 1 });
+    const { edit, cast } = levelWithLineage(c, c.classes[0]);
+    expect(edit.gain.flip).toEqual([{ id: 'id-faerie-fire', name: 'Faerie Fire', source: 'Drow', owner: 'Bard', counted: true, notes: NOTE }]);
+    expect(edit.owed?.prepared).toEqual({ target, held: target - 2, owed: 2 });
+    expect(edit.others).toEqual([]);
+    expect(sheetSpell(edit.character, 'Faerie Fire')).toEqual({ id: 'id-faerie-fire', name: 'Faerie Fire', level: 1, prepared: true, source: 'Drow', alwaysPrepared: true, notes: NOTE });
+    expect(cast.added).toEqual(['Faerie Fire']);
+    // A turned spell with notes of its own keeps them.
+    const noted = lineageHero('Drow', [entry('Bard', 3)], [spell('Faerie Fire', 1, 'Bard', true, { notes: 'Learned from a moth-priest' })]);
+    const kept = levelWithLineage(noted, noted.classes[0]);
+    expect(kept.edit.gain.flip).toEqual([{ id: 'id-faerie-fire', name: 'Faerie Fire', source: 'Drow', owner: 'Bard', counted: true }]);
+    expect(sheetSpell(kept.edit.character, 'Faerie Fire')).toMatchObject({ source: 'Drow', alwaysPrepared: true, notes: 'Learned from a moth-priest' });
+  });
+
+  it("keeps a Wizard's spellbook copy in the book, prepared spells counted after it (srd:rule:wizard-spellcasting)", () => {
+    // A High Elf Wizard 2 → 3 whose starting book holds Detect Magic, prepared: "The book contains the level 1+ spells you
+    // know", so it stays there (source "Wizard"), always prepared now, and no longer counted among the prepared spells.
+    const book = [...fill('Wizard', 3, 0), spell('Detect Magic', 1, 'Wizard', true, { ritual: true, concentration: true }), ...fill('Wizard', 3, 1), ...fill('Wizard', 2, 1, false, 'book')];
+    const c = lineageHero('High Elf', [entry('Wizard', 3)], book, [], 'Intelligence');
+    const today = levelSpellsEdit(c, c.classes[0], cls('Wizard'), undefined, findSpell, classes);
+    expect(today.owed).toMatchObject({ prepared: { target: 6, held: 4, owed: 2 }, spellbook: { target: 10, held: 6, owed: 4 } });
+    const { edit, cast } = levelWithLineage(c, c.classes[0]);
+    const note = 'Spellcasting ability: Intelligence. Once per Long Rest without a spell slot';
+    expect(edit.gain.flip).toEqual([{ id: 'id-detect-magic', name: 'Detect Magic', source: 'High Elf', owner: 'Wizard', inBook: true, counted: true, notes: note }]);
+    expect(edit.owed).toMatchObject({ prepared: { target: 6, held: 3, owed: 3 }, spellbook: { target: 10, held: 6, owed: 4 } });
+    expect(edit.others).toEqual([]);
+    expect(sheetSpell(edit.character, 'Detect Magic')).toMatchObject({ source: 'Wizard', alwaysPrepared: true, prepared: true, ritual: true, notes: note });
+    expect(counters(cast.character).map((f) => f.description)).toEqual([
+      'Detect Magic once without a spell slot, using Intelligence; regained on a Long Rest (Elven Lineage: High Elf). A spell slot of its level or higher also casts it.',
+    ]);
+  });
+
+  it("leaves a Magic Initiate copy as it is, beside which the lineage's own free casting is counted (srd:feat:magic-initiate)", () => {
+    // Magic Initiate: "You always have that spell prepared. You can cast it once without a spell slot, and you regain the
+    // ability to cast it in that way when you finish a Long Rest." The lineage grants its own, so the hero has both.
+    const initiate = spell('Detect Magic', 1, 'Magic Initiate (Wizard)', true, { alwaysPrepared: true, notes: 'Spellcasting ability: Intelligence. Once per Long Rest without a spell slot' });
+    const feat: Feature = { id: 'f-mi', name: 'Magic Initiate (Wizard)', source: 'feat', sourceName: 'Sage (Origin feat)', description: '', uses: { max: 1, used: 0, recharge: 'long' } };
+    const c = lineageHero('High Elf', [entry('Fighter', 3)], [initiate], [feat]);
+    const { edit, cast } = levelWithLineage(c, c.classes[0]);
+    expect(edit.gain).toEqual({ add: [], flip: [], missing: [] });
+    expect(sheetSpell(edit.character, 'Detect Magic')).toEqual(initiate);
+    expect(cast.added).toEqual(['Detect Magic']);
+    expect(cast.character.features.filter((f) => f.uses).map((f) => [f.name, f.uses?.max])).toEqual([
+      ['Magic Initiate (Wizard)', 1],
+      ['Detect Magic (free casting)', 1],
+    ]);
+    // The lineage's casting uses the lineage's ability (Wisdom here), not the feat's.
+    expect(counters(cast.character)[0].description).toContain('using Wisdom;');
+  });
+
+  it("adds no counter beside the DM's own record of a free casting, and none while the trait's uses count them (the DM's ruling)", () => {
+    // The DM recorded Faerie Fire's free casting by hand: Darkness, at character level 5, gets the app's counter only.
+    const dmCounter: Feature = { id: 'f-dm', name: 'Faerie Fire (Drow, free casting)', source: 'species', sourceName: 'Granted in play', description: '', uses: { max: 1, used: 0, recharge: 'long' } };
+    const byHand = lineageHero('Drow', [entry('Bard', 5)], [spell('Faerie Fire', 1, 'Elven Lineage (Drow)')], [dmCounter]);
+    const dm = levelWithLineage(byHand, byHand.classes[0]);
+    expect(dm.edit.gain.add.map((s) => s.name)).toEqual(['Darkness']);
+    expect(dm.cast.added).toEqual(['Darkness']);
+    // A feature already of the counter's name, even without uses, is never doubled.
+    const named = lineageHero('Drow', [entry('Fighter', 3)], [], [{ id: 'f-named', name: 'Faerie Fire (free casting)', source: 'other', sourceName: 'Granted in play', description: '' }]);
+    expect(levelWithLineage(named, named.classes[0]).cast.added).toEqual([]);
+    // Only a spell the sheet keeps always prepared gets one: before the gain (a level-up whose class data is missing, so
+    // its spell edit didn't run), an ordinary Bard pick waits for the next level-up.
+    const unturned = lineageHero('Drow', [entry('Bard', 3)], [spell('Faerie Fire', 1, 'Bard')]);
+    const pending = withLineageCastings(unturned, SRD_BUILDER_DATA, lineageSpellGrants(unturned, SRD_BUILDER_DATA, findSpell));
+    expect(pending).toEqual({ character: unturned, lineage: 'Drow', added: [], withheldBy: null });
+    // The DM gave the lineage trait its own uses: the spells are still always prepared, but no counter is added, and the
+    // DM hears why.
+    const ruledTrait = (uses: Feature['uses']): Feature => ({ id: 'f-lineage', name: 'Elven Lineage (Drow)', source: 'species', sourceName: 'Elf', description: '', uses });
+    const ruled: Character = { ...lineageHero('Drow', [entry('Fighter', 5)]), features: [ruledTrait({ max: 2, used: 1, recharge: 'long', ruled: true })] };
+    const r = levelWithLineage(ruled, ruled.classes[0]);
+    expect(r.edit.gain.add.map((s) => s.name)).toEqual(['Faerie Fire', 'Darkness']);
+    expect(r.cast).toEqual({ character: r.edit.character, lineage: 'Drow', added: [], withheldBy: ruled.features[0] });
+    expect(r.cast.character).toBe(r.edit.character);
+    expect(freeCastingLines(r.cast)).toEqual(['Elven Lineage (Drow) already counts its free castings (your ruling: 2 uses): no free-casting counters added.']);
+    expect(freeCastingNoticeParts(r.cast)).toEqual(['Elven Lineage (Drow) already counts its free castings (your ruling: 2 uses): no free-casting counters added']);
+    expect(freeCastingRuling(ruledTrait({ max: 1, used: 0, recharge: 'long', ruled: true }))).toBe('Elven Lineage (Drow) already counts its free castings (your ruling: 1 use): no free-casting counters added');
+    expect(freeCastingRuling(ruledTrait({ max: 2, used: 0, recharge: 'long' }))).toBe('Elven Lineage (Drow) already counts its free castings (2 uses): no free-casting counters added');
+    // With nothing left to count (each spell has the DM's counter), nothing is said.
+    const both: Feature[] = ['Faerie Fire', 'Darkness'].map((s) => ({ ...dmCounter, id: `f-${nameKey(s)}`, name: `${s} (Drow, free casting)` }));
+    const settled: Character = { ...ruled, features: [...ruled.features, ...both] };
+    expect(levelWithLineage(settled, settled.classes[0]).cast).toMatchObject({ added: [], withheldBy: null });
+  });
+
+  it("notes the ability the lineage's own cantrip names, and only the free casting without one", () => {
+    const unnoted = lineageHero('Drow', [entry('Fighter', 3)], [spell('Light', 0, 'Magic Initiate (Wizard)', true, { notes: 'Spellcasting ability: Intelligence' })], [], null);
+    const { grants, cast } = levelWithLineage(unnoted, unnoted.classes[0]);
+    // Another feature's note (Magic Initiate's Intelligence) isn't the lineage's.
+    expect(grants).toEqual([{ name: 'Faerie Fire', source: 'Drow', notes: 'Once per Long Rest without a spell slot' }]);
+    expect(sheetSpell(cast.character, 'Faerie Fire')?.notes).toBe('Once per Long Rest without a spell slot');
+    expect(counters(cast.character)[0].description).toBe('Faerie Fire once without a spell slot; regained on a Long Rest (Elven Lineage: Drow). A spell slot of its level or higher also casts it.');
+  });
+
+  describe("a book's lineage (the invented Gloamwood fixture)", () => {
+    const mothkin = EXPECTED_MERGED.species.find((s) => s.name === 'Mothkin') as SpeciesOption;
+    /** A Mothkin as the builder makes one from the book: the trait as printed and the lineage as its own feature, each with its ref. */
+    const moth = (lineage: 'Ashwing' | 'Silverwing', level: number, species: SpeciesOption = mothkin): Character => {
+      const option = (species.lineages ?? []).find((l) => l.name === lineage)!;
+      const trait = species.traits.find((t) => t.name === 'Lamp-Drawn')!;
+      return {
+        ...hero(
+          [entry('Fighter', level)],
+          [spell(lineage === 'Ashwing' ? 'Light' : 'Dancing Lights', 0, lineage, true, { notes: 'Spellcasting ability: Charisma' })],
+          [
+            { id: 'f-lamp', name: `Lamp-Drawn (${lineage})`, source: 'species', sourceName: species.name, description: TEXT.lampDrawn.join('\n\n'), ...(trait.ref ? { ref: trait.ref } : {}) },
+            { id: 'f-wing', name: lineage, source: 'species', sourceName: species.name, description: option.description, ...(option.ref ? { ref: option.ref } : {}) },
+          ],
+        ),
+        species: `${species.name} (${lineage} lineage)`,
+        speciesId: species.id,
+      };
+    };
+
+    it('grants its table-row spells at 3 and 5, under the lineage, with a counter named for its trait', () => {
+      expect(names(moth('Silverwing', 2), EXPECTED_MERGED)).toEqual([]);
+      expect(names(moth('Silverwing', 3), EXPECTED_MERGED)).toEqual(['Faerie Fire']);
+      expect(names(moth('Silverwing', 5), EXPECTED_MERGED)).toEqual(['Faerie Fire', 'Moonbeam']);
+      expect(names(moth('Ashwing', 5), EXPECTED_MERGED)).toEqual(['Burning Hands', 'Continual Flame']);
+      const c = moth('Silverwing', 3);
+      const { edit, cast } = levelWithLineage(c, c.classes[0], EXPECTED_MERGED);
+      expect(edit.gain.add.map((s) => [s.name, s.source, s.notes])).toEqual([['Faerie Fire', 'Silverwing', 'Spellcasting ability: Charisma. Once per Long Rest without a spell slot']]);
+      expect(counters(cast.character).map((f) => [f.name, f.sourceName, f.description])).toEqual([
+        ['Faerie Fire (free casting)', 'Silverwing', 'Faerie Fire once without a spell slot, using Charisma; regained on a Long Rest (Lamp-Drawn: Silverwing). A spell slot of its level or higher also casts it.'],
+      ]);
+      // The counter is the app's words: no ref, no book text.
+      expect(counters(cast.character)[0]).not.toHaveProperty('ref');
+    });
+
+    /** The Mothkin with its Ashwing row laid out as `row` (a book whose table isn't Level 1/3/5). */
+    const reshaped = (row: string): { data: BuilderData; species: SpeciesOption } => {
+      const description = lineageRowText(splitRow(row));
+      const species: SpeciesOption = { ...mothkin, lineages: (mothkin.lineages ?? []).map((l) => (l.name === 'Ashwing' ? { ...l, description } : l)) };
+      return { species, data: { ...EXPECTED_MERGED, species: EXPECTED_MERGED.species.map((s) => (s.id === mothkin.id ? species : s)) } };
+    };
+
+    it('skips a cell the rules index finds as a cantrip (spec §2.1), whether the grant or the gain looks it up', () => {
+      const { data, species } = reshaped('| Ashwing | Resistance to Necrotic damage. | Chill Touch | False Life | Ray of Enfeeblement |');
+      const c = moth('Ashwing', 5, species);
+      expect(names(c, data)).toEqual(['False Life']);
+      // Without a lookup of its own the grant passes every cell on; the gain's lookup leaves the cantrip out all the same.
+      expect(lineageSpellGrants(c, data).map((g) => g.name)).toEqual(['Chill Touch', 'False Life']);
+      const gain = alwaysPreparedGained(c, undefined, undefined, 0, findSpell, [], lineageSpellGrants(c, data));
+      expect(gain).toEqual({ add: [expect.objectContaining({ name: 'False Life', level: 1, source: 'Ashwing' })], flip: [], missing: [] });
+    });
+
+    it('lists a cell the rules lack among the spells to add by hand, quoting it only when it reads as a name, and counts none (spec §2.1)', () => {
+      const { data, species } = reshaped('| Ashwing | You know the Light cantrip. | Cinder Mote | You learn the faerie fire spell |');
+      const c = moth('Ashwing', 5, species);
+      const { edit, cast } = levelWithLineage(c, c.classes[0], data);
+      expect(edit.gain).toEqual({
+        add: [],
+        flip: [],
+        missing: [
+          { name: 'Cinder Mote', source: 'Ashwing' },
+          { name: "a spell the app couldn't read from Ashwing's table", source: 'Ashwing' },
+        ],
+      });
+      expect(cast.added).toEqual([]);
+      expect(cast.character).toBe(edit.character);
+    });
+  });
+
+  it('changes nothing for a hero without the lineage trait feature: Mira, a High Elf by name only', () => {
+    // The sample hero predates "<Trait> (<Lineage>)" features; her Detect Magic and Misty Step stay Wizard picks.
+    const mira = sampleCharacter();
+    const at5: Character = { ...mira, classes: mira.classes.map((cl) => ({ ...cl, level: 5 })) };
+    expect(lineageSpellGrants(at5, SRD_BUILDER_DATA, findSpell)).toEqual([]);
+    const evoker = sub('Wizard', 'Evoker');
+    expect(levelSpellsEdit(at5, at5.classes[0], cls('Wizard'), evoker, findSpell, classes, lineageSpellGrants(at5, SRD_BUILDER_DATA, findSpell))).toEqual(
+      levelSpellsEdit(at5, at5.classes[0], cls('Wizard'), evoker, findSpell, classes),
+    );
+    const cast = withLineageCastings(at5, SRD_BUILDER_DATA, []);
+    expect(cast).toEqual({ character: at5, lineage: '', added: [], withheldBy: null });
+    expect(cast.character).toBe(at5);
+    expect(freeCastingLines(cast)).toEqual([]);
+    expect(freeCastingNoticeParts(cast)).toEqual([]);
+    // Without the species data (it failed to load) nothing is read either.
+    expect(lineageSpellGrants(lineageHero('Drow', [entry('Fighter', 5)]), null, findSpell)).toEqual([]);
   });
 });

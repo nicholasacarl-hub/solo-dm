@@ -6,12 +6,25 @@
  * prerequisites: only "Level N+" is checked).
  */
 import { describe, expect, it } from 'vitest';
-import { characterLevel, characterSheetText, computeArmorClass, levelUp } from '@/engine';
+import compendiumRaw from '../../../public/srd/compendium.json?raw';
+import { applyLongRest, characterLevel, characterSheetText, computeArmorClass, levelUp, useFeature } from '@/engine';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
-import { HOMEBREW_SOURCE_ID, type Character, type ClassFeatureDef, type ClassLevel, type ClassOption, type CompendiumEntry, type FeatOption, type Feature, type OptionSource, type SubclassOption } from '@/types';
-import { featureUseChanges, gainedFeatures, keptRulings } from './leveling';
+import {
+  HOMEBREW_SOURCE_ID,
+  type Character,
+  type ClassFeatureDef,
+  type ClassLevel,
+  type ClassOption,
+  type CompendiumEntry,
+  type FeatOption,
+  type Feature,
+  type OptionSource,
+  type SpeciesOption,
+  type SubclassOption,
+} from '@/types';
+import { chosenLineage, featureUseChanges, gainedFeatures, keptRulings, refreshFeatureUses } from './leveling';
 import {
   applyFeatChoice,
   caughtUpFeatures,
@@ -30,7 +43,7 @@ import {
   type FeatChoiceTrigger,
   type FeatPick,
 } from './levelUpChoices';
-import { alwaysPreparedGained, applyAlwaysPrepared } from './spellPicks';
+import { alwaysPreparedGained, applyAlwaysPrepared, freeCastingLines, levelSpellsEdit, lineageSpellGrants, withLineageCastings } from './spellPicks';
 
 const classOf = (id: string): ClassOption => {
   const found = EXPECTED_MERGED.classes.find((c) => c.id === id) ?? SRD_BUILDER_DATA.classes.find((c) => c.id === id);
@@ -627,6 +640,76 @@ describe('featureUseChanges: the uses a level-up changed', () => {
     // Only one of them grew: its name alone.
     const one = { ...before, features: [taking('a', 4, 4), taking('b', 8, 3), rage] };
     expect(featureUseChanges(before, one)).toEqual(['Wick Tender 3 → 4']);
+  });
+});
+
+describe("chosenLineage and a lineage's spells through a level-up (SRD 5.2.1 srd:species:elf, Elven Lineage)", () => {
+  const SPELLS = (JSON.parse(compendiumRaw) as CompendiumEntry[]).filter((e) => e.kind === 'spell');
+  const find = (name: string) => SPELLS.find((e) => nameKey(e.name) === nameKey(name));
+  const elf = SRD_BUILDER_DATA.species.find((s) => s.id === 'srd:species:elf') as SpeciesOption;
+  const trait: Feature = { id: 'f-lineage', name: 'Elven Lineage (Drow)', source: 'species', sourceName: 'Elf', description: 'The Drow benefits.' };
+  /** A Drow Fighter as the builder makes one: the lineage trait's feature, and Dancing Lights noted with the chosen ability. */
+  const drow = (level: number) =>
+    hero(
+      { classId: FIGHTER.id, name: 'Fighter', level, hitDie: 10 },
+      {
+        species: 'Elf (Drow lineage)',
+        speciesId: elf.id,
+        features: [trait],
+        spellcasting: { ability: 'cha', slots: {}, spells: [{ id: 'srd:spell:dancing-lights', name: 'Dancing Lights', level: 0, prepared: true, source: 'Drow', concentration: true, notes: 'Spellcasting ability: Charisma' }], concentratingOn: null },
+      },
+    );
+  /** The dialog's order: the engine's level-up, the uses refresh, then the levelled class's spell edit with the lineage's grants and the free castings. */
+  const levelOnce = (c: Character) => {
+    const r = levelUp(c, { className: 'Fighter', classId: FIGHTER.id, hpMethod: 'average' });
+    const refreshed = refreshFeatureUses(r.character, SRD_BUILDER_DATA);
+    const grants = lineageSpellGrants(refreshed, SRD_BUILDER_DATA, find);
+    const edit = levelSpellsEdit(refreshed, refreshed.classes[0], FIGHTER, undefined, find, SRD_BUILDER_DATA.classes, grants);
+    return { grants, cast: withLineageCastings(edit.character, SRD_BUILDER_DATA, grants) };
+  };
+
+  it('reads the lineage from the trait\'s feature "<Trait> (<Lineage>)", and none from a sheet without it (Mira)', () => {
+    expect(chosenLineage(drow(1), elf)?.name).toBe('Drow');
+    expect(chosenLineage(sampleCharacter(), elf)).toBeUndefined();
+    expect(chosenLineage(drow(1), undefined)).toBeUndefined();
+    // A book's lineage is two features, the trait as printed and the lineage: the trait's names it.
+    const mothkin = EXPECTED_MERGED.species.find((s) => s.name === 'Mothkin') as SpeciesOption;
+    const moth = sampleCharacter({
+      features: [
+        { id: 'f-lamp', name: 'Lamp-Drawn (Silverwing)', source: 'species', sourceName: 'Mothkin', description: TEXT.lampDrawn.join('\n\n') },
+        { id: 'f-wing', name: 'Silverwing', source: 'species', sourceName: 'Mothkin', description: '' },
+      ],
+    });
+    expect(chosenLineage(moth, mothkin)?.name).toBe('Silverwing');
+  });
+
+  it('gives the Level 3 spell at character level 3, Darkness at 5, each with its counter, which the uses refresh and the lineage reading leave alone', () => {
+    const two = drow(2);
+    // The dialog's preview reads the hero before the level-up at the next character level: the same grants.
+    const preview = lineageSpellGrants(two, SRD_BUILDER_DATA, find, characterLevel(two) + 1);
+    const three = levelOnce(two);
+    expect(three.grants).toEqual(preview);
+    expect(three.cast.character.spellcasting?.spells.find((s) => s.name === 'Faerie Fire')).toMatchObject({
+      alwaysPrepared: true,
+      prepared: true,
+      source: 'Drow',
+      notes: 'Spellcasting ability: Charisma. Once per Long Rest without a spell slot',
+    });
+    expect(freeCastingLines(three.cast)).toEqual(['Free casting now, once per Long Rest without a spell slot: Faerie Fire (Drow); spend it with update_character features_use "Faerie Fire (free casting)".']);
+    const sheet = three.cast.character;
+    // Not "<Trait> (…)": the lineage is still the trait's, and a later refresh changes nothing.
+    expect(chosenLineage(sheet, elf)?.name).toBe('Drow');
+    expect(refreshFeatureUses(sheet, SRD_BUILDER_DATA)).toBe(sheet);
+    // Spent, then "you regain the ability to cast it in that way when you finish a Long Rest".
+    const spent = useFeature(sheet, 'Faerie Fire (free casting)').character;
+    const rested = applyLongRest(spent).character;
+    expect(rested.features.find((f) => f.name === 'Faerie Fire (free casting)')?.uses).toEqual({ max: 1, used: 0, recharge: 'long' });
+    // Character level 4 adds nothing; 5 adds Darkness and its counter only.
+    const four = levelOnce(sheet);
+    expect(four.cast.added).toEqual([]);
+    const five = levelOnce(four.cast.character);
+    expect(five.cast.added).toEqual(['Darkness']);
+    expect(five.cast.character.features.filter((f) => f.name.endsWith('(free casting)')).map((f) => f.name)).toEqual(['Faerie Fire (free casting)', 'Darkness (free casting)']);
   });
 });
 
