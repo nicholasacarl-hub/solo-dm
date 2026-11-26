@@ -677,6 +677,19 @@ export const spellAttackBonus: typeof Engine.spellAttackBonus = () => null;
 export const attackAbilityModifier: typeof Engine.attackAbilityModifier = (c, a) => attackMod(c, a);
 export const attackBonus: typeof Engine.attackBonus = (c, a) => attackMod(c, a) + (a.proficient ? pb(c) : 0);
 export const effectiveSpeed: typeof Engine.effectiveSpeed = (c) => c.speed;
+/** No class feature raises Speed here and nothing lowers it: the sheet's speed and other speeds as stored. */
+export const speedDetails: typeof Engine.speedDetails = (c) => ({
+  speed: c.speed,
+  base: c.speed,
+  raised: c.speed,
+  bonuses: [],
+  off: [],
+  classFeatures: [],
+  other: c.otherSpeeds ?? {},
+  notes: [],
+});
+export const speedChangeText: typeof Engine.speedChangeText = () => '';
+export const sheetSpeedText: typeof Engine.sheetSpeedText = (c) => `${c.speed} ft`;
 /** The fake knows no armor's stats: any armor worn is unknown (computeArmorClass keeps the sheet's AC for it). */
 export const unknownWornArmor: typeof Engine.unknownWornArmor = (c) => c.inventory.find((i) => i.equipped && i.category === 'armor');
 /** Unarmored: 10 + DEX; with armor or a shield equipped the sheet's AC is kept (as the engine does for unknown armor). */

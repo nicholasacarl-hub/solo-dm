@@ -124,18 +124,21 @@ function feet(n: unknown): number {
 }
 
 /**
- * The hero (spec §3.4.1): speedDetails gives walk after death, Speed-0 conditions, heavy armor and Exhaustion;
- * every other speed (the sheet's, max'd with Combatant.speeds granted for now) loses the same amount
- * (srd:rule:speed, Changes to Your Speeds).
+ * The hero (spec §3.4.1): speedDetails gives walk after death, Speed-0 conditions, the class features' bonuses
+ * (Unarmored Movement, Fast Movement, Roving), heavy armor and Exhaustion. The penalty (raised − speed) comes off every
+ * speed: the walk (the raised Speed max'd with a granted walk, so a walk granted for the feature counts once) and every
+ * other speed (the sheet's own, max'd with Combatant.speeds granted for now; srd:rule:speed, Changes to Your Speeds).
+ * A class feature's bonus raises walking Speed only (the app's ruling); Roving's Climb and Swim Speeds equal Speed
+ * (srd:rule:ranger-roving), so they are at least the walk.
  */
 function heroSpeeds(sheet: Character, c: Combatant, notes: string[]): SpeedSet {
   const sd = speedDetails(sheet);
   notes.push(...sd.notes);
-  const delta = Math.max(0, sd.base - sd.speed);
+  const penalty = Math.max(0, sd.raised - sd.speed);
   const granted: CreatureSpeeds = c.speeds ?? {};
   const own = sheet.otherSpeeds ?? {};
   const out: SpeedSet = {
-    walk: Math.max(0, Math.max(sd.base, feet(granted.walk)) - delta),
+    walk: Math.max(0, Math.max(sd.raised, feet(granted.walk)) - penalty),
     fly: 0,
     swim: 0,
     climb: 0,
@@ -144,7 +147,11 @@ function heroSpeeds(sheet: Character, c: Combatant, notes: string[]): SpeedSet {
   };
   for (const k of OTHER_SPEEDS) {
     const v = Math.max(feet(own[k]), feet(granted[k]));
-    out[k] = v > 0 ? Math.max(0, v - delta) : 0;
+    out[k] = v > 0 ? Math.max(0, v - penalty) : 0;
+  }
+  if (sd.classFeatures.includes('Roving')) {
+    out.climb = Math.max(out.climb, out.walk);
+    out.swim = Math.max(out.swim, out.walk);
   }
   return out;
 }

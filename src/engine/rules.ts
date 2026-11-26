@@ -17,6 +17,7 @@ import {
   type Feature,
   type GameEvent,
   type InventoryItem,
+  type OtherSpeed,
   type PlayerRollRequest,
   type Skill,
   type SkillBonus,
@@ -514,13 +515,104 @@ export function attackCritRange(c: Character, req: Pick<PlayerRollRequest, 'roll
   return range < 20 && !isSpellAttack(c, req.attackName) ? range : 20;
 }
 
+/** A class feature's standing bonus to walking Speed, while it is in force. */
+export interface SpeedBonus {
+  name: string;
+  feet: number;
+}
+
 export interface SpeedDetails {
-  /** Walking speed after penalties. */
+  /** Walking speed after the class features' bonuses and every penalty. */
   speed: number;
-  /** Walking speed on the sheet. */
+  /** Walking speed on the sheet: the hero's own (species or lineage, a transformation's change, a DM's ruling). */
   base: number;
-  /** Why the speed differs, e.g. "Exhaustion 2: −10 ft". */
+  /** Base plus the class features' bonuses in force, before penalties; equal to base when none is. */
+  raised: number;
+  /** The class features' bonuses in force, in order: { name: 'Unarmored Movement', feet: 15 }. */
+  bonuses: SpeedBonus[];
+  /** The hero's bonuses its gear suspends: "Unarmored Movement: no +15 ft in armor or with a Shield". */
+  off: string[];
+  /**
+   * The Speed features the hero has at its class levels, in force or not ("Unarmored Movement", "Fast Movement",
+   * "Roving"): the readers that explain such a hero's Speed key on it.
+   */
+  classFeatures: string[];
+  /** The other speeds as the sheet shows them: as stored (key order kept), with Roving's Climb and Swim Speeds. */
+  other: Partial<Record<OtherSpeed, number>>;
+  /** Why the speed differs: the bonuses in force first ("Unarmored Movement: +15 ft"), then "Exhaustion 2: −10 ft". */
   notes: string[];
+}
+
+const UNARMORED_MOVEMENT = 'Unarmored Movement';
+const FAST_MOVEMENT = 'Fast Movement';
+const ROVING = 'Roving';
+/** The class features that raise walking Speed, in the order the texts name them. */
+const SPEED_FEATURES = [UNARMORED_MOVEMENT, FAST_MOVEMENT, ROVING] as const;
+
+/**
+ * The Monk Features table's Unarmored Movement column (SRD 5.2.1 srd:class:monk): +10 ft at Monk levels 2–5, +15 at
+ * 6–9, +20 at 10–13, +25 at 14–17 and +30 at 18–20; none at level 1.
+ */
+function unarmoredMovementFeet(monkLevel: number): number {
+  const l = toInt(monkLevel);
+  if (l < 2) return 0;
+  return l >= 18 ? 30 : l >= 14 ? 25 : l >= 10 ? 20 : l >= 6 ? 15 : 10;
+}
+
+/**
+ * Why Heavy armor withholds Fast Movement and Roving ("while you aren't wearing Heavy armor"): "in Heavy armor" for
+ * equipped armor whose type is heavy, or whose stored stats give no type and a DEX cap of 0 (SRD 5.2.1 srd:rule:armor:
+ * "Every type of armor falls into a category: Light, Medium, or Heavy"); never a Shield, which neither feature
+ * mentions. Armor the app can't identify (category armor, no stats) may be Heavy, so it withholds them too:
+ * "(Mithral Coat: armor type unknown)". Null when no such armor is worn.
+ */
+function heavyArmorReason(c: Character): string | null {
+  const { known, unknown } = wornArmor(c.inventory);
+  const heavy = known.some(({ stats }) => stats.kind === 'armor' && (stats.armorType === 'heavy' || (!stats.armorType && stats.dexCap === 0)));
+  if (heavy) return 'in Heavy armor';
+  return unknown.length ? `(${unknown[0].name.trim() || 'Armor'}: armor type unknown)` : null;
+}
+
+interface SpeedFeature extends SpeedBonus {
+  /** What suspends the bonus now ("Fast Movement: no +10 ft in Heavy armor"), or null while it is in force. */
+  off: string | null;
+}
+
+/**
+ * The class features that raise walking Speed, by class levels (classLevelOf: the SRD class, a DM's class of that name,
+ * a 2024 book's class standing in for it; an older-edition book's class gets none, its numbers can differ, as for the
+ * Martial Arts die). Multiclass bonuses add up: they are different features, and srd:rule:multiclassing-class-features
+ * names special rules only for Extra Attack, Spellcasting and the ways to calculate Armor Class.
+ * - Unarmored Movement (srd:rule:monk-unarmored-movement), Monk 2+: "Your speed increases by 10 feet while you aren't
+ *   wearing armor or wielding a Shield", growing by the Monk Features table; the Martial Arts test (wearsArmorOrShield:
+ *   armor the app can't identify counts as armor).
+ * - Fast Movement (srd:rule:barbarian-fast-movement), Barbarian 5+, and Roving (srd:rule:ranger-roving), Ranger 6+:
+ *   +10 ft "while you aren't wearing Heavy armor" (heavyArmorReason).
+ */
+function speedFeatures(c: Character): SpeedFeature[] {
+  const out: SpeedFeature[] = [];
+  const monk = unarmoredMovementFeet(classLevelOf(c, 'Monk'));
+  if (monk > 0) {
+    const off = wearsArmorOrShield(c) ? `${UNARMORED_MOVEMENT}: no +${monk} ft in armor or with a Shield` : null;
+    out.push({ name: UNARMORED_MOVEMENT, feet: monk, off });
+  }
+  const heavyGated = [...(classLevelOf(c, 'Barbarian') >= 5 ? [FAST_MOVEMENT] : []), ...(classLevelOf(c, 'Ranger') >= 6 ? [ROVING] : [])];
+  if (heavyGated.length) {
+    const heavy = heavyArmorReason(c);
+    for (const name of heavyGated) out.push({ name, feet: 10, off: heavy ? `${name}: no +10 ft ${heavy}` : null });
+  }
+  return out;
+}
+
+/**
+ * The other speeds the sheet shows: as stored, in their stored key order. A Ranger 6+ also has "a Climb Speed and a
+ * Swim Speed equal to your Speed" (srd:rule:ranger-roving; no armor condition): each is raised in place to the Speed
+ * (after penalties), or appended when missing (climb, then swim).
+ */
+function sheetOtherSpeeds(c: Character, roving: boolean, speed: number): Partial<Record<OtherSpeed, number>> {
+  const other = { ...(c.otherSpeeds ?? {}) };
+  if (roving) for (const k of ['climb', 'swim'] as const) other[k] = Math.max(0, toInt(other[k]), speed);
+  return other;
 }
 
 /** Heavy armor below its Strength requirement costs 10 ft of Speed (SRD 5.2.1 Armor table). */
@@ -534,14 +626,37 @@ function heavyArmorNote(c: Character): string | null {
   return null;
 }
 
-/** Walking speed with an explanation of every penalty applied. */
+/**
+ * Walking speed with an explanation of every bonus and penalty applied. The stored speed is the hero's own; the class
+ * features' bonuses are worked out here, never stored. In order: Dead and the Speed-0 conditions give 0 ("Your Speed is
+ * 0 and can't increase", srd:condition:grappled); a stored Speed of 0 (only a DM's ruling stores one) gets no bonus;
+ * then the bonuses in force (speedFeatures); then heavy armor below its Strength (−10 ft) and Exhaustion (−5 ft per
+ * level); floor 0. The app's ruling: a class feature's standing bonus raises walking Speed only (the other speeds as
+ * stored; Roving's Climb and Swim Speeds follow Speed by their own words).
+ */
 export function speedDetails(c: Character): SpeedDetails {
   const base = Math.max(0, toInt(c.speed));
-  if (c.deathSaves.dead) return { speed: 0, base, notes: ['Dead'] };
+  const features = speedFeatures(c);
+  const classFeatures = features.map((f) => f.name);
+  const roving = classFeatures.includes(ROVING);
+  const details = (speed: number, notes: string[], bonuses: SpeedBonus[] = [], off: string[] = []): SpeedDetails => ({
+    speed,
+    base,
+    raised: base + bonuses.reduce((sum, b) => sum + b.feet, 0),
+    bonuses,
+    off,
+    classFeatures,
+    other: sheetOtherSpeeds(c, roving, speed),
+    notes,
+  });
+  if (c.deathSaves.dead) return details(0, ['Dead']);
   const zeroing = c.conditions.map((cond) => conditionKey(cond.id)).find((id) => SPEED_ZERO_CONDITIONS.has(id));
-  if (zeroing) return { speed: 0, base, notes: [`${conditionName(zeroing)}: Speed 0`] };
-  const notes: string[] = [];
-  let speed = base;
+  if (zeroing) return details(0, [`${conditionName(zeroing)}: Speed 0`]);
+  const counted = base > 0 ? features : [];
+  const bonuses = counted.filter((f) => !f.off).map(({ name, feet }) => ({ name, feet }));
+  const off = counted.flatMap((f) => (f.off ? [f.off] : []));
+  const notes = bonuses.map((b) => `${b.name}: +${b.feet} ft`);
+  let speed = base + bonuses.reduce((sum, b) => sum + b.feet, 0);
   const armorNote = heavyArmorNote(c);
   if (armorNote) {
     speed -= 10;
@@ -552,12 +667,44 @@ export function speedDetails(c: Character): SpeedDetails {
     speed -= 5 * exhaustion;
     notes.push(`Exhaustion ${exhaustion}: ${MINUS}${5 * exhaustion} ft`);
   }
-  return { speed: Math.max(0, speed), base, notes };
+  return details(Math.max(0, speed), notes, bonuses, off);
 }
 
-/** Walking speed after exhaustion (−5 ft per level) and speed-zeroing conditions (grappled, restrained...). */
+/**
+ * Walking speed after the class features' bonuses (Unarmored Movement, Fast Movement, Roving), heavy armor below its
+ * Strength, Exhaustion (−5 ft per level) and the speed-zeroing conditions (grappled, restrained...).
+ */
 export function effectiveSpeed(c: Character): number {
   return speedDetails(c).speed;
+}
+
+/** "a Climb Speed and a Swim Speed of 40 ft"; "a Climb Speed of 40 ft and a Swim Speed of 60 ft"; "a Swim Speed of 30 ft". */
+function climbSwimPhrase(keys: readonly ('climb' | 'swim')[], other: SpeedDetails['other']): string {
+  const label = (k: 'climb' | 'swim') => (k === 'climb' ? 'a Climb Speed' : 'a Swim Speed');
+  const feet = keys.map((k) => Math.max(0, toInt(other[k])));
+  if (keys.length === 2 && feet[0] === feet[1]) return `${label(keys[0])} and ${label(keys[1])} of ${feet[0]} ft`;
+  return keys.map((k, i) => `${label(k)} of ${feet[i]} ft`).join(' and ');
+}
+
+/**
+ * What a change to the hero (a level-up) did to its walking Speed and to Roving's Climb and Swim Speeds: "" when neither
+ * changed; else "Speed 30 ft → 40 ft (Unarmored Movement)", naming the class bonuses that changed, plus ", with a Climb
+ * Speed and a Swim Speed of 40 ft" when Roving's speeds appear or change (srd:rule:ranger-roving). Roving's alone, the
+ * walking Speed unchanged (Heavy armor withholds the +10 ft, not the speeds): "A Climb Speed and a Swim Speed of 30 ft
+ * (Roving)". Pure: one text for the engine's level-up event, the dialog's notice and its Summary.
+ */
+export function speedChangeText(before: Character, after: Character): string {
+  const was = speedDetails(before);
+  const now = speedDetails(after);
+  const feetOf = (sd: SpeedDetails, name: string) => sd.bonuses.find((b) => b.name === name)?.feet ?? 0;
+  const changed = SPEED_FEATURES.filter((name) => feetOf(was, name) !== feetOf(now, name));
+  const roving = now.classFeatures.includes(ROVING)
+    ? (['climb', 'swim'] as const).filter((k) => Math.max(0, toInt(now.other[k])) !== Math.max(0, toInt(was.other[k])))
+    : [];
+  const walk = now.speed !== was.speed ? `Speed ${was.speed} ft → ${now.speed} ft${changed.length ? ` (${changed.join(', ')})` : ''}` : '';
+  const speeds = roving.length ? climbSwimPhrase(roving, now.other) : '';
+  if (walk) return speeds ? `${walk}, with ${speeds}` : walk;
+  return speeds ? `${speeds.charAt(0).toUpperCase()}${speeds.slice(1)} (${ROVING})` : '';
 }
 
 // ---------------------------------------------------------------------------

@@ -27,6 +27,7 @@ import {
   spellAttackBonus,
   spellSaveDC,
   weaponCritRange,
+  type SpeedDetails,
 } from './rules';
 import { ordinal } from './spellcasting';
 import { activeTransformations } from './transform';
@@ -156,6 +157,35 @@ function conditionsText(c: Character): string | null {
 }
 
 /**
+ * The status line's Speed: for a hero with a Speed feature at its class levels (Unarmored Movement, Fast Movement,
+ * Roving), always, naming the bonuses in force ("Speed 45 ft (Unarmored Movement)"): what the DM must not add again.
+ * All suspended, or a Speed of 0: "Speed 30 ft", "Speed 0 ft". Any other hero's only when it isn't the sheet's.
+ */
+function statusSpeedText(speed: SpeedDetails): string | null {
+  if (!speed.classFeatures.length) return speed.speed !== speed.base ? `Speed ${speed.speed} ft` : null;
+  const named = speed.speed > 0 && speed.bonuses.length ? ` (${speed.bonuses.map((b) => b.name).join(', ')})` : '';
+  return `Speed ${speed.speed} ft${named}`;
+}
+
+function speedText(speed: SpeedDetails): string {
+  if (!speed.classFeatures.length) return `${speed.speed} ft${speed.notes.length ? ` (${speed.notes.join('; ')})` : ''}`;
+  // The notes list the bonuses in force first, then the penalties: what gear suspends goes between, as the sum runs.
+  const bonusNotes = speed.notes.slice(0, speed.bonuses.length);
+  const penaltyNotes = speed.notes.slice(speed.bonuses.length);
+  return `${speed.speed} ft (${[`base ${speed.base} ft`, ...bonusNotes, ...speed.off, ...penaltyNotes].join('; ')})`;
+}
+
+/**
+ * The sheet text's walking Speed with what explains it, as vitalsLines prints it after "**Speed** ": "30 ft",
+ * "25 ft (Exhaustion 1: −5 ft)"; for a hero with a Speed feature at its class levels, the stored base first, then the
+ * bonuses in force, those gear suspends and the penalties: "45 ft (base 30 ft; Unarmored Movement: +15 ft)",
+ * "30 ft (base 30 ft; Unarmored Movement: no +15 ft in armor or with a Shield)", "0 ft (base 30 ft; Grappled: Speed 0)".
+ */
+export function sheetSpeedText(c: Character): string {
+  return speedText(speedDetails(c));
+}
+
+/**
  * One- or two-line status, e.g.
  * "Mira (Wizard 3) · HP 14/20 (+5 temp) · AC 12 · Slots 1st 2/4, 2nd 1/2 · Hit Dice 2/3 d6 ·
  *  Conditions: Poisoned · Exhaustion 1 · Concentrating: Fly · Inspiration"; with AC spells counted, "AC 17 (Mage Armor,
@@ -171,8 +201,8 @@ export function characterStatusLine(c: Character): string {
   // The spells the AC counts ("AC 17 (Mage Armor, Shield of Faith)"): what the DM must not count again.
   const inAc = countedAcSpells(c);
   parts.push(`AC ${c.armorClass}${inAc.length ? ` (${inAc.join(', ')})` : ''}`);
-  const speed = speedDetails(c);
-  if (speed.speed !== speed.base) parts.push(`Speed ${speed.speed} ft`);
+  const speed = statusSpeedText(speedDetails(c));
+  if (speed) parts.push(speed);
   const slots = slotsText(c);
   if (slots) parts.push(`Slots ${slots}`);
   const dice = hitDiceText(c);
@@ -206,8 +236,8 @@ function headerLines(c: Character): string[] {
 
 function vitalsLines(c: Character): string[] {
   const speed = speedDetails(c);
-  const speedText = `${speed.speed} ft${speed.notes.length ? ` (${speed.notes.join('; ')})` : ''}`;
-  const others = Object.entries(c.otherSpeeds ?? {})
+  // The other speeds as the sheet has them, in their stored order (Roving's Climb and Swim Speeds included).
+  const others = Object.entries(speed.other)
     .filter(([, v]) => (v ?? 0) > 0)
     .map(([k, v]) => `${k} ${v} ft`);
   const adjustments = hpMaxAdjustments(c);
@@ -215,7 +245,7 @@ function vitalsLines(c: Character): string[] {
     `**${hpText(c)}**`,
     ...(adjustments.length ? [`**HP max includes** ${adjustments.map(hpMaxAdjustmentLabel).join(', ')}`] : []),
     `**AC** ${c.armorClass}${c.acFormula ? ` (${c.acFormula})` : ''}`,
-    `**Speed** ${speedText}${others.length ? `, ${others.join(', ')}` : ''}`,
+    `**Speed** ${speedText(speed)}${others.length ? `, ${others.join(', ')}` : ''}`,
     `**Initiative** ${formatModifier(initiativeModifier(c))}`,
     `**Proficiency Bonus** ${formatModifier(proficiencyBonus(characterLevel(c)))}`,
     `**Passive Perception** ${passivePerception(c)}`,
