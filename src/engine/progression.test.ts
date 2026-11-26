@@ -611,6 +611,42 @@ describe('applyLongRest ends the AC spells (srd:spell:mage-armor; srd:spell:shie
     expect(rested.character).not.toHaveProperty('acSpells');
     expect(messages(rested)).toEqual(['Mage Armor ends: AC 15 → 12', expect.stringMatching(/^Long rest: .*Concentration on Mage Armor ended\.$/)]);
   });
+
+  it('a Concentration under a sheet copy\'s noted name is that AC spell\'s: the rest reminds once, never twice (H1; srd:spell:mage-armor, Duration "8 hours"; srd:spell:shield-of-faith: "Concentration, up to 10 minutes")', () => {
+    // An older save "concentrating" on a noted Mage Armor, its AC set by hand: one reminder, the rest's (F1).
+    for (const acFormula of ['set by the DM: Mage Armor', 'set by the DM: Mage Armor (scroll)']) {
+      const old = setConcentration(mira({ armorClass: 15, acFormula }), 'Mage Armor (scroll)').character;
+      const r = applyLongRest(old);
+      expect(r.events.map((e) => e.type), acFormula).toEqual(['rest', 'warning']);
+      expect(r.events[1].message, acFormula).toBe('AC 15 was set by hand for Mage Armor: if it counted Mage Armor, set the AC back to 12 (armor and abilities).');
+    }
+    // A noted Shield of Faith with no record behind an old save's words: its Concentration's end gives the one reminder.
+    const faith = setConcentration(
+      mira({ armorTraining: ['Heavy armor'], inventory: [mail], armorClass: 18, acFormula: 'set by the DM: Shield of Faith' }),
+      'Shield of Faith (scroll)',
+    ).character;
+    expect(messages(applyLongRest(faith)).slice(1)).toEqual([
+      'AC 18 was set by hand for Shield of Faith (scroll): if it counted Shield of Faith (scroll), set the AC back to 16 (armor and abilities).',
+    ]);
+    // Recorded, her own casting from the copy: the record ends with the rest, and nothing is left to remind.
+    const recorded = addAcSpell(setConcentration(mira(), 'Shield of Faith (scroll)').character, 'Shield of Faith').character;
+    const rested = applyLongRest(recorded);
+    expect(rested.character).toMatchObject({ armorClass: 12, acFormula: '10 + DEX 2', spellcasting: { concentratingOn: null } });
+    expect(messages(rested)).toEqual(['Shield of Faith ends: AC 14 → 12', expect.stringMatching(/^Long rest: .*Concentration on Shield of Faith \(scroll\) ended\.$/)]);
+  });
+
+  it("Mage Armor's end at the rest, on an AC set by hand that counted it and that gear now gives too, says the number may still hold it (H3/HA2; srd:spell:mage-armor: \"Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier\")", () => {
+    const note = 'AC 12, set by hand, counted Mage Armor, which has ended: if 12 still includes it, set the AC again (armor and abilities give 12).';
+    // F3's advice followed: 12 "set by the DM: cursed (-3) + Mage Armor: 13" (13 + DEX 2 − 3).
+    const cursed = mira({ armorClass: 12, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13', acSpells: ['Mage Armor'] });
+    const r = applyLongRest(cursed);
+    expect(r.character).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' });
+    expect(r.character).not.toHaveProperty('acSpells');
+    expect(messages(r)).toEqual(['Mage Armor ends: AC stays 12', expect.stringMatching(/^Long rest: /), note]);
+    // With Shield of Faith on top (14), its +2 comes off first, then the same warning on the 12 left.
+    const both = mira({ armorClass: 14, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13 + Shield of Faith 2', acSpells: ['Mage Armor', 'Shield of Faith'] });
+    expect(messages(applyLongRest(both))).toEqual(['Shield of Faith ends: AC 14 → 12', 'Mage Armor ends: AC stays 12', expect.stringMatching(/^Long rest: /), note]);
+  });
 });
 
 describe('levelUp: feature uses that grow with level', () => {

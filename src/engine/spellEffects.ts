@@ -15,7 +15,7 @@ import { safeEnd } from '@/lib/text';
 import { currentCombatant, findCombatant } from './combat';
 import { INCAPACITATING_CONDITIONS, conditionKey, conditionName, matchStandardCondition } from './conditions';
 import { computeArmorClass, handSetNames } from './rules';
-import { namesPhrase } from './util';
+import { namesSpell } from './util';
 
 // ---------------------------------------------------------------------------
 // Durations
@@ -231,12 +231,13 @@ export function concentrationTurnStart(before: CombatState, after: CombatState, 
 /**
  * Lasting areas on the map that may be `spell`'s (srd:rule:concentration: "If the effect's creator loses
  * Concentration, the effect ends"): their label names the spell as whole words (a plural "Webs" counts; "Butterfly
- * Swarm" isn't Fly), and they don't come from another creature. The app never removes them: a label isn't an
+ * Swarm" isn't Fly), or the spell without its trailing note (namesSpell: "Spirit Guardians" for a sheet copy's "Spirit
+ * Guardians (scroll)"), and they don't come from another creature. The app never removes them: a label isn't an
  * identity, so the DM is told the exact call.
  */
 export function concentrationAreas(map: BattleMap | undefined, casterId: string, spell: string): MapEffect[] {
   if (!map) return [];
-  return map.effects.filter((e) => e.duration === 'lasting' && !(e.spec.fromId && e.spec.fromId !== casterId) && namesPhrase(e.label, spell));
+  return map.effects.filter((e) => e.duration === 'lasting' && !(e.spec.fromId && e.spec.fromId !== casterId) && namesSpell(e.label, spell));
 }
 
 /** A condition that names a spell, and on whom. */
@@ -263,10 +264,11 @@ function storedKey(condition: string): string {
 }
 
 /**
- * Conditions whose `source` or `duration` names `spell` as whole words (case-insensitive), on the hero (her sheet's
- * conditions) and on each other combatant: the ones the spell may have imposed, which the DM may need to end with it.
- * The conditions the triggering call itself just added are skipped (`skip`: a Paralyzed added by an ally's Hold Person
- * that broke this Hold Person isn't named back).
+ * Conditions whose `source` or `duration` names `spell` as whole words (case-insensitive), or the spell without its
+ * trailing note (namesSpell: a Paralyzed sourced "Hold Person" for a sheet copy's "Hold Person (scroll)"), on the hero
+ * (her sheet's conditions) and on each other combatant: the ones the spell may have imposed, which the DM may need to
+ * end with it. The conditions the triggering call itself just added are skipped (`skip`: a Paralyzed added by an ally's
+ * Hold Person that broke this Hold Person isn't named back).
  */
 export function conditionsNaming(
   spell: string,
@@ -274,7 +276,7 @@ export function conditionsNaming(
   state: CombatState | null,
   skip: readonly AddedCondition[] = [],
 ): ConditionNaming[] {
-  const names = (x: ActiveCondition) => namesPhrase(x.source, spell) || namesPhrase(x.duration, spell);
+  const names = (x: ActiveCondition) => namesSpell(x.source, spell) || namesSpell(x.duration, spell);
   const skipped = (combatantId: string | undefined, x: ActiveCondition) =>
     skip.some((s) => s.combatantId === combatantId && storedKey(s.condition) === conditionKey(x.id));
   const out: ConditionNaming[] = [];
@@ -291,11 +293,12 @@ export function conditionsNaming(
 
 /**
  * The hero's AC was set by hand for `spell` (its formula is "set by the DM: …" and the DM's words name the spell as
- * whole words: Haste, Slow, an old save's Shield of Faith or Mage Armor; handSetNames), so the app can't take the spell
- * back out of it itself: the stored AC and what armor, abilities and the recorded spells give instead. The app's own
- * parts never count ("set by the DM: shrine blessing +1 + Shield of Faith 2" isn't set for Shield of Faith: the app
- * takes that +2 off itself). Undefined otherwise, and when the two are the same (nothing to set back; armor the app
- * can't identify keeps the stored AC).
+ * whole words, or the spell without its trailing note: Haste, Slow, an old save's Shield of Faith or Mage Armor, and
+ * "Haste" for a sheet copy's "Haste (scroll)"; handSetNames), so the app can't take the spell back out of it itself:
+ * the stored AC and what armor, abilities and the recorded spells give instead. The app's own parts never count ("set
+ * by the DM: shrine blessing +1 + Shield of Faith 2" isn't set for Shield of Faith: the app takes that +2 off itself).
+ * Undefined otherwise, and when the two are the same (nothing to set back; armor the app can't identify keeps the
+ * stored AC).
  */
 export function handSetAcNaming(
   c: Character,

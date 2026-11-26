@@ -1341,9 +1341,10 @@ describe("a hand-set AC naming a spell the app now counts, and an older save's C
     const set = await h.run('update_character', { armor_class: 16, reason: 'Slow from the Stone Golem (-2)' });
     expect(set.content).toContain('AC 18 → 16\nShield of Faith stays recorded, and this AC is taken to include it (ending it takes 2 off).');
     expect(h.sheet()).toMatchObject({ armorClass: 16, acFormula: 'set by the DM: Slow from the Stone Golem (-2) + Shield of Faith 2', acSpells: ['Shield of Faith'] });
-    // Its end takes the 2 off once: 14, the hero still slowed.
+    // Its end takes the 2 off once: 14, the hero still slowed, and nothing to warn of (H3 is for a base, not a bonus).
     const ended = await h.run('update_character', { concentration: null });
     expect(ended.content).toContain('No longer concentrating on Shield of Faith.\nShield of Faith ends: AC 16 → 14');
+    expect(ended.content).not.toContain('Warning');
     expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Slow from the Stone Golem (-2)' });
     expect(h.sheet()).not.toHaveProperty('acSpells');
   });
@@ -1363,6 +1364,59 @@ describe("a hand-set AC naming a spell the app now counts, and an older save's C
     const ended = await alone.run('update_character', { concentration: null });
     expect(ended.content).not.toContain('set by hand');
     expect(alone.sheet()).toMatchObject({ armorClass: 15, acFormula: 'set by the DM: Mage Armor', spellcasting: { concentratingOn: null } });
+  });
+});
+
+describe("F3's baseline in its own words, and Mage Armor's end on an AC set by hand that counted it (spell effects round 4)", () => {
+  const keptOnBase = 'Warning: AC 12, set by hand, counted Mage Armor, which has ended: if 12 still includes it, set the AC again (armor and abilities give 12).';
+
+  it('one ac_spells_add call recording both spells: the second warning names the Mage Armor its baseline counts, as the first line does (H2/HA1; srd:spell:mage-armor: "base AC becomes 13 plus its Dexterity modifier"; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration")', async () => {
+    // An older save: Mira Voss (DEX 14, no armor: gear 12) at 14 "set by the DM: Mage Armor and Shield of Faith; cursed (-3)".
+    const h = setup({ character: sampleCharacter({ armorClass: 14, acFormula: 'set by the DM: Mage Armor and Shield of Faith; cursed (-3)' }) });
+    const out = await h.run('update_character', { ac_spells_add: ['Mage Armor', 'Shield of Faith'] });
+    expect(out.content).toContain(
+      [
+        'Mage Armor: AC stays 14',
+        'Warning: AC 14 was set by hand naming Mage Armor: kept, and Mage Armor is now counted in it. Gear, features and spells give 15 (Mage Armor: 13 + DEX 2); update the AC if that is right.',
+        'Shield of Faith: AC 14 → 16',
+        "Warning: AC 14, set by hand, names Shield of Faith, but gear, features and Mage Armor give 15, so the app now counts Shield of Faith as well (AC 16): if 14 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 14.",
+      ].join('\n'),
+    );
+    expect(out.content).not.toContain('alone give');
+    expect(h.sheet()).toMatchObject({
+      armorClass: 16,
+      acFormula: 'set by the DM: Mage Armor and Shield of Faith; cursed (-3) + Mage Armor: 13 + Shield of Faith 2',
+      acSpells: ['Mage Armor', 'Shield of Faith'],
+    });
+  });
+
+  it("F3's advice followed for Mage Armor, then Mage Armor ends by ac_spells_end or a Long Rest: the DM hears the 12 may still hold it (H3/HA2; srd:spell:mage-armor: \"Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier\")", async () => {
+    const follow = async () => {
+      // An older save: 12 "set by the DM: Mage Armor; cursed (-3)" (13 + DEX 2 − 3). Recording Mage Armor gives 15, with
+      // F3's warning; following it sets 12 for the curse, Mage Armor still counted in it.
+      const h = setup({ character: sampleCharacter({ armorClass: 12, acFormula: 'set by the DM: Mage Armor; cursed (-3)' }) });
+      const recorded = await h.run('update_character', { ac_spells_add: ['Mage Armor'] });
+      expect(recorded.content).toContain(
+        "Mage Armor: AC 12 → 15\nWarning: AC 12, set by hand, names Mage Armor, but gear and features alone give 12, so the app now counts Mage Armor as well (AC 15): if 12 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 12.",
+      );
+      const set = await h.run('update_character', { armor_class: 12, reason: 'cursed (-3)' });
+      expect(set.content).toContain('AC 15 → 12\nMage Armor stays recorded, and this AC is taken to include it. If it has ended, use ac_spells_end.');
+      expect(h.sheet()).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13', acSpells: ['Mage Armor'] });
+      return h;
+    };
+    // Its end by ac_spells_end: the number stays, and the DM is told it may still hold Mage Armor's base.
+    const ended = await follow();
+    const end = await ended.run('update_character', { ac_spells_end: ['Mage Armor'] });
+    expect(end.content).toContain(`Mage Armor ends: AC stays 12\n${keptOnBase}`);
+    expect(ended.sheet()).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' });
+    expect(ended.sheet()).not.toHaveProperty('acSpells');
+    // By a Long Rest (Mage Armor's 8 hours are over): the same warning, after the rest's line.
+    const rested = await follow();
+    const rest = await rested.run('take_rest', { kind: 'long' });
+    expect(rest.content).toContain('Mage Armor ends: AC stays 12\n');
+    expect(rest.content).toContain(keptOnBase);
+    expect(rest.content.indexOf(keptOnBase)).toBeGreaterThan(rest.content.indexOf('\nLong rest: HP 12 → 17'));
+    expect(rested.sheet()).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' });
   });
 });
 

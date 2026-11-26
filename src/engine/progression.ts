@@ -690,6 +690,7 @@ export function applyLongRest(start: Character): { character: Character; events:
   // rest just ended, whose +2 the app took off itself); then a reminder for an AC set by hand for an AC spell that had
   // no record, unless the Concentration's end gave it: never for Mage Armor, which needs no Concentration
   // (srd:spell:mage-armor, Duration: "8 hours"), so an older save's Concentration on it gives none and the rest does.
+  // A Concentration under a sheet copy's noted name ("Shield of Faith (scroll)") is that AC spell's (acSpellNamed).
   const recorded = acSpells(c);
   const acEvents: GameEvent[] = [];
   for (const name of [...recorded.filter((n) => AC_SPELLS[n].bonus), ...recorded.filter((n) => !AC_SPELLS[n].bonus)]) {
@@ -698,14 +699,14 @@ export function applyLongRest(start: Character): { character: Character; events:
     acEvents.push(...ended.events);
   }
   const concentration = sc?.concentratingOn;
-  const heldRecord = concentration ? acSpellNamed(concentration) : undefined;
-  if (concentration && !(heldRecord && recorded.includes(heldRecord))) {
+  const heldAcSpell = concentration ? acSpellNamed(concentration) : undefined;
+  if (concentration && !(heldAcSpell && recorded.includes(heldAcSpell))) {
     const ended = afterConcentrationEnds(character, concentration);
     character = ended.character;
     acEvents.push(...ended.events);
   }
   for (const name of AC_SPELL_NAMES) {
-    if (recorded.includes(name) || (concentration && nameKey(concentration) === nameKey(name) && name !== 'Mage Armor')) continue;
+    if (recorded.includes(name) || (heldAcSpell === name && name !== 'Mage Armor')) continue;
     const reminder = handSetAcReminder(character, name);
     if (reminder) acEvents.push(reminder);
   }

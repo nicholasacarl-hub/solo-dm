@@ -35,7 +35,7 @@ import {
   parseDice,
   type DiceTerm,
 } from './dice';
-import { clamp, gameEvent, listJoin, matchByName, namesPhrase, toInt, warning } from './util';
+import { clamp, gameEvent, listJoin, matchByName, namesSpell, toInt, warning, withoutNote } from './util';
 
 const MINUS = '\u2212';
 
@@ -590,10 +590,17 @@ export const AC_SPELLS: Record<AcSpellName, { base?: number; bonus?: number }> =
   'Shield of Faith': { bonus: 2 },
 };
 
-/** The AC spell of exactly this name (case and punctuation aside), never a looser match: "Shield" isn't Shield of Faith. */
+/**
+ * The AC spell of exactly this name (case and punctuation aside), else of the name less its trailing note (withoutNote:
+ * a sheet copy's "Shield of Faith (scroll)" or "Shield of Faith (Paladin)" is Shield of Faith), never a looser match:
+ * "Shield" isn't Shield of Faith, and "(scroll)" alone is no spell.
+ */
 export function acSpellNamed(name: string): AcSpellName | undefined {
-  const key = typeof name === 'string' ? nameKey(name) : '';
-  return key ? AC_SPELL_NAMES.find((n) => nameKey(n) === key) : undefined;
+  const exactly = (n: string) => {
+    const key = typeof n === 'string' ? nameKey(n) : '';
+    return key ? AC_SPELL_NAMES.find((s) => nameKey(s) === key) : undefined;
+  };
+  return exactly(name) ?? exactly(withoutNote(name));
 }
 
 /** The AC spells recorded on the hero, read leniently (stored rows aren't validated): known names only, once each, in AC_SPELL_NAMES order. */
@@ -653,7 +660,8 @@ function endedPart(name: AcSpellName): string {
 /**
  * Whether an AC set by hand names `spell` in the DM's own words: the formula is "set by the DM: …" and, the app's own
  * parts aside ("Shield of Faith 2", "Mage Armor: 13", "Shield of Faith ended", which are never the DM's words), names the
- * spell as whole words. "set by the DM: Slow from the Stone Golem + Shield of Faith 2" names Slow, not Shield of Faith;
+ * spell as whole words, or the spell without its trailing note (namesSpell: "set by the DM: Haste" names a sheet copy's
+ * "Haste (scroll)"). "set by the DM: Slow from the Stone Golem + Shield of Faith 2" names Slow, not Shield of Faith;
  * an old save's "set by the DM: Shield of Faith" names Shield of Faith, until the app has taken that spell off it
  * ("set by the DM: Shield of Faith + Shield of Faith ended" doesn't).
  */
@@ -663,7 +671,7 @@ export function handSetNames(formula: string | undefined, spell: string): boolea
   const acSpell = acSpellNamed(spell);
   if (acSpell && parts.includes(endedPart(acSpell))) return false;
   const own = new Set<string>(AC_SPELL_NAMES.flatMap((n) => [acSpellPart(n), endedPart(n)]));
-  return namesPhrase(parts.filter((part) => !own.has(part)).join(' + '), spell);
+  return namesSpell(parts.filter((part) => !own.has(part)).join(' + '), spell);
 }
 
 interface AcOption {
@@ -927,15 +935,18 @@ function withoutStaleBases(before: Character, r: AcSync, catalog: readonly Equip
  *    armor the engine can't identify); a recorded spell the formula doesn't count (a Mage Armor recorded beside the
  *    DM's words) isn't in that baseline. One no higher is taken not to hold it, with a warning: the spell is added as
  *    below, and when that moves the AC the warning says how to put the AC back, for the DM's words may have counted it
- *    beside a penalty the app doesn't count (srd:spell:slow: "it takes a -2 penalty to AC"). Once the app has ended
- *    the spell, the words no longer name it (movedBySpells' "Shield of Faith ended").
+ *    beside a penalty the app doesn't count (srd:spell:slow: "it takes a -2 penalty to AC"). That warning names the
+ *    spells its baseline counts, when there are any. Once the app has ended the spell, the words no longer name it
+ *    (movedBySpells' "Shield of Faith ended").
  * 3. With armor the engine can't identify, computeArmorClass keeps the stored AC: only the spells move it.
  * 4. The sheet's AC counts as derived when it equals computeArmorClass(before); it then becomes the AC computed for
  *    `after`. Armor it can't identify keeps the stored AC and the parts of the bonus spells it counted, its own part
  *    giving the AC less their bonuses ("Elven Chain (stats unknown — AC kept at 16) + Shield of Faith 2" at 18).
  * 5. Otherwise it was set by hand: it moves by the spells' change (a hand-set "Haste" 18 plus Shield of Faith is 20;
  *    Shield of Faith ending takes its 2 back off, whatever the rest adds up to), or, when that is nothing, it is kept
- *    and a warning gives the computed value.
+ *    and a warning gives the computed value when that differs. When it is the same number, nothing is said, unless the
+ *    formula counted Mage Armor, whose record has ended (a DM's 12 "cursed (-3) + Mage Armor: 13"): then a warning says
+ *    the number may still hold its base, which a delta can't take out.
  * 6. A formula the engine didn't work out drops a Mage Armor part that no longer applies (withoutStaleBases).
  * Without a catalog the SRD armor table is used. No events when the computed AC doesn't change.
  */
@@ -960,17 +971,31 @@ export function syncArmorClass(before: Character, after: Character, catalog: rea
   /**
    * Step 2's other side: spells the DM's words name on an AC no higher than the baseline are taken not to be in it. Used
    * on the two results that move the AC (derived, or moved by the spells' change), which step 2 has not kept, so any
-   * `named` here is such a spell: the warning says how to put the stored AC back.
+   * `named` here is such a spell: the warning says how to put the stored AC back, and what its baseline counts (the
+   * spells the formula counts, when there are any: "gear, features and Mage Armor give 15").
    */
   const taken = (r: AcSync): AcSync => {
     if (!named.length) return r;
     const names = listJoin(named);
     const them = named.length === 1 ? 'it' : 'them';
+    const baseline = counted.length ? `gear, features and ${listJoin(counted)} give` : 'gear and features alone give';
     const note = warning(
-      `AC ${stored}, set by hand, names ${names}, but gear and features alone give ${gearAc}, so the app now counts ${names} as well (AC ${r.character.armorClass}): if ${stored} already counted ${them} beside a penalty the app doesn't count (such as Slow), set the AC to ${stored}.`,
+      `AC ${stored}, set by hand, names ${names}, but ${baseline} ${gearAc}, so the app now counts ${names} as well (AC ${r.character.armorClass}): if ${stored} already counted ${them} beside a penalty the app doesn't count (such as Slow), set the AC to ${stored}.`,
     );
     return { ...r, events: [...r.events, note] };
   };
+  /**
+   * Step 5's kept AC when a base spell an AC set by hand counted has ended (Mage Armor's record gone, its part in the
+   * formula, "set by the DM" with the DM's reason or without) and the AC worked out without it is that same number:
+   * nothing moved, yet the number may still hold the base (srd:spell:mage-armor: "the target's base AC becomes 13 plus
+   * its Dexterity modifier"), which no delta takes out. One base AC counts at a time (srd:rule:armor-class: "you can't
+   * use more than one"), so one spell at most.
+   */
+  const endedBase = counted.find((n) => AC_SPELLS[n].base !== undefined && !recorded.includes(n));
+  const keptOnBase = (): GameEvent[] =>
+    endedBase && typeof after.acFormula === 'string' && after.acFormula.startsWith('set by the DM')
+      ? [warning(`AC ${stored}, set by hand, counted ${endedBase}, which has ended: if ${stored} still includes it, set the AC again (armor and abilities give ${now.ac}).`)]
+      : [];
 
   if (alreadyIn.length) {
     if (!unknown && now.ac === stored) return { character: { ...after, acFormula: now.formula }, events: [] };
@@ -1006,7 +1031,7 @@ export function syncArmorClass(before: Character, after: Character, catalog: rea
     });
   }
   if (delta !== 0) return taken(done(movedBySpells(after, delta, adds, ends)));
-  if (now.ac === stored) return done({ character: after, events: [] });
+  if (now.ac === stored) return done({ character: after, events: keptOnBase() });
   return done({
     character: after,
     events: [

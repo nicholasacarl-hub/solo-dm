@@ -456,6 +456,17 @@ describe('concentrationAreas: the lasting areas the DM is told to end with a spe
     expect(concentrationAreas(map([effect('e1', 'Spirit Guardians', {}, 'hero')]), 'hero', 'Spirit Guardians').map((e) => e.id)).toEqual(['e1']);
     expect(concentrationAreas(undefined, 'cf', 'Web')).toEqual([]);
   });
+
+  it('reads a Concentration recorded under a noted name as its spell: "Spirit Guardians" for a sheet copy\'s "Spirit Guardians (scroll)" (H1; srd:spell:spirit-guardians: "Concentration, up to 10 minutes", "Protective spirits flit around you in a 15-foot Emanation for the duration")', () => {
+    const guardians = map([effect('e1', 'Spirit Guardians', {}, 'hero'), effect('e2', 'Spirit Guardians (scroll)', {}, 'hero'), effect('e3', 'Guardians of the Gate')]);
+    expect(concentrationAreas(guardians, 'hero', 'Spirit Guardians (scroll)').map((e) => e.id)).toEqual(['e1', 'e2']);
+    expect(concentrationAreas(guardians, 'hero', 'Spirit Guardians').map((e) => e.id)).toEqual(['e1', 'e2']);
+    // Whole words still, and another creature's area still isn't the hero's.
+    const m = map([effect('e1', 'Web', {}, 'cf'), effect('e4', 'Web', {}, 'b'), effect('e6', 'Butterfly Swarm')]);
+    expect(concentrationAreas(m, 'cf', 'Web (scroll)').map((e) => e.id)).toEqual(['e1']);
+    expect(concentrationAreas(m, 'cf', 'Fly (scroll)')).toEqual([]);
+    expect(concentrationAreas(m, 'cf', '(scroll)')).toEqual([]);
+  });
 });
 
 describe('conditionsNaming: conditions the DM is told to end with a spell', () => {
@@ -488,6 +499,17 @@ describe('conditionsNaming: conditions the DM is told to end with a spell', () =
     const mira = hero({ conditions: [{ id: 'paralyzed', source: 'Hold Person' }] });
     expect(conditionsNaming('Hold Person', mira, null, [{ condition: 'paralyzed' }])).toEqual([]);
     expect(conditionsNaming('Hold Person', mira, null, [{ combatantId: 'c-2', condition: 'paralyzed' }])).toHaveLength(1);
+  });
+
+  it('reads a Concentration recorded under a noted name as its spell: a Paralyzed sourced "Hold Person" for a sheet copy\'s "Hold Person (scroll)" (H1; srd:spell:hold-person: "The target must succeed on a Wisdom saving throw or have the Paralyzed condition for the duration")', () => {
+    const mira = hero({ conditions: [{ id: 'paralyzed', source: 'hold person' }, { id: 'poisoned', source: 'Giant spider venom' }] });
+    const asHoldPerson = conditionsNaming('Hold Person', mira, state());
+    expect(asHoldPerson.map((n) => n.who)).toEqual(['Mira Voss', 'Bandit 1', 'Bandit 2']);
+    for (const noted of ['Hold Person (scroll)', 'Hold Person (3rd level)']) expect(conditionsNaming(noted, mira, state()), noted).toEqual(asHoldPerson);
+    // The skip list works the same, and a note alone, or another spell's name with one, names nothing.
+    expect(conditionsNaming('Hold Person (scroll)', null, state(), [{ combatantId: 'c-2', condition: 'Paralyzed' }]).map((n) => n.who)).toEqual(['Bandit 2']);
+    expect(conditionsNaming('(scroll)', mira, state())).toEqual([]);
+    expect(conditionsNaming('Web (scroll)', mira, state())).toEqual([]);
   });
 });
 

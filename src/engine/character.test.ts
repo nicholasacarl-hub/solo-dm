@@ -1885,3 +1885,108 @@ describe("Mage Armor's Concentration and an exact Concentration (spell effects r
     expect(messages(setConcentration(holding, null, { exact: true }))).toEqual(['No longer concentrating on Greater Invisibility.']);
   });
 });
+
+describe("a Concentration recorded under a sheet copy's noted name is that spell's (spell effects round 4)", () => {
+  const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
+  const warnings = (r: { events: { type: string; message: string }[] }) => r.events.filter((e) => e.type === 'warning').map((e) => e.message);
+  /** The sheet holds a copy under a noted name (a Spell Scroll's, a multiclass sheet's), and she concentrates on it. */
+  const holding = (copy: string, patch: Partial<Character> = {}) =>
+    setConcentration(addSpell(mira(patch), { name: copy, level: 1, prepared: true, concentration: true }).character, copy).character;
+
+  it('every path that ends it ends the Shield of Faith record and takes its +2 off (H1/HN1/HX1; srd:spell:shield-of-faith: "Concentration, up to 10 minutes"; srd:rule:concentration: "If the effect\'s creator loses Concentration, the effect ends")', () => {
+    for (const copy of ['Shield of Faith (scroll)', 'Shield of Faith (Paladin)']) {
+      // Her own casting from the copy, its +2 recorded: AC 14 on her 12 (10 + DEX 2).
+      const faithful = () => addAcSpell(holding(copy), 'Shield of Faith').character;
+      expect(faithful(), copy).toMatchObject({ armorClass: 14, acFormula: '10 + DEX 2 + Shield of Faith 2', spellcasting: { concentratingOn: copy } });
+      const ends = 'Shield of Faith ends: AC 14 → 12';
+      const after = (r: { character: Character }, path: string) => {
+        expect(r.character, `${copy}: ${path}`).toMatchObject({ armorClass: 12, acFormula: '10 + DEX 2' });
+        expect(r.character, `${copy}: ${path}`).not.toHaveProperty('acSpells');
+        expect(r.character.spellcasting?.concentratingOn, `${copy}: ${path}`).not.toBe(copy);
+      };
+      const off = setConcentration(faithful(), null);
+      after(off, 'null');
+      expect(messages(off)).toEqual([`No longer concentrating on ${copy}.`, ends]);
+      // Another spell (srd:rule:concentration, Another Concentration Effect).
+      const bless = setConcentration(faithful(), 'Bless');
+      after(bless, 'another spell');
+      expect(messages(bless)).toEqual([`Concentration on ${copy} ends (started concentrating on Bless).`, ends, 'Concentrating on Bless.']);
+      // 0 HP and death (srd:rule:concentration: "Your Concentration ends if you have the Incapacitated condition or you die").
+      const down = applyDamage(faithful(), 12);
+      after(down, '0 HP');
+      expect(messages(down).slice(1)).toEqual([`Concentration on ${copy} ends (Unconscious).`, ends]);
+      const dead = applyDamage(faithful(), 29);
+      expect(dead.character.deathSaves.dead).toBe(true);
+      after(dead, 'death');
+      expect(messages(dead).slice(1)).toEqual([`Concentration on ${copy} ends (death).`, ends]);
+      // An Incapacitating condition (srd:condition:incapacitated: "Your Concentration is broken").
+      const stunned = addCondition(faithful(), { id: 'stunned' });
+      after(stunned, 'Stunned');
+      expect(messages(stunned).slice(1)).toEqual([`Concentration on ${copy} ends (Stunned).`, ends]);
+      // Its time runs out; the copy leaves the sheet.
+      const expired = expireConcentration(faithful(), copy, 'its duration is up');
+      after(expired, 'expire');
+      expect(messages(expired)).toEqual([`Concentration on ${copy} ends: its duration is up.`, ends]);
+      const removed = removeSpell(faithful(), copy);
+      after(removed, 'removed');
+      expect(messages(removed)).toEqual([`Removed spell: ${copy}`, `Concentration on ${copy} ends.`, ends]);
+      // A Long Rest (srd:rule:long-rest: "During sleep, you have the Unconscious condition"): the record ends once.
+      const rested = applyLongRest(faithful());
+      after(rested, 'Long Rest');
+      expect(messages(rested)).toEqual([ends, expect.stringMatching(new RegExp(`^Long rest: .*Concentration on ${copy.replace(/[()]/g, '\\$&')} ended\\.$`))]);
+    }
+  });
+
+  it('an older save\'s Concentration on a noted Mage Armor ends with no hand-set AC reminder (H1/F1; srd:spell:mage-armor, Duration "8 hours")', () => {
+    for (const acFormula of ['set by the DM: Mage Armor', 'set by the DM: Mage Armor (scroll)']) {
+      const start = setConcentration(mira({ armorClass: 15, acFormula }), 'Mage Armor (scroll)').character;
+      expect(start.spellcasting?.concentratingOn).toBe('Mage Armor (scroll)');
+      const paths = {
+        null: setConcentration(start, null),
+        '0 HP': applyDamage(start, 12),
+        Stunned: addCondition(start, { id: 'stunned' }),
+        'another spell': setConcentration(start, 'Bless'),
+        expire: expireConcentration(start, 'Mage Armor (scroll)', 'its duration is up'),
+      };
+      for (const [path, r] of Object.entries(paths)) {
+        expect(warnings(r), `${acFormula}: ${path}`).toEqual([]);
+        expect(r.character.armorClass, `${acFormula}: ${path}`).toBe(15);
+      }
+      expect(messages(paths.null)).toEqual(['No longer concentrating on Mage Armor (scroll).']);
+    }
+  });
+
+  it('an AC set by hand for Haste gets its reminder when a Concentration on a "Haste (scroll)" copy ends (H1/HX2; srd:spell:haste: "it gains a +2 bonus to Armor Class")', () => {
+    // The DM's 14 "set by the DM: Haste" (her 12 + 2), and she concentrates on the sheet's copy.
+    const hasted = () => holding('Haste (scroll)', { armorClass: 14, acFormula: 'set by the DM: Haste' });
+    const reminder = 'AC 14 was set by hand for Haste (scroll): if it counted Haste (scroll), set the AC back to 12 (armor and abilities).';
+    expect(messages(setConcentration(hasted(), null))).toEqual(['No longer concentrating on Haste (scroll).', reminder]);
+    expect(warnings(setConcentration(hasted(), 'Bless'))).toEqual([reminder]);
+    expect(warnings(addCondition(hasted(), { id: 'stunned' }))).toEqual([reminder]);
+    expect(warnings(expireConcentration(hasted(), 'Haste (scroll)', 'its duration is up'))).toEqual([reminder]);
+    // A Long Rest: once, after the rest's line.
+    expect(warnings(applyLongRest(hasted()))).toEqual([reminder]);
+  });
+
+  it("Mage Armor's end on an AC set by hand that counted it, whose number gear now gives too, says the number may still hold it (H3/HA2; srd:spell:mage-armor: \"Until the spell ends, the target's base AC becomes 13 plus its Dexterity modifier\")", () => {
+    // F3's advice followed: 12 "set by the DM: cursed (-3) + Mage Armor: 13" (13 + DEX 2 − 3), Mage Armor recorded.
+    const cursed = mira({ armorClass: 12, acFormula: 'set by the DM: cursed (-3) + Mage Armor: 13', acSpells: ['Mage Armor'] });
+    const ended = endAcSpell(cursed, 'Mage Armor');
+    expect(ended.character).toMatchObject({ armorClass: 12, acFormula: 'set by the DM: cursed (-3)' });
+    expect(ended.character).not.toHaveProperty('acSpells');
+    expect(ended.events).toEqual([
+      { type: 'combat', message: 'Mage Armor ends: AC stays 12' },
+      { type: 'warning', message: 'AC 12, set by hand, counted Mage Armor, which has ended: if 12 still includes it, set the AC again (armor and abilities give 12).' },
+    ]);
+    // Shield of Faith's +2 comes off instead (16 under Slow, on Chain Mail 16): 14, and no warning.
+    const mail: InventoryItem = { id: 'cm', name: 'Chain Mail', quantity: 1, weight: 55, category: 'armor', equipped: true };
+    const slowed = mira({
+      armorTraining: ['Heavy armor'],
+      inventory: [...mira().inventory, mail],
+      armorClass: 16,
+      acFormula: 'set by the DM: Slow from the Stone Golem (-2) + Shield of Faith 2',
+      acSpells: ['Shield of Faith'],
+    });
+    expect(endAcSpell(slowed, 'Shield of Faith').events).toEqual([{ type: 'combat', message: 'Shield of Faith ends: AC 16 → 14' }]);
+  });
+});
