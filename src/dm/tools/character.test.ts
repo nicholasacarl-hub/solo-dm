@@ -1248,10 +1248,13 @@ describe('a hand-set AC the new gear only matches: what it may have counted (H1/
     const h = setup({ character: fighter4({ inventory: [mail, shield], armorClass: 18, acFormula: 'set by the DM: Shield of Faith', ...concentratingOn('Shield of Faith') }) });
     const donned = await h.run('update_character', { inventory_update: [{ name: 'Shield', equipped: true }] });
     expect(donned.content).toContain('If it counted Shield of Faith, record it with ac_spells_add ["Shield of Faith"] (the app adds and ends it).');
-    // Following it takes one call (D4): the hand-set 18 is what the gear alone gives now, so it can't hold the +2
-    // whatever its words say (E2), and the app adds it.
+    // Following it takes one call (D4): the hand-set 18 is what the gear alone gives now, so it is taken not to hold the
+    // +2 (E2), and the app adds it; its words name the spell, so the DM is told how to put 18 back should it have
+    // counted the spell beside a penalty the app doesn't count (F3; srd:spell:slow: "it takes a -2 penalty to AC").
     const recorded = await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
-    expect(recorded.content).toContain('Shield of Faith: AC 18 → 20');
+    expect(recorded.content).toContain(
+      "Shield of Faith: AC 18 → 20\nWarning: AC 18, set by hand, names Shield of Faith, but gear and features alone give 18, so the app now counts Shield of Faith as well (AC 20): if 18 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 18.",
+    );
     expect(recorded.content).not.toContain('was set by hand naming');
     expect(h.sheet()).toMatchObject({ armorClass: 20, acFormula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
     const ended = await h.run('update_character', { concentration: null });
@@ -1267,7 +1270,7 @@ describe('a hand-set AC the new gear only matches: what it may have counted (H1/
     expect(out.content).toContain(
       'Warning: AC 18 stays as set by hand; armor and features now give 18 too (Chain Mail 16 + Shield 2). If the hand-set AC counted an effect that still applies (such as Haste), set armor_class to include it.\nShield of Faith: AC 18 → 20',
     );
-    // The hand-set 18 is what the gear alone gives now, so it held no +2 (E2): the app adds it and ends it.
+    // The hand-set 18 is what the gear alone gives now, so it is taken to hold no +2 (E2): the app adds it and ends it.
     expect(h.sheet()).toMatchObject({ armorClass: 20, acFormula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
     expect((await h.run('update_character', { concentration: null })).content).toContain('Shield of Faith ends: AC 20 → 18');
     expect(h.sheet()).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield 2' });
@@ -1315,6 +1318,49 @@ describe('a hand-set AC the new gear only matches: what it may have counted (H1/
     const h = setup({ character: sampleCharacter({ abilityScores: { ...sampleCharacter().abilityScores, cha: 20 }, armorClass: 17, acFormula: 'set by the DM: Mage Armor and Shield of Faith' }) });
     const out = await h.run('update_character', { features_add: [dragonBlooded] });
     expect(out.content).toContain('If it counted Mage Armor and Shield of Faith, record them with ac_spells_add ["Mage Armor", "Shield of Faith"] (the app adds and ends them).');
+  });
+});
+
+describe("a hand-set AC naming a spell the app now counts, and an older save's Concentration on Mage Armor (spell effects round 3)", () => {
+  const mail = { id: 'cm', name: 'Chain Mail', quantity: 1, equipped: true, category: 'armor' as const, armor: { kind: 'armor' as const, armorType: 'heavy' as const, baseAc: 16, dexCap: 0 } };
+  const fighter4 = (extra: Partial<Character> = {}) => hero({ classId: FIGHTER.id, name: 'Fighter', level: 4, hitDie: 10 }, extra);
+  const concentratingOn = (spell: string) => ({ spellcasting: { ...sampleCharacter().spellcasting!, concentratingOn: spell } });
+
+  it('says how to put back an AC whose words named the spell it now counts, and following that keeps the spell counted (F3/TE1/TX1; srd:spell:slow: "it takes a -2 penalty to AC"; srd:spell:shield-of-faith: "a +2 bonus to AC for the duration")', async () => {
+    // An older save in Chain Mail (16): AC 16 "set by the DM: Slow (-2) and Shield of Faith" (16 − 2 + 2), concentrating
+    // on Shield of Faith. Recording it gives 18 (no higher than the gear, the AC is taken not to hold it), with the warning.
+    const h = setup({ character: fighter4({ inventory: [mail], armorClass: 16, acFormula: 'set by the DM: Slow (-2) and Shield of Faith', ...concentratingOn('Shield of Faith') }) });
+    const recorded = await h.run('update_character', { ac_spells_add: ['Shield of Faith'] });
+    expect(recorded.content).toContain(
+      "Shield of Faith: AC 16 → 18\nWarning: AC 16, set by hand, names Shield of Faith, but gear and features alone give 16, so the app now counts Shield of Faith as well (AC 18): if 16 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 16.",
+    );
+    expect(h.sheet()).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    // Following it: armor_class 16, and Shield of Faith stays counted in the DM's AC (its part kept).
+    const set = await h.run('update_character', { armor_class: 16, reason: 'Slow from the Stone Golem (-2)' });
+    expect(set.content).toContain('AC 18 → 16\nShield of Faith stays recorded, and this AC is taken to include it (ending it takes 2 off).');
+    expect(h.sheet()).toMatchObject({ armorClass: 16, acFormula: 'set by the DM: Slow from the Stone Golem (-2) + Shield of Faith 2', acSpells: ['Shield of Faith'] });
+    // Its end takes the 2 off once: 14, the hero still slowed.
+    const ended = await h.run('update_character', { concentration: null });
+    expect(ended.content).toContain('No longer concentrating on Shield of Faith.\nShield of Faith ends: AC 16 → 14');
+    expect(h.sheet()).toMatchObject({ armorClass: 14, acFormula: 'set by the DM: Slow from the Stone Golem (-2)' });
+    expect(h.sheet()).not.toHaveProperty('acSpells');
+  });
+
+  it("an older save's Concentration on Mage Armor ended in the call that records it: no line asks for the AC back (F1/TE2; srd:spell:mage-armor, Duration \"8 hours\"; srd:rule:concentration: \"Some spells and other effects require Concentration\")", async () => {
+    const wizard = () => sampleCharacter({ armorClass: 15, acFormula: 'set by the DM: Mage Armor', ...concentratingOn('Mage Armor') });
+    // One call, as start_combat's note for this save suggests (its concentration step runs before ac_spells_add, the
+    // call's last step).
+    const h = setup({ character: wizard() });
+    const out = await h.run('update_character', { ac_spells_add: ['Mage Armor'], concentration: null });
+    expect(out.content).toContain('No longer concentrating on Mage Armor.\nMage Armor: AC stays 15\n');
+    expect(out.content).not.toContain('set by hand');
+    expect(out.content).not.toContain('set the AC back');
+    expect(h.sheet()).toMatchObject({ armorClass: 15, acFormula: 'Mage Armor: 13 + DEX 2', acSpells: ['Mage Armor'], spellcasting: { concentratingOn: null } });
+    // The end alone: nothing about the AC, which stays as set by hand.
+    const alone = setup({ character: wizard() });
+    const ended = await alone.run('update_character', { concentration: null });
+    expect(ended.content).not.toContain('set by hand');
+    expect(alone.sheet()).toMatchObject({ armorClass: 15, acFormula: 'set by the DM: Mage Armor', spellcasting: { concentratingOn: null } });
   });
 });
 

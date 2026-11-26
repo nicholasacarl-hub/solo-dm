@@ -923,9 +923,12 @@ function withoutStaleBases(before: Character, r: AcSync, catalog: readonly Equip
  *    spell-effects: the same spell's effects "don't combine"). When gear, features and spells give that same AC
  *    (armor the engine knows), the AC becomes derived. Otherwise it is kept, the spell's part is appended (so it is
  *    counted, and ending Shield of Faith later takes its 2 off), anything else that changed moves it as below, and a
- *    warning says so. Only for an AC above what gear and features gave (or under armor the engine can't identify): one
- *    no higher can't hold the spell's bonus or base, whatever its words say, so the spell is added as below. Once the
- *    app has ended the spell, the words no longer name it (movedBySpells' "Shield of Faith ended").
+ *    warning says so. Only for an AC above what gear, features and the AC spells its formula counts gave (or under
+ *    armor the engine can't identify); a recorded spell the formula doesn't count (a Mage Armor recorded beside the
+ *    DM's words) isn't in that baseline. One no higher is taken not to hold it, with a warning: the spell is added as
+ *    below, and when that moves the AC the warning says how to put the AC back, for the DM's words may have counted it
+ *    beside a penalty the app doesn't count (srd:spell:slow: "it takes a -2 penalty to AC"). Once the app has ended
+ *    the spell, the words no longer name it (movedBySpells' "Shield of Faith ended").
  * 3. With armor the engine can't identify, computeArmorClass keeps the stored AC: only the spells move it.
  * 4. The sheet's AC counts as derived when it equals computeArmorClass(before); it then becomes the AC computed for
  *    `after`. Armor it can't identify keeps the stored AC and the parts of the bonus spells it counted, its own part
@@ -944,13 +947,30 @@ export function syncArmorClass(before: Character, after: Character, catalog: rea
   const stored = after.armorClass;
   const unknown = unknownWornArmor(after, catalog);
   const wasAc = computeArmorClass(before, catalog);
-  const holdsMore = unknown !== undefined || stored > wasAc.ac;
-  const alreadyIn = holdsMore ? added.filter((n) => handSetNames(after.acFormula, n)) : [];
+  // Step 2's baseline: gear, features and only the AC spells the formula itself counts.
+  const gearAc = computeArmorClass({ ...before, acSpells: counted }, catalog).ac;
+  const holdsMore = unknown !== undefined || stored > gearAc;
+  const named = added.filter((n) => handSetNames(after.acFormula, n));
+  const alreadyIn = holdsMore ? named : [];
   const adds = added.filter((n) => acSpellBonus(n) && !alreadyIn.includes(n));
   const ends = was.filter((n) => acSpellBonus(n) && !recorded.includes(n) && counted.includes(n));
   const delta = bonusTotal(adds) - bonusTotal(ends);
   const now = computeArmorClass(after, catalog);
   const done = (r: AcSync): AcSync => withoutStaleBases(before, r, catalog);
+  /**
+   * Step 2's other side: spells the DM's words name on an AC no higher than the baseline are taken not to be in it. Used
+   * on the two results that move the AC (derived, or moved by the spells' change), which step 2 has not kept, so any
+   * `named` here is such a spell: the warning says how to put the stored AC back.
+   */
+  const taken = (r: AcSync): AcSync => {
+    if (!named.length) return r;
+    const names = listJoin(named);
+    const them = named.length === 1 ? 'it' : 'them';
+    const note = warning(
+      `AC ${stored}, set by hand, names ${names}, but gear and features alone give ${gearAc}, so the app now counts ${names} as well (AC ${r.character.armorClass}): if ${stored} already counted ${them} beside a penalty the app doesn't count (such as Slow), set the AC to ${stored}.`,
+    );
+    return { ...r, events: [...r.events, note] };
+  };
 
   if (alreadyIn.length) {
     if (!unknown && now.ac === stored) return { character: { ...after, acFormula: now.formula }, events: [] };
@@ -980,12 +1000,12 @@ export function syncArmorClass(before: Character, after: Character, catalog: rea
       });
     }
     if (now.ac === stored) return { character: { ...after, acFormula: now.formula }, events: [] };
-    return {
+    return taken({
       character: { ...after, armorClass: now.ac, acFormula: now.formula },
       events: [gameEvent('combat', `AC ${stored} → ${now.ac} (${now.formula})`)],
-    };
+    });
   }
-  if (delta !== 0) return done(movedBySpells(after, delta, adds, ends));
+  if (delta !== 0) return taken(done(movedBySpells(after, delta, adds, ends)));
   if (now.ac === stored) return done({ character: after, events: [] });
   return done({
     character: after,

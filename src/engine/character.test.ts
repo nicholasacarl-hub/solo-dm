@@ -1756,7 +1756,7 @@ describe('Shield of Faith cast again, the AC the gear gives, and the name record
     }
   });
 
-  it('the D1 state: a hand-set AC the gear alone now gives holds no Shield of Faith, so recording it adds the 2 and its end takes them off (E2; srd:spell:shield-of-faith: "a +2 bonus to AC"; srd:rule:armor-class)', () => {
+  it('the D1 state: a hand-set AC the gear alone now gives is taken to hold no Shield of Faith, so recording it adds the 2, with F3\'s warning, and its end takes them off (E2/F3; srd:spell:shield-of-faith: "a +2 bonus to AC"; srd:rule:armor-class)', () => {
     // An older save's 18 "set by the DM: Shield of Faith" in Chain Mail, concentrating on the spell; then a Shield.
     const shield: InventoryItem = { id: 'sh', name: 'Shield', quantity: 1, category: 'shield', equipped: false };
     const old = setConcentration(
@@ -1766,17 +1766,24 @@ describe('Shield of Faith cast again, the AC the gear gives, and the name record
     const donned = updateItem(old, 'Shield', { equipped: true });
     expect(donned.character).toMatchObject({ armorClass: 18, acFormula: 'set by the DM: Shield of Faith' });
     expect(messages(donned)).toEqual(['Updated Shield: equipped']);
-    // Recorded: 20 (Chain Mail 16 + Shield 2 + Shield of Faith 2), and its end 18.
+    // Recorded: 20 (Chain Mail 16 + Shield 2 + Shield of Faith 2), and its end 18. The words name the spell, so the DM
+    // is told how to put 18 back if it already counted the spell beside a penalty (F3).
     const recorded = addAcSpell(donned.character, 'Shield of Faith');
     expect(recorded.character).toMatchObject({ armorClass: 20, acFormula: 'Chain Mail 16 + Shield 2 + Shield of Faith 2', acSpells: ['Shield of Faith'] });
-    expect(messages(recorded)).toEqual(['Shield of Faith: AC 18 → 20']);
+    expect(messages(recorded)).toEqual([
+      'Shield of Faith: AC 18 → 20',
+      "AC 18, set by hand, names Shield of Faith, but gear and features alone give 18, so the app now counts Shield of Faith as well (AC 20): if 18 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 18.",
+    ]);
     const ended = lose(recorded.character);
     expect(ended.character).toMatchObject({ armorClass: 18, acFormula: 'Chain Mail 16 + Shield 2' });
     expect(messages(ended)).toEqual(['No longer concentrating on Shield of Faith.', 'Shield of Faith ends: AC 20 → 18']);
     // Below the gear (srd:spell:slow: "a -2 penalty to AC"): "Slow, without Shield of Faith" 14 gives 16, not "AC stays 14".
     const slowed = addAcSpell(armored({ armorClass: 14, acFormula: 'set by the DM: Slow, without Shield of Faith' }), 'Shield of Faith');
     expect(slowed.character).toMatchObject({ armorClass: 16, acFormula: 'set by the DM: Slow, without Shield of Faith + Shield of Faith 2' });
-    expect(messages(slowed)).toEqual(['Shield of Faith: AC 14 → 16']);
+    expect(messages(slowed)).toEqual([
+      'Shield of Faith: AC 14 → 16',
+      "AC 14, set by hand, names Shield of Faith, but gear and features alone give 16, so the app now counts Shield of Faith as well (AC 16): if 14 already counted it beside a penalty the app doesn't count (such as Slow), set the AC to 14.",
+    ]);
   });
 
   it('records a new Concentration in the sheet\'s spelling only of that very name, else as given (E5; srd:spell:invisibility: "Concentration, up to 1 hour"; srd:spell:see-invisibility: "Duration: 1 hour")', () => {
@@ -1797,5 +1804,84 @@ describe('Shield of Faith cast again, the AC the gear gives, and the name record
     const faith = setConcentration(knowing('Shield of Faith'), 'Shield of Faith').character;
     expect(setConcentration(faith, 'Faith')).toEqual({ character: faith, events: [] });
     expect(setConcentration(unseen.character, 'invisibility')).toEqual({ character: unseen.character, events: [] });
+  });
+});
+
+describe("Mage Armor's Concentration and an exact Concentration (spell effects round 3)", () => {
+  const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
+  const warnings = (r: { events: { type: string; message: string }[] }) => r.events.filter((e) => e.type === 'warning').map((e) => e.message);
+  /** An older save: Mira (a wizard, DEX 14, no armor: gear 12) with an AC set by hand for Mage Armor, "concentrating" on it. */
+  const robed = (patch: Partial<Character> = {}) => setConcentration(mira({ armorClass: 15, acFormula: 'set by the DM: Mage Armor', ...patch }), 'Mage Armor').character;
+
+  it('an older save\'s Concentration on Mage Armor ending gives no hand-set AC reminder and leaves the AC and its record: Mage Armor needs none (F1/TE2; srd:spell:mage-armor, Duration "8 hours"; srd:rule:concentration: "Some spells and other effects require Concentration")', () => {
+    const starts: Array<[string, Character]> = [
+      ['15, no record', robed()],
+      ['15, recorded', robed({ acSpells: ['Mage Armor'] })],
+      ['17 with Haste, recorded', robed({ armorClass: 17, acFormula: 'set by the DM: Mage Armor and Haste', acSpells: ['Mage Armor'] })],
+    ];
+    for (const [what, start] of starts) {
+      expect(start.spellcasting?.concentratingOn, what).toBe('Mage Armor');
+      const off = setConcentration(start, null);
+      expect(off.events, what).toEqual([{ type: 'condition-removed', message: 'No longer concentrating on Mage Armor.' }]);
+      expect(off.character, what).toMatchObject({ armorClass: start.armorClass, acFormula: start.acFormula, spellcasting: { concentratingOn: null } });
+      expect(off.character.acSpells, what).toEqual(start.acSpells);
+      // Every other path that ends the Concentration: no reminder either, and the AC and the record stay.
+      const paths = {
+        '0 HP': applyDamage(start, 12),
+        Stunned: addCondition(start, { id: 'stunned' }),
+        'another spell': setConcentration(start, 'Bless'),
+        expire: expireConcentration(start, 'Mage Armor', 'its duration is up'),
+        'spell removed': removeSpell(addSpell(start, { name: 'Mage Armor', level: 1, prepared: true }).character, 'Mage Armor'),
+      };
+      for (const [path, r] of Object.entries(paths)) {
+        expect(messages(r).filter((m) => m.includes('set by hand')), `${what}: ${path}`).toEqual([]);
+        expect(r.character.armorClass, `${what}: ${path}`).toBe(start.armorClass);
+        expect(r.character.acSpells, `${what}: ${path}`).toEqual(start.acSpells);
+        expect(r.character.spellcasting?.concentratingOn, `${what}: ${path}`).not.toBe('Mage Armor');
+      }
+    }
+    // Haste's own reminder is unchanged (srd:spell:haste: "+2 bonus to Armor Class"), beside the same Mage Armor.
+    const hasted = setConcentration(mira({ armorClass: 17, acFormula: 'set by the DM: Mage Armor and Haste', acSpells: ['Mage Armor'] }), 'Haste').character;
+    expect(setConcentration(hasted, null).events).toEqual([
+      { type: 'condition-removed', message: 'No longer concentrating on Haste.' },
+      { type: 'warning', message: 'AC 17 was set by hand for Haste: if it counted Haste, set the AC back to 15 (armor and abilities).' },
+    ]);
+    // Mage Armor's own end still reminds the DM of the AC set by hand for it (no record to end).
+    expect(warnings(endAcSpell(robed(), 'Mage Armor'))).toEqual([
+      "Mage Armor isn't recorded.",
+      'AC 15 was set by hand for Mage Armor: if it counted Mage Armor, set the AC back to 12 (armor and abilities).',
+    ]);
+    // Shield of Faith's record still ends with the Concentration on it (srd:spell:shield-of-faith: "Concentration, up to 10 minutes").
+    const faith = addAcSpell(setConcentration(mira(), 'Shield of Faith').character, 'Shield of Faith').character;
+    expect(messages(setConcentration(faith, null))).toEqual(['No longer concentrating on Shield of Faith.', 'Shield of Faith ends: AC 14 → 12']);
+  });
+
+  it('setConcentration exact: only the very name held is the same spell, never the sheet\'s looser match (F4; srd:spell:invisibility: "Concentration, up to 1 hour"; srd:spell:greater-invisibility: "Concentration, up to 1 minute"; srd:rule:concentration: "Another Concentration Effect")', () => {
+    const sheet = (...names: string[]) => ({ ...mira().spellcasting!, spells: names.map((name, i) => ({ id: `s${i}`, name, level: 4, prepared: true, concentration: true })) });
+    // Holding Greater Invisibility, with only it on the sheet.
+    const holding = setConcentration(mira({ spellcasting: sheet('Greater Invisibility') }), 'Greater Invisibility').character;
+    expect(holding.spellcasting?.concentratingOn).toBe('Greater Invisibility');
+    // Without exact, the sheet's loose match finds the spell held: nothing changes, as before (H9).
+    expect(setConcentration(holding, 'Invisibility')).toEqual({ character: holding, events: [] });
+    expect(setConcentration(holding, 'Invisibility', { exact: false })).toEqual({ character: holding, events: [] });
+    // With exact, the caller has judged "Invisibility" another spell: Greater Invisibility ends and Invisibility is recorded.
+    const switched = setConcentration(holding, 'Invisibility', { exact: true });
+    expect(switched.character.spellcasting?.concentratingOn).toBe('Invisibility');
+    expect(messages(switched)).toEqual(['Concentration on Greater Invisibility ends (started concentrating on Invisibility).', 'Concentrating on Invisibility.']);
+    // The very name held is the same spell, whatever its case and punctuation.
+    expect(setConcentration(holding, ' greater-invisibility ', { exact: true })).toEqual({ character: holding, events: [] });
+    // E5's label rule is unchanged: a new one in the sheet's spelling of that very name (srd:spell:hold-person:
+    // "Concentration, up to 1 minute").
+    const both = setConcentration(mira({ spellcasting: sheet('Greater Invisibility', 'Hold Person') }), 'Greater Invisibility').character;
+    const held = setConcentration(both, 'hold person', { exact: true });
+    expect(held.character.spellcasting?.concentratingOn).toBe('Hold Person');
+    expect(messages(held)).toEqual(['Concentration on Greater Invisibility ends (started concentrating on Hold Person).', 'Concentrating on Hold Person.']);
+    // So are the refusals for the dead and the Incapacitated, and the end with null.
+    expect(setConcentration({ ...holding, deathSaves: { ...holding.deathSaves, dead: true } }, 'Invisibility', { exact: true }).events).toEqual([
+      { type: 'warning', message: "The dead can't concentrate." },
+    ]);
+    const stunned = addCondition(holding, { id: 'stunned' }).character;
+    expect(setConcentration(stunned, 'Invisibility', { exact: true }).events).toEqual([{ type: 'warning', message: "Can't concentrate while Stunned." }]);
+    expect(messages(setConcentration(holding, null, { exact: true }))).toEqual(['No longer concentrating on Greater Invisibility.']);
   });
 });

@@ -596,6 +596,21 @@ describe('applyLongRest ends the AC spells (srd:spell:mage-armor; srd:spell:shie
     // A Short Rest ends nothing (srd:rule:short-rest).
     expect(applyShortRest(addAcSpell(mira(), 'Mage Armor').character).character).toMatchObject({ armorClass: 15, acSpells: ['Mage Armor'] });
   });
+
+  it('an older save\'s Concentration on Mage Armor: its end reminds of nothing, so the rest that ends the spell still does, once (F1; srd:spell:mage-armor, Duration "8 hours"; srd:rule:long-rest: "at least 8 hours")', () => {
+    const old = setConcentration(mira({ armorClass: 15, acFormula: 'set by the DM: Mage Armor' }), 'Mage Armor').character;
+    const r = applyLongRest(old);
+    expect(r.character).toMatchObject({ armorClass: 15, spellcasting: { concentratingOn: null } });
+    expect(r.events.map((e) => e.type)).toEqual(['rest', 'warning']);
+    expect(messages(r)[0]).toMatch(/^Long rest: .*Concentration on Mage Armor ended\.$/);
+    expect(r.events[1].message).toBe('AC 15 was set by hand for Mage Armor: if it counted Mage Armor, set the AC back to 12 (armor and abilities).');
+    // Recorded: the record ends with the rest, and nothing is left to remind.
+    const recorded = setConcentration(addAcSpell(mira(), 'Mage Armor').character, 'Mage Armor').character;
+    const rested = applyLongRest(recorded);
+    expect(rested.character).toMatchObject({ armorClass: 12, acFormula: '10 + DEX 2' });
+    expect(rested.character).not.toHaveProperty('acSpells');
+    expect(messages(rested)).toEqual(['Mage Armor ends: AC 15 → 12', expect.stringMatching(/^Long rest: .*Concentration on Mage Armor ended\.$/)]);
+  });
 });
 
 describe('levelUp: feature uses that grow with level', () => {
