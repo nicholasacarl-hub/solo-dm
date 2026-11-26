@@ -12,6 +12,7 @@ import type { BuilderData, ClassLevel, ClassOption, Feature } from '@/types';
 import { inferFeatureUses, refreshTableCountedUses, type UsesContext } from './featureUses';
 import { featureUseChanges, gainedFeatures, refreshFeatureUses } from './leveling';
 import { applyFeatChoice, featChoiceTrigger } from './levelUpChoices';
+import { lineageFeatureText, speciesChoices } from './species';
 
 const data = JSON.parse(builderRaw) as BuilderData;
 const SRD_FIGHTER = data.classes.find((c) => c.id === 'srd:class:fighter')!;
@@ -196,5 +197,55 @@ describe("a book Fighter's held entries through both level-up paths", () => {
     const wizards: Feature = { ...OLD_INDOMITABLE, id: 'wiz', sourceName: 'Wizard 1' };
     const hero = sampleCharacter({ classes: [bookFighter(13), WIZARD_1], features: [ruled, named, dm, wizards] });
     expect(refreshTableCountedUses(hero, BOOK, hero.classes[0])).toBe(hero);
+  });
+});
+
+describe("a lineage trait's later spells are no use of the trait, however a book words or wraps that paragraph (srd:species:elf, Elven Lineage)", () => {
+  // srd:species:elf (srd:species:tiefling's Fiendish Legacy alike): "When you reach character levels 3 and 5, you learn a
+  // higher-level spell, as shown on the table. You always have that spell prepared. You can cast it once without a spell
+  // slot, and you regain the ability to cast it in that way when you finish a Long Rest." Each spell has its own casting,
+  // which the level-up counts beside it ("Faerie Fire (free casting)"), so the trait reads no use off that paragraph.
+  const CASTING =
+    'you learn a higher-level spell, as shown on the table. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest.';
+  /** The review's wordings of an invented book's paragraph: other openings, and the SRD's words wrapped across lines. */
+  const WORDINGS = [
+    `At character level 3 and again at character level 5, ${CASTING}`,
+    `When you reach 3rd and 5th level, ${CASTING}`,
+    `Starting at character level 3, and again at 5, ${CASTING}`,
+    'When you reach character levels 3 and 5, you learn a\nhigher-level spell, as shown on the table. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest.',
+    'When you reach character levels 3 and 5, you learn a higher-level spell, as shown on the\ntable. You always have that spell prepared. You can cast it once without a spell slot, and\nyou regain the ability to cast it in that way when you finish a Long Rest.',
+  ];
+  /** An invented book's lineage trait (the Quillfolk's Inkbound Heritage) with that paragraph. */
+  const inkbound = (later: string, opening = 'You are marked by an inkbound heritage. Choose a heritage from the table. You gain its level 1 benefit.') => ({
+    name: 'Inkbound Heritage',
+    description: `${opening}\n\n${later}\n\nIntelligence, Wisdom, or Charisma is your spellcasting ability for the spells you cast with this trait (choose the ability when you select the heritage).\n\n| Heritage | Level 1 | Level 3 | Level 5 |\n|---|---|---|---|\n| Sepia | You know the Light cantrip. | Faerie Fire | Darkness |`,
+  });
+  /** Its Sepia heritage as the app keeps a table row (lineageRowText). */
+  const SEPIA = { name: 'Sepia', description: 'You know the Light cantrip. Level 3: Faerie Fire. Level 5: Darkness.' };
+  /** The trait's uses as the builder and the level-up's refresh read them: its preamble and the chosen heritage. */
+  const traitUses = (trait: { name: string; description: string }, level: number) => inferFeatureUses(trait.name, lineageFeatureText(trait, SEPIA), ctx(undefined, level));
+
+  it('reads no use off the paragraph at any character level, as off the SRD Elf and Tiefling', () => {
+    for (const later of WORDINGS) for (let level = 1; level <= 20; level++) expect(traitUses(inkbound(later), level), `${later} at ${level}`).toBeUndefined();
+    for (const species of data.species.filter((s) => s.name === 'Elf' || s.name === 'Tiefling')) {
+      const { lineageTrait, lineages } = speciesChoices(species);
+      expect(lineages).toHaveLength(3);
+      for (const lineage of lineages) {
+        for (let level = 1; level <= 20; level++) expect(inferFeatureUses(lineageTrait!.name, lineageFeatureText(lineageTrait!, lineage), ctx(undefined, level))).toBeUndefined();
+      }
+    }
+  });
+
+  it("keeps every other reading: a use the trait's other paragraphs give, the SRD's opening line and Magic Initiate's free casting", () => {
+    // The paragraph ends at a blank line: a use the trait's opening gives still counts.
+    const opening = "Choose a heritage from the table. Once you use this trait, you can't do so again until you finish a Long Rest.";
+    expect(traitUses(inkbound(WORDINGS[3], opening), 3)).toEqual({ max: 1, used: 0, recharge: 'long' });
+    // The SRD's own opening still takes its line away, however the rest of it is worded (as before).
+    expect(traitUses(inkbound('When you reach character levels 3 and 5, you gain the spell your heritage names. You can cast it once without a spell slot.'), 5)).toBeUndefined();
+    // srd:feat:magic-initiate, Level 1 Spell: "You always have that spell prepared. You can cast it once without a spell
+    // slot, and you regain the ability to cast it in that way when you finish a Long Rest." Its paragraph learns no
+    // higher-level spell: one use, at every level.
+    const initiate = data.feats.find((f) => f.name === 'Magic Initiate')!;
+    for (let level = 1; level <= 20; level++) expect(inferFeatureUses(initiate.name, initiate.description, ctx(undefined, level))).toEqual({ max: 1, used: 0, recharge: 'long' });
   });
 });

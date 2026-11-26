@@ -171,13 +171,14 @@ export function withoutEmphasis(cell: string): string {
 
 /**
  * A lineage spell the rules here can't find, as DM text may name it: the cell without its emphasis when it reads as a
- * name (at most five words, no sentence punctuation), else the app's own words, so a book's sentence never reaches the
- * transcript: "a spell the app couldn't read from Ashwing's table".
+ * name (at most five words, no sentence punctuation), else the app's own words naming the cell's column (`level`, the
+ * tag's character level), so a book's sentence never reaches the transcript and two unreadable cells stay two spells:
+ * "the Level 3 spell the app couldn't read from Ashwing's table".
  */
-export function lineageSpellLabel(cell: string, lineage: string): string {
+export function lineageSpellLabel(cell: string, lineage: string, level: number): string {
   const name = withoutEmphasis(cell);
   const words = name.split(' ').filter(Boolean).length;
-  return words >= 1 && words <= 5 && NAME_LIKE.test(name) ? name : `a spell the app couldn't read from ${lineage}'s table`;
+  return words >= 1 && words <= 5 && NAME_LIKE.test(name) ? name : `the Level ${level} spell the app couldn't read from ${lineage}'s table`;
 }
 
 /** "You know the _Mending_ and _Prestidigitation_ cantrips" -> ["Mending", "Prestidigitation"]. */

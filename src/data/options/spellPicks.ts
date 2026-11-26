@@ -729,7 +729,9 @@ function lineageAbility(c: Character, lineage: string): string | null {
  * gets none, and so does a lineage written in paragraphs. With `findSpell` (the rules index) a cell is granted under the
  * index entry's name, and one the index finds as a cantrip is left out (the book's table isn't laid out Level 1/3/5); a
  * cell it can't find is granted under lineageSpellLabel's name, so the gain lists it among the spells the rules lack
- * without quoting a book's sentence. Without `findSpell` every cell goes as that name, and the gain's own lookup decides.
+ * without quoting a book's sentence (an unreadable cell is named by its column, "the Level 5 spell the app couldn't read
+ * from Ashwing's table", so two such cells stay two). Without `findSpell` every cell goes as that name, and the gain's own
+ * lookup decides.
  * Each grant's source is the lineage's name ("Drow"), and its notes "Spellcasting ability: Wisdom. Once per Long Rest
  * without a spell slot" (the ability as the lineage's own cantrip notes it; without one, the second sentence alone).
  */
@@ -752,7 +754,7 @@ export function lineageSpellGrants(
     const entry = cell ? findSpell?.(cell) : undefined;
     const spell = entry?.kind === 'spell' ? knownSpellFromEntry(entry) : null;
     if (spell && spell.level < 1) continue;
-    const name = spell?.name ?? lineageSpellLabel(tag.cell, lineage.name);
+    const name = spell?.name ?? lineageSpellLabel(tag.cell, lineage.name, tag.level);
     if (!grants.some((g) => nameKey(g.name) === nameKey(name))) grants.push({ name, source: lineage.name, notes });
   }
   return grants;
@@ -765,7 +767,7 @@ export interface LineageCastings {
   lineage: string;
   /** The spells whose free-casting counters it added, as the sheet names them, in the table's order. */
   added: string[];
-  /** The lineage trait's feature whose own uses already count the free castings (the DM's ruling): none were added. */
+  /** The lineage trait's feature whose uses the DM ruled (FeatureUses.ruled), which count the free castings: none were added. */
   withheldBy: Feature | null;
 }
 
@@ -781,8 +783,10 @@ export const freeCastingName = (spell: string): string => `${spell} (free castin
  * lineage's). It is "<Spell> (free casting)", a species feature with the lineage as its source name and one use, which a
  * Long Rest resets with every feature and features_use spends. A spell gets none when a feature with uses bears its name
  * once a trailing parenthesis is off (baseFeatureName: the DM's "Faerie Fire (Drow, free casting)", an earlier
- * level-up's counter) or a feature has the counter's own name; and none are added when the lineage trait's feature has
- * uses (the DM's ruling counts them there: `withheldBy`). The same character comes back when nothing is added.
+ * level-up's counter) or a feature has the counter's own name; and none are added when the DM ruled the lineage trait's
+ * feature's uses (FeatureUses.ruled: the ruling counts them there, `withheldBy`). Uses the app read off a book trait's own
+ * words are no ruling: the SRD gives each spell its own casting ("You can cast it once without a spell slot"), so the
+ * counters are added beside them. The same character comes back when nothing is added.
  */
 export function withLineageCastings(c: Character, data: SpeciesData, grants: readonly AlwaysPreparedGrant[]): LineageCastings {
   const found = grants.length ? heroLineage(c, data) : null;
@@ -797,7 +801,7 @@ export function withLineageCastings(c: Character, data: SpeciesData, grants: rea
     if (held?.alwaysPrepared && held.level >= 1 && !counted(held.name) && !due.includes(held)) due.push(held);
   }
   if (!due.length) return none;
-  const ruled = traitFeatures.find((f) => f.uses);
+  const ruled = traitFeatures.find((f) => f.uses?.ruled);
   if (ruled) return { ...none, withheldBy: ruled };
   const ability = lineageAbility(c, lineage.name);
   const counters = due.map(
@@ -814,13 +818,13 @@ export function withLineageCastings(c: Character, data: SpeciesData, grants: rea
 }
 
 /**
- * Why no counter was added, for the DM (no final period: the level_up line adds one, the notice joins it as a part):
- * "Elven Lineage (Drow) already counts its free castings (your ruling: 2 uses): no free-casting counters added".
+ * Why no counter was added, for the DM (no final period: the level_up line adds one, the notice joins it as a part): the
+ * trait's feature the DM ruled (withLineageCastings' `withheldBy`), "Elven Lineage (Drow) already counts its free
+ * castings (your ruling: 2 uses): no free-casting counters added".
  */
 export function freeCastingRuling(feature: Pick<Feature, 'name' | 'uses'>): string {
   const max = feature.uses?.max ?? 0;
-  const uses = `${max} use${max === 1 ? '' : 's'}`;
-  return `${feature.name} already counts its free castings (${feature.uses?.ruled ? `your ruling: ${uses}` : uses}): no free-casting counters added`;
+  return `${feature.name} already counts its free castings (your ruling: ${max} use${max === 1 ? '' : 's'}): no free-casting counters added`;
 }
 
 /**

@@ -136,16 +136,24 @@ describe("lineageSpellTags: the spells a lineage's table gives at character leve
 });
 
 describe('lineageSpellLabel: a lineage spell the rules here lack, as DM text may name it (spec §2.1)', () => {
-  it("quotes a cell that reads as a name, emphasis stripped, and otherwise says the app couldn't read it", () => {
+  it("quotes a cell that reads as a name, emphasis stripped, and otherwise says the app couldn't read its column's spell", () => {
     expect(withoutEmphasis('_Faerie Fire_')).toBe('Faerie Fire');
-    expect(lineageSpellLabel('_Cinder Mote_', 'Ashwing')).toBe('Cinder Mote');
-    expect(lineageSpellLabel("Moth's Lantern", 'Ashwing')).toBe("Moth's Lantern");
-    expect(lineageSpellLabel('Choir of the Long Dusk', 'Ashwing')).toBe('Choir of the Long Dusk');
+    expect(lineageSpellLabel('_Cinder Mote_', 'Ashwing', 3)).toBe('Cinder Mote');
+    expect(lineageSpellLabel("Moth's Lantern", 'Ashwing', 3)).toBe("Moth's Lantern");
+    expect(lineageSpellLabel('Choir of the Long Dusk', 'Ashwing', 5)).toBe('Choir of the Long Dusk');
     // More than five words, sentence punctuation or nothing left: the book's words never reach the transcript.
-    const unread = "a spell the app couldn't read from Ashwing's table";
-    expect(lineageSpellLabel('You learn the faerie fire spell', 'Ashwing')).toBe(unread);
-    expect(lineageSpellLabel('Faerie Fire (level 3), Darkness (level 5)', 'Ashwing')).toBe(unread);
-    expect(lineageSpellLabel('Faerie Fire; see below', 'Ashwing')).toBe(unread);
-    expect(lineageSpellLabel('__', 'Ashwing')).toBe(unread);
+    const unread = "the Level 3 spell the app couldn't read from Ashwing's table";
+    expect(lineageSpellLabel('You learn the faerie fire spell', 'Ashwing', 3)).toBe(unread);
+    expect(lineageSpellLabel('Faerie Fire (level 3), Darkness (level 5)', 'Ashwing', 3)).toBe(unread);
+    expect(lineageSpellLabel('Faerie Fire; see below', 'Ashwing', 3)).toBe(unread);
+    expect(lineageSpellLabel('__', 'Ashwing', 3)).toBe(unread);
+  });
+
+  it('names the column of a cell it can\'t read, so two such cells are two spells (srd:species:elf: "When you reach character levels 3 and 5, you learn a higher-level spell, as shown on the table")', () => {
+    const [three, five] = lineageSpellTags(lineageRowText(splitRow('| Ashwing | You know the Light cantrip. | Burning Hands, Light | Continual Flame; Darkness |')));
+    expect([three, five].map((t) => lineageSpellLabel(t.cell, 'Ashwing', t.level))).toEqual([
+      "the Level 3 spell the app couldn't read from Ashwing's table",
+      "the Level 5 spell the app couldn't read from Ashwing's table",
+    ]);
   });
 });

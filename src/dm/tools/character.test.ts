@@ -3553,16 +3553,63 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
       const h = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Monk', 6)) });
       const out = await h.run('update_character', { speed: 40 });
       expect(out.content).toContain(
-        'Speed 30 ft. → 40 ft.\nspeed is the Speed before class features, which the app adds: Mira Voss\'s Speed is now 55 ft (base 40 ft; Unarmored Movement: +15 ft).\n',
+        'Speed 30 ft. → 40 ft.\nspeed is the Speed before Unarmored Movement, which the app adds: Mira Voss\'s Speed is now 55 ft (base 40 ft; Unarmored Movement: +15 ft).\n',
       );
       expect(out.content).toContain('· Speed 55 ft (Unarmored Movement) ·');
       // An Exhaustion in the same call counts (srd:condition:exhaustion: "Your Speed is reduced by a number of feet equal to 5 times your Exhaustion level").
       const tired = setup({ builderData: SRD_BUILDER_DATA, character: { ...hero(srdEntry('Monk', 6)), name: '' } });
       expect((await tired.run('update_character', { speed: 40, exhaustion_change: 2 })).content).toContain(
-        "speed is the Speed before class features, which the app adds: The hero's Speed is now 45 ft (base 40 ft; Unarmored Movement: +15 ft; Exhaustion 2: −10 ft).",
+        "speed is the Speed before Unarmored Movement, which the app adds: The hero's Speed is now 45 ft (base 40 ft; Unarmored Movement: +15 ft; Exhaustion 2: −10 ft).",
       );
       const wizard = setup();
       expect((await wizard.run('update_character', { speed: 25 })).content).not.toContain('speed is the Speed');
+    });
+
+    it("names only the features the app adds: a 2014 book's Monk 6 beside an SRD Barbarian 5 hears Fast Movement, an SRD Monk 6 / Barbarian 5 both (srd:rule:barbarian-fast-movement)", async () => {
+      // srd:rule:barbarian-fast-movement: "Your speed increases by 10 feet while you aren't wearing Heavy armor." An
+      // older-edition book's Monk gets no Unarmored Movement from the app (its numbers can differ), so the DM keeps that
+      // one in speed: the line doesn't call it a feature the app adds.
+      const ref: ImportedRef = { sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:monk', kind: 'class', entryName: 'Monk', textHash: '', textCopied: false, format: '2014' };
+      const bookMonk: ClassLevel = { classId: 'lib:lamp:class:monk', name: 'Monk', level: 6, hitDie: 8, casterType: 'none', ref };
+      const older = setup({ builderData: SRD_BUILDER_DATA, character: hero(bookMonk, { classes: [bookMonk, srdEntry('Barbarian', 5)] }) });
+      expect((await older.run('update_character', { speed: 45 })).content).toContain(
+        "Speed 30 ft. → 45 ft.\nspeed is the Speed before Fast Movement, which the app adds: Mira Voss's Speed is now 55 ft (base 45 ft; Fast Movement: +10 ft).\n",
+      );
+      const both = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Monk', 6), { classes: [srdEntry('Monk', 6), srdEntry('Barbarian', 5)] }) });
+      expect((await both.run('update_character', { speed: 35 })).content).toContain(
+        "speed is the Speed before Unarmored Movement and Fast Movement, which the app adds: Mira Voss's Speed is now 60 ft (base 35 ft; Unarmored Movement: +15 ft; Fast Movement: +10 ft).",
+      );
+      // Three (srd:rule:ranger-roving: "Your Speed increases by 10 feet while you aren't wearing Heavy armor"), and none
+      // for a call that leaves speed alone.
+      const three = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Monk', 2), { classes: [srdEntry('Monk', 2), srdEntry('Barbarian', 5), srdEntry('Ranger', 6)] }) });
+      expect((await three.run('update_character', { speed: 30 })).content).toContain(
+        "speed is the Speed before Unarmored Movement, Fast Movement and Roving, which the app adds: Mira Voss's Speed is now 60 ft (base 30 ft; Unarmored Movement: +10 ft; Fast Movement: +10 ft; Roving: +10 ft).",
+      );
+      expect((await three.run('update_character', { exhaustion_change: 1 })).content).not.toContain('speed is the Speed');
+    });
+
+    it("transform_character says the same when a transformation moves the Speed (begun, advanced, ended), for the DM only; nothing when it doesn't, or for a hero without such a feature", async () => {
+      const begin = { action: 'begin', name: 'Galemark', summary: 'Invented: the wind at the heels.', origin: 'accepted', player_chose_it: true, speed_change: 10, reason: 'Invented: a wind blessing' };
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Monk', 6)) });
+      expect((await h.run('transform_character', begin)).content).toContain(
+        "\n- Speed 30 → 40 ft (+10 ft)\nThe transformation changes the Speed before Unarmored Movement, which the app adds: Mira Voss's Speed is now 55 ft (base 40 ft; Unarmored Movement: +15 ft).\n",
+      );
+      // The player's log keeps the change itself.
+      expect(toolLog(h, 'transform_character')?.detail).toContain('- Speed 30 → 40 ft (+10 ft)');
+      expect(toolLog(h, 'transform_character')?.detail).not.toContain('which the app adds');
+      const stage = (n: number, change: object) => ({ action: 'advance', name: 'Galemark', stage: `Stage ${n}`, player_chose_it: true, reason: 'Invented: the wind rises', ...change });
+      expect((await h.run('transform_character', stage(2, { speed_change: 5 }))).content).toContain(
+        "The transformation changes the Speed before Unarmored Movement, which the app adds: Mira Voss's Speed is now 60 ft (base 45 ft; Unarmored Movement: +15 ft).",
+      );
+      expect((await h.run('transform_character', stage(3, { darkvision: 90 }))).content).not.toContain('The transformation changes');
+      expect((await h.run('transform_character', { action: 'end', name: 'Galemark', reason: 'Invented: the wind passes' })).content).toContain(
+        "The transformation changes the Speed before Unarmored Movement, which the app adds: Mira Voss's Speed is now 45 ft (base 30 ft; Unarmored Movement: +15 ft).",
+      );
+      const unnamed = setup({ builderData: SRD_BUILDER_DATA, character: { ...hero(srdEntry('Monk', 6)), name: '' } });
+      expect((await unnamed.run('transform_character', begin)).content).toContain("which the app adds: The hero's Speed is now 55 ft");
+      const wizard = await setup({ builderData: SRD_BUILDER_DATA }).run('transform_character', begin);
+      expect(wizard.content).toContain('- Speed 30 → 40 ft (+10 ft)');
+      expect(wizard.content).not.toContain('The transformation changes');
     });
   });
 });

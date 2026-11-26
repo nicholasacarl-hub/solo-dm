@@ -272,3 +272,41 @@ describe('endTransformation', () => {
     expect(r.events[0].message).toMatch(/No active transformation named "Vampirism".*Active: none/);
   });
 });
+
+describe("a Ranger's Roving speeds in a transformation's lines (srd:rule:ranger-roving)", () => {
+  // srd:rule:ranger-roving: "Your Speed increases by 10 feet while you aren't wearing Heavy armor. You also have a Climb
+  // Speed and a Swim Speed equal to your Speed." The sheet shows a Ranger 6's climb and swim at its Speed (40 ft here)
+  // whatever is stored; the grant is stored and undone as for anyone, and its lines name what the sheet shows.
+  const ranger = (level: number, extra: Partial<Character> = {}) =>
+    mira({ classes: [{ classId: 'srd:class:ranger', name: 'Ranger', level, hitDie: 10, casterType: 'half', spellcastingAbility: 'wis' }], inventory: [], ...extra });
+  const tidemark = (otherSpeeds: BeginTransformationSpec['otherSpeeds']): BeginTransformationSpec => ({ name: 'Tidemark', summary: 'Salt in the blood.', origin: 'accepted', otherSpeeds });
+  const speedLines = (r: { events: { message: string }[] }) => messages(r).filter((m) => / Speed /.test(m));
+
+  it('a swim the shown Swim Speed already beats stays at it, begun and ended, while the stored grant comes and goes', () => {
+    const start = ranger(6, { otherSpeeds: { swim: 30 } });
+    const begun = beginTransformation(start, tidemark({ swim: 35 }), opts());
+    expect(speedLines(begun)).toEqual(['Swim Speed stays 40 ft (Tidemark gives 35 ft)']);
+    expect(begun.character.otherSpeeds).toEqual({ swim: 35 });
+    expect(transformationGrants(begun.transformation!).otherSpeeds).toEqual({ swim: { value: 35, natural: 30 } });
+    const ended = endTransformation(begun.character, 'Tidemark', opts());
+    expect(speedLines(ended)).toEqual([]);
+    expect(ended.character.otherSpeeds).toEqual({ swim: 30 });
+    // None stored at all: the Ranger still swims at its Speed.
+    const none = beginTransformation(ranger(6), tidemark({ swim: 30 }), opts());
+    expect(speedLines(none)).toEqual(['Swim Speed stays 40 ft (Tidemark gives 30 ft)']);
+    expect(none.character.otherSpeeds).toEqual({ swim: 30 });
+    const noneEnded = endTransformation(none.character, 'Tidemark', opts());
+    expect(speedLines(noneEnded)).toEqual([]);
+    expect(noneEnded.character.otherSpeeds).toEqual({});
+  });
+
+  it('a speed past the shown one reads from it and back to it; a hero without Roving reads the stored speeds, as before', () => {
+    const begun = beginTransformation(ranger(6), tidemark({ climb: 50, swim: 60 }), opts());
+    expect(speedLines(begun)).toEqual(['Swim Speed 40 ft → 60 ft', 'Climb Speed 40 ft → 50 ft']);
+    expect(speedLines(endTransformation(begun.character, 'Tidemark', opts()))).toEqual(['Swim Speed 60 ft → 40 ft', 'Climb Speed 50 ft → 40 ft']);
+    // A Ranger 5 has no Roving yet.
+    const five = beginTransformation(ranger(5, { otherSpeeds: { swim: 30 } }), tidemark({ swim: 35 }), opts());
+    expect(speedLines(five)).toEqual(['Swim Speed 30 ft → 35 ft']);
+    expect(speedLines(endTransformation(five.character, 'Tidemark', opts()))).toEqual(['Swim Speed 35 ft → 30 ft']);
+  });
+});

@@ -768,14 +768,27 @@ function besideLines(before: Character, after: Character): string[] {
 }
 
 /**
- * For the DM, after "Speed 30 ft. → 40 ft.": what `speed` is for a hero with a class feature that raises Speed at its
- * levels (Unarmored Movement, Fast Movement, Roving), which the app adds when the Speed is read, and the Speed it reads
- * now on the sheet as the call left it (its own notes: a bonus in force, one gear suspends, a penalty, Speed 0), so a
- * Speed raised by hand for the feature is in front of the DM.
+ * For a hero with a class feature that raises Speed at its levels (speedDetails().classFeatures: Unarmored Movement, Fast
+ * Movement, Roving), which the app adds when the Speed is read: what the stored Speed is, naming those features (so an
+ * older-edition book's Monk, whose Unarmored Movement the app doesn't count and the DM keeps in the Speed, isn't told it
+ * is one), and the Speed the sheet reads now with its own notes (a bonus in force, one gear suspends, a penalty, Speed 0):
+ * "the Speed before Fast Movement, which the app adds: Mira Voss's Speed is now 55 ft (base 45 ft; Fast Movement: +10
+ * ft)."; two: "the Speed before Unarmored Movement and Fast Movement, …". '' for any other hero.
+ */
+export function speedBeforeFeatures(after: Character): string {
+  const features = speedDetails(after).classFeatures;
+  if (!features.length) return '';
+  const named = features.length < 2 ? features.join('') : `${features.slice(0, -1).join(', ')} and ${features[features.length - 1]}`;
+  return `the Speed before ${named}, which the app adds: ${after.name.trim() || 'The hero'}'s Speed is now ${sheetSpeedText(after)}.`;
+}
+
+/**
+ * For the DM, after "Speed 30 ft. → 40 ft.": what `speed` is and the Speed the sheet reads now as the call left it
+ * (speedBeforeFeatures), so a Speed raised by hand for one of the features is in front of the DM.
  */
 function speedLines(input: ToolInput<'update_character'>, after: Character): string[] {
-  if (input.speed === undefined || !speedDetails(after).classFeatures.length) return [];
-  return [`speed is the Speed before class features, which the app adds: ${after.name.trim() || 'The hero'}'s Speed is now ${sheetSpeedText(after)}.`];
+  const text = input.speed === undefined ? '' : speedBeforeFeatures(after);
+  return text ? [`speed is ${text}`] : [];
 }
 
 /** "Stable" or "Stabilized", alone or with a detail after it ("Stable (Healer's Kit)", "Stabilized by Brother Aldo"). */

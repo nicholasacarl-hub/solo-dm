@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
-import { applyLongRest, useFeature } from '@/engine';
+import { applyLongRest, levelUp, useFeature } from '@/engine';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
 import type { BuilderData, Character, ClassLevel, ClassOption, CompendiumEntry, Feature, KnownSpell, SpeciesOption } from '@/types';
 import { lineageRowText, splitRow } from '../structured/parse/srdRulesOptions';
 import { cantripsKnown, preparedSpellCount } from './classFeatures';
+import { inferFeatureUses } from './featureUses';
+import { refreshFeatureUses } from './leveling';
+import { lineageFeatureText } from './species';
 import {
   alwaysPreparedGained,
   applyAlwaysPrepared,
@@ -759,11 +762,96 @@ describe("a lineage's spells at character levels 3 and 5 (srd:species:elf, srd:s
     expect(freeCastingLines(r.cast)).toEqual(['Elven Lineage (Drow) already counts its free castings (your ruling: 2 uses): no free-casting counters added.']);
     expect(freeCastingNoticeParts(r.cast)).toEqual(['Elven Lineage (Drow) already counts its free castings (your ruling: 2 uses): no free-casting counters added']);
     expect(freeCastingRuling(ruledTrait({ max: 1, used: 0, recharge: 'long', ruled: true }))).toBe('Elven Lineage (Drow) already counts its free castings (your ruling: 1 use): no free-casting counters added');
-    expect(freeCastingRuling(ruledTrait({ max: 2, used: 0, recharge: 'long' }))).toBe('Elven Lineage (Drow) already counts its free castings (2 uses): no free-casting counters added');
     // With nothing left to count (each spell has the DM's counter), nothing is said.
     const both: Feature[] = ['Faerie Fire', 'Darkness'].map((s) => ({ ...dmCounter, id: `f-${nameKey(s)}`, name: `${s} (Drow, free casting)` }));
     const settled: Character = { ...ruled, features: [...ruled.features, ...both] };
     expect(levelWithLineage(settled, settled.classes[0]).cast).toMatchObject({ added: [], withheldBy: null });
+  });
+
+  it('adds the counters beside trait uses the app read off its words, which are no ruling (srd:species:elf: "You can cast it once without a spell slot")', () => {
+    // An older save's trait feature holds a use an earlier reading took off a book's paragraph: unruled, so each spell
+    // still gets its own free casting, and nothing is said about the trait.
+    const read = (uses: Feature['uses']): Character => ({
+      ...lineageHero('Drow', [entry('Fighter', 5)]),
+      features: [{ id: 'f-lineage', name: 'Elven Lineage (Drow)', source: 'species', sourceName: 'Elf', description: '', uses }],
+    });
+    const unruled = read({ max: 1, used: 0, recharge: 'long' });
+    const older = levelWithLineage(unruled, unruled.classes[0]);
+    expect(older.cast).toMatchObject({ added: ['Faerie Fire', 'Darkness'], withheldBy: null });
+    expect(counters(older.cast.character).map((f) => f.name)).toEqual(['Faerie Fire (free casting)', 'Darkness (free casting)']);
+    expect(freeCastingNoticeParts(older.cast)).toEqual(['free casting once per Long Rest: Faerie Fire, Darkness (Drow)']);
+    // The same uses ruled by the DM withhold them.
+    const ruled = read({ max: 1, used: 0, recharge: 'long', ruled: true });
+    expect(levelWithLineage(ruled, ruled.classes[0]).cast).toMatchObject({ added: [], withheldBy: { name: 'Elven Lineage (Drow)' } });
+  });
+
+  describe("a book's lineage trait worded otherwise than the SRD (the invented Quillfolk, the review's wordings)", () => {
+    // srd:species:elf, Elven Lineage: "You can cast it once without a spell slot, and you regain the ability to cast it in
+    // that way when you finish a Long Rest": one free casting for each spell, however a book opens that paragraph or wraps
+    // its lines; the trait reads no use of its own off it.
+    const CASTING =
+      'you learn a higher-level spell, as shown on the table. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest.';
+    const WORDINGS = [
+      `At character level 3 and again at character level 5, ${CASTING}`,
+      `When you reach 3rd and 5th level, ${CASTING}`,
+      `Starting at character level 3, and again at 5, ${CASTING}`,
+      'When you reach character levels 3 and 5, you learn a\nhigher-level spell, as shown on the table. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest.',
+    ];
+    const ROW = '| Sepia | You know the Light cantrip. | Faerie Fire | Darkness |';
+    const quillfolk = (later: string): SpeciesOption => ({
+      id: 'lib:quill:species:quillfolk',
+      name: 'Quillfolk',
+      summary: 'Medium Humanoid',
+      creatureType: 'Humanoid',
+      sizes: ['Medium'],
+      speed: 30,
+      source: { sourceId: 'quill', title: 'The Quillfolk Primer', recordId: 'r-quill', format: '2024', adaptations: [] },
+      lineageTrait: 'Inkbound Heritage',
+      traits: [
+        {
+          name: 'Inkbound Heritage',
+          description: `You are marked by an inkbound heritage. Choose a heritage from the table. You gain its level 1 benefit.\n\n${later}\n\nIntelligence, Wisdom, or Charisma is your spellcasting ability for the spells you cast with this trait (choose the ability when you select the heritage).\n\n| Heritage | Level 1 | Level 3 | Level 5 |\n|---|---|---|---|\n${ROW}`,
+        },
+      ],
+      lineages: [{ name: 'Sepia', description: lineageRowText(splitRow(ROW)) }],
+    });
+    /** A Quillfolk Fighter 2 as the builder makes one from a book: the trait whole with the uses it reads, the heritage as its own feature. */
+    const built = (species: SpeciesOption): Character => {
+      const [trait] = species.traits;
+      const sepia = species.lineages![0];
+      const c = hero([entry('Fighter', 2)], [spell('Light', 0, 'Sepia', true, { notes: 'Spellcasting ability: Wisdom' })]);
+      const uses = inferFeatureUses(trait.name, lineageFeatureText(trait, sepia), { level: 1, proficiencyBonus: 2, scores: c.abilityScores });
+      const features: Feature[] = [
+        { id: 'f-ink', name: 'Inkbound Heritage (Sepia)', source: 'species', sourceName: 'Quillfolk', description: trait.description, ...(uses ? { uses } : {}) },
+        { id: 'f-sepia', name: 'Sepia', source: 'species', sourceName: 'Quillfolk', description: sepia.description },
+      ];
+      return { ...c, features, species: 'Quillfolk (Sepia heritage)', speciesId: species.id };
+    };
+    const trait = (c: Character) => c.features.find((f) => f.name === 'Inkbound Heritage (Sepia)');
+
+    it("gives the trait no use, and Faerie Fire's free casting at character level 3 and Darkness's at 5, by the level-up's steps", () => {
+      for (const later of WORDINGS) {
+        const species = quillfolk(later);
+        const data: BuilderData = { ...SRD_BUILDER_DATA, species: [...SRD_BUILDER_DATA.species, species] };
+        let c = built(species);
+        expect(trait(c)?.uses, later).toBeUndefined();
+        const added: string[][] = [];
+        for (let level = 3; level <= 5; level++) {
+          // The level-up dialog's order: the engine's level, the uses read again, then the spells and their castings.
+          const refreshed = refreshFeatureUses(levelUp(c, { className: 'Fighter', classId: 'srd:class:fighter', hpMethod: 'average' }).character, data);
+          const { cast } = levelWithLineage(refreshed, refreshed.classes[0], data);
+          expect(cast.withheldBy, `${later} at ${level}`).toBeNull();
+          added.push(cast.added);
+          c = cast.character;
+        }
+        expect(added, later).toEqual([['Faerie Fire'], [], ['Darkness']]);
+        expect(counters(c).map((f) => [f.name, f.sourceName, f.uses])).toEqual([
+          ['Faerie Fire (free casting)', 'Sepia', { max: 1, used: 0, recharge: 'long' }],
+          ['Darkness (free casting)', 'Sepia', { max: 1, used: 0, recharge: 'long' }],
+        ]);
+        expect(trait(c)?.uses, later).toBeUndefined();
+      }
+    });
   });
 
   it("notes the ability the lineage's own cantrip names, and only the free casting without one", () => {
@@ -836,11 +924,20 @@ describe("a lineage's spells at character levels 3 and 5 (srd:species:elf, srd:s
         flip: [],
         missing: [
           { name: 'Cinder Mote', source: 'Ashwing' },
-          { name: "a spell the app couldn't read from Ashwing's table", source: 'Ashwing' },
+          { name: "the Level 5 spell the app couldn't read from Ashwing's table", source: 'Ashwing' },
         ],
       });
       expect(cast.added).toEqual([]);
       expect(cast.character).toBe(edit.character);
+    });
+
+    it('keeps two cells it can\'t read as two spells to add, one per column (srd:species:elf: "When you reach character levels 3 and 5, you learn a higher-level spell, as shown on the table")', () => {
+      const { data, species } = reshaped('| Ashwing | You know the Light cantrip. | Burning Hands, Light | Continual Flame; Darkness |');
+      const unread = (level: number) => ({ name: `the Level ${level} spell the app couldn't read from Ashwing's table`, source: 'Ashwing' });
+      const at3 = moth('Ashwing', 3, species);
+      expect(levelWithLineage(at3, at3.classes[0], data).edit.gain).toEqual({ add: [], flip: [], missing: [unread(3)] });
+      const at5 = moth('Ashwing', 5, species);
+      expect(levelWithLineage(at5, at5.classes[0], data).edit.gain).toEqual({ add: [], flip: [], missing: [unread(3), unread(5)] });
     });
   });
 

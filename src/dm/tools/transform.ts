@@ -24,6 +24,7 @@ import {
 import { nameKey } from '@/lib/id';
 import type { Character, Transformation, TransformationsMode } from '@/types';
 import { transformationsMode } from '../modes';
+import { speedBeforeFeatures } from './character';
 import type { ToolInput } from './definitions';
 import { refitHeroAfterSheetChange } from './map';
 import {
@@ -184,10 +185,21 @@ function logDetail(input: Input, t: Transformation, result: TransformationResult
   return parts.filter(Boolean).join('\n\n');
 }
 
-function reply(input: Input, t: Transformation, result: TransformationResult, hero: Character): string {
+/**
+ * For the DM only (the player's log keeps the change itself): when the transformation moved the stored walking Speed of a
+ * hero with a class feature that raises it (Unarmored Movement, Fast Movement, Roving), that the change is to the Speed
+ * before those features, and the Speed the sheet reads now: "The transformation changes the Speed before Unarmored
+ * Movement, which the app adds: Mira Voss's Speed is now 55 ft (base 40 ft; Unarmored Movement: +15 ft)."
+ */
+function speedLines(before: Character, after: Character): string[] {
+  const text = before.speed === after.speed ? '' : speedBeforeFeatures(after);
+  return text ? [`The transformation changes ${text}`] : [];
+}
+
+function reply(input: Input, t: Transformation, result: TransformationResult, heroBefore: Character, hero: Character): string {
   const changes = changeLines(result);
   const warnings = warningsOf(result.events).map((e) => `Warning: ${e.message}`);
-  const lines = [...changes, ...warnings];
+  const lines = [...changes, ...speedLines(heroBefore, hero), ...warnings];
   if (input.action !== 'end' && t.howItEnds) lines.push(`How it could end: ${t.howItEnds}`);
   lines.push(
     input.action === 'end'
@@ -227,5 +239,5 @@ export async function transformCharacterTool(input: Input, ctx: ToolContext): Pr
   await logTool(ctx, 'transform_character', 'transform', summary, { detail: logDetail(input, t, result), refId: t.id });
   // A size change during a mapped fight re-fits the hero's space (D39).
   const mapLine = await refitHeroAfterSheetChange(ctx, hero, result.character);
-  return ok(`${summary}.\n${reply(input, t, result, result.character)}${mapLine ? `\n${mapLine}` : ''}`);
+  return ok(`${summary}.\n${reply(input, t, result, hero, result.character)}${mapLine ? `\n${mapLine}` : ''}`);
 }
