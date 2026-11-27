@@ -925,8 +925,13 @@ function LevelUpForm({
       const chose = featChoiceNotice(chosen, increases);
       const answered = plan.trigger ? dropChoiceReminder(r.reminders, plan.trigger.kind, chosen, increases) : r.reminders;
       const reminders = owed ? withoutSpellReview(answered, className, classLevel) : answered;
-      // A new feature folded into an entry the sheet held (the table's "Indomitable (two uses)") is no new feature.
-      const added = chosen.kind === 'dm' ? withoutFolded(plan.features.map((f) => f.name), r.folded ?? []) : refreshed.features.filter((f) => !before.has(f.id)).map((f) => f.name);
+      // A new feature folded into an entry the sheet held (the table's "Indomitable (two uses)") is no new feature, nor is
+      // one a merge with entries the sheet held renamed (FeatureMerge.renamedNew: the merge names it).
+      const renamed = new Set((r.merges ?? []).filter((m) => m.renamedNew).map((m) => m.id));
+      const added =
+        chosen.kind === 'dm'
+          ? withoutFolded(plan.features.map((f) => f.name), r.folded ?? [])
+          : refreshed.features.filter((f) => !before.has(f.id) && !renamed.has(f.id)).map((f) => f.name);
       const hpGained = final.hp.max - c.hp.max;
       outcome.result = { ...r, character: final, hpGained, reminders };
       outcome.uses = uses;

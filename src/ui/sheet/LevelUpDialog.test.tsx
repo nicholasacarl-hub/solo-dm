@@ -1448,6 +1448,133 @@ describe('LevelUpDialog: lineage spells, Speed and counted families (class extra
       }
     });
 
+    it("a boon's \"Indomitable (two uses)\" beside the class's Indomitable stays beside it: Fighter 12 → 13 grows the class's one entry, the boon as it was (F1; srd:rule:fighter-indomitable: \"You can use this feature twice before a Long Rest starting at level 13\")", async () => {
+      const user = userEvent.setup();
+      // The DM's features_add with source "boon" at Fighter 9: added beside the class's entry, which it leaves as it is.
+      const gift: Feature = { id: 'gift', name: 'Indomitable (two uses)', source: 'boon', sourceName: 'Granted in play', description: 'A boon of the Lantern-Saint: one more reroll.', uses: { max: 2, used: 1, recharge: 'long' } };
+      const twelve = hero(srdEntry('Fighter', 12, champion), { features: [own('surge', 'Action Surge (one use)', 2, 1), own('ind', 'Indomitable (one use)', 9, 1, 1), gift] });
+      resetFakeGame({ campaign: sampleCampaign(), character: twelve });
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      await user.click(screen.getByRole('button', { name: 'Level up' }));
+      expect(family('Indomitable')).toEqual([{ ...twelve.features[1], name: 'Indomitable (two uses)', uses: { max: 2, used: 1, recharge: 'long' } }, gift]);
+      expect(notices()[0]).toContain('; new features: Studied Attacks; feature uses now: Indomitable (two uses) 1 → 2;');
+      expect(await screen.findByText('Level 13!')).toBeInTheDocument();
+      expect(summaryUses()).toEqual(['Indomitable (two uses) 1 → 2']);
+    });
+
+    describe("the DM's boon named with a count above the class's own, before the class's level (F3; srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\", \"| 9 | +4 | Indomitable (one use), Tactical Master |\")", () => {
+      /** The DM's features_add of the class's counted name with the class's source: "Granted in play". */
+      const boon = (name: string, recharge: 'short' | 'long'): Feature => ({ id: 'boon', name, source: 'class', sourceName: 'Granted in play', description: 'A boon of the Lantern-Saint.', uses: { max: 2, used: 0, recharge } });
+
+      it('a Wizard 5 / Fighter 1 levelling Fighter 2: the class\'s Action Surge is kept under the boon\'s name, the notice and the Summary name both as merged, and the row is no new feature', async () => {
+        const user = userEvent.setup();
+        const wizard = srdEntry('Wizard', 5);
+        resetFakeGame({
+          campaign: sampleCampaign(),
+          character: { ...hero(wizard, { features: [boon('Action Surge (two uses)', 'short')] }), classes: [wizard, srdEntry('Fighter', 1)], hitDice: [{ die: 6, total: 5, spent: 0 }, { die: 10, total: 1, spent: 0 }] },
+        });
+        render(<LevelUpDialog open onClose={() => undefined} />);
+        await user.click(screen.getByRole('radio', { name: /^Fighter 1 → 2/ }));
+        await user.click(screen.getByRole('button', { name: 'Level up' }));
+        const kept = family('Action Surge');
+        expect(kept.map((f) => [f.id === 'boon', f.name, f.sourceName, f.uses])).toEqual([[false, 'Action Surge (two uses)', 'Fighter 2', { max: 2, used: 0, recharge: 'short', ruled: true }]]);
+        const merge = 'merged into Action Surge (two uses) (2 uses, 2 left): Action Surge (one use), Action Surge (two uses)';
+        expect(notices()[0]).toContain(`; new features: Tactical Mind; feature uses now: ${merge}; kept your ruling: Action Surge (two uses) 2 uses (a new uses_max in features_add changes it)`);
+        expect(notices()[0]).not.toMatch(/new features: [^;]*Action Surge/);
+        expect(await screen.findByText('Level 7!')).toBeInTheDocument();
+        expect(summaryUses()).toEqual([merge]);
+      });
+
+      it('an SRD Fighter 8 levelling to 9: the class\'s Indomitable is kept under the boon\'s name, told the same way', async () => {
+        const user = userEvent.setup();
+        resetFakeGame({ campaign: sampleCampaign(), character: hero(srdEntry('Fighter', 8, champion), { features: [own('surge', 'Action Surge (one use)', 2, 1), boon('Indomitable (two uses)', 'long')] }) });
+        render(<LevelUpDialog open onClose={() => undefined} />);
+        await user.click(screen.getByRole('button', { name: 'Level up' }));
+        expect(family('Indomitable').map((f) => [f.id === 'boon', f.name, f.sourceName, f.uses])).toEqual([[false, 'Indomitable (two uses)', 'Fighter 9', { max: 2, used: 0, recharge: 'long', ruled: true }]]);
+        const merge = 'merged into Indomitable (two uses) (2 uses, 2 left): Indomitable (one use), Indomitable (two uses)';
+        expect(notices()[0]).toContain(`; new features: Tactical Master; feature uses now: ${merge}; kept your ruling: Indomitable (two uses) 2 uses (a new uses_max in features_add changes it)`);
+        expect(await screen.findByText('Level 9!')).toBeInTheDocument();
+        expect(summaryUses()).toEqual([merge]);
+      });
+
+      it("with a feat choice at the level (an invented subclass's Ability Score Improvement at 9, +2 Strength): the kept entry is no new feature either", async () => {
+        const user = userEvent.setup();
+        const FIGHTER_DATA = SRD_BUILDER_DATA.classes.find((c) => c.id === 'srd:class:fighter')!;
+        const scholar = { ...EMBER, id: 'lib:gloam:subclass:lamp-scholar', name: 'Lamp Scholar', features: [{ level: 9, name: 'Ability Score Improvement', description: 'Invented: a feat in the lamplight.' }] };
+        mocks.data = { ...SRD_BUILDER_DATA, classes: SRD_BUILDER_DATA.classes.map((c) => (c.id === FIGHTER_DATA.id ? { ...c, subclasses: [...c.subclasses, scholar] } : c)) };
+        resetFakeGame({
+          campaign: sampleCampaign(),
+          character: hero(srdEntry('Fighter', 8, { subclass: scholar.name, subclassId: scholar.id }), { features: [own('surge', 'Action Surge (one use)', 2, 1), boon('Indomitable (two uses)', 'long')] }),
+        });
+        render(<LevelUpDialog open onClose={() => undefined} />);
+        await user.click(screen.getByRole('radio', { name: '+2 to one ability' }));
+        await user.selectOptions(screen.getByLabelText('Ability to raise by 2'), 'str');
+        await user.click(screen.getByRole('button', { name: 'Level up' }));
+        expect(sheet().abilityScores.str).toBe(18);
+        expect(family('Indomitable').map((f) => [f.id === 'boon', f.name, f.uses?.max])).toEqual([[false, 'Indomitable (two uses)', 2]]);
+        expect(notices()[0]).toContain('; new features: Tactical Master, Ability Score Improvement (+2 Strength); ');
+        expect(notices()[0]).toContain('; feature uses now: merged into Indomitable (two uses) (2 uses, 2 left): Indomitable (one use), Indomitable (two uses);');
+
+        // A new feature kept under its own name is new, as before: a 2024 book's Fighter's bare "Indomitable" (it reads its
+        // table) with the DM's boon merged into it.
+        cleanup();
+        const book: ClassOption = {
+          ...FIGHTER_DATA,
+          id: 'lib:lantern:class:fighter',
+          source: { sourceId: 'lantern', title: 'The Lanternfall Handbook', recordId: 'r-fighter', format: '2024', adaptations: [] },
+          subclasses: [...FIGHTER_DATA.subclasses, scholar],
+          features: FIGHTER_DATA.features.filter((f) => !/\((two|three) uses\)$/.test(f.name)).map((f) => ({ ...f, name: f.name.replace(/\s*\(one use\)$/, '') })),
+        };
+        mocks.data = { ...SRD_BUILDER_DATA, classes: [book, ...SRD_BUILDER_DATA.classes.filter((c) => c.id !== FIGHTER_DATA.id)] };
+        const bookFighter: ClassLevel = {
+          classId: book.id,
+          name: 'Fighter',
+          level: 8,
+          hitDie: 10,
+          casterType: 'none',
+          subclass: scholar.name,
+          subclassId: scholar.id,
+          ref: { sourceId: 'lantern', sourceTitle: 'The Lanternfall Handbook', entryId: book.id, kind: 'class', entryName: 'Fighter', format: '2024', textHash: '', textCopied: false },
+        };
+        resetFakeGame({ campaign: sampleCampaign(), character: hero(bookFighter, { features: [boon('Indomitable (two uses)', 'long')] }) });
+        render(<LevelUpDialog open onClose={() => undefined} />);
+        await user.click(screen.getByRole('radio', { name: '+2 to one ability' }));
+        await user.selectOptions(screen.getByLabelText('Ability to raise by 2'), 'str');
+        await user.click(screen.getByRole('button', { name: 'Level up' }));
+        expect(family('Indomitable').map((f) => [f.id === 'boon', f.name, f.uses?.max, f.uses?.ruled])).toEqual([[false, 'Indomitable', 2, true]]);
+        expect(notices().at(-1)).toContain('; new features: Indomitable, Tactical Master, Ability Score Improvement (+2 Strength); ');
+        expect(notices().at(-1)).toContain('; feature uses now: merged into Indomitable (2 uses, 2 left): Indomitable (two uses);');
+      });
+
+      it("every other merge reads as before: an older DM-only Fighter 17 (every entry from features_add) levelling to 18 (srd:class:fighter table: \"| 17 | +6 | Action Surge (two uses), Indomitable (three uses) |\")", async () => {
+        const user = userEvent.setup();
+        const granted = (id: string, name: string, max: number, used = 0): Feature => ({ ...own(id, name, 0, max, used), sourceName: 'Granted in play', description: 'DM words.' });
+        const old17 = hero(srdEntry('Fighter', 17, champion), {
+          features: [
+            granted('surge1', 'Action Surge (one use)', 1, 1),
+            granted('ind1', 'Indomitable (one use)', 1, 1),
+            granted('ind2', 'Indomitable (two uses)', 2),
+            granted('surge2', 'Action Surge (two uses)', 2),
+            granted('ind3', 'Indomitable (three uses)', 3),
+          ],
+        });
+        resetFakeGame({ campaign: sampleCampaign(), character: old17 });
+        render(<LevelUpDialog open onClose={() => undefined} />);
+        await user.click(screen.getByRole('button', { name: 'Level up' }));
+        expect(sheet().features.filter((f) => /^(Action Surge|Indomitable)/.test(f.name)).map((f) => [f.id, f.name, f.uses])).toEqual([
+          ['surge1', 'Action Surge (two uses)', { max: 2, used: 1, recharge: 'short' }],
+          ['ind1', 'Indomitable (three uses)', { max: 3, used: 1, recharge: 'long' }],
+        ]);
+        const merges = [
+          'merged into Action Surge (two uses) (2 uses, 1 left): Action Surge (one use), Action Surge (two uses)',
+          'merged into Indomitable (three uses) (3 uses, 2 left): Indomitable (one use), Indomitable (two uses), Indomitable (three uses)',
+        ];
+        expect(notices()[0]).toContain(`; new features: Survivor; feature uses now: ${merges.join(', ')}`);
+        expect(await screen.findByText('Level 18!')).toBeInTheDocument();
+        expect(summaryUses()).toEqual(merges);
+      });
+    });
+
     describe("an older save of a 2024 book's Fighter, its features named as the offline parser names them", () => {
       /** A 2024 book's Fighter with the SRD's table, its features named by their headings ("Indomitable", once). */
       const BOOK: ClassOption = {

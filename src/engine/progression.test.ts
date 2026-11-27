@@ -1377,6 +1377,59 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     expect(two.reminders).toContain('New Fighter 2 features to add to the sheet: Tactical Mind.');
   });
 
+  it("a new feature kept under the name of the DM's entry that counts more is merged with it, named first as it came, and is no new feature; every other merge reads as before (F3; srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\")", () => {
+    // A Wizard 5 / Fighter 1 holding the DM's boon "Action Surge (two uses)" (features_add, the class's source, before the
+    // Fighter's own Action Surge) levels Fighter 2 with the table's row among the new features: the level-up dialog's, or
+    // level_up's new_features. The class's entry is kept under the boon's name and count, the DM's ruling (D3).
+    const boon: Feature = { ...entry('boon', 'Action Surge (two uses)', 0, 2), sourceName: 'Granted in play', description: 'A boon of the Lantern-Saint.' };
+    const multi = mira({ classes: [asClass('Wizard', 5), asClass('Fighter', 1)], hitDice: [{ die: 6, total: 5, spent: 0 }, { die: 10, total: 1, spent: 0 }], features: [boon] });
+    const two = up(multi, [row('Action Surge (one use)', 2, 1), row('Tactical Mind', 2)]);
+    const kept = family(two.character, 'Action Surge');
+    expect(kept).toEqual([{ ...entry(kept[0].id, 'Action Surge (two uses)', 2, 2), uses: { max: 2, used: 0, recharge: 'short', ruled: true } }]);
+    expect(kept[0].id).not.toBe('boon');
+    expect(messages(two).filter((m) => m.startsWith('New features'))).toEqual(['New features: Tactical Mind.']);
+    expect(messages(two)).toContain('Action Surge (one use) and Action Surge (two uses) merged into Action Surge (two uses): 2 uses, 2 left.');
+    expect(two.merges).toEqual([
+      {
+        id: kept[0].id,
+        name: 'Action Surge (two uses)',
+        merged: ['Action Surge (one use)', 'Action Surge (two uses)'],
+        text: 'merged into Action Surge (two uses) (2 uses, 2 left): Action Surge (one use), Action Surge (two uses)',
+        renamedNew: true,
+      },
+    ]);
+    expect(two.folded).toEqual(['Action Surge (one use)']);
+    expect(two.reminders.some((m) => m.startsWith('New Fighter 2 features'))).toBe(false);
+    // The DM's level_up without new_features keeps the boon itself, its count the ruling, as before: no merge, nothing
+    // folded, and the reminder names Tactical Mind.
+    const dm = up(multi);
+    expect(family(dm.character, 'Action Surge')).toEqual([{ ...boon, uses: { max: 2, used: 0, recharge: 'short', ruled: true } }]);
+    expect(dm.merges).toBeUndefined();
+    expect(dm.folded).toBeUndefined();
+    expect(dm.reminders).toContain('New Fighter 2 features to add to the sheet: Tactical Mind.');
+    // Indomitable alike: an SRD Fighter 8's boon "Indomitable (two uses)" at Fighter 9 (srd:class:fighter table: "| 9 | +4 |
+    // Indomitable (one use), Tactical Master |").
+    const eight = fighterAt(8, [entry('surge', 'Action Surge (one use)', 2, 1), { ...entry('dm', 'Indomitable (two uses)', 0, 2), sourceName: 'Granted in play', description: 'A boon.' }]);
+    const nine = up(eight, [row('Indomitable (one use)', 9, 1), row('Tactical Master', 9)]);
+    expect(messages(nine).filter((m) => m.startsWith('New features') || m.includes('merged'))).toEqual([
+      'New features: Tactical Master.',
+      'Indomitable (one use) and Indomitable (two uses) merged into Indomitable (two uses): 2 uses, 2 left.',
+    ]);
+    expect(nine.folded).toEqual(['Indomitable (one use)']);
+    // A new feature kept under its own name is listed as new, and the DM's entry merged into it, as before: a 2024 book's
+    // Fighter's bare "Indomitable" (readsItsTable) beside the DM's boon at 9.
+    const ref: ImportedRef = { sourceId: 'lantern', sourceTitle: 'The Lanternfall Handbook', entryId: 'lib:lantern:class:fighter', kind: 'class', entryName: 'Fighter', format: '2024', textHash: '', textCopied: false };
+    const book = { ...eight, classes: [{ classId: 'lib:lantern:class:fighter', name: 'Fighter', level: 8, hitDie: 10 as const, casterType: 'none' as const, ref }] };
+    const bookNine = up(book, [row('Indomitable', 9), row('Tactical Master', 9)]);
+    expect(family(bookNine.character, 'Indomitable').map((f) => [f.name, f.sourceName, f.uses?.max, f.uses?.ruled])).toEqual([['Indomitable', 'Fighter 9', 2, true]]);
+    expect(messages(bookNine).filter((m) => m.startsWith('New features') || m.includes('merged'))).toEqual([
+      'New features: Indomitable, Tactical Master.',
+      'Indomitable (two uses) merged into Indomitable: 2 uses, 2 left.',
+    ]);
+    expect(bookNine.merges?.map((m) => [m.merged, 'renamedNew' in m])).toEqual([[['Indomitable (two uses)'], false]]);
+    expect(bookNine.folded).toBeUndefined();
+  });
+
   it("a hero with no counted family levels up exactly as before: no merges, nothing folded", () => {
     const r = levelUp(mira(), { className: 'Wizard', hpMethod: 'average' });
     expect(Object.keys(r).sort()).toEqual(['character', 'events', 'hpGained', 'newLevel', 'reminders']);

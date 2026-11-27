@@ -1164,13 +1164,17 @@ const storesNumbers = (f: Pick<Feature, 'name' | 'source'>): boolean => isAlertF
  * beside it, as the level-up panel's feat does. A feat whose numbers the sheet stores (Alert, Tough) stays the feat: a
  * species trait or class feature of its name joins beside it too, so its numbers are never left without it, nor paid
  * again when the feat is recorded after. A name with a use count that no feature has ("Indomitable (two uses)", as the
- * level-up reminder names the table's row) rewrites an entry of its counted family (countedFamily: one of the class's
- * own entries named with a count, or a class whose table counts it by name, SRD 5.2.1's Fighter) instead of adding a
- * second one: the DM's ruling of its uses first, else the class's own entry named with a count ("Fighter 9"), else the
- * class's own entry whose uses follow its class table (tableCounted, a 2024 book's "Indomitable": it keeps its name),
- * else the DM's named with a count (isGrantedFamilyEntry), else the class's own, as a level-up keeps one. Beside a class
- * feature of a family no one counts ("Rage (3 uses)" beside a Barbarian's "Rage", or beside the DM's "Rage (2 uses)")
- * it is added as any other name is.
+ * level-up reminder names the table's row), recorded as a class feature (source "class"), rewrites an entry of its
+ * counted family (countedFamily: one of the class's own entries named with a count, or a class whose table counts it by
+ * name, SRD 5.2.1's Fighter) instead of adding a second one: the DM's ruling of its uses first, else the class's own
+ * entry named with a count ("Fighter 9"), else the class's own entry whose uses follow its class table (tableCounted, a
+ * 2024 book's "Indomitable": it keeps its name), else the DM's named with a count (isGrantedFamilyEntry), else the
+ * class's own, as a level-up keeps one. Under any other source (a boon's "Indomitable (two uses)", an item's, a
+ * subclass's or species' entry, a feat) it is added beside the family as any other name is, and the class's entry keeps
+ * its source and text: it stays the one the class table's rows grow (SRD 5.2.1 Indomitable: "You can use this feature
+ * twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17"). Beside a
+ * class feature of a family no one counts ("Rage (3 uses)" beside a Barbarian's "Rage", or beside the DM's "Rage (2
+ * uses)") it is added as any other name is.
  */
 export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | 'source'>): Feature | undefined {
   const name = feature.name.trim();
@@ -1182,8 +1186,10 @@ export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | '
     return !side || !theirs || side === theirs;
   };
   const exact = c.features.find((f) => nameKey(f.name) === nameKey(name) && fits(f));
-  if (exact || nameUseCount(name) === null) return exact;
-  const family = countedFamily(c, featureBaseName(name)).filter(fits);
+  if (exact || nameUseCount(name) === null || feature.source !== 'class') return exact;
+  // Every entry of a counted family is a class feature, the class's own or the DM's "Granted in play" (countedFamily): on
+  // the call's side of the feat line, and neither a feat nor a transformation's power.
+  const family = countedFamily(c, featureBaseName(name));
   const own = (f: Feature) => featureClassOf(f, c.classes) !== undefined;
   const counted = (f: Feature) => nameUseCount(f.name) !== null;
   return (

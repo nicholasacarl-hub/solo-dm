@@ -109,7 +109,8 @@ export interface LevelUpResult {
   merges?: FeatureMerge[];
   /**
    * The names of this level-up's new features folded into an entry the sheet held (the table's "Indomitable (two uses)"
-   * growing "Indomitable (one use)"), which a list of new features leaves out. Absent when there were none.
+   * growing "Indomitable (one use)"), or renamed by a merge with entries it held (FeatureMerge.renamedNew), which a list
+   * of new features leaves out. Absent when there were none.
    */
   folded?: string[];
   /**
@@ -129,10 +130,19 @@ export interface FeatureMerge {
   id: string;
   /** Its name after the level-up ("Indomitable (two uses)"). */
   name: string;
-  /** The sheet's entries merged, by name in sheet order (the kept one's name before the level-up first, when it was one). */
+  /**
+   * The sheet's entries merged, by name in sheet order (the kept one's name before the level-up first, when it was one);
+   * after the name of the kept one as it came, when it is one of this level-up's new features (renamedNew).
+   */
   merged: string[];
   /** For a notice or summary: "merged into Indomitable (two uses) (2 uses, 1 left): Indomitable (one use), Indomitable (two uses)". */
   text: string;
+  /**
+   * Set when the entry kept is one of this level-up's new features the merge renamed: an entry the sheet held counted
+   * more (the class's "Action Surge (one use)" at Fighter 2, kept as the DM's "Action Surge (two uses)"). It is no new
+   * feature (LevelUpResult.folded has its name as it came), and `merged` names it first by that name.
+   */
+  renamedNew?: true;
 }
 
 function totalClassLevels(c: Character): number {
@@ -513,7 +523,7 @@ interface Collapsed {
   grows: string[];
   merges: FeatureMerge[];
   events: GameEvent[];
-  /** This level-up's new features folded into another entry. */
+  /** This level-up's new features folded into another entry, or renamed by a merge with entries the sheet held (renamedNew). */
   folded: Set<Feature>;
 }
 
@@ -583,9 +593,10 @@ export function featureMergeText(kept: Pick<Feature, 'name' | 'uses'>, merged: r
  *   parser names it, "Indomitable") keeps its own name and its scale, whose count at the class level is its maximum; a
  *   member counting more (the DM's "Indomitable (three uses)" at Fighter 13, where the table gives two) is the DM's
  *   ruling of that number on the same entry.
- * The other entries leave the sheet. A merge of entries the sheet held is reported as one (an event and a FeatureMerge);
- * a held entry the level's row grew is reported as growth. `levelled` is the hero with the level's classes, for a scale's
- * count.
+ * The other entries leave the sheet. A merge of entries the sheet held is reported as one (an event and a FeatureMerge),
+ * and a new feature it renamed (the DM's boon named with a higher count before the class's level) is named first in
+ * it, as it came, and listed as no new feature; a held entry the level's row grew is reported as growth. `levelled` is
+ * the hero with the level's classes, for a scale's count.
  */
 function collapseCountedFamilies(
   held: readonly Feature[],
@@ -678,10 +689,16 @@ function collapseCountedFamilies(
     }
     const heldMembers = real.filter((m) => m.held);
     if (heldMembers.some((m) => m !== keep)) {
-      const merged = heldMembers.map((m) => m.f.name);
+      // One of this level-up's new features the merge renamed (an entry the sheet held counted more: the DM's boon "Action
+      // Surge (two uses)" before the Fighter's own at 2, SRD 5.2.1 Fighter Features table: "| 2 | +2 | Action Surge (one
+      // use), Tactical Mind |"): it is merged too, named first as it came, and no new feature (folded).
+      const renamedNew = !keep.held && nameKey(kept.name) !== nameKey(keep.f.name);
+      if (renamedNew) collapsed.folded.add(keep.f);
+      const merged = [...(renamedNew ? [keep.f.name] : []), ...heldMembers.map((m) => m.f.name)];
       const left = kept.uses ? usesLeft(kept.uses) : '';
       collapsed.events.push(gameEvent('level-up', `${listJoin(merged)} merged into ${kept.name}${left ? `: ${left}` : ''}.`));
-      collapsed.merges.push({ id: kept.id, name: kept.name, merged, text: featureMergeText(kept, merged) });
+      const merge: FeatureMerge = { id: kept.id, name: kept.name, merged, text: featureMergeText(kept, merged) };
+      collapsed.merges.push(renamedNew ? { ...merge, renamedNew: true } : merge);
     } else if (keep.held && kept.uses && kept.uses.max !== keep.f.uses?.max) {
       collapsed.grows.push(keep.f.uses ? `${kept.name} ${keep.f.uses.max} → ${kept.uses.max}` : `${kept.name} ${kept.uses.max}`);
     }
