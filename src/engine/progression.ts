@@ -320,9 +320,17 @@ function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: rea
     (f) => f !== 'Ability Score Improvement' && f !== 'Epic Boon' && f !== 'Subclass feature' && !f.endsWith(' Subclass'),
   );
   // A row the table names with a use count ("Indomitable (two uses)") is held when the sheet holds an entry of its
-  // family, bare or named with any count: the level-up grew it or folded the row into it, a ruled entry and a DM's
-  // higher count included (SRD 5.2.1 Fighter Features table: one Indomitable, "(two uses)" at 13).
-  const missing = named.filter((f) => !hasFeatureNamed(alreadyAdded, f) && !(nameUseCount(f) !== null && holdsFamilyEntry(alreadyAdded, cl, f)));
+  // family, bare or named with any count (the level-up grew it or folded the row into it, a ruled entry and a DM's
+  // higher count included: SRD 5.2.1 Fighter Features table, one Indomitable, "(two uses)" at 13), or a class feature
+  // of its name. An entry of its name under another source (a boon's "Indomitable (one use)", an item's "Action Surge
+  // (one use)") is neither, so the row is named, and the class's entry it asks for joins beside that one, as the
+  // level-up dialog adds it (SRD 5.2.1 Fighter Features table: "Indomitable (one use)" at 9). Any entry of its name
+  // holds a row without a count.
+  const holds = (f: string) =>
+    nameUseCount(f) === null
+      ? hasFeatureNamed(alreadyAdded, f)
+      : holdsFamilyEntry(alreadyAdded, cl, f) || hasFeatureNamed(alreadyAdded.filter((x) => x.source === 'class'), f);
+  const missing = named.filter((f) => !holds(f));
   if (missing.length) reminders.push(`New ${info.name} ${level} features to add to the sheet: ${missing.join(', ')}.`);
   for (const feature of named) {
     const hint = CHOICE_HINTS.find(([pattern]) => pattern.test(feature));

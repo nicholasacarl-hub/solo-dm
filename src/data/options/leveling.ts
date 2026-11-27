@@ -9,7 +9,7 @@
  * ("Rage (Duration)" -> "Rage"), and the Thaumaturge/Magician skill bonus and species Resistances
  * it never recorded.
  */
-import { characterLevel, featureLabel, proficiencyBonus } from '@/engine';
+import { characterLevel, featureLabel, featureToRewrite, proficiencyBonus } from '@/engine';
 import { listJoin } from '@/engine/util';
 import { nameKey } from '@/lib/id';
 import type {
@@ -240,13 +240,25 @@ export function refreshFeatureUses(c: Character, data: LevelingData | null | und
 /**
  * The numbers of uses the DM ruled (FeatureUses.ruled), which level-ups leave as they are, as a reminder for the DM
  * (the level_up result and the dialog's notice): "kept your ruling: Second Wind 4 uses (a new uses_max in features_add
- * changes it)", each told apart from a namesake as features_use takes it. Null when it ruled none.
+ * changes it)", each told apart from a namesake as features_use takes it. features_add takes no such label (it would
+ * add an entry named with it), so for an entry told apart that a features_add of its name and source changes
+ * (featureToRewrite; any source but a transformation's, whose power transform_character changes), the line names that
+ * call: "kept your ruling: Indomitable (two uses) (boon) 1 use (a new uses_max in features_add changes it: name
+ * "Indomitable (two uses)", source "boon")"; of several ruled, "… changes one; for Indomitable (two uses) (boon): name
+ * …, source …)". Null when it ruled none.
  */
 export function keptRulings(c: Character): string | null {
   const ruled = c.features.filter((f) => f.uses?.ruled);
   if (!ruled.length) return null;
-  const list = listJoin(ruled.map((f) => `${featureLabel(f, c.features)} ${f.uses?.max ?? 0} use${f.uses?.max === 1 ? '' : 's'}`));
-  return `kept your ruling${ruled.length === 1 ? '' : 's'}: ${list} (a new uses_max in features_add changes ${ruled.length === 1 ? 'it' : 'one'})`;
+  const label = (f: Feature) => featureLabel(f, c.features);
+  const list = listJoin(ruled.map((f) => `${label(f)} ${f.uses?.max ?? 0} use${f.uses?.max === 1 ? '' : 's'}`));
+  const reached = ruled.filter(
+    (f) => label(f) !== f.name && f.source !== 'transformation' && featureToRewrite(c, { name: f.name, source: f.source })?.id === f.id,
+  );
+  const call = (f: Feature) => `name "${f.name}", source "${f.source}"`;
+  const how =
+    ruled.length === 1 ? `it${reached.length ? `: ${call(reached[0])}` : ''}` : `one${reached.map((f) => `; for ${label(f)}: ${call(f)}`).join('')}`;
+  return `kept your ruling${ruled.length === 1 ? '' : 's'}: ${list} (a new uses_max in features_add changes ${how})`;
 }
 
 /**

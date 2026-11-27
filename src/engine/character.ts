@@ -1161,22 +1161,28 @@ const storesNumbers = (f: Pick<Feature, 'name' | 'source'>): boolean => isAlertF
  * The feature addFeature rewrites for an entry of this name and source: of those of its name on the same side of the
  * feat line, or on either for an entry on neither (featOrTrait), the one under the call's source, else the first (a
  * boon's "Indomitable (two uses)" kept beside the class's entry, which comes to share its name when the class table
- * grows it at Fighter 13, is the boon's call's to change, and the class's entry the class's). Undefined when it would
- * add one. A transformation's power is the transformation's (transform_character changes it, and its end takes it):
- * another entry of its name joins beside it, as the level-up panel's feat does. A feat whose numbers the sheet stores
- * (Alert, Tough) stays the feat: a species trait or class feature of its name joins beside it too, so its numbers are
- * never left without it, nor paid again when the feat is recorded after. A name with a use count that no feature has
- * ("Indomitable (two uses)", as the level-up reminder names the table's row), recorded as a class feature (source
- * "class"), rewrites an entry of its counted family (countedFamily: one of the class's own entries named with a count,
- * or a class whose table counts it by name, SRD 5.2.1's Fighter) instead of adding a second one: the DM's ruling of its
- * uses first, else the class's own entry named with a count ("Fighter 9"), else the class's own entry whose uses follow
- * its class table (tableCounted, a 2024 book's "Indomitable": it keeps its name), else the DM's named with a count
- * (isGrantedFamilyEntry), else the class's own, as a level-up keeps one. Under any other source (a boon's "Indomitable
- * (two uses)", an item's, a subclass's or species' entry, a feat) it is added beside the family as any other name is,
- * and the class's entry keeps its source and text: it stays the one the class table's rows grow (SRD 5.2.1 Indomitable:
- * "You can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting
- * at level 17"). Beside a class feature of a family no one counts ("Rage (3 uses)" beside a Barbarian's "Rage", or
- * beside the DM's "Rage (2 uses)") it is added as any other name is.
+ * grows it at Fighter 13, is the boon's call's to change, and the class's entry the class's), but for a class feature's
+ * counted name, below. Undefined when it would add one. A transformation's power is the transformation's
+ * (transform_character changes it, and its end takes it): another entry of its name joins beside it, as the level-up
+ * panel's feat does. A feat whose numbers the sheet stores (Alert, Tough) stays the feat: a species trait or class
+ * feature of its name joins beside it too, so its numbers are never left without it, nor paid again when the feat is
+ * recorded after. A name with a use count that no class feature has ("Indomitable (two uses)", as the level-up reminder
+ * names the table's row), recorded as a class feature (source "class"), rewrites an entry of its counted family
+ * (countedFamily: one of the class's own entries named with a count, or a class whose table counts it by name, SRD
+ * 5.2.1's Fighter) instead of adding a second one: the DM's ruling of its uses first, else the class's own entry named
+ * with a count ("Fighter 9"), else the class's own entry whose uses follow its class table (tableCounted, a 2024 book's
+ * "Indomitable": it keeps its name), else the DM's named with a count (isGrantedFamilyEntry), else the class's own, as
+ * a level-up keeps one. An entry of that very name under another source (a boon's, an item's) doesn't take it while its
+ * family is counted, so it keeps its source and text: the class's call of "Indomitable (two uses)" with 3 at Fighter 17
+ * beside a boon of that name rewrites the class's "Indomitable (three uses)" (whose name addFeature keeps), and with no
+ * entry of the family the call is added beside (the class's "Indomitable (one use)" beside a boon of that name at
+ * Fighter 9, as the level-up dialog adds it). Under any other source (a boon's "Indomitable (two uses)", an item's, a
+ * subclass's or species' entry, a feat) it is added beside the family as any other name is, and the class's entry keeps
+ * its source and text: it stays the one the class table's rows grow (SRD 5.2.1 Indomitable: "You can use this feature
+ * twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17"). Beside a
+ * class feature of a family no one counts ("Rage (3 uses)" beside a Barbarian's "Rage", or beside the DM's "Rage (2
+ * uses)") it is added as any other name is, and an entry of its name under another source takes it as any other name's
+ * (a Wizard's boon "Indomitable (two uses)").
  */
 export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | 'source'>): Feature | undefined {
   const name = feature.name.trim();
@@ -1189,11 +1195,15 @@ export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | '
   };
   // Of several of the name, the call's source picks (an entry of that source always fits), else the first as ever.
   const named = c.features.filter((f) => nameKey(f.name) === nameKey(name) && fits(f));
-  const exact = named.find((f) => f.source === feature.source) ?? named[0];
-  if (exact || nameUseCount(name) === null || feature.source !== 'class') return exact;
+  const exact = named.find((f) => f.source === feature.source);
+  if (exact || nameUseCount(name) === null || feature.source !== 'class') return exact ?? named[0];
   // Every entry of a counted family is a class feature, the class's own or the DM's "Granted in play" (countedFamily): on
-  // the call's side of the feat line, and neither a feat nor a transformation's power.
-  const family = countedFamily(c, featureBaseName(name));
+  // the call's side of the feat line, and neither a feat nor a transformation's power. An entry of the name under
+  // another source (a boon's, an item's) takes a class feature's counted name only when no one counts its family (a
+  // Wizard's boon "Indomitable (two uses)"); else the call goes to the family's entry, or is added beside with none.
+  const base = featureBaseName(name);
+  const family = countedFamily(c, base);
+  if (!family.length && classCountingByName(c.classes, base) === undefined) return named[0];
   const own = (f: Feature) => featureClassOf(f, c.classes) !== undefined;
   const counted = (f: Feature) => nameUseCount(f.name) !== null;
   return (

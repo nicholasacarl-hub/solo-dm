@@ -1430,6 +1430,39 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     expect(bookNine.folded).toBeUndefined();
   });
 
+  it("a row named with a count is held only by an entry of its family or a class feature of its name: a boon's or an item's entry of that name doesn't keep it from the reminder, and the level-up dialog adds the class's beside it; any entry of its name holds a row without a count, as before (F3; srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\", \"| 9 | +4 | Indomitable (one use), Tactical Master |\")", () => {
+    const gift = (id: string, name: string, source: Feature['source'], max?: number): Feature => ({
+      id,
+      name,
+      source,
+      sourceName: 'Granted in play',
+      description: 'A gift of the Lantern-Saint.',
+      ...(max ? { uses: { max, used: 0, recharge: 'long' as const } } : {}),
+    });
+    // A boon "Indomitable (one use)" on a Fighter 8, an item's "Action Surge (one use)" on a Fighter 1: the rows are named.
+    const eight = fighterAt(8, [entry('surge', 'Action Surge (one use)', 2, 1), gift('boon', 'Indomitable (one use)', 'boon', 1)]);
+    expect(up(eight).reminders).toContain('New Fighter 9 features to add to the sheet: Indomitable (one use), Tactical Master.');
+    expect(up(eight).character.features).toEqual(eight.features);
+    const one = fighterAt(1, [gift('charm', 'Action Surge (one use)', 'item', 1)]);
+    expect(up(one).reminders).toContain('New Fighter 2 features to add to the sheet: Action Surge (one use), Tactical Mind.');
+    // The level-up dialog adds the class's row beside the boon, which stays as it is, and names no row.
+    const nine = up(eight, [row('Indomitable (one use)', 9, 1), row('Tactical Master', 9)]);
+    expect(family(nine.character, 'Indomitable').map((f) => [f.id === 'boon', f.source, f.uses?.max])).toEqual([
+      [true, 'boon', 1],
+      [false, 'class', 1],
+    ]);
+    expect(nine.reminders.some((m) => m.startsWith('New Fighter 9 features'))).toBe(false);
+    // An entry of its family holds it: the DM's bare "Indomitable", or the class's own under a higher count.
+    for (const held of [{ ...entry('ind', 'Indomitable', 0, 1), sourceName: 'Granted in play' }, entry('ind', 'Indomitable (two uses)', 8, 2)]) {
+      expect(up(fighterAt(8, [held])).reminders, held.name).toContain('New Fighter 9 features to add to the sheet: Tactical Master.');
+    }
+    // So does a class feature of its name outside the family: one no source name ties to a class (an older save's).
+    const { sourceName: _unnamed, ...older } = entry('ind', 'Indomitable (one use)', 9, 1);
+    expect(up(fighterAt(8, [older])).reminders).toContain('New Fighter 9 features to add to the sheet: Tactical Master.');
+    // A row without a count: any entry of its name holds it, a boon's included, as before.
+    expect(up(fighterAt(1, [gift('mind', 'Tactical Mind', 'boon')])).reminders).toContain('New Fighter 2 features to add to the sheet: Action Surge (one use).');
+  });
+
   it("a hero with no counted family levels up exactly as before: no merges, nothing folded", () => {
     const r = levelUp(mira(), { className: 'Wizard', hpMethod: 'average' });
     expect(Object.keys(r).sort()).toEqual(['character', 'events', 'hpGained', 'newLevel', 'reminders']);

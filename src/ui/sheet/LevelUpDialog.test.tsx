@@ -1462,6 +1462,21 @@ describe('LevelUpDialog: lineage spells, Speed and counted families (class extra
       expect(summaryUses()).toEqual(['Indomitable (two uses) 1 → 2']);
     });
 
+    it("a ruled boon of the class's entry's name: the notice's kept-ruling line names the features_add call that changes it, as the label it gives a use isn't one features_add takes (D1; srd:rule:fighter-indomitable: \"You can use this feature twice before a Long Rest starting at level 13\")", async () => {
+      const user = userEvent.setup();
+      // The DM ruled the boon down to one use at Fighter 13 (features_add, source "boon", uses_max 1).
+      const gift: Feature = { id: 'gift', name: 'Indomitable (two uses)', source: 'boon', sourceName: 'Granted in play', description: 'The favor dims.', uses: { max: 1, used: 0, recharge: 'long', ruled: true } };
+      const thirteen = hero(srdEntry('Fighter', 13, champion), { features: [own('surge', 'Action Surge (one use)', 2, 1), own('ind', 'Indomitable (two uses)', 9, 2), gift] });
+      resetFakeGame({ campaign: sampleCampaign(), character: thirteen });
+      render(<LevelUpDialog open onClose={() => undefined} />);
+      await user.click(screen.getByRole('button', { name: 'Level up' }));
+      expect(await screen.findByText('Level 14!')).toBeInTheDocument();
+      expect(family('Indomitable')).toEqual([thirteen.features[1], gift]);
+      expect(notices()[0]).toContain(
+        '; kept your ruling: Indomitable (two uses) (Granted in play) 1 use (a new uses_max in features_add changes it: name "Indomitable (two uses)", source "boon")',
+      );
+    });
+
     describe("the DM's boon named with a count above the class's own, before the class's level (F3; srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\", \"| 9 | +4 | Indomitable (one use), Tactical Master |\")", () => {
       /** The DM's features_add of the class's counted name with the class's source: "Granted in play". */
       const boon = (name: string, recharge: 'short' | 'long'): Feature => ({ id: 'boon', name, source: 'class', sourceName: 'Granted in play', description: 'A boon of the Lantern-Saint.', uses: { max: 2, used: 0, recharge } });

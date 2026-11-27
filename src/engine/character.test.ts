@@ -917,6 +917,126 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     expect(addFeature(thirteen, call('Indomitable (three uses)', 3, 'long')).character.features[1]).toEqual({ ...thirteen.features[1], name: 'Indomitable (three uses)', description: 'The DM restates it.', uses: { max: 3, used: 0, recharge: 'long' } });
   });
 
+  it("the count rule holds for the DM's own entries, an entry without uses and a family only the class's own counted names count: an older counted name given another number keeps the entry's name (round 7; srd:rule:fighter-action-surge, srd:rule:fighter-indomitable)", () => {
+    // srd:rule:fighter-action-surge: "Starting at level 17, you can use it twice before a rest". srd:rule:fighter-indomitable:
+    // "You can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting
+    // at level 17."
+    const at = (level: number, features: Feature[], classes?: Character['classes']) =>
+      mira({ classes: classes ?? [{ classId: 'srd:class:fighter', name: 'Fighter', level, hitDie: 10, casterType: 'none' }], hitDice: [{ die: 10, total: level, spent: 0 }], spellcasting: undefined, features });
+    const granted = (id: string, name: string, uses?: Feature['uses']): Feature => ({ id, name, source: 'class', sourceName: 'Granted in play', description: 'As the table says.', ...(uses ? { uses } : {}) });
+    const call = (name: string, max: number, recharge: 'short' | 'long') => ({ name, source: 'class' as const, sourceName: 'Granted in play', description: 'The DM restates it.', uses: { max, used: 0, recharge } });
+    const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
+    // The DM's "Granted in play" entries, as level_up's reminders have the DM record them: today's 2 under the older name.
+    const dm17 = at(17, [granted('surge', 'Action Surge (two uses)', { max: 2, used: 1, recharge: 'short' }), granted('ind', 'Indomitable (three uses)', { max: 3, used: 0, recharge: 'long' })]);
+    const surged = addFeature(dm17, call('Action Surge (one use)', 2, 'short'));
+    expect(messages(surged)).toEqual(['Updated feature: Action Surge (two uses)']);
+    expect(surged.character.features[0]).toEqual({ ...dm17.features[0], description: 'The DM restates it.' });
+    const thrice = addFeature(dm17, call('Indomitable (two uses)', 3, 'long'));
+    expect(messages(thrice)).toEqual(['Updated feature: Indomitable (three uses)']);
+    expect(thrice.character.features[1]).toEqual({ ...dm17.features[1], description: 'The DM restates it.' });
+    // The DM's entry recorded without uses: it keeps its name, and any number given it is the DM's ruling.
+    const bare13 = at(13, [granted('ind', 'Indomitable (two uses)')]);
+    const given = addFeature(bare13, call('Indomitable (one use)', 2, 'long'));
+    expect(messages(given)).toEqual(['Updated feature: Indomitable (two uses)']);
+    expect(given.character.features[0]).toEqual({ ...bare13.features[0], description: 'The DM restates it.', uses: { max: 2, used: 0, recharge: 'long', ruled: true } });
+    // An older-edition book's Fighter doesn't stand in for the SRD's, so only its own entry's counted name makes the family:
+    // the same rule keeps that entry's name.
+    const book = {
+      classId: 'lib:lantern:class:fighter',
+      name: 'Fighter',
+      level: 13,
+      hitDie: 10 as const,
+      casterType: 'none' as const,
+      ref: { sourceId: 'lantern', sourceTitle: 'The Lanternfall Handbook', entryId: 'lib:lantern:class:fighter', kind: 'class' as const, entryName: 'Fighter', format: '2014' as const, textHash: '', textCopied: false },
+    };
+    const older = at(13, [indomitable('ind', 'Indomitable (two uses)', 2, 1, { sourceName: 'Fighter 13' })], [book]);
+    const restated = addFeature(older, call('Indomitable (one use)', 2, 'long'));
+    expect(messages(restated)).toEqual(['Updated feature: Indomitable (two uses)']);
+    expect(restated.character.features[0]).toEqual({ ...older.features[0], description: 'The DM restates it.' });
+  });
+
+  it("a class feature's counted name goes to its family past an entry of that name under another source: the family's entry takes the call and the boon or item keeps its source, text and uses, or with no entry of the family the class's joins beside it, as the level-up dialog adds it; a call under another source, a name without a count and a class whose family no one counts are as before (F1; srd:rule:fighter-indomitable, srd:rule:fighter-action-surge)", () => {
+    // srd:rule:fighter-indomitable: "You can use this feature twice before a Long Rest starting at level 13 and three times
+    // before a Long Rest starting at level 17." srd:rule:fighter-action-surge: "Starting at level 17, you can use it twice
+    // before a rest". The DM restates the class's feature by a name a boon or an item holds.
+    const at = (level: number, features: Feature[], classes?: Character['classes']) =>
+      mira({ classes: classes ?? [{ classId: 'srd:class:fighter', name: 'Fighter', level, hitDie: 10, casterType: 'none' }], hitDice: [{ die: 10, total: level, spent: 0 }], spellcasting: undefined, features });
+    const gift = (name: string, max: number, source: Feature['source'] = 'boon', recharge: 'short' | 'long' = 'long'): Feature => ({ id: 'gift', name, source, sourceName: 'Granted in play', description: 'A boon of the Lantern-Saint.', uses: { max, used: 1, recharge } });
+    const call = (name: string, max: number, recharge: 'short' | 'long' = 'long') => ({ name, source: 'class' as const, sourceName: 'Granted in play', description: 'The DM restates it.', uses: { max, used: 0, recharge } });
+    const surge = (name: string, max: number): Feature => ({ id: 'surge', name, source: 'class', sourceName: 'Fighter 2', description: 'One more action.', uses: { max, used: 0, recharge: 'short' } });
+    const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
+    // Fighter 17, the class's "Indomitable (three uses)" (the level-up dialog's, or the DM's) beside a boon "Indomitable (two
+    // uses)" from Fighter 9: the class's call of the boon's name with 3 changes the class's entry, which keeps its name.
+    for (const own of [indomitable('ind', 'Indomitable (three uses)', 3, 1), indomitable('ind', 'Indomitable (three uses)', 3, 1, { sourceName: 'Granted in play' })]) {
+      const seventeen = at(17, [own, gift('Indomitable (two uses)', 2)]);
+      const r = addFeature(seventeen, call('Indomitable (two uses)', 3));
+      expect(messages(r), own.sourceName).toEqual(['Updated feature: Indomitable (three uses)']);
+      expect(r.character.features, own.sourceName).toEqual([{ ...own, description: 'The DM restates it.' }, seventeen.features[1]]);
+    }
+    // Fighter 10 alike: "Indomitable (two uses)" with 1 keeps the class's "Indomitable (one use)", and the boon its 2. The
+    // table grows the class's entry into the boon's name at 13 and past it at 17, whichever path levels it.
+    const ten = at(10, [indomitable('ind', 'Indomitable (one use)', 1), gift('Indomitable (two uses)', 2)]);
+    const restated = addFeature(ten, call('Indomitable (two uses)', 1));
+    expect(messages(restated)).toEqual(['Updated feature: Indomitable (one use)']);
+    expect(restated.character.features).toEqual([{ ...ten.features[0], description: 'The DM restates it.' }, ten.features[1]]);
+    for (const dialog of [true, false]) {
+      let c = restated.character;
+      while (c.classes[0].level < 17) {
+        const level = c.classes[0].level + 1;
+        const row = { 13: ['Indomitable (two uses)', 2], 17: ['Indomitable (three uses)', 3] }[level] as [string, number] | undefined;
+        const newFeatures = dialog && row ? [{ name: row[0], source: 'class' as const, description: 'The class table row.', uses: { max: row[1], used: 0, recharge: 'long' as const } }] : [];
+        c = levelUp(c, { className: 'Fighter', hpMethod: 'average', newFeatures }).character;
+        const count = level < 13 ? 1 : level < 17 ? 2 : 3;
+        expect(c.features.map((f) => [f.id, f.source, f.uses?.max]), `${dialog ? 'dialog' : 'level_up'} ${level}`).toEqual([['ind', 'class', count], ['gift', 'boon', 2]]);
+      }
+    }
+    // Fighter 9 holding only a boon "Indomitable (one use)" (from Fighter 5): no entry of the family, so the class's joins
+    // beside the boon, as the level-up dialog adds it; the class's later call of that name changes the class's.
+    const nine = at(9, [gift('Indomitable (one use)', 1)]);
+    const joined = addFeature(nine, call('Indomitable (one use)', 1));
+    expect(messages(joined)).toEqual(['Gained feature: Indomitable (one use) (1 use, recharges on a Long Rest), beside Indomitable (one use) (boon)']);
+    const [boon, cls] = joined.character.features;
+    expect(boon).toEqual(nine.features[0]);
+    expect(cls).toEqual({ ...call('Indomitable (one use)', 1), id: expect.any(String) });
+    const again = addFeature(joined.character, { ...call('Indomitable (one use)', 1), description: 'Once before a Long Rest.' });
+    expect(messages(again)).toEqual(['Updated feature: Indomitable (one use) (class)']);
+    expect(again.character.features).toEqual([boon, { ...cls, description: 'Once before a Long Rest.' }]);
+    // Fighter 17, an item's "Action Surge (one use)" (from Fighter 1) beside the class's "Action Surge (two uses)":
+    // "Action Surge (one use)" with 2 changes the class's, its name and recharge kept.
+    const surging = at(17, [gift('Action Surge (one use)', 1, 'item', 'short'), surge('Action Surge (two uses)', 2)]);
+    const surged = addFeature(surging, call('Action Surge (one use)', 2, 'short'));
+    expect(messages(surged)).toEqual(['Updated feature: Action Surge (two uses)']);
+    expect(surged.character.features).toEqual([surging.features[0], { ...surging.features[1], description: 'The DM restates it.' }]);
+    // A family the class's own counted entry makes (no table counting it by name): a Cleric 6's own "Channel Divinity (3
+    // uses)" beside the DM's boon "Channel Divinity (2 uses)" (srd:rule:cleric-channel-divinity: "You can use this class's
+    // Channel Divinity twice.").
+    const cleric = at(6, [{ id: 'cd', name: 'Channel Divinity (3 uses)', source: 'class', sourceName: 'Cleric 6', description: 'Divine Spark or Turn Undead.', uses: { max: 3, used: 0, recharge: 'short' } }, gift('Channel Divinity (2 uses)', 2)], [{ classId: 'srd:class:cleric', name: 'Cleric', level: 6, hitDie: 8, casterType: 'full', spellcastingAbility: 'wis' }]);
+    const divine = addFeature(cleric, call('Channel Divinity (2 uses)', 3, 'short'));
+    expect(messages(divine)).toEqual(['Updated feature: Channel Divinity (3 uses)']);
+    expect(divine.character.features).toEqual([{ ...cleric.features[0], description: 'The DM restates it.' }, cleric.features[1]]);
+
+    // As before: the boon's own call changes the boon, and another source's call the boon when it is the only one of the name.
+    const seventeen = at(17, [indomitable('ind', 'Indomitable (three uses)', 3), gift('Indomitable (two uses)', 2)]);
+    const retold = addFeature(seventeen, { ...gift('Indomitable (two uses)', 2), id: undefined, description: 'The boon retold.' });
+    expect(messages(retold)).toEqual(['Updated feature: Indomitable (two uses)']);
+    expect(retold.character.features).toEqual([seventeen.features[0], { ...seventeen.features[1], description: 'The boon retold.', uses: { max: 2, used: 1, recharge: 'long' } }]);
+    expect(addFeature(seventeen, { ...gift('Indomitable (two uses)', 2, 'item'), id: undefined }).character.features.map((f) => [f.id, f.source])).toEqual([
+      ['ind', 'class'],
+      ['gift', 'item'],
+    ]);
+    // A class no table or entry counts the family for, the Wizard Mira: the class's call changes her boon, as before.
+    const wizard = mira({ features: [gift('Indomitable (two uses)', 2)] });
+    const taken = addFeature(wizard, call('Indomitable (two uses)', 2));
+    expect(messages(taken)).toEqual(['Updated feature: Indomitable (two uses)']);
+    expect(taken.character.features).toEqual([{ ...wizard.features[0], source: 'class', description: 'The DM restates it.', uses: { max: 2, used: 1, recharge: 'long' } }]);
+    // A name without a count, as before: the class's call changes a Fighter 2's lone boon "Tactical Mind" (srd:class:fighter
+    // table: "| 2 | +2 | Action Surge (one use), Tactical Mind |").
+    const mind = at(2, [{ id: 'mind', name: 'Tactical Mind', source: 'boon', sourceName: 'Granted in play', description: 'A boon of the Lantern-Saint.' }]);
+    const told = addFeature(mind, { name: 'Tactical Mind', source: 'class', sourceName: 'Granted in play', description: 'Second Wind for a failed check.' });
+    expect(messages(told)).toEqual(['Updated feature: Tactical Mind']);
+    expect(told.character.features).toEqual([{ ...mind.features[0], source: 'class', description: 'Second Wind for a failed check.' }]);
+  });
+
   it("only a class feature's count in its name is its table's row: another feature named with a count, given that count over its own, is the DM's ruling as any rewrite is (srd:class:fighter table: \"| 13 | +5 | Indomitable (two uses), Studied Attacks |\")", () => {
     // An invented species trait the DM named with a count: no class table names it, so its name vouches for no number.
     const luck: Feature = { id: 'luck', name: 'Lantern Luck (2 uses)', source: 'species', sourceName: 'Mothkin', description: 'Luck of the lamp.', uses: { max: 1, used: 0, recharge: 'long' } };

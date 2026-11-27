@@ -16,10 +16,10 @@ vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import { createRulesIndex } from '@/data/search';
 import { refreshBookTableCounts } from '@/data/options/featureUses';
-import { gainedFeatures, refreshFeatureUses } from '@/data/options/leveling';
+import { gainedFeatures, keptRulings, refreshFeatureUses } from '@/data/options/leveling';
 import { knownSpellFromEntry } from '@/data/options/levelUpChoices';
 import { owedSpells } from '@/data/options/spellPicks';
-import { characterSheetText, levelUp, recomputeSlots, weaponCritRange } from '@/engine';
+import { characterSheetText, levelUp, nameUseCount, recomputeSlots, weaponCritRange } from '@/engine';
 import { sampleCharacter, sampleCombat, sampleMappedCombat } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, gloamwoodEntryId, importedRef, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
 import {
@@ -51,6 +51,7 @@ import { SAMPLE_RULES } from '../testing/fakeData';
 import { setupHarness, type HarnessOptions } from '../testing/harness';
 import { acSpellLines } from './character';
 import type { ToolContext } from './context';
+import { DM_TOOLS } from './definitions';
 import { runTool } from './handlers';
 import { heroConcentration } from './spellEffects';
 
@@ -195,7 +196,16 @@ describe('level_up from the merged builder data', () => {
     await h.run('update_character', { features_add: [{ name: 'Lantern Luck', description: 'DM ruling: twice.', source: 'species', uses_max: 2, recharge: 'short' }] });
     await h.run('update_character', { features_add: [{ name: 'Lantern Luck', description: 'DM ruling: once.', source: 'feat', uses_max: 1 }] });
     const out = await h.run('level_up', { class_name: 'Fighter' });
-    expect(out.content).toContain('Kept your rulings: Lantern Luck (species) 2 uses and Lantern Luck (feat) 1 use (a new uses_max in features_add changes one).');
+    // The labels features_use takes; for each, the features_add call that changes it.
+    expect(out.content).toContain(
+      'Kept your rulings: Lantern Luck (species) 2 uses and Lantern Luck (feat) 1 use (a new uses_max in features_add changes one; for Lantern Luck (species): name "Lantern Luck", source "species"; for Lantern Luck (feat): name "Lantern Luck", source "feat").',
+    );
+    // That call for the feat changes the feat, the trait left as it is.
+    await h.run('update_character', { features_add: [{ name: 'Lantern Luck', description: 'DM ruling: twice now.', source: 'feat', uses_max: 2 }] });
+    expect(h.sheet().features.filter((f) => f.name === 'Lantern Luck').map((f) => [f.source, f.description, f.uses?.max])).toEqual([
+      ['species', 'DM ruling: twice.', 2],
+      ['feat', 'DM ruling: twice now.', 2],
+    ]);
   });
 
   it('naming the hero’s own book subclass by the name it was given in review since adds none of its features again', async () => {
@@ -4110,6 +4120,230 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
           if (level !== 17) expect(up.content, `${why}, level_up to ${level}`).not.toContain('Feature uses now');
         }
       }
+    });
+
+    /** features_add as the DM sends it. */
+    const featureCall = (name: string, source: string, description: string, usesMax?: number, recharge?: string) => ({
+      features_add: [{ name, description, source, ...(usesMax ? { uses_max: usesMax } : {}), ...(recharge ? { recharge } : {}) }],
+    });
+    /** The DM's level_up, each row its reminder names recorded as a class feature with the row's count, as the DM is told. */
+    const levelUpFollowing = async (h: ReturnType<typeof setup>): Promise<{ out: string; added: string[] }> => {
+      const out = (await h.run('level_up', { class_name: 'Fighter' })).content;
+      const rows = /\n- New Fighter \d+ features to add to the sheet: ([^\n]+)\.\n/.exec(out)?.[1].split(', ') ?? [];
+      const added: string[] = [];
+      for (const name of rows) {
+        const count = nameUseCount(name) ?? undefined;
+        const r = await h.run('update_character', featureCall(name, 'class', 'As the table says.', count, count && name.startsWith('Action Surge') ? 'short' : undefined));
+        added.push(r.content.split('\n')[0]);
+      }
+      return { out, added };
+    };
+
+    it("features_add of a class feature's counted name that a boon or an item beside the class's entry holds changes the class's entry, or joins beside the namesake while the sheet holds none, and the namesake keeps its source, words and uses to Fighter 20 on level_up, its reminders followed, and the level-up dialog's steps alike (F1, F3; srd:rule:fighter-indomitable: \"You can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17\"; srd:rule:fighter-action-surge: \"Starting at level 17, you can use it twice before a rest\")", async () => {
+      const champion = { subclass: CHAMPION.name, subclassId: CHAMPION.id };
+      const short = (max: number) => ({ max, used: 0, recharge: 'short' });
+      const long = (max: number) => ({ max, used: 0, recharge: 'long' });
+      const indomitable = (level: number) => (level < 13 ? 'Indomitable (one use)' : level < 17 ? 'Indomitable (two uses)' : 'Indomitable (three uses)');
+      const indCount = (level: number) => (level < 13 ? 1 : level < 17 ? 2 : 3);
+      const family = (c: Character, base: string) => c.features.filter((f) => f.name.startsWith(base)).map((f) => [f.name, f.source, f.uses]);
+      const total = (c: Character, base: string) => c.features.filter((f) => f.name.startsWith(base)).reduce((n, f) => n + (f.uses?.max ?? 0), 0);
+      const gift = (name: string, max: number, source = 'boon', recharge?: string) => featureCall(name, source, 'A gift of the Lantern-Saint.', max, recharge);
+      interface Case {
+        why: string;
+        level: number;
+        base: string;
+        /** The DM's calls after the level-up to that level (at the start level: before any), each with its result's first line. */
+        calls: Record<number, { input: unknown; said: string }>;
+        /** The family's entries at each level: name, source, uses. */
+        at: (level: number) => unknown[];
+        total: (level: number) => number;
+        /** What level_up's reminder names at a level, and the result of the DM's features_add of its row. */
+        reminder?: { level: number; line: string; added: string };
+      }
+      const CASES: Case[] = [
+        {
+          why: "(a) a boon \"Indomitable (two uses)\" from Fighter 9, the class's call of that name with 3 at Fighter 17",
+          level: 8,
+          base: 'Indomitable',
+          calls: {
+            9: { input: gift('Indomitable (two uses)', 2), said: 'Gained feature: Indomitable (two uses) (2 uses, recharges on a Long Rest)' },
+            17: { input: featureCall('Indomitable (two uses)', 'class', 'The DM restates it.', 3), said: 'Updated feature: Indomitable (three uses)' },
+          },
+          at: (l) => [[indomitable(l), 'class', long(indCount(l))], ['Indomitable (two uses)', 'boon', long(2)]],
+          total: (l) => indCount(l) + 2,
+        },
+        {
+          why: "(b) the same boon, the class's call of its name with 1 at Fighter 10",
+          level: 8,
+          base: 'Indomitable',
+          calls: {
+            9: { input: gift('Indomitable (two uses)', 2), said: 'Gained feature: Indomitable (two uses) (2 uses, recharges on a Long Rest)' },
+            10: { input: featureCall('Indomitable (two uses)', 'class', 'The DM restates it.', 1), said: 'Updated feature: Indomitable (one use)' },
+          },
+          at: (l) => [[indomitable(l), 'class', long(indCount(l))], ['Indomitable (two uses)', 'boon', long(2)]],
+          total: (l) => indCount(l) + 2,
+        },
+        {
+          why: "(c) a boon \"Indomitable (one use)\" from Fighter 5, the class's own from 9, and the class's call of the boon's name with 2 at Fighter 14",
+          level: 4,
+          base: 'Indomitable',
+          calls: {
+            5: { input: gift('Indomitable (one use)', 1), said: 'Gained feature: Indomitable (one use) (1 use, recharges on a Long Rest)' },
+            14: { input: featureCall('Indomitable (one use)', 'class', 'The DM restates it.', 2), said: 'Updated feature: Indomitable (two uses)' },
+          },
+          at: (l) => [['Indomitable (one use)', 'boon', long(1)], ...(l < 9 ? [] : [[indomitable(l), 'class', long(indCount(l))]])],
+          total: (l) => 1 + (l < 9 ? 0 : indCount(l)),
+          reminder: {
+            level: 9,
+            line: '\n- New Fighter 9 features to add to the sheet: Indomitable (one use), Tactical Master.\n',
+            added: 'Gained feature: Indomitable (one use) (1 use, recharges on a Long Rest), beside Indomitable (one use) (boon)',
+          },
+        },
+        {
+          why: "(d) an item's \"Action Surge (one use)\" from Fighter 1, the class's own from 2, and the class's call of the item's name with 2 at Fighter 17",
+          level: 1,
+          base: 'Action Surge',
+          calls: {
+            1: { input: gift('Action Surge (one use)', 1, 'item', 'short'), said: 'Gained feature: Action Surge (one use) (1 use, recharges on a Short or Long Rest)' },
+            // No recharge given: the class's entry keeps its own, a Short or Long Rest (srd:rule:fighter-action-surge).
+            17: { input: featureCall('Action Surge (one use)', 'class', 'The DM restates it.', 2), said: 'Updated feature: Action Surge (two uses)' },
+          },
+          at: (l) => [['Action Surge (one use)', 'item', short(1)], ...(l < 2 ? [] : [[l < 17 ? 'Action Surge (one use)' : 'Action Surge (two uses)', 'class', short(l < 17 ? 1 : 2)]])],
+          total: (l) => 1 + (l < 2 ? 0 : l < 17 ? 1 : 2),
+          reminder: {
+            level: 2,
+            line: '\n- New Fighter 2 features to add to the sheet: Action Surge (one use), Tactical Mind.\n',
+            added: 'Gained feature: Action Surge (one use) (1 use, recharges on a Short or Long Rest), beside Action Surge (one use) (item)',
+          },
+        },
+      ];
+      for (const k of CASES) {
+        for (const path of ['level_up', 'dialog'] as const) {
+          const why = `${k.why}, ${path}`;
+          const start = hero(srdEntry('Fighter', k.level, champion), { features: k.level >= 2 ? [own('surge', 'Action Surge (one use)', 2, 1)] : [] });
+          let h = setup({ builderData: SRD_BUILDER_DATA, character: start });
+          const calls = async (level: number) => {
+            const call = k.calls[level];
+            if (call) expect((await h.run('update_character', call.input)).content.split('\n')[0], `${why}, at ${level}`).toBe(call.said);
+          };
+          await calls(k.level);
+          for (let level = k.level + 1; level <= 20; level++) {
+            if (path === 'level_up') {
+              const { out, added } = await levelUpFollowing(h);
+              if (k.reminder?.level === level) {
+                expect(out, `${why}, at ${level}`).toContain(k.reminder.line);
+                expect(added[0], `${why}, at ${level}`).toBe(k.reminder.added);
+              }
+            } else h = setup({ builderData: SRD_BUILDER_DATA, character: dialogSteps(h.sheet(), level) });
+            await calls(level);
+            expect(family(h.sheet(), k.base), `${why}, at ${level}`).toEqual(k.at(level));
+            expect(total(h.sheet(), k.base), `${why}, at ${level}`).toBe(k.total(level));
+            // The namesake keeps the DM's words for it.
+            expect(h.sheet().features.filter((f) => f.name.startsWith(k.base) && f.source !== 'class').map((f) => f.description), `${why}, at ${level}`).toEqual(['A gift of the Lantern-Saint.']);
+          }
+        }
+      }
+    });
+
+    it("as before: the boon's own call changes the boon; the class's call changes a lone boon of a counted name for a class whose family no one counts (a Wizard), and a lone boon \"Tactical Mind\", a name without a count, whose row level_up then leaves out (srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\"; srd:rule:fighter-tactical-mind)", async () => {
+      // srd:rule:fighter-tactical-mind: "When you fail an ability check, you can expend a use of your Second Wind to push
+      // yourself toward success".
+      const champion = { subclass: CHAMPION.name, subclassId: CHAMPION.id };
+      const gift: Feature = { id: 'gift', name: 'Indomitable (two uses)', source: 'boon', sourceName: 'Granted in play', description: 'A gift of the Lantern-Saint.', uses: { max: 2, used: 0, recharge: 'long' } };
+      const seventeen = hero(srdEntry('Fighter', 17, champion), { features: [own('surge', 'Action Surge (two uses)', 2, 2), own('ind', 'Indomitable (three uses)', 9, 3), gift] });
+      const f = setup({ builderData: SRD_BUILDER_DATA, character: seventeen });
+      const retold = await f.run('update_character', featureCall('Indomitable (two uses)', 'boon', 'The gift retold.', 2));
+      expect(retold.content.split('\n')[0]).toBe('Updated feature: Indomitable (two uses)');
+      expect(f.sheet().features).toEqual([seventeen.features[0], seventeen.features[1], { ...gift, description: 'The gift retold.' }]);
+      // A boon's counted name no entry holds, without uses_max: added beside the class's family with no uses, the name's
+      // count being the class's table's, not the boon's.
+      const fresh = await f.run('update_character', featureCall('Indomitable (four uses)', 'boon', 'A greater gift.'));
+      expect(fresh.content.split('\n')[0]).toBe('Gained feature: Indomitable (four uses)');
+      expect(f.sheet().features.slice(0, 2)).toEqual([seventeen.features[0], seventeen.features[1]]);
+      expect(f.sheet().features[3]).toMatchObject({ name: 'Indomitable (four uses)', source: 'boon' });
+      expect(f.sheet().features[3].uses).toBeUndefined();
+      // The Wizard Mira's boon of that name: her class counts no Indomitable, so the class's call changes the boon.
+      const wizard = sampleCharacter();
+      const w = setup({ builderData: SRD_BUILDER_DATA, character: { ...wizard, features: [...wizard.features, gift] } });
+      expect((await w.run('update_character', featureCall('Indomitable (two uses)', 'class', 'The DM restates it.', 2))).content.split('\n')[0]).toBe('Updated feature: Indomitable (two uses)');
+      expect(w.sheet().features.filter((x) => x.name.startsWith('Indomitable'))).toEqual([{ ...gift, source: 'class', description: 'The DM restates it.' }]);
+      // A Fighter 1's boon "Tactical Mind": level_up's reminder at 2 leaves its row out, and the class's call changes the
+      // boon, whose words are gone (the level-up dialog adds the class's own beside it instead).
+      const one = hero(srdEntry('Fighter', 1, champion), { features: [] });
+      const t = setup({ builderData: SRD_BUILDER_DATA, character: one });
+      await t.run('update_character', featureCall('Tactical Mind', 'boon', 'A gift of the Lantern-Saint.'));
+      const { out } = await levelUpFollowing(t);
+      expect(out).toContain('\n- New Fighter 2 features to add to the sheet: Action Surge (one use).\n');
+      expect((await t.run('update_character', featureCall('Tactical Mind', 'class', 'Second Wind for a failed check.'))).content.split('\n')[0]).toBe('Updated feature: Tactical Mind');
+      expect(t.sheet().features.filter((x) => x.name === 'Tactical Mind').map((x) => [x.source, x.description])).toEqual([['class', 'Second Wind for a failed check.']]);
+      const d = setup({ builderData: SRD_BUILDER_DATA, character: one });
+      await d.run('update_character', featureCall('Tactical Mind', 'boon', 'A gift of the Lantern-Saint.'));
+      const two = setup({ builderData: SRD_BUILDER_DATA, character: dialogSteps(d.sheet(), 2) });
+      expect((await two.run('update_character', featureCall('Tactical Mind', 'class', 'Second Wind for a failed check.'))).content.split('\n')[0]).toBe('Updated feature: Tactical Mind (Fighter 2)');
+      expect(two.sheet().features.filter((x) => x.name === 'Tactical Mind').map((x) => [x.source, x.description])).toEqual([
+        ['boon', 'A gift of the Lantern-Saint.'],
+        ['class', 'Second Wind for a failed check.'],
+      ]);
+    });
+
+    it("the kept-ruling line names the features_add call that changes a ruled boon told apart from the class's entry of its name, and the call as the line gives it changes the boon: 3 + 2 Indomitable at Fighter 17 on level_up and the level-up dialog's steps alike (D1; srd:rule:fighter-indomitable: \"three times before a Long Rest starting at level 17\")", async () => {
+      const champion = { subclass: CHAMPION.name, subclassId: CHAMPION.id };
+      const eight = hero(srdEntry('Fighter', 8, champion), { features: [own('surge', 'Action Surge (one use)', 2, 1)] });
+      const gift = featureCall('Indomitable (two uses)', 'boon', 'A gift of the Lantern-Saint.', 2);
+      const dims = featureCall('Indomitable (two uses)', 'boon', 'The favor dims.', 1);
+      const indomitable = (c: Character) => c.features.filter((f) => f.name.startsWith('Indomitable')).map((f) => [f.name, f.source, f.uses?.max, f.uses?.ruled === true]);
+      /** The call the line names, as the DM would send it with a new uses_max. */
+      const followed = (line: string) => {
+        const m = /changes it: name "([^"]+)", source "([^"]+)"\)/.exec(line);
+        if (!m) throw new Error(`no call in: ${line}`);
+        return featureCall(m[1], m[2], 'The favor returns.', 2);
+      };
+      // level_up, its reminders followed: the class's entry is the DM's, "Granted in play" as the boon is.
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: eight });
+      await levelUpFollowing(h);
+      await h.run('update_character', gift);
+      for (let level = 10; level <= 13; level++) await levelUpFollowing(h);
+      expect((await h.run('update_character', dims)).content.split('\n')[0]).toBe('Updated feature: Indomitable (two uses) (boon)');
+      const { out } = await levelUpFollowing(h);
+      const line = 'Kept your ruling: Indomitable (two uses) (boon) 1 use (a new uses_max in features_add changes it: name "Indomitable (two uses)", source "boon").';
+      expect(out).toContain(`\n${line}\n`);
+      expect((await h.run('update_character', followed(line))).content.split('\n')[0]).toBe('Updated feature: Indomitable (two uses) (boon)');
+      expect(indomitable(h.sheet())).toEqual([
+        ['Indomitable (two uses)', 'class', 2, false],
+        ['Indomitable (two uses)', 'boon', 2, true],
+      ]);
+      for (let level = 15; level <= 17; level++) await levelUpFollowing(h);
+      expect(indomitable(h.sheet())).toEqual([
+        ['Indomitable (three uses)', 'class', 3, false],
+        ['Indomitable (two uses)', 'boon', 2, true],
+      ]);
+      // The level-up dialog's steps: the class's entry is "Fighter 9", so the line labels the boon "(Granted in play)", as
+      // the dialog's notice gives it (keptRulings).
+      let c = dialogSteps(eight, 9);
+      const step = async (input: unknown) => {
+        const d = setup({ builderData: SRD_BUILDER_DATA, character: c });
+        const said = (await d.run('update_character', input)).content.split('\n')[0];
+        c = d.sheet();
+        return said;
+      };
+      await step(gift);
+      c = dialogSteps(c, 13);
+      expect(await step(dims)).toBe('Updated feature: Indomitable (two uses) (Granted in play)');
+      c = dialogSteps(c, 14);
+      const notice = keptRulings(c)!;
+      expect(notice).toBe('kept your ruling: Indomitable (two uses) (Granted in play) 1 use (a new uses_max in features_add changes it: name "Indomitable (two uses)", source "boon")');
+      expect(await step(followed(notice))).toBe('Updated feature: Indomitable (two uses) (Granted in play)');
+      c = dialogSteps(c, 17);
+      expect(indomitable(c)).toEqual([
+        ['Indomitable (three uses)', 'class', 3, false],
+        ['Indomitable (two uses)', 'boon', 2, true],
+      ]);
+    });
+
+    it("the kept-ruling line names a call for every source but a transformation's, which are exactly the sources features_add takes", () => {
+      const tool = DM_TOOLS.find((t) => t.name === 'update_character') as unknown as { input_schema: { properties: { features_add: { items: { properties: { source: { enum: string[] } } } } } } };
+      const all: Feature['source'][] = ['class', 'subclass', 'species', 'background', 'feat', 'boon', 'transformation', 'item', 'homebrew', 'other'];
+      expect([...tool.input_schema.properties.features_add.items.properties.source.enum].sort()).toEqual(all.filter((x) => x !== 'transformation').sort());
     });
 
     it("level_up of a Wizard 5 / Fighter 1 holding the DM's boon \"Action Surge (two uses)\", with the table's row among new_features: the class's entry is kept under the boon's name, the merge names both, and the row is no new feature; a book's row isn't among the book's features added either; without new_features the boon is kept, as before (F3; srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\")", async () => {

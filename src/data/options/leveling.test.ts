@@ -727,7 +727,59 @@ describe('keptRulings: the numbers of uses the DM ruled, which level-ups keep', 
     expect(keptRulings(sampleCharacter({ features: [luck('a', 'species', 2), luck('b', 'feat', 1)] }))).toBeNull();
     expect(keptRulings(sampleCharacter({ features: [wind, luck('a', 'species', 2)] }))).toBe('kept your ruling: Second Wind 4 uses (a new uses_max in features_add changes it)');
     expect(keptRulings(sampleCharacter({ features: [luck('a', 'species', 2, true), luck('b', 'feat', 1, true)] }))).toBe(
-      'kept your rulings: Lantern Luck (species) 2 uses and Lantern Luck (feat) 1 use (a new uses_max in features_add changes one)',
+      'kept your rulings: Lantern Luck (species) 2 uses and Lantern Luck (feat) 1 use (a new uses_max in features_add changes one; for Lantern Luck (species): name "Lantern Luck", source "species"; for Lantern Luck (feat): name "Lantern Luck", source "feat")',
     );
+  });
+
+  it('names the features_add call that changes a ruled entry told apart from a namesake, which a label would not; an entry that call cannot reach is named as before (D1; srd:rule:fighter-indomitable)', () => {
+    // srd:rule:fighter-indomitable: "You can use this feature twice before a Long Rest starting at level 13 and three times
+    // before a Long Rest starting at level 17." An SRD Fighter 13's class entry beside a boon of its name the DM ruled to 1.
+    const fighter13 = (features: Feature[]) =>
+      sampleCharacter({ classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level: 13, hitDie: 10, casterType: 'none' }], spellcasting: undefined, features });
+    const entry = (id: string, source: Feature['source'], sourceName: string, max: number, ruled?: boolean): Feature => ({
+      id,
+      name: 'Indomitable (two uses)',
+      source,
+      sourceName,
+      description: 'Invented.',
+      uses: { max, used: 0, recharge: 'long', ...(ruled ? { ruled } : {}) },
+    });
+    const boon = entry('boon', 'boon', 'Granted in play', 1, true);
+    // The DM's level_up path (both "Granted in play") and the level-up dialog's (the class's "Fighter 9").
+    expect(keptRulings(fighter13([entry('ind', 'class', 'Granted in play', 2), boon]))).toBe(
+      'kept your ruling: Indomitable (two uses) (boon) 1 use (a new uses_max in features_add changes it: name "Indomitable (two uses)", source "boon")',
+    );
+    expect(keptRulings(fighter13([entry('ind', 'class', 'Fighter 9', 2), boon]))).toBe(
+      'kept your ruling: Indomitable (two uses) (Granted in play) 1 use (a new uses_max in features_add changes it: name "Indomitable (two uses)", source "boon")',
+    );
+    // The class's own ruled: its call has source "class".
+    expect(keptRulings(fighter13([entry('ind', 'class', 'Fighter 9', 3, true), entry('boon', 'boon', 'Granted in play', 2)]))).toBe(
+      'kept your ruling: Indomitable (two uses) (Fighter 9) 3 uses (a new uses_max in features_add changes it: name "Indomitable (two uses)", source "class")',
+    );
+    // Several ruled: the call for each one told apart.
+    const wind: Feature = { id: 'wind', name: 'Second Wind', source: 'class', sourceName: 'Fighter 1', description: '', uses: { max: 4, used: 1, recharge: 'short', ruled: true } };
+    expect(keptRulings(fighter13([wind, entry('ind', 'class', 'Granted in play', 2), boon]))).toBe(
+      'kept your rulings: Second Wind 4 uses and Indomitable (two uses) (boon) 1 use (a new uses_max in features_add changes one; for Indomitable (two uses) (boon): name "Indomitable (two uses)", source "boon")',
+    );
+    // A feat taken twice, each told apart by its source name: features_add changes the first of the two, so the second's
+    // ruling is named as before, and the first's with its call.
+    const taking = (id: string, level: number, ruled?: boolean): Feature => ({
+      id,
+      name: 'Wick Tender',
+      source: 'feat',
+      sourceName: `Ability Score Improvement (Fighter ${level})`,
+      description: 'Invented.',
+      uses: { max: 1, used: 0, recharge: 'long', ...(ruled ? { ruled } : {}) },
+    });
+    expect(keptRulings(fighter13([taking('first', 4), taking('second', 8, true)]))).toBe(
+      'kept your ruling: Wick Tender (Ability Score Improvement (Fighter 8)) 1 use (a new uses_max in features_add changes it)',
+    );
+    expect(keptRulings(fighter13([taking('first', 4, true), taking('second', 8)]))).toBe(
+      'kept your ruling: Wick Tender (Ability Score Improvement (Fighter 4)) 1 use (a new uses_max in features_add changes it: name "Wick Tender", source "feat")',
+    );
+    // A transformation's power, which features_add doesn't take (transform_character changes it): as before.
+    const power: Feature = { id: 'power', name: 'Lantern Luck', source: 'transformation', sourceName: 'Moth Form', description: 'Invented.', uses: { max: 1, used: 0, recharge: 'long', ruled: true } };
+    const trait: Feature = { id: 'trait', name: 'Lantern Luck', source: 'species', sourceName: 'Mothkin', description: 'Invented.', uses: { max: 2, used: 0, recharge: 'long' } };
+    expect(keptRulings(sampleCharacter({ features: [trait, power] }))).toBe('kept your ruling: Lantern Luck (Moth Form) 1 use (a new uses_max in features_add changes it)');
   });
 });
