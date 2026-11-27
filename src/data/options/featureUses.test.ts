@@ -8,10 +8,10 @@ import { describe, expect, it } from 'vitest';
 import builderRaw from '../../../public/srd/builder.json?raw';
 import { levelUp } from '@/engine';
 import { sampleCharacter } from '@/test/fixtures';
-import type { BuilderData, ClassLevel, ClassOption, Feature } from '@/types';
+import type { BuilderData, ClassLevel, ClassOption, FeatOption, Feature, SpeciesOption, SubclassOption } from '@/types';
 import { inferFeatureUses, refreshBookTableCounts, refreshTableCountedUses, type UsesContext } from './featureUses';
 import { featureUseChanges, gainedFeatures, refreshFeatureUses } from './leveling';
-import { applyFeatChoice, featChoiceTrigger } from './levelUpChoices';
+import { applyFeatChoice, featChoiceTrigger, type FeatPick } from './levelUpChoices';
 import { lineageFeatureText, speciesChoices } from './species';
 
 const data = JSON.parse(builderRaw) as BuilderData;
@@ -256,18 +256,62 @@ describe("a lineage trait's later spells are no use of the trait, however a book
   });
   /** Its Sepia heritage as the app keeps a table row (lineageRowText). */
   const SEPIA = { name: 'Sepia', description: 'You know the Light cantrip. Level 3: Faerie Fire. Level 5: Darkness.' };
+  /** A species trait's reading, as the builder's species step and refreshFeatureUses' species branch give it. */
+  const asTrait = (level: number): UsesContext => ({ ...ctx(undefined, level), speciesTrait: true });
   /** The trait's uses as the builder and the level-up's refresh read them: its preamble and the chosen heritage. */
-  const traitUses = (trait: { name: string; description: string }, level: number) => inferFeatureUses(trait.name, lineageFeatureText(trait, SEPIA), ctx(undefined, level));
+  const traitUses = (trait: { name: string; description: string }, level: number) => inferFeatureUses(trait.name, lineageFeatureText(trait, SEPIA), asTrait(level));
+  /** The SRD's own free-casting sentence. */
+  const CAST = 'You can cast it once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest.';
+  const ONE_USE = { max: 1, used: 0, recharge: 'long' };
 
-  it('reads no use off the paragraph at any character level, as off the SRD Elf and Tiefling', () => {
+  it('reads no use off the paragraph at any character level, as off the SRD Elf and Tiefling read as species traits', () => {
     for (const later of WORDINGS) for (let level = 1; level <= 20; level++) expect(traitUses(inkbound(later), level), `${later} at ${level}`).toBeUndefined();
     for (const species of data.species.filter((s) => s.name === 'Elf' || s.name === 'Tiefling')) {
       const { lineageTrait, lineages } = speciesChoices(species);
       expect(lineages).toHaveLength(3);
       for (const lineage of lineages) {
-        for (let level = 1; level <= 20; level++) expect(inferFeatureUses(lineageTrait!.name, lineageFeatureText(lineageTrait!, lineage), ctx(undefined, level))).toBeUndefined();
+        for (let level = 1; level <= 20; level++) expect(inferFeatureUses(lineageTrait!.name, lineageFeatureText(lineageTrait!, lineage), asTrait(level))).toBeUndefined();
       }
     }
+  });
+
+  it('knows the paragraph by "learn a higher-level spell" alone, whatever follows: "…from your heritage\'s table" reads no use', () => {
+    const own = `At character levels 3 and 5, you learn a higher-level spell from your heritage's table. You always have that spell prepared. ${CAST}`;
+    for (let level = 1; level <= 20; level++) expect(traitUses(inkbound(own), level), `level ${level}`).toBeUndefined();
+  });
+
+  it('leaves out the free-casting sentence a blank line split from that paragraph, in the SRD Elf\'s and Tiefling\'s own words too', () => {
+    // The SRD's paragraph (srd:species:elf) as an import broken at a page or column can give it: "You can cast it once
+    // without a spell slot" opens a paragraph of its own, right after the one that teaches the spell.
+    const split = (text: string) => text.replace('You always have that spell prepared. You can cast it once', 'You always have that spell prepared.\n\nYou can cast it once');
+    for (const species of data.species.filter((s) => s.name === 'Elf' || s.name === 'Tiefling')) {
+      const { lineageTrait, lineages } = speciesChoices(species);
+      const trait = { ...lineageTrait!, description: split(lineageTrait!.description) };
+      expect(trait.description).toContain('You always have that spell prepared.\n\nYou can cast it once without a spell slot');
+      for (const lineage of lineages) {
+        for (let level = 1; level <= 20; level++) expect(inferFeatureUses(trait.name, lineageFeatureText(trait, lineage), asTrait(level)), `${lineage.name} at ${level}`).toBeUndefined();
+      }
+    }
+    // Another opening; "without expending a spell slot"; two blank lines; the sentence split off twice; a break in
+    // mid-sentence ("…prepared, and" / "you can cast it once…").
+    const opening = 'At character level 3 and again at character level 5, you learn a higher-level spell, as shown on the table. You always have that spell prepared.';
+    const expending = 'You can cast it once without expending a spell slot, and you regain the ability to do so when you finish a Long Rest.';
+    const midSentence = `${opening.replace(/\.$/, ', and')}\n\nyou can cast it once without a spell slot, regaining the ability to do so when you finish a Long Rest.`;
+    for (const later of [`${opening}\n\n${CAST}`, `${opening}\n\n${expending}`, `${opening}\n\n\n\n${CAST}`, `${opening}\n \n${CAST}\n\n${expending}`, midSentence]) {
+      for (const level of [1, 3, 5, 20]) expect(traitUses(inkbound(later), level), `${later} at ${level}`).toBeUndefined();
+    }
+  });
+
+  it("keeps the free-casting sentence anywhere else as the trait's own use: alone, before that paragraph, after another one, or later in the next", () => {
+    // srd:feat:magic-initiate, Level 1 Spell: "You always have that spell prepared. You can cast it once without a
+    // spell slot, and you regain the ability to cast it in that way when you finish a Long Rest." A trait's own spell
+    // alike.
+    expect(inferFeatureUses('Inkwell Gift', `You always have the Bless spell prepared.\n\n${CAST}`, asTrait(1))).toEqual(ONE_USE);
+    const before = `You are marked by an inkbound heritage. You always have the Bless spell prepared.\n\n${CAST}`;
+    expect(traitUses(inkbound(WORDINGS[0], before), 5)).toEqual(ONE_USE);
+    expect(traitUses(inkbound(`${WORDINGS[0]}\n\nYou always have the Bless spell prepared.\n\n${CAST}`), 5)).toEqual(ONE_USE);
+    // The paragraph right after the later spells' one, opening with a spell of the trait's own.
+    expect(traitUses(inkbound(`${WORDINGS[0]}\n\nYou always have the Bless spell prepared. ${CAST}`), 5)).toEqual(ONE_USE);
   });
 
   it("keeps every other reading: a use the trait's other paragraphs give, the SRD's opening line and Magic Initiate's free casting", () => {
@@ -281,5 +325,119 @@ describe("a lineage trait's later spells are no use of the trait, however a book
     // higher-level spell: one use, at every level.
     const initiate = data.feats.find((f) => f.name === 'Magic Initiate')!;
     for (let level = 1; level <= 20; level++) expect(inferFeatureUses(initiate.name, initiate.description, ctx(undefined, level))).toEqual({ max: 1, used: 0, recharge: 'long' });
+  });
+});
+
+describe("only a species trait leaves out the paragraph that teaches a higher-level spell: a class's, a subclass's or a feat's feature reads all of its text", () => {
+  // The paragraph left out is a lineage trait's (srd:species:elf, Elven Lineage: "When you reach character levels 3 and 5,
+  // you learn a higher-level spell, as shown on the table."), whose spells' castings the level-up counts beside the trait.
+  // Any other feature's free casting is its own use, as an SRD subclass feature's is
+  // (srd:rule:sorcerer-draconic-sorcery-dragon-companion: "You can also cast it once without a spell slot, and you regain
+  // the ability to cast it in this way when you finish a Long Rest.").
+  const CLERIC = data.classes.find((c) => c.id === 'srd:class:cleric')!;
+  const ONE_USE = { max: 1, used: 0, recharge: 'long' };
+  /** An invented book's subclass of the SRD Cleric, whose level 6 feature teaches a spell and counts its own casting. */
+  const ASCENT =
+    'Starting at 6th level, you learn a higher-level spell of your choice from the Wizard spell list; it counts as a Cleric spell for you. You can cast it once without expending a spell slot, and you regain the ability to do so when you finish a Long Rest.';
+  const STARLIT: SubclassOption = {
+    id: 'lib:starbook:subclass:starlit-domain',
+    name: 'Starlit Domain',
+    summary: 'Invented: a domain of the night sky.',
+    source: { sourceId: 'starbook', title: 'The Starbook', recordId: 'r-starlit', format: '2024', adaptations: [] },
+    features: [{ level: 6, name: 'Starlit Ascent', description: ASCENT }],
+  };
+  const cleric6: ClassLevel = { classId: CLERIC.id, name: 'Cleric', level: 6, hitDie: 8, casterType: 'full', spellcastingAbility: 'wis', subclass: 'Starlit Domain', subclassId: STARLIT.id };
+
+  it("an invented book subclass's feature keeps its free casting, 1/1 per Long Rest: read, gained at the level and read again by the dialog", () => {
+    expect(inferFeatureUses('Starlit Ascent', ASCENT, ctx(CLERIC, 6))).toEqual(ONE_USE);
+    // The level's new feature, as the level-up dialog and the DM's level_up take it.
+    const gained = gainedFeatures(CLERIC, 6, STARLIT, { scores: sampleCharacter().abilityScores, characterLevel: 6 }).find((f) => f.name === 'Starlit Ascent');
+    expect(gained).toMatchObject({ source: 'subclass', sourceName: 'Starlit Domain 6', uses: ONE_USE });
+    // The dialog's re-read after the level: a sheet whose feature holds no uses (as the change before this one read
+    // it) gets them.
+    const hero = sampleCharacter({ classes: [cleric6], features: [{ id: 'ascent', name: 'Starlit Ascent', source: 'subclass', sourceName: 'Starlit Domain 6', description: ASCENT }] });
+    expect(refreshFeatureUses(hero, data).features.find((f) => f.id === 'ascent')?.uses).toEqual(ONE_USE);
+    // The same words in a species trait: the paragraph that teaches the spell is left out.
+    expect(inferFeatureUses('Starlit Ascent', ASCENT, { ...ctx(undefined, 6), speciesTrait: true })).toBeUndefined();
+  });
+
+  it('an invented feat that teaches a higher-level spell keeps its Proficiency Bonus uses: read, taken at an Ability Score Improvement and read again', () => {
+    // srd:species:gnome, Forest Gnome: "You can cast it without a spell slot a number of times equal to your Proficiency
+    // Bonus, and you regain all expended uses when you finish a Long Rest." The invented feat counts its casting alike.
+    const TEXT =
+      "You learn a higher-level spell: choose a level 2 spell from any class's spell list. You can cast the spell without a spell slot a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.";
+    const byPb = (max: number) => ({ max, used: 0, recharge: 'long', scale: { by: 'proficiency-bonus' } });
+    expect(inferFeatureUses('Starlit Initiate', TEXT, ctx(undefined, 4))).toEqual(byPb(2));
+    expect(inferFeatureUses('Starlit Initiate', TEXT, { ...ctx(undefined, 4), speciesTrait: true })).toBeUndefined();
+    // The level-up dialog's feat panel at Fighter 4's Ability Score Improvement, then its re-read at character level 5.
+    const feat: FeatOption = { id: 'lib:starbook:feat:starlit-initiate', name: 'Starlit Initiate', category: 'general', description: TEXT };
+    const pick: FeatPick = { id: feat.id, name: feat.name, description: TEXT, feat, sourceLabel: 'The Starbook', meetsLevel: true, taken: false, category: 'general' };
+    const fighter3 = sampleCharacter({ classes: [{ classId: SRD_FIGHTER.id, name: 'Fighter', level: 3, hitDie: 10, casterType: 'none' }], spellcasting: undefined, features: [] });
+    const newFeatures = gainedFeatures(SRD_FIGHTER, 4, undefined, { scores: fighter3.abilityScores, characterLevel: 4 });
+    const r = levelUp(fighter3, { className: 'Fighter', classId: SRD_FIGHTER.id, hpMethod: 'average', newFeatures });
+    const addedIds = new Set(r.character.features.map((f) => f.id));
+    const taken = applyFeatChoice(r.character, featChoiceTrigger(newFeatures)!, { kind: 'feat', pick }, { className: 'Fighter', classLevel: 4, addedIds }).character;
+    expect(taken.features.find((f) => f.name === 'Starlit Initiate')?.uses).toEqual(byPb(2));
+    const five = refreshFeatureUses(levelUp(taken, { className: 'Fighter', classId: SRD_FIGHTER.id, hpMethod: 'average' }).character, data);
+    expect(five.features.find((f) => f.name === 'Starlit Initiate')?.uses).toEqual(byPb(3));
+    // The dialog's re-read of a sheet whose feat holds no uses (as the change before this one read it) gives them.
+    const older = sampleCharacter({
+      classes: [{ classId: SRD_FIGHTER.id, name: 'Fighter', level: 5, hitDie: 10, casterType: 'none' }],
+      spellcasting: undefined,
+      features: [{ id: 'initiate', name: 'Starlit Initiate', source: 'feat', sourceName: 'Ability Score Improvement (Fighter 4)', description: TEXT }],
+    });
+    expect(refreshFeatureUses(older, data).features.find((f) => f.id === 'initiate')?.uses).toEqual(byPb(3));
+  });
+});
+
+describe("the level-up's refresh reads a species trait as one (UsesContext.speciesTrait), the lineage trait and the others", () => {
+  // srd:species:elf, Elven Lineage: "When you reach character levels 3 and 5, you learn a higher-level spell, as shown
+  // on the table. You always have that spell prepared. You can cast it once without a spell slot, and you regain the
+  // ability to cast it in that way when you finish a Long Rest." Read again at each level-up, an invented book's lineage
+  // trait and another of its traits worded so read no use off that paragraph; a trait's own Proficiency Bonus uses
+  // still grow.
+  const later = (spells: string) =>
+    `At character level 3 and again at character level 5, you learn a higher-level spell, ${spells}. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest.`;
+  const QUILLFOLK: SpeciesOption = {
+    id: 'lib:quill:species:quillfolk',
+    name: 'Quillfolk',
+    summary: 'Medium Humanoid',
+    creatureType: 'Humanoid',
+    sizes: ['Medium'],
+    speed: 30,
+    source: { sourceId: 'quill', title: 'The Quillfolk Primer', recordId: 'r-quill', format: '2024', adaptations: [] },
+    lineageTrait: 'Inkbound Heritage',
+    traits: [
+      {
+        name: 'Inkbound Heritage',
+        description: `You are marked by an inkbound heritage. Choose a heritage from the table.\n\n${later('as shown on the table')}\n\n| Heritage | Level 1 | Level 3 | Level 5 |\n|---|---|---|---|\n| Sepia | You know the Light cantrip. | Faerie Fire | Darkness |`,
+      },
+      { name: 'Inkwell Gift', description: later('which your inkwell names') },
+      { name: 'Blot Step', description: 'You can use this trait a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.' },
+    ],
+    lineages: [{ name: 'Sepia', description: 'You know the Light cantrip. Level 3: Faerie Fire. Level 5: Darkness.' }],
+  };
+
+  it("leaves both traits' later-spells paragraphs unread at every level, and grows the other trait's uses", () => {
+    const quillData = { classes: data.classes, species: [...data.species, QUILLFOLK] };
+    const trait = (name: string, description: string): Feature => ({ id: `f-${name}`, name, source: 'species', sourceName: 'Quillfolk', description });
+    let c = sampleCharacter({
+      classes: [{ classId: SRD_FIGHTER.id, name: 'Fighter', level: 1, hitDie: 10, casterType: 'none' }],
+      species: 'Quillfolk (Sepia heritage)',
+      speciesId: QUILLFOLK.id,
+      spellcasting: undefined,
+      features: [trait('Inkbound Heritage (Sepia)', QUILLFOLK.traits[0].description), trait('Inkwell Gift', QUILLFOLK.traits[1].description), trait('Blot Step', QUILLFOLK.traits[2].description)],
+    });
+    for (let level = 2; level <= 5; level++) {
+      c = refreshFeatureUses(levelUp(c, { className: 'Fighter', classId: SRD_FIGHTER.id, hpMethod: 'average' }).character, quillData);
+      expect(
+        c.features.map((f) => [f.name, f.uses?.max ?? null]),
+        `level ${level}`,
+      ).toEqual([
+        ['Inkbound Heritage (Sepia)', null],
+        ['Inkwell Gift', null],
+        ['Blot Step', level < 5 ? 2 : 3],
+      ]);
+    }
   });
 });

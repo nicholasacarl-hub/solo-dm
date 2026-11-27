@@ -31,6 +31,12 @@ export interface UsesContext {
   scores: AbilityScores;
   /** The owning class (for level-table columns), if any. */
   cls?: ClassOption;
+  /**
+   * The text is a species trait's (the builder's species step, refreshFeatureUses' species branch): its paragraph on
+   * the spells it gives at later character levels is no use of the trait (withoutLaterSpells). A class's, a
+   * subclass's or a feat's feature reads its whole text.
+   */
+  speciesTrait?: boolean;
 }
 
 interface UsesFound {
@@ -139,26 +145,41 @@ function usesFromTable(name: string, description: string, ctx: UsesContext): Use
 const LATER_SPELL = /\blearn a higher-level spell/i;
 
 /**
- * The text less a lineage trait's paragraph about the spells it gives at later character levels (SRD 5.2.1
+ * A paragraph that opens with that spell's free casting, in the SRD's words (srd:species:elf): "You can cast it once
+ * without a spell slot".
+ */
+const FREE_CASTING_OPENING = /^You can cast it once without (?:expending )?a spell slot/i;
+
+/**
+ * A species trait's text less its paragraph about the spells it gives at later character levels (SRD 5.2.1
  * srd:species:elf, Elven Lineage: "When you reach character levels 3 and 5, you learn a higher-level spell, as shown on
  * the table. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability
  * to cast it in that way when you finish a Long Rest."; srd:species:tiefling's Fiendish Legacy alike): each such spell's
  * free casting is its own, counted beside it (spellPicks.ts withLineageCastings), never a use of the trait. Known by
  * "learn a higher-level spell" however a book words the paragraph's opening or wraps its lines; a paragraph runs to a
- * blank line, and the rest of the text stays as it was (Magic Initiate's "Level 1 Spell" is no such paragraph).
+ * blank line. A paragraph right after a left-out one that opens with the free-casting sentence goes too (that paragraph
+ * split by a blank line before "You can cast it once without a spell slot"); the rest of the text stays as it was, so
+ * the sentence anywhere else is the trait's own use (Magic Initiate's "Level 1 Spell" is no such paragraph).
  */
 function withoutLaterSpells(text: string): string {
-  // Split keeping the blank lines (odd places), so the text joins back exactly.
+  let leftOut = false;
+  // Split keeping the blank lines (odd places), so the text joins back exactly; blank lines alone are no paragraph.
   return text
     .split(/(\n[ \t]*\n)/)
-    .map((part, i) => (i % 2 === 0 && LATER_SPELL.test(part.replace(/\s+/g, ' ')) ? '' : part))
+    .map((part, i) => {
+      const flat = part.replace(/\s+/g, ' ').trim();
+      if (i % 2 === 1 || !flat) return part;
+      leftOut = LATER_SPELL.test(flat) || (leftOut && FREE_CASTING_OPENING.test(flat));
+      return leftOut ? '' : part;
+    })
     .join('');
 }
 
 function usesFromText(raw: string, ctx: UsesContext): UsesFound | null {
-  // Ignore the paragraph about spells learned at later levels (Elven Lineage, Fiendish Legacy): however it is worded or
-  // wrapped, and, as before, the line that opens "When you reach character levels 3 and 5".
-  const text = withoutLaterSpells(raw).replace(/When you reach character levels \d+ and \d+[^\n]*(?:\n|$)/i, '');
+  // Ignore the line that opens "When you reach character levels 3 and 5" (Elven Lineage, Fiendish Legacy), and a
+  // species trait's paragraph about the spells learned at later levels, however it is worded or wrapped
+  // (withoutLaterSpells).
+  const text = (ctx.speciesTrait ? withoutLaterSpells(raw) : raw).replace(/When you reach character levels \d+ and \d+[^\n]*(?:\n|$)/i, '');
   const pool = /total number of Hit Points equal to (\w+) times your (\w+) level/i.exec(text);
   if (pool) {
     const multiplier = wordNumber(pool[1]) ?? 1;

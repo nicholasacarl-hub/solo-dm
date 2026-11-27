@@ -785,6 +785,22 @@ describe("a lineage's spells at character levels 3 and 5 (srd:species:elf, srd:s
     expect(levelWithLineage(ruled, ruled.classes[0]).cast).toMatchObject({ added: [], withheldBy: { name: 'Elven Lineage (Drow)' } });
   });
 
+  it("adds Faerie Fire's counter at character level 3 beside the DM's ruling on another feature: only a ruled lineage trait holds them back", () => {
+    // srd:species:elf, Elven Lineage: "You can cast it once without a spell slot, and you regain the ability to cast it in
+    // that way when you finish a Long Rest." The DM's ruling on Rage, or on another species trait, counts no such casting.
+    const rage: Feature = { id: 'f-rage', name: 'Rage', source: 'class', sourceName: 'Barbarian 1', description: '', uses: { max: 4, used: 1, recharge: 'long', ruled: true } };
+    const senses: Feature = { id: 'f-senses', name: 'Keen Senses', source: 'species', sourceName: 'Elf', description: '', uses: { max: 2, used: 0, recharge: 'long', ruled: true } };
+    for (const ruling of [rage, senses]) {
+      const c = lineageHero('Drow', [entry('Barbarian', 3)], [], [ruling]);
+      const { cast } = levelWithLineage(c, c.classes[0]);
+      expect(cast, ruling.name).toMatchObject({ lineage: 'Drow', added: ['Faerie Fire'], withheldBy: null });
+      expect(counters(cast.character).map((f) => [f.name, f.sourceName, f.uses]), ruling.name).toEqual([['Faerie Fire (free casting)', 'Drow', { max: 1, used: 0, recharge: 'long' }]]);
+      expect(freeCastingLines(cast), ruling.name).toEqual(['Free casting now, once per Long Rest without a spell slot: Faerie Fire (Drow); spend it with update_character features_use "Faerie Fire (free casting)".']);
+      // The ruling stays as the DM made it.
+      expect(cast.character.features.find((f) => f.id === ruling.id), ruling.name).toEqual(ruling);
+    }
+  });
+
   describe("a book's lineage trait worded otherwise than the SRD (the invented Quillfolk, the review's wordings)", () => {
     // srd:species:elf, Elven Lineage: "You can cast it once without a spell slot, and you regain the ability to cast it in
     // that way when you finish a Long Rest": one free casting for each spell, however a book opens that paragraph or wraps
@@ -820,7 +836,7 @@ describe("a lineage's spells at character levels 3 and 5 (srd:species:elf, srd:s
       const [trait] = species.traits;
       const sepia = species.lineages![0];
       const c = hero([entry('Fighter', 2)], [spell('Light', 0, 'Sepia', true, { notes: 'Spellcasting ability: Wisdom' })]);
-      const uses = inferFeatureUses(trait.name, lineageFeatureText(trait, sepia), { level: 1, proficiencyBonus: 2, scores: c.abilityScores });
+      const uses = inferFeatureUses(trait.name, lineageFeatureText(trait, sepia), { level: 1, proficiencyBonus: 2, scores: c.abilityScores, speciesTrait: true });
       const features: Feature[] = [
         { id: 'f-ink', name: 'Inkbound Heritage (Sepia)', source: 'species', sourceName: 'Quillfolk', description: trait.description, ...(uses ? { uses } : {}) },
         { id: 'f-sepia', name: 'Sepia', source: 'species', sourceName: 'Quillfolk', description: sepia.description },

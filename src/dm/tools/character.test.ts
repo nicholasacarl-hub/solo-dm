@@ -3762,6 +3762,14 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
       expect((await wizard.run('update_character', { speed: 25 })).content).not.toContain('speed is the Speed');
     });
 
+    it('names the feature a Shield suspends, in the sheet\'s words for it (srd:rule:monk-unarmored-movement: "while you aren\'t wearing armor or wielding a Shield")', async () => {
+      const shield = { id: 'sh', name: 'Shield', quantity: 1, equipped: true, category: 'shield' as const, armor: { kind: 'shield' as const, baseAc: 2, dexCap: 0 } };
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Monk', 6), { inventory: [shield] }) });
+      expect((await h.run('update_character', { speed: 35 })).content).toContain(
+        "Speed 30 ft. → 35 ft.\nspeed is the Speed before Unarmored Movement, which the app adds: Mira Voss's Speed is now 35 ft (base 35 ft; Unarmored Movement: no +15 ft in armor or with a Shield).\n",
+      );
+    });
+
     it("names only the features the app adds: a 2014 book's Monk 6 beside an SRD Barbarian 5 hears Fast Movement, an SRD Monk 6 / Barbarian 5 both (srd:rule:barbarian-fast-movement)", async () => {
       // srd:rule:barbarian-fast-movement: "Your speed increases by 10 feet while you aren't wearing Heavy armor." An
       // older-edition book's Monk gets no Unarmored Movement from the app (its numbers can differ), so the DM keeps that

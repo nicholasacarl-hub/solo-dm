@@ -395,12 +395,14 @@ function buildFeatures(draft: BuilderDraft, data: BuilderData, p: Picks, usesCtx
     const description = originFeat.feat?.description ?? '';
     out.push(feature(originFeat.name, 'feat', originFeat.source, description, inferFeatureUses(originFeat.name, description, usesCtx), originFeat.feat?.ref));
   }
+  // A species trait's paragraph on its later spells is no use of the trait (UsesContext.speciesTrait).
+  const traitCtx: UsesContext = { ...usesCtx, speciesTrait: true };
   for (const trait of species?.traits ?? []) {
     if (trait === choices.lineageTrait && lineage) {
       // Only the chosen option: Giant Ancestry's use limit is in its preamble, and the Forest Gnome's
       // Proficiency Bonus uses must not reach a Rock Gnome.
       const text = lineageFeatureText(trait, lineage);
-      const uses = inferFeatureUses(trait.name, text, usesCtx);
+      const uses = inferFeatureUses(trait.name, text, traitCtx);
       if (species!.source) {
         // A book's lineage keeps the book's words exactly, part by part, each with its ref (so exports leave
         // each out and a device that has the book fills each back in): the trait as printed, and the chosen
@@ -419,7 +421,7 @@ function buildFeatures(draft: BuilderDraft, data: BuilderData, p: Picks, usesCtx
       const feat = data.feats.find((f) => f.id === draft.speciesFeat);
       if (feat) name = `${trait.name} (${feat.name})`;
     }
-    out.push(feature(name, 'species', species!.name, trait.description, inferFeatureUses(trait.name, trait.description, usesCtx), trait.ref));
+    out.push(feature(name, 'species', species!.name, trait.description, inferFeatureUses(trait.name, trait.description, traitCtx), trait.ref));
   }
   // An older background's named feature, kept on the sheet (§5.6 background-feature-kept).
   const legacy = background?.legacyFeature;

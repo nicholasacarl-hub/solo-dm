@@ -219,7 +219,7 @@ export function refreshFeatureUses(c: Character, data: LevelingData | null | und
       }
     } else if (f.source === 'species') {
       const text = species ? speciesTraitText(species, f, lineage) : null;
-      if (text !== null) next = withUses(f, inferFeatureUses(baseFeatureName(f.name), text, base));
+      if (text !== null) next = withUses(f, inferFeatureUses(baseFeatureName(f.name), text, { ...base, speciesTrait: true }));
     } else if (f.source === 'feat') {
       next = withUses(f, inferFeatureUses(f.name, f.description, base));
     }
