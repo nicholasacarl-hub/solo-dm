@@ -30,45 +30,48 @@ vibe-coding session.
   its column's character level as one for the DM to add, and a table with a column more gives its Level 3 spell at
   character level 5 and its Level 5 spell never, saying nothing); a book's species trait reads a use of its own off
   "cast it once without a spell slot", beside the lineage spells' own counters (only a use the DM rules holds those
-  back), when its paragraph on the later spells neither says "learn a higher-level spell" nor opens "When you reach
-  character levels 3 and 5" (a list marker, emphasis or a bold label before those words counts as another opening), or
+  back), when its paragraph on the later spells neither says "learn a higher-level spell" (an en dash or another glyph
+  between "higher" and "level" isn't read so) nor opens "When you reach character levels 3 and 5", with any two levels,
+  and has the word "spell" (a list marker, emphasis or a bold label before those words counts as another opening), or
   when that sentence stands anywhere but in that paragraph or at the opening of the paragraph right after it; a species
   trait whose paragraphs are kept apart by single line breaks (a plain-text paste) also loses any use written in the
-  same block as "learn a higher-level spell" or after an opening "When you reach character levels 3 and 5", and a
-  paragraph that opens with those words is no use of the trait whatever it says; any feature, species trait or not,
-  reads no use off its first line that opens "When you reach character levels 3 and 5" (the SRD's lineage paragraphs
-  open so), so a book feature whose own use stands on that line has none, and the DM counts that use; a book species'
-  trait other than its lineage trait that teaches "a higher-level spell" reads no use and gets no free-casting counter,
-  so the DM counts that casting; a hero made before this version from a book worded otherwise keeps the use its trait
-  read then, beside the counters its next level-up adds (no tool takes the use away, and a DM's ruling of another number
-  on the trait holds the counters back instead); a hero already past character level 3 or 5 gets the spells at its next
-  level-up (a level in a class the builder data lacks adds none; a later one does), and one who won't level again only
-  by hand, since `spells_add` can't mark a spell always prepared; a lineage spell cast with an ability the sheet's
-  spellcasting doesn't use has no save DC on the sheet; and the Spells tab reads "0 prepared" for a hero whose leveled
-  spells are all always prepared. Draconic Flight and Large Form get their use at character level 5 through the level-up
-  dialog only, not the DM's `level_up`. Counted uses: a Fighter keeps the duplicate Action Surge and Indomitable entries
-  an older version added (the class's own, or the DM's from an older `level_up`) until its next level-up here, and an
-  older version on a synced device adds them again at Fighter 13 and 17, reads a book Fighter's counts and a book
-  species trait's use as it used to and shows the Speed without class features. A book Fighter whose class table counts
-  no uses keeps the uses it reads today, and a `uses_max` the DM gives its bare entry ("Action Surge (one use)" with 1
-  on the text's 2) is the DM's ruling, which both level-up paths keep, at Fighter 17 too (a new `uses_max` changes it).
-  A level-up or a features call on a device without the book's data reads none of its counts (a merge then keeps the
-  class's bare "Indomitable", and the next read with the data reads the table), and there `features_add` with a
-  `uses_max` on an older save's bare Action Surge or Indomitable is the DM's ruling under any name, the table's own
-  included ("Indomitable (two uses)" with 2 at Fighter 13 stays 2 at 17, and the kept-ruling line names it); the name's
-  count filled in for a `uses_max` left out is no ruling, and the next read corrects it. A book Fighter's bare entry the
-  DM ruled stays the DM's ruling (an older version's `uses_max`, or any given without the book's data): no read and no
-  `features_add` puts it back on its table, though the table's count under the table's name clears an SRD entry's
-  ruling; a new `uses_max` changes the number. An older-edition book's Fighter, or one whose edition the sheet hasn't
-  recorded, doesn't stand in for the SRD's, so only its own entries' names count: the DM's `features_add` of a counted
-  name ("Indomitable (two uses)") beside its bare "Indomitable" is added beside it, and no level-up folds the two, as a
-  DM's "Wild Shape (2 uses)" beside the Druid's "Wild Shape" stays beside it. A DM's ruled Action Surge or Indomitable
-  (a `uses_max` of another number, or a count above the table's at the level that merged it) keeps its number at the
-  table's later rows, and `level_up` names the kept ruling, not the table's new count; a `uses_max` the DM gives one of
-  the table's names in `level_up` `new_features` ("Indomitable (two uses)" with three) gives way to the name's count,
-  which the result shows as growth (1 → 2), and the bare name with a higher `uses_max` ("Indomitable" with 3 uses at the
-  Fighter 13 level-up) on a sheet that holds no Indomitable yet is no ruling: the level-up dialog's next level reads the
-  table's 2 while `level_up` keeps 3. Two classes of one name (an SRD Fighter beside a book's) count as one family.
+  same block as those words, and such a paragraph is no use of the trait whatever else it says (its "spell" may be only
+  "without a spell slot"); any feature, species trait or not, reads no use off its first line that opens "When you reach
+  character levels 3 and 5", with any two levels, and has the word "spell" (the SRD's lineage paragraphs open so), so a
+  book feature whose own use stands on that line has none, and the DM counts that use; a book species' trait other than
+  its lineage trait that teaches "a higher-level spell" reads no use and gets no free-casting counter, so the DM counts
+  that casting; a hero made before this version from a book worded otherwise keeps the use its trait read then, beside
+  the counters its next level-up adds (no tool takes the use away, and a DM's ruling of another number on the trait
+  holds the counters back instead); a hero already past character level 3 or 5 gets the spells at its next level-up (a
+  level in a class the builder data lacks adds none; a later one does), and one who won't level again only by hand,
+  since `spells_add` can't mark a spell always prepared; a lineage spell cast with an ability the sheet's spellcasting
+  doesn't use has no save DC on the sheet; and the Spells tab reads "0 prepared" for a hero whose leveled spells are all
+  always prepared. Draconic Flight and Large Form get their use at character level 5 through the level-up dialog only,
+  not the DM's `level_up`. Counted uses: a Fighter keeps the duplicate Action Surge and Indomitable entries an older
+  version added (the class's own, or the DM's from an older `level_up`) until its next level-up here, and an older
+  version on a synced device adds them again at Fighter 13 and 17, reads a book Fighter's counts and a book species
+  trait's use as it used to and shows the Speed without class features. An older save's book Fighter keeps its older
+  counts on the sheet's own use pips, in a rest and in `get_character_sheet` until its first level-up or features call
+  reads the table, whose line then names the correction. A book Fighter whose class table counts no uses keeps the uses
+  it reads today, and a `uses_max` the DM gives its bare entry ("Action Surge (one use)" with 1 on the text's 2) is the
+  DM's ruling, which both level-up paths keep, at Fighter 17 too (a new `uses_max` changes it). A level-up or a features
+  call on a device without the book's data reads none of its counts (a merge then keeps the class's bare "Indomitable",
+  and the next read with the data reads the table), and there `features_add` with a `uses_max` on an older save's bare
+  Action Surge or Indomitable is the DM's ruling under any name, the table's own included ("Indomitable (two uses)" with
+  2 at Fighter 13 stays 2 at 17, and the kept-ruling line names it); the name's count filled in for a `uses_max` left
+  out is no ruling, and the next read corrects it. A book Fighter's bare entry the DM ruled stays the DM's ruling (an
+  older version's `uses_max`, or any given without the book's data): no read and no `features_add` puts it back on its
+  table, though the table's count under the table's name clears an SRD entry's ruling; a new `uses_max` changes the
+  number. An older-edition book's Fighter, or one whose edition the sheet hasn't recorded, doesn't stand in for the
+  SRD's, so only its own entries' names count: the DM's `features_add` of a counted name ("Indomitable (two uses)")
+  beside its bare "Indomitable" is added beside it, and no level-up folds the two, as a DM's "Wild Shape (2 uses)"
+  beside the Druid's "Wild Shape" stays beside it. A DM's ruled Action Surge or Indomitable (a `uses_max` of another
+  number, or a count above the table's at the level that merged it) keeps its number at the table's later rows, and
+  `level_up` names the kept ruling, not the table's new count; a `uses_max` the DM gives one of the table's names in
+  `level_up` `new_features` ("Indomitable (two uses)" with three) gives way to the name's count, which the result shows
+  as growth (1 → 2), and the bare name with a higher `uses_max` ("Indomitable" with 3 uses at the Fighter 13 level-up)
+  on a sheet that holds no Indomitable yet is no ruling: the level-up dialog's next level reads the table's 2 while
+  `level_up` keeps 3. Two classes of one name (an SRD Fighter beside a book's) count as one family.
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
   DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
   Signature Spells, copying a spell into a spellbook and Evocation Savant's free spells (the DM records those as
