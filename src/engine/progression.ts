@@ -32,6 +32,7 @@ import {
   isGrantedFamilyEntry,
   isToughFeat,
   nameUseCount,
+  readsItsTable,
 } from './character';
 import { asiLevels, featuresAtLevel, findSrdClass, isLibraryId, rulesClassFor, srdClassFor, SRD_FEATURE_USE_SCALES, WARLOCK_INVOCATIONS, type SrdClassInfo } from './classData';
 import { cryptoRng, rollDice, type Rng } from './dice';
@@ -519,6 +520,20 @@ interface Collapsed {
 /** A member's count: its name's ("Indomitable (two uses)": 2), else its uses' maximum. */
 const memberCount = (f: Feature): number => nameUseCount(f.name) ?? Math.max(0, toInt(f.uses?.max));
 
+/**
+ * The count the rules table of the hero's class (rulesClassFor: the SRD class, or the SRD class a 2024 book's stands in
+ * for) gives a base name (its key: "indomitable") at the class's level: the latest name at or below that level naming it
+ * with a use count (SRD 5.2.1 Fighter Features table: "Indomitable (two uses)" at 13, so two at Fighter 13 to 16). Null
+ * before the first such name, or for a table that names none.
+ */
+function tableCountByName(cl: ClassLevel, base: string): number | null {
+  let count: number | null = null;
+  for (const names of rulesClassFor(cl)?.featuresByLevel.slice(0, cl.level) ?? []) {
+    for (const name of names) if (nameKey(featureBaseName(name)) === base) count = nameUseCount(name) ?? count;
+  }
+  return count;
+}
+
 const namesItsCount = (m: FamilyMember): boolean => nameUseCount(m.f.name) !== null;
 
 /** The newer of two members (in sheet order, `m` after `best`): the higher count, else the one named by it, else `m`. */
@@ -558,7 +573,12 @@ export function featureMergeText(kept: Pick<Feature, 'name' | 'uses'>, merged: r
  * - else the class's first entry whole (id, place, source name, text, ref), or the DM's first when the class has none,
  *   under the newest member's name, the highest count ("Indomitable (three uses)"), with that count as its maximum; spent
  *   uses are all the members', at most the family's count before this level-up (an older sheet's duplicates allowed
- *   more), up to the new maximum;
+ *   more), up to the new maximum. A book class's entry its table's reader reads by its bare name keeps that name
+ *   (readsItsTable: a 2024 book's Fighter's "Indomitable" without uses yet, beside the DM's "Indomitable (one use)"), so
+ *   the next read gives it the table's count. A maximum above the class's rules table at its class level
+ *   (tableCountByName: the DM's "Indomitable" with 3 uses at Fighter 13, where the table gives two) is the DM's ruling,
+ *   so the level-up dialog's re-read and the DM's level_up keep it alike; for an entry read by its bare name, only
+ *   another member's count makes one (its own is an older reading the next read corrects);
  * - but an entry whose uses follow its class table's counts (a by-table scale: a 2024 book's Fighter as the offline
  *   parser names it, "Indomitable") keeps its own name and its scale, whose count at the class level is its maximum; a
  *   member counting more (the DM's "Indomitable (three uses)" at Fighter 13, where the table gives two) is the DM's
@@ -578,10 +598,10 @@ function collapseCountedFamilies(
   const isNew = new Set(added);
   const collapsed: Collapsed = { features, grows: [], merges: [], events: [], folded: new Set() };
   // By class and base name: "fighter indomitable". `byName`: the class counts the base by name (classCountingByName).
-  const families = new Map<string, { base: string; byName: boolean; members: FamilyMember[] }>();
+  const families = new Map<string, { base: string; byName: boolean; cl: ClassLevel; members: FamilyMember[] }>();
   const keyOf = (cl: ClassLevel, f: Feature) => `${nameKey(cl.name)} ${nameKey(featureBaseName(f.name))}`;
   const familyOf = (cl: ClassLevel, f: Feature) => {
-    const family = families.get(keyOf(cl, f)) ?? { base: nameKey(featureBaseName(f.name)), byName: classCountingByName([cl], featureBaseName(f.name)) !== undefined, members: [] };
+    const family = families.get(keyOf(cl, f)) ?? { base: nameKey(featureBaseName(f.name)), byName: classCountingByName([cl], featureBaseName(f.name)) !== undefined, cl, members: [] };
     families.set(keyOf(cl, f), family);
     return family;
   };
@@ -610,7 +630,7 @@ function collapseCountedFamilies(
   const order = (m: FamilyMember) => (m.row ? features.length : (place.get(m.f) ?? features.length));
   const drop = new Set<Feature>();
   const replace = new Map<Feature, Feature>();
-  for (const { byName, members } of families.values()) {
+  for (const { base, byName, cl, members } of families.values()) {
     // Counted by the class's own name for it (its entry, its new feature, its table's row, or its table naming the base
     // with a count): the DM's own counted label beside a class feature named without a count is no family.
     if (members.length < 2 || !(byName || members.some((m) => (m.own || m.row) && namesItsCount(m)))) continue;
@@ -620,6 +640,8 @@ function collapseCountedFamilies(
     if (!keep) continue;
     const spent = real.reduce((sum, m) => sum + Math.max(0, toInt(m.f.uses?.used)), 0);
     const before = Math.max(0, ...real.filter((m) => m.held).map((m) => memberCount(m.f)));
+    // The other members' highest count: above the table's, the DM's ruling on an entry that follows or reads its table.
+    const most = Math.max(0, ...members.filter((m) => m !== keep).map((m) => memberCount(m.f)));
     let kept: Feature;
     const ruled = keep.f.uses?.ruled ? keep.f.uses : undefined;
     const tracked = !ruled && keep.f.uses?.scale?.by === 'table' ? keep.f.uses : undefined;
@@ -627,7 +649,6 @@ function collapseCountedFamilies(
     if (ruled) kept = { ...keep.f, uses: { ...ruled, used: clamp(spent, 0, ruled.max) } };
     else if (tracked && table !== null) {
       // The table's count by its scale; another member's higher count is the DM's ruling on this entry (its scale off).
-      const most = Math.max(0, ...members.filter((m) => m !== keep).map((m) => memberCount(m.f)));
       const { scale: _scale, ...own } = tracked;
       const uses: FeatureUses = most > table ? { ...own, max: most, ruled: true } : { ...tracked, max: table };
       kept = { ...keep.f, uses: { ...uses, used: clamp(Math.min(spent, before), 0, uses.max) } };
@@ -635,7 +656,19 @@ function collapseCountedFamilies(
       const newest = members.reduce((best, m) => newerMember(m, best));
       const count = memberCount(newest.f);
       const template = keep.f.uses ?? newest.f.uses ?? real.find((m) => m.f.uses)?.f.uses;
-      kept = { ...keep.f, name: newest.f.name, ...(template ? { uses: { ...template, max: count, used: clamp(Math.min(spent, before), 0, count) } } : {}) };
+      // A book class's entry read by its bare name keeps it, and the next read gives it the table's count (its own count,
+      // an older reading, is no ruling). A count above the class's rules table at its level is the DM's ruling (its
+      // scale off), as for an entry that follows the table.
+      const reads = readsItsTable(keep.f, classes);
+      const name = reads ? keep.f.name : newest.f.name;
+      // None for a class whose rules table doesn't count the base by name (classCountingByName): no ruling then.
+      const rules = tableCountByName(cl, base);
+      let uses: FeatureUses | undefined;
+      if (template && rules !== null && (reads ? most : count) > rules) {
+        const { scale: _scale, ...plain } = template;
+        uses = { ...plain, max: count, ruled: true };
+      } else if (template) uses = { ...template, max: count };
+      kept = { ...keep.f, name, ...(uses ? { uses: { ...uses, used: clamp(Math.min(spent, before), 0, count) } } : {}) };
     }
     replace.set(keep.f, kept);
     for (const m of real) {

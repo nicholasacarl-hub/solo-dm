@@ -31,6 +31,7 @@ import {
   findItem,
   formatCurrency,
   gainXp,
+  readsItsTable,
   recordDeathSave,
   removeCondition,
   removeFeature,
@@ -601,8 +602,13 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     const ruled = fighter([indomitable('ind', 'Indomitable (one use)', 2, 0, { uses: { max: 2, used: 0, recharge: 'long', ruled: true } })]);
     expect(addFeature(ruled, tableRow('Indomitable (two uses)', 2)).character.features[0].uses).toEqual({ max: 2, used: 0, recharge: 'long' });
     expect(addFeature(ruled, tableRow('Indomitable (one use)', 1)).character.features[0].uses).toEqual({ max: 1, used: 0, recharge: 'long' });
-    // Without uses the rewrite keeps the entry's own.
-    expect(addFeature(c, tableRow('Indomitable (two uses)')).character.features[0]).toMatchObject({ name: 'Indomitable (two uses)', uses: c.features[0].uses });
+    // Without uses the rewrite changes only the entry's text: it keeps its name and its uses, so its name never counts
+    // what its uses don't (the DM's features_add gives an entry counting fewer the name's count).
+    const textOnly = addFeature(c, tableRow('Indomitable (two uses)'));
+    expect(textOnly.character.features[0]).toMatchObject({ name: 'Indomitable (one use)', uses: c.features[0].uses });
+    expect(textOnly.events[0].message).toBe('Updated feature: Indomitable (one use)');
+    // The entry's own name in another spelling is no counted name routed onto it: the call's spelling, as always.
+    expect(addFeature(c, tableRow('indomitable (one use)')).character.features[0]).toMatchObject({ name: 'indomitable (one use)', uses: c.features[0].uses });
   });
 
   it("features_add of the table's name rewrites the DM's own entry of the family, the DM's ruling first", () => {
@@ -659,6 +665,45 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     const ruled = { ...c, features: [{ ...own, uses: { ...own.uses!, ruled: true } }, dm] };
     expect(addFeature(ruled, tableRow('Indomitable (two uses)', 2)).character.features[0].uses).toEqual(own.uses);
     expect(addFeature(c, tableRow('Indomitable (two uses)')).character.features[0]).toEqual(own);
+  });
+
+  it("a counted name routed onto a 2024 book Fighter's bare entry its table hasn't counted yet keeps that entry's name, so the table's reader goes on reading it (F1; srd:rule:fighter-indomitable)", () => {
+    // srd:rule:fighter-indomitable: "You can use this feature twice before a Long Rest starting at level 13 and three times
+    // before a Long Rest starting at level 17." An older save of a 2024 book's Fighter 13, its features named as the
+    // offline parser names them: "Indomitable" without uses yet, "Action Surge" read as 2.
+    const bare = indomitable('ind', 'Indomitable', 0, 0, { uses: undefined });
+    const surge: Feature = { id: 'surge', name: 'Action Surge', source: 'class', sourceName: 'Fighter 2', description: 'One more action.', uses: { max: 2, used: 1, recharge: 'short' } };
+    const c = mira({ classes: [bookFighter(13)], spellcasting: undefined, features: [surge, bare] });
+    const two = addFeature(c, { ...tableRow('Indomitable (two uses)', 2), description: 'Rewritten.' });
+    expect(two.events[0].message).toBe('Updated feature: Indomitable');
+    expect(two.character.features).toEqual([surge, { ...bare, description: 'Rewritten.', uses: { max: 2, used: 0, recharge: 'long' } }]);
+    // Another number is the DM's ruling, on the same entry under its own name.
+    expect(addFeature(c, { ...tableRow('Indomitable (two uses)'), uses: { max: 3, used: 0, recharge: 'long' } }).character.features[1]).toMatchObject({
+      name: 'Indomitable',
+      uses: { max: 3, used: 0, recharge: 'long', ruled: true },
+    });
+    // Action Surge alike: "(one use)" with one use on the older reading's two is no ruling, its spent use kept.
+    const one = addFeature(c, { ...tableRow('Action Surge (one use)'), uses: { max: 1, used: 0, recharge: 'short' } });
+    expect(one.events[0].message).toBe('Updated feature: Action Surge');
+    expect(one.character.features[0]).toEqual({ ...surge, description: 'Reroll a failed saving throw.', uses: { max: 1, used: 1, recharge: 'short' } });
+    // The SRD Fighter's own bare entry (a hand-made sheet) is no book's: it takes the table's name, as before.
+    expect(addFeature(fighter([bare]), tableRow('Indomitable (two uses)', 2)).character.features[0]).toMatchObject({ name: 'Indomitable (two uses)', uses: { max: 2 } });
+  });
+
+  it('reads its table: a book class standing in for one that counts the base by name, its own entry, named with the base alone (readsItsTable)', () => {
+    const own = (name: string, sourceName = 'Fighter 9') => indomitable('x', name, 1, 0, { sourceName });
+    const classes = [bookFighter(13)];
+    expect(readsItsTable(own('Indomitable'), classes)).toBe(true);
+    expect(readsItsTable(own('Action Surge', 'Fighter 2'), classes)).toBe(true);
+    // A name with a count, another parenthetical, the DM's entry, another base, another class: not read by the table.
+    expect(readsItsTable(own('Indomitable (two uses)'), classes)).toBe(false);
+    expect(readsItsTable(own('Indomitable (Tactical)'), classes)).toBe(false);
+    expect(readsItsTable(own('Indomitable', 'Granted in play'), classes)).toBe(false);
+    expect(readsItsTable(own('Second Wind', 'Fighter 1'), classes)).toBe(false);
+    expect(readsItsTable(own('Indomitable', 'Wizard 1'), [...classes, { classId: 'srd:class:wizard', name: 'Wizard', level: 1, hitDie: 6, casterType: 'full' }])).toBe(false);
+    // The SRD Fighter's own (its table names its entries with their counts), and an older-edition book's (no stand-in).
+    expect(readsItsTable(own('Indomitable'), [{ classId: 'srd:class:fighter', name: 'Fighter', level: 13, hitDie: 10, casterType: 'none' }])).toBe(false);
+    expect(readsItsTable(own('Indomitable'), [bookFighter(13, '2014')])).toBe(false);
   });
 
   it('a name without a count, a feat of the name, or a DM entry named otherwise is added beside it as before', () => {

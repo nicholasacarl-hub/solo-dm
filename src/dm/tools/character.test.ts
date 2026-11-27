@@ -3459,6 +3459,101 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
       ]);
     });
 
+    /** The book Fighter's Action Surge and Indomitable: id, name, maximum and scale. */
+    const counts = (c: Character) => c.features.filter((f) => /^(Action Surge|Indomitable)/.test(f.name)).map((f) => [f.id, f.name, f.uses?.max, f.uses?.scale]);
+    /** srd:class:fighter table: "| 17 | +6 | Action Surge (two uses), Indomitable (three uses) |", read from the book's table. */
+    const AT_17 = [
+      ['surge', 'Action Surge', 2, scale(SURGE_COUNTS)],
+      ['ind', 'Indomitable', 3, scale(INDOMITABLE_COUNTS)],
+    ];
+    const WIZARD_1: ClassLevel = { classId: 'srd:class:wizard', name: 'Wizard', level: 1, hitDie: 6, casterType: 'full', spellcastingAbility: 'int' };
+    /** An older save of the book's Fighter with an SRD Wizard 1 beside it. */
+    const withWizard = (c: Character, extra: Feature[] = []): Character => ({ ...c, classes: [...c.classes, WIZARD_1], hitDice: [...c.hitDice, { die: 6, total: 1, spent: 0 }], features: [...c.features, ...extra] });
+
+    it("features_add of the table's name on an older book Fighter's bare entry without counts keeps the entry's name, so level_up to 17 gives the table's 3 Indomitable and 2 Action Surge (F1; srd:rule:fighter-indomitable: \"three times before a Long Rest starting at level 17\")", async () => {
+      for (const [name, max, id, kept] of [
+        ['Indomitable (two uses)', 2, 'ind', 'Indomitable'],
+        ['Action Surge (one use)', 1, 'surge', 'Action Surge'],
+      ] as const) {
+        const h = setup({ builderData: bookData, character: olderBook(13) });
+        const add = await h.run('update_character', { features_add: [{ name, description: 'The DM gives it its uses.', source: 'class', uses_max: max }] });
+        expect(add.content.split('\n')[0]).toBe(`Updated feature: ${kept}`);
+        // The name's count is no ruling: the table's reader goes on reading the entry by its own name.
+        expect(h.sheet().features.find((f) => f.id === id)).toMatchObject({ name: kept, uses: { max } });
+        expect(h.sheet().features.find((f) => f.id === id)?.uses?.ruled).toBeUndefined();
+        for (let level = 14; level <= 17; level++) await h.run('level_up', { class_name: 'Fighter' });
+        expect(counts(h.sheet())).toEqual(AT_17);
+      }
+    });
+
+    it("an older book Fighter 12 / Wizard 1 with the DM's \"Indomitable (one use)\" beside its bare Indomitable levels Wizard, then Fighter to 17: 3 Indomitable and 2 Action Surge by the table, the book's data on this device at the Wizard level or not (F2; srd:rule:fighter-indomitable)", async () => {
+      const dm: Feature = { id: 'dm', name: 'Indomitable (one use)', source: 'class', sourceName: 'Granted in play', description: 'DM words.', uses: { max: 1, used: 0, recharge: 'long' } };
+      const older = withWizard(olderBook(12), [dm]);
+      const merge = '\nIndomitable and Indomitable (one use) merged into Indomitable: 1 use, 1 left.\n';
+      // With the book's data the table is read first; the DM's entry merges into the class's under its own name.
+      const h = setup({ builderData: bookData, character: older });
+      const wizard = await h.run('level_up', { class_name: 'Wizard' });
+      expect(wizard.content).toContain('\nUses read from the Fighter class table: Action Surge 2 → 1, Indomitable none → 1.\n');
+      expect(wizard.content).toContain(merge);
+      for (let level = 13; level <= 17; level++) await h.run('level_up', { class_name: 'Fighter' });
+      expect(counts(h.sheet())).toEqual(AT_17);
+      // Without it (the Wizard level on a device without the book): nothing read, the merge keeps the bare name all the
+      // same, and the Fighter's next level with the book reads the table.
+      const away = setup({ builderData: SRD_BUILDER_DATA, character: older });
+      const apart = await away.run('level_up', { class_name: 'Wizard' });
+      expect(apart.content).not.toContain('Uses read from');
+      expect(apart.content).toContain(merge);
+      const back = setup({ builderData: bookData, character: away.sheet() });
+      expect((await back.run('level_up', { class_name: 'Fighter' })).content).toContain('\nUses read from the Fighter class table: Action Surge 2 → 1.\n');
+      for (let level = 14; level <= 17; level++) await back.run('level_up', { class_name: 'Fighter' });
+      expect(counts(back.sheet())).toEqual(AT_17);
+      // The entry kept takes its uses from the book (its Long Rest), not from the DM's entry recorded with a Short Rest,
+      // as the level-up dialog reads it (srd:rule:fighter-indomitable: "you can't use this feature again until you finish
+      // a Long Rest").
+      const short = setup({ builderData: bookData, character: withWizard(olderBook(12), [{ ...dm, uses: { max: 1, used: 0, recharge: 'short' } }]) });
+      await short.run('level_up', { class_name: 'Wizard' });
+      expect(short.sheet().features.find((f) => f.id === 'ind')?.uses).toEqual({ max: 1, used: 0, recharge: 'long', scale: scale(INDOMITABLE_COUNTS) });
+    });
+
+    it("level_up of any class reads each book class's table first: an older book Fighter 13 / Wizard 1 levelling Wizard holds Action Surge 1 and Indomitable 2, a line per class read; a refused level leaves the sheet as it was (D2; srd:rule:fighter-action-surge, srd:rule:fighter-indomitable)", async () => {
+      // srd:rule:fighter-action-surge: "Starting at level 17, you can use it twice before a rest"; srd:rule:fighter-indomitable:
+      // "You can use this feature twice before a Long Rest starting at level 13".
+      const older = withWizard(olderBook(13));
+      const h = setup({ builderData: bookData, character: older });
+      const out = await h.run('level_up', { class_name: 'Wizard' });
+      const read = 'Uses read from the Fighter class table: Action Surge 2 → 1, Indomitable none → 2.';
+      expect(out.content).toContain(`(max 35)\n${read}\nReached level 15`);
+      expect(toolLog(h, 'level_up')?.detail?.split('\n')[0]).toBe(read);
+      expect(h.sheet().features.slice(0, 2).map((f) => [f.name, f.uses])).toEqual([
+        ['Action Surge', { max: 1, used: 1, recharge: 'short', scale: scale(SURGE_COUNTS) }],
+        ['Indomitable', { max: 2, used: 0, recharge: 'long', scale: scale(INDOMITABLE_COUNTS) }],
+      ]);
+      expect(out.content).not.toContain('Limited-use features that grew');
+      // Refused (a class the app can't add without its hit die): the sheet stays as it was, nothing read.
+      const refused = setup({ builderData: bookData, character: older });
+      const no = await refused.run('level_up', { class_name: 'Lanternmancer' });
+      expect(no.content).not.toContain('Uses read from');
+      expect(refused.sheet().features).toEqual(older.features);
+      // Two book classes read: a line each, in the hero's class order (an invented book's Lanternmancer, whose table
+      // counts its Lantern Ward by name: "Lantern Ward (two uses)" at 5).
+      const lantern: ClassOption = {
+        ...BOOK,
+        id: 'lib:lantern:class:lanternmancer',
+        name: 'Lanternmancer',
+        features: [{ name: 'Lantern Ward', level: 1, description: 'You raise a ward of lamplight.' }],
+        levelTable: Array.from({ length: 20 }, (_, i) => ({ level: i + 1, features: i === 0 ? 'Lantern Ward (one use)' : i === 4 ? 'Lantern Ward (two uses)' : '' })),
+      };
+      const mancer: ClassLevel = { ...bookFighter(5), classId: lantern.id, name: 'Lanternmancer', ref: { ...bookFighter(5).ref!, entryId: lantern.id, entryName: 'Lanternmancer' } };
+      const ward: Feature = { id: 'ward', name: 'Lantern Ward', source: 'class', sourceName: 'Lanternmancer 1', description: 'You raise a ward of lamplight.', uses: { max: 1, used: 0, recharge: 'long' } };
+      const thirteen = olderBook(13);
+      const both = setup({
+        builderData: { ...bookData, classes: [lantern, ...bookData.classes] },
+        character: { ...thirteen, classes: [...thirteen.classes, mancer], hitDice: [...thirteen.hitDice, { die: 10, total: 5, spent: 0 }], features: [...thirteen.features, ward] },
+      });
+      const two = await both.run('level_up', { class_name: 'Wizard' });
+      expect(two.content).toContain(`\n${read}\nUses read from the Lanternmancer class table: Lantern Ward 1 → 2.\nReached level 19`);
+    });
+
     it("a book Fighter whose features keep the table's names: the rows at 17 fold into the entries held, never listed as book features added", async () => {
       // The book prints its features as the SRD's table names them ("Action Surge (one use)" … "(two uses)" at 17), each
       // with its text copied (a ref).
@@ -3531,6 +3626,108 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
         ['Rage', rage.uses],
         ['Rage (4 uses)', undefined],
         ['Rage (5 uses)', { max: 5, used: 0, recharge: 'long' }],
+      ]);
+    });
+
+    it("features_add of an older counted name without uses_max rewrites only the text of an entry the DM ruled, one that follows its table or one counting as many: its name and uses stay (F3; srd:rule:fighter-indomitable: \"three times before a Long Rest starting at level 17\")", async () => {
+      // The DM's ruling of 3 on the class's "Indomitable (one use)" at Fighter 13: it stays, and the next level_up names it.
+      const ruledUses = { max: 3, used: 1, recharge: 'long' as const, ruled: true };
+      const ruled = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Fighter', 13), { features: [{ ...own('ind', 'Indomitable (one use)', 9, 3, 1), uses: ruledUses }] }) });
+      const a = await ruled.run('update_character', { features_add: [{ name: 'Indomitable (two uses)', description: 'New words.', source: 'class' }] });
+      expect(a.content.split('\n')[0]).toBe('Updated feature: Indomitable (one use)');
+      expect(ruled.sheet().features[0]).toMatchObject({ name: 'Indomitable (one use)', description: 'New words.', uses: ruledUses });
+      expect((await ruled.run('level_up', { class_name: 'Fighter' })).content).toContain('\nKept your ruling: Indomitable (one use) 3 uses (a new uses_max in features_add changes it).\n');
+      // An SRD Fighter 17 under the names from earlier in the session: three Indomitable and two Action Surge stay, all usable.
+      const seventeen = setup({
+        builderData: SRD_BUILDER_DATA,
+        campaignSettings: { playerRollMode: 'auto' },
+        character: hero(srdEntry('Fighter', 17), { features: [own('surge', 'Action Surge (two uses)', 17, 2), own('ind', 'Indomitable (three uses)', 17, 3)] }),
+      });
+      const b = await seventeen.run('update_character', {
+        features_add: [
+          { name: 'Indomitable (two uses)', description: 'Reworded.', source: 'class' },
+          { name: 'Action Surge (one use)', description: 'Reworded.', source: 'class' },
+        ],
+      });
+      expect(b.content).toContain('Updated feature: Indomitable (three uses)\nUpdated feature: Action Surge (two uses)\n');
+      expect(seventeen.sheet().features.map((f) => [f.name, f.description, f.uses])).toEqual([
+        ['Action Surge (two uses)', 'Reworded.', { max: 2, used: 0, recharge: 'short' }],
+        ['Indomitable (three uses)', 'Reworded.', { max: 3, used: 0, recharge: 'long' }],
+      ]);
+      const thrice = await seventeen.run('update_character', { features_use: [{ name: 'Indomitable (two uses)' }, { name: 'Indomitable (two uses)' }, { name: 'Indomitable (two uses)' }] });
+      expect(thrice.content).toContain('Used Indomitable (three uses) (0/3 left; recharges on a Long Rest)');
+      expect(thrice.content).not.toContain('Not enough uses');
+      // A 2024 book Fighter 17's entries that follow the table: their scale and their 3 and 2 stay, no ruling at 18.
+      const bookUses = (id: string, max: number, values: number[]): Feature => ({
+        ...olderBook(17).features.find((f) => f.id === id)!,
+        uses: { max, used: 0, recharge: id === 'surge' ? 'short' : 'long', scale: { by: 'table', className: 'Fighter', values } },
+      });
+      const book = setup({ builderData: bookData, character: { ...olderBook(17), features: [bookUses('surge', 2, SURGE_COUNTS), bookUses('ind', 3, INDOMITABLE_COUNTS)] } });
+      const c = await book.run('update_character', {
+        features_add: [
+          { name: 'Indomitable (two uses)', description: 'Reworded.', source: 'class' },
+          { name: 'Action Surge (one use)', description: 'Reworded.', source: 'class' },
+        ],
+      });
+      expect(c.content).toContain('Updated feature: Indomitable\nUpdated feature: Action Surge\n');
+      expect(counts(book.sheet())).toEqual(AT_17);
+      expect((await book.run('level_up', { class_name: 'Fighter' })).content).not.toContain('Kept your ruling');
+      // Following the table holds even under a name counting more ("(three uses)" at Fighter 13, where the table gives two).
+      const book13 = setup({ builderData: bookData, character: { ...olderBook(13), features: [bookUses('ind', 2, INDOMITABLE_COUNTS)] } });
+      expect((await book13.run('update_character', { features_add: [{ name: 'Indomitable (three uses)', description: 'Reworded.', source: 'class' }] })).content.split('\n')[0]).toBe('Updated feature: Indomitable');
+      expect(book13.sheet().features[0].uses).toEqual({ max: 2, used: 0, recharge: 'long', scale: scale(INDOMITABLE_COUNTS) });
+      // As many uses as the name counts holds too: the DM's bare "Indomitable" with 2 at Fighter 13 under "(two uses)".
+      const bare2: Feature = { id: 'dm', name: 'Indomitable', source: 'class', sourceName: 'Granted in play', description: 'DM words.', uses: { max: 2, used: 1, recharge: 'long' } };
+      const same = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Fighter', 13), { features: [bare2] }) });
+      expect((await same.run('update_character', { features_add: [{ name: 'Indomitable (two uses)', description: 'Twice.', source: 'class' }] })).content.split('\n')[0]).toBe('Updated feature: Indomitable');
+      expect(same.sheet().features[0]).toEqual({ ...bare2, description: 'Twice.' });
+      // Only an entry counting fewer takes the name and its count (F5): the DM's "Indomitable (two uses)" without uses
+      // given "(three uses)" at Fighter 17.
+      const none: Feature = { id: 'dm', name: 'Indomitable (two uses)', source: 'class', sourceName: 'Granted in play', description: 'DM words.' };
+      const fewer = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Fighter', 17), { features: [none] }) });
+      expect((await fewer.run('update_character', { features_add: [{ name: 'Indomitable (three uses)', description: 'Thrice.', source: 'class' }] })).content.split('\n')[0]).toBe(
+        'Updated feature: Indomitable (two uses) → Indomitable (three uses)',
+      );
+      expect(fewer.sheet().features[0]).toMatchObject({ id: 'dm', name: 'Indomitable (three uses)', uses: { max: 3, used: 0, recharge: 'long' } });
+      // An entry counts by its name's count before its uses: the DM's "Indomitable (two uses)" added with 3 uses counts
+      // two, fewer than "(three uses)", which it takes (its 3 uses then the name's count, no ruling).
+      const named = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Fighter', 17), { features: [{ ...none, uses: { max: 3, used: 1, recharge: 'long' } }] }) });
+      expect((await named.run('update_character', { features_add: [{ name: 'Indomitable (three uses)', description: 'Thrice.', source: 'class' }] })).content.split('\n')[0]).toBe(
+        'Updated feature: Indomitable (two uses) → Indomitable (three uses)',
+      );
+      expect(named.sheet().features[0]).toMatchObject({ id: 'dm', name: 'Indomitable (three uses)', uses: { max: 3, used: 1, recharge: 'long' } });
+      expect(named.sheet().features[0].uses?.ruled).toBeUndefined();
+    });
+
+    it("level_up new_features counting more than the table at Fighter 13 (the bare name or a counted one) is the DM's ruling, kept at 14 and named; the table's own counts at 13 and 17 make none (D3; srd:class:fighter table: \"| 13 | +5 | Indomitable (two uses), Studied Attacks |\")", async () => {
+      const twelve = hero(srdEntry('Fighter', 12, { subclass: 'Champion', subclassId: 'srd:subclass:champion' }), { features: [own('surge', 'Action Surge (one use)', 2, 1), own('ind', 'Indomitable (one use)', 9, 1)] });
+      for (const name of ['Indomitable', 'Indomitable (three uses)']) {
+        const h = setup({ builderData: SRD_BUILDER_DATA, character: twelve });
+        const thirteen = await h.run('level_up', { class_name: 'Fighter', new_features: [{ name, description: 'House rule: three rerolls per Long Rest at this table.', uses_max: 3 }] });
+        const ruling = `\nKept your ruling: ${name} 3 uses (a new uses_max in features_add changes it).\n`;
+        expect(thirteen.content).toContain(ruling);
+        expect(h.sheet().features[1]).toMatchObject({ id: 'ind', name, uses: { max: 3, used: 0, recharge: 'long', ruled: true } });
+        const fourteen = await h.run('level_up', { class_name: 'Fighter' });
+        expect(fourteen.content).toContain(ruling);
+        expect(h.sheet().features[1].uses).toEqual({ max: 3, used: 0, recharge: 'long', ruled: true });
+      }
+      // The table's counts: "Indomitable (two uses)" at 13, "Action Surge (two uses), Indomitable (three uses)" at 17.
+      const plain = setup({ builderData: SRD_BUILDER_DATA, character: twelve });
+      for (let level = 13; level <= 17; level++) expect((await plain.run('level_up', { class_name: 'Fighter' })).content).not.toContain('Kept your ruling');
+      expect(plain.sheet().features.map((f) => [f.name, f.uses?.max, f.uses?.ruled])).toEqual([
+        ['Action Surge (two uses)', 2, undefined],
+        ['Indomitable (three uses)', 3, undefined],
+      ]);
+    });
+
+    it("a Fighter 16 holding only its class's \"Action Surge (Bonus)\" is still told at 17 to add \"Action Surge (two uses)\": another parenthetical holds no row of the table (srd:class:fighter table: \"| 17 | +6 | Action Surge (two uses), Indomitable (three uses) |\")", async () => {
+      const bonus: Feature = { id: 'bonus', name: 'Action Surge (Bonus)', source: 'class', sourceName: 'Fighter 14', description: 'Homebrew: a Bonus Action surge.', uses: { max: 1, used: 0, recharge: 'short' } };
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Fighter', 16), { features: [bonus, own('ind', 'Indomitable (two uses)', 13, 2)] }) });
+      const out = await h.run('level_up', { class_name: 'Fighter' });
+      expect(out.content).toContain('\n- New Fighter 17 features to add to the sheet: Action Surge (two uses).\n');
+      expect(h.sheet().features.map((f) => [f.name, f.uses?.max])).toEqual([
+        ['Action Surge (Bonus)', 1],
+        ['Indomitable (three uses)', 3],
       ]);
     });
 

@@ -30,7 +30,7 @@ import {
 import { nameKey, newId } from '@/lib/id';
 import { safeEnd } from '@/lib/text';
 import { wornArmor } from './armorData';
-import { rulesClassFor } from './classData';
+import { isLibraryId, rulesClassFor } from './classData';
 import { CONDITIONS, INCAPACITATING_CONDITIONS, conditionKey, conditionName, matchStandardCondition } from './conditions';
 import { levelForXp, scaledUsesMax } from './progression';
 import {
@@ -939,6 +939,20 @@ export function classCountingByName(classes: readonly ClassLevel[], base: string
 }
 
 /**
+ * A book's class's own entry named with its base name alone, of a family its class counts by name: a 2024 book's
+ * Fighter's "Indomitable" or "Action Surge" as the offline parser names them, its class standing in for SRD 5.2.1's
+ * Fighter (classCountingByName). Its uses come from that book's table, whose features column counts it by name
+ * ("Indomitable (two uses)" at 13; the data layer's usesFromCountedCells, which the level-up dialog and the DM's
+ * level_up read before each level), as long as its name carries no count: a rewrite or a level-up's merge keeps its
+ * name, never naming it with one, which would pin the count.
+ */
+export function readsItsTable(f: Pick<Feature, 'name' | 'source' | 'sourceName'>, classes: readonly ClassLevel[]): boolean {
+  const cl = featureClassOf(f, classes);
+  const base = featureBaseName(f.name);
+  return cl !== undefined && isLibraryId(cl.classId) && nameKey(f.name) === nameKey(base) && classCountingByName([cl], base) !== undefined;
+}
+
+/**
  * The entries of the counted family whose base name is `base` (features_add's rewrite, a lookup by an older counted
  * name): the class features of that base one of the hero's classes owns (featureClassOf) and the DM's
  * (isGrantedFamilyEntry), named "<base>" or "<base> (N use(s))" only (familyNamed), when the family is counted: one
@@ -1227,7 +1241,11 @@ function tableCountedUses(table: { uses: FeatureUses; count: number }, given: Fe
  * another number, or uses where it had none, is the DM's ruling (FeatureUses.ruled), which level-ups leave as it is,
  * except a class feature named with a use count given that number (rewrittenGrowth). A counted name that rewrote its
  * family's entry under another name (featureToRewrite) says so: "Updated feature: Indomitable (one use) → Indomitable
- * (two uses)"; an entry whose uses follow its class table's counts keeps its own name and its scale (tableCountedUses).
+ * (two uses)"; an entry whose uses follow its class table's counts keeps its own name and its scale (tableCountedUses),
+ * and so does a book class's entry its table's reader reads by its bare name (readsItsTable: a 2024 book's Fighter's
+ * "Indomitable" without uses yet takes the uses given under its own name, the name's count no ruling). Given no uses (the
+ * DM's features_add gives the name's count only to an entry counting fewer), the entry keeps its name and its uses, and
+ * only its text changes: an older "Indomitable (two uses)" at Fighter 17 reads "Updated feature: Indomitable (three uses)".
  * Beside a namesake, the result names the feature as a use or restore takes it now (featureLabel). A feat and a species
  * trait or class feature never merge (featOrTrait):
  * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
@@ -1241,10 +1259,13 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
   if (!name) return unchanged(c, 'A feature needs a name.');
   const existing = featureToRewrite(c, { name, source: feature.source });
   if (existing) {
-    // A counted name routed onto its family's entry (featureToRewrite) whose uses follow the class table's counts: the
-    // entry keeps its name, which the table's reader goes on reading (a count in the name would pin it).
-    const table = nameKey(existing.name) === nameKey(name) ? null : tableCounted(c, existing);
-    const updated: Feature = { ...existing, ...feature, id: existing.id, name: table ? existing.name : name, ...(existing.sourceName ? { sourceName: existing.sourceName } : {}) };
+    // A counted name routed onto its family's entry under another name (featureToRewrite). The entry keeps its name when
+    // its uses follow the class table's counts, or the table's reader reads it by that name (a count in the name would
+    // pin it: SRD 5.2.1 Fighter Features table, "Indomitable (three uses)" at 17), or the call gives no uses (its text only).
+    const routed = nameKey(existing.name) !== nameKey(name);
+    const table = routed ? tableCounted(c, existing) : null;
+    const keepsName = routed && (table !== null || !feature.uses || readsItsTable(existing, c.classes));
+    const updated: Feature = { ...existing, ...feature, id: existing.id, name: keepsName ? existing.name : name, ...(existing.sourceName ? { sourceName: existing.sourceName } : {}) };
     const old = existing.uses;
     if (feature.uses && table) updated.uses = tableCountedUses(table, feature.uses);
     else if (feature.uses) {

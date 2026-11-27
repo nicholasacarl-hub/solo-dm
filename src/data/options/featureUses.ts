@@ -10,6 +10,7 @@
 import { nameKey } from '@/lib/id';
 import type { Ability, AbilityScores, Character, ClassLevel, ClassOption, FeatureScale, FeatureUses, RechargeOn } from '@/types';
 import { baseFeatureName, cellNumber, columnKey, levelRow, wordNumber } from './classFeatures';
+import { classOptionFor } from './resolve';
 
 const ABILITY_WORDS: Record<string, Ability> = {
   strength: 'str',
@@ -189,12 +190,12 @@ export function inferFeatureUses(name: string, description: string, ctx: UsesCon
 }
 
 /**
- * For the DM's level_up, which re-reads no uses (the level-up dialog runs refreshFeatureUses): the levelled class's own
- * class features (source name "Fighter 9") named without a count whose base name its table counts by name
- * (usesFromCountedCells: a 2024 book's Fighter as the offline parser names it, made before the app read the counts:
- * "Action Surge" with 2 uses from level 2, "Indomitable" with none), re-read at the class's level with that reader. A
- * ruling (FeatureUses.ruled) stays; spent uses stay, capped at the new maximum; the recharge stays. The same character
- * when nothing changed.
+ * For the DM's level_up, which re-reads no uses (the level-up dialog runs refreshFeatureUses), and for the dialog before
+ * the level: a book class's own class features (source name "Fighter 9") named without a count whose base name its table
+ * counts by name (usesFromCountedCells: a 2024 book's Fighter as the offline parser names it, made before the app read
+ * the counts: "Action Surge" with 2 uses from level 2, "Indomitable" with none), re-read at the class's level with that
+ * reader. A ruling (FeatureUses.ruled) stays; spent uses stay, capped at the new maximum; the recharge stays. The same
+ * character when nothing changed.
  */
 export function refreshTableCountedUses(c: Character, cls: ClassOption, cl: Pick<ClassLevel, 'name' | 'level'>): Character {
   const owners = new Set([nameKey(cl.name), nameKey(cls.name)]);
@@ -213,4 +214,32 @@ export function refreshTableCountedUses(c: Character, cls: ClassOption, cl: Pick
     return { ...f, uses };
   });
   return changed ? { ...c, features } : c;
+}
+
+/** One class's read in refreshBookTableCounts: the hero before and after it. */
+export interface TableCountsRead {
+  /** The hero's class whose table was read ("Fighter"). */
+  className: string;
+  before: Character;
+  after: Character;
+}
+
+/**
+ * Before any level-up, whichever class the level is in (the level-up dialog's and the DM's level_up): each book class the
+ * hero holds whose option `classes` has re-reads its own entries by its table (refreshTableCountedUses), so an older
+ * save's book Fighter 13 levelling its Wizard holds the counts its table gives (SRD 5.2.1 Fighter Features table:
+ * "Action Surge (one use)" at 2, "Indomitable (two uses)" at 13) before the level-up folds or grows them. The reads that
+ * changed the sheet, in the hero's class order, and the hero after them all (the same character when none did).
+ */
+export function refreshBookTableCounts(c: Character, classes: readonly ClassOption[]): { character: Character; reads: TableCountsRead[] } {
+  const reads: TableCountsRead[] = [];
+  let character = c;
+  for (const cl of c.classes) {
+    const option = classOptionFor(cl, classes);
+    if (!option?.source) continue;
+    const after = refreshTableCountedUses(character, option, cl);
+    if (after !== character) reads.push({ className: cl.name, before: character, after });
+    character = after;
+  }
+  return { character, reads };
 }

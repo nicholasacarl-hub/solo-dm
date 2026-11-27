@@ -9,7 +9,7 @@ import builderRaw from '../../../public/srd/builder.json?raw';
 import { levelUp } from '@/engine';
 import { sampleCharacter } from '@/test/fixtures';
 import type { BuilderData, ClassLevel, ClassOption, Feature } from '@/types';
-import { inferFeatureUses, refreshTableCountedUses, type UsesContext } from './featureUses';
+import { inferFeatureUses, refreshBookTableCounts, refreshTableCountedUses, type UsesContext } from './featureUses';
 import { featureUseChanges, gainedFeatures, refreshFeatureUses } from './leveling';
 import { applyFeatChoice, featChoiceTrigger } from './levelUpChoices';
 import { lineageFeatureText, speciesChoices } from './species';
@@ -197,6 +197,40 @@ describe("a book Fighter's held entries through both level-up paths", () => {
     const wizards: Feature = { ...OLD_INDOMITABLE, id: 'wiz', sourceName: 'Wizard 1' };
     const hero = sampleCharacter({ classes: [bookFighter(13), WIZARD_1], features: [ruled, named, dm, wizards] });
     expect(refreshTableCountedUses(hero, BOOK, hero.classes[0])).toBe(hero);
+  });
+
+  it('before a level-up in any class, each book class the hero holds is re-read by its own table: one read per class whose entries it changed (refreshBookTableCounts)', () => {
+    // srd:rule:fighter-action-surge: "Starting at level 17, you can use it twice before a rest"; srd:rule:fighter-indomitable:
+    // "You can use this feature twice before a Long Rest starting at level 13". An older save's book Fighter 13 / Wizard 1.
+    const hero = sampleCharacter({ classes: [bookFighter(13), WIZARD_1], spellcasting: undefined, features: [OLD_SURGE, OLD_INDOMITABLE] });
+    const { character, reads } = refreshBookTableCounts(hero, BOOKS.classes);
+    expect(character.features).toEqual([
+      { ...OLD_SURGE, uses: { max: 1, used: 1, recharge: 'short', scale: byTable(SURGE_COUNTS) } },
+      { ...OLD_INDOMITABLE, uses: { max: 2, used: 0, recharge: 'long', scale: byTable(INDOMITABLE_COUNTS) } },
+    ]);
+    expect(reads).toEqual([{ className: 'Fighter', before: hero, after: character }]);
+    // Read once, nothing more to read; without the book's data, or for an SRD class (its own bare "Indomitable" without
+    // uses on a hand-made sheet included: the dialog's re-read after the level reads that one), nothing at all.
+    expect(refreshBookTableCounts(character, BOOKS.classes)).toEqual({ character, reads: [] });
+    expect(refreshBookTableCounts(hero, data.classes)).toEqual({ character: hero, reads: [] });
+    const srd = sampleCharacter({ classes: [{ classId: SRD_FIGHTER.id, name: 'Fighter', level: 13, hitDie: 10, casterType: 'none' }], spellcasting: undefined, features: [OLD_INDOMITABLE] });
+    expect(refreshBookTableCounts(srd, BOOKS.classes)).toEqual({ character: srd, reads: [] });
+    // An invented book's Lanternmancer whose table counts its Lantern Ward by name ("(two uses)" at 5) beside it: one
+    // read each, in the hero's class order.
+    const lantern: ClassOption = {
+      ...BOOK,
+      id: 'lib:lantern:class:lanternmancer',
+      name: 'Lanternmancer',
+      features: [{ name: 'Lantern Ward', level: 1, description: 'You raise a ward of lamplight.' }],
+      levelTable: Array.from({ length: 20 }, (_, i) => ({ level: i + 1, features: i === 0 ? 'Lantern Ward (one use)' : i === 4 ? 'Lantern Ward (two uses)' : '' })),
+    };
+    const lanternmancer: ClassLevel = { ...bookFighter(5), classId: lantern.id, name: 'Lanternmancer', ref: { ...bookFighter(5).ref!, entryId: lantern.id, entryName: 'Lanternmancer' } };
+    const ward: Feature = { id: 'ward', name: 'Lantern Ward', source: 'class', sourceName: 'Lanternmancer 1', description: 'You raise a ward of lamplight.', uses: { max: 1, used: 0, recharge: 'long' } };
+    const both = sampleCharacter({ classes: [bookFighter(13), lanternmancer], spellcasting: undefined, features: [OLD_SURGE, OLD_INDOMITABLE, ward] });
+    const two = refreshBookTableCounts(both, [lantern, ...BOOKS.classes]);
+    expect(two.reads.map((r) => r.className)).toEqual(['Fighter', 'Lanternmancer']);
+    expect(two.reads[1].before).toBe(two.reads[0].after);
+    expect(two.character.features[2].uses).toEqual({ max: 2, used: 0, recharge: 'long', scale: { by: 'table', className: 'Lanternmancer', values: [1, 1, 1, 1, ...Array<number>(16).fill(2)] } });
   });
 });
 
