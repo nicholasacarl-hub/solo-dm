@@ -33,9 +33,11 @@ import {
   endHpMaxAdjustments,
   featOrTrait,
   featureLabel,
+  featureToRewrite,
   hpMaxAdjustmentLabel,
   hpMaxAdjustments,
   hpMaxEndsText,
+  nameUseCount,
   removeSpellById,
   setConcentration,
 } from '@/engine/character';
@@ -241,6 +243,10 @@ export const fakeEngine = {
   computeArmorClass,
   featOrTrait,
   featureLabel,
+  // The feature a features_add of a name and source changes, and the use count a name ends with: the real rules (pure),
+  // which the level-up notice's kept-ruling line reads (keptRulings).
+  featureToRewrite,
+  nameUseCount,
   isFightingStyle,
   adjustHpMax,
   endHpMaxAdjustments,

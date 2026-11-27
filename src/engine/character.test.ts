@@ -27,6 +27,7 @@ import {
   createBlankCharacter,
   expireConcentration,
   featureLabel,
+  featureToRewrite,
   findFeature,
   findItem,
   formatCurrency,
@@ -1035,6 +1036,32 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     const told = addFeature(mind, { name: 'Tactical Mind', source: 'class', sourceName: 'Granted in play', description: 'Second Wind for a failed check.' });
     expect(messages(told)).toEqual(['Updated feature: Tactical Mind']);
     expect(told.character.features).toEqual([{ ...mind.features[0], source: 'class', description: 'Second Wind for a failed check.' }]);
+  });
+
+  it("a species trait's or a subclass feature's entry of a class feature's counted name keeps its source too, though on the class's side of the feat line: the class's call changes the family's entry, or joins beside the namesake while the sheet holds none (srd:rule:fighter-indomitable)", () => {
+    // srd:rule:fighter-indomitable: "You can use this feature twice before a Long Rest starting at level 13 and three times
+    // before a Long Rest starting at level 17." A Mothkin's invented trait, or a subclass's, named like the class's row.
+    const at = (level: number, features: Feature[]) =>
+      mira({ classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level, hitDie: 10, casterType: 'none' }], hitDice: [{ die: 10, total: level, spent: 0 }], spellcasting: undefined, features });
+    const SOURCE_NAMES = { species: 'Mothkin', subclass: 'Champion 7' } as const;
+    const namesake = (source: 'species' | 'subclass', name: string): Feature => ({ id: 'namesake', name, source, sourceName: SOURCE_NAMES[source], description: 'An invented gift.', uses: { max: 1, used: 1, recharge: 'long' } });
+    const call = (name: string, max: number) => ({ name, source: 'class' as const, sourceName: 'Granted in play', description: 'The DM restates it.', uses: { max, used: 0, recharge: 'long' as const } });
+    const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
+    for (const source of ['species', 'subclass'] as const) {
+      // Fighter 9 holding no entry of the family: the class's joins beside the namesake, which keeps its source and use spent.
+      const nine = at(9, [namesake(source, 'Indomitable (one use)')]);
+      expect(featureToRewrite(nine, { name: 'Indomitable (one use)', source: 'class' }), source).toBeUndefined();
+      const joined = addFeature(nine, call('Indomitable (one use)', 1));
+      expect(messages(joined), source).toEqual([`Gained feature: Indomitable (one use) (1 use, recharges on a Long Rest), beside Indomitable (one use) (${SOURCE_NAMES[source]})`]);
+      expect(joined.character.features, source).toEqual([nine.features[0], { ...call('Indomitable (one use)', 1), id: expect.any(String) }]);
+      // Fighter 17: the class's call of the namesake's name changes the class's "Indomitable (three uses)".
+      const seventeen = at(17, [indomitable('ind', 'Indomitable (three uses)', 3), namesake(source, 'Indomitable (two uses)')]);
+      const r = addFeature(seventeen, call('Indomitable (two uses)', 3));
+      expect(messages(r), source).toEqual(['Updated feature: Indomitable (three uses)']);
+      expect(r.character.features, source).toEqual([{ ...seventeen.features[0], description: 'The DM restates it.' }, seventeen.features[1]]);
+      // The namesake's own call changes the namesake, as before.
+      expect(featureToRewrite(seventeen, { name: 'Indomitable (two uses)', source })?.id, source).toBe('namesake');
+    }
   });
 
   it("only a class feature's count in its name is its table's row: another feature named with a count, given that count over its own, is the DM's ruling as any rewrite is (srd:class:fighter table: \"| 13 | +5 | Indomitable (two uses), Studied Attacks |\")", () => {

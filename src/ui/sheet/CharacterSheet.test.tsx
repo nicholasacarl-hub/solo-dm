@@ -965,6 +965,27 @@ describe('LevelUpDialog', () => {
     expect(await screen.findByText('Second Wind 2 → 3')).toBeInTheDocument();
   });
 
+  it("names the kept-ruling call for a ruled boon alone in a counted name the class's entry has grown past, which the fake engine works out with the real rules (srd:rule:fighter-indomitable)", async () => {
+    // srd:rule:fighter-indomitable: "You can use this feature twice before a Long Rest starting at level 13 and three times
+    // before a Long Rest starting at level 17." A boon the DM ruled to 1, beside the class's grown entry.
+    const user = userEvent.setup();
+    resetFakeGame({
+      campaign: sampleCampaign(),
+      character: sampleCharacter({
+        classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level: 17, hitDie: 10, subclass: 'Champion', casterType: 'none' }],
+        hitDice: [{ die: 10, total: 17, spent: 0 }],
+        spellcasting: undefined,
+        features: [
+          { id: 'ind', name: 'Indomitable (three uses)', source: 'class', sourceName: 'Fighter 9', description: 'Reroll a failed saving throw.', uses: { max: 3, used: 0, recharge: 'long' } },
+          { id: 'boon', name: 'Indomitable (two uses)', source: 'boon', sourceName: 'Granted in play', description: 'A gift of the Lantern-Saint.', uses: { max: 1, used: 0, recharge: 'long', ruled: true } },
+        ],
+      }),
+    });
+    render(<LevelUpDialog open onClose={() => undefined} />);
+    await user.click(screen.getByRole('button', { name: 'Level up' }));
+    expect(notices()[0]).toContain('kept your ruling: Indomitable (two uses) 1 use (a new uses_max in features_add changes it: name "Indomitable (two uses)", source "boon")');
+  });
+
   it('shows multiclass prerequisites', async () => {
     const user = userEvent.setup();
     render(<LevelUpDialog open onClose={() => undefined} />);

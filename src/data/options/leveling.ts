@@ -9,7 +9,7 @@
  * ("Rage (Duration)" -> "Rage"), and the Thaumaturge/Magician skill bonus and species Resistances
  * it never recorded.
  */
-import { characterLevel, featureLabel, featureToRewrite, proficiencyBonus } from '@/engine';
+import { characterLevel, featureLabel, featureToRewrite, nameUseCount, proficiencyBonus } from '@/engine';
 import { listJoin } from '@/engine/util';
 import { nameKey } from '@/lib/id';
 import type {
@@ -245,15 +245,26 @@ export function refreshFeatureUses(c: Character, data: LevelingData | null | und
  * (featureToRewrite; any source but a transformation's, whose power transform_character changes), the line names that
  * call: "kept your ruling: Indomitable (two uses) (boon) 1 use (a new uses_max in features_add changes it: name
  * "Indomitable (two uses)", source "boon")"; of several ruled, "… changes one; for Indomitable (two uses) (boon): name
- * …, source …)". Null when it ruled none.
+ * …, source …)". So does an entry alone in its name that a features_add of that name with source "class" passes by,
+ * one named with a use count under another source (the class's call goes to the class's counted family, or is added
+ * beside it): the boon "Indomitable (two uses)" beside the class's "Indomitable (three uses)" from Fighter 17, "kept
+ * your ruling: Indomitable (two uses) 1 use (a new uses_max in features_add changes it: name "Indomitable (two uses)",
+ * source "boon")". Null when it ruled none.
  */
 export function keptRulings(c: Character): string | null {
   const ruled = c.features.filter((f) => f.uses?.ruled);
   if (!ruled.length) return null;
   const label = (f: Feature) => featureLabel(f, c.features);
   const list = listJoin(ruled.map((f) => `${label(f)} ${f.uses?.max ?? 0} use${f.uses?.max === 1 ? '' : 's'}`));
+  // Told apart from a namesake, or a counted name a class's call of it passes by: either way the call of its own name
+  // and source has to reach it.
+  const passedBy = (f: Feature) =>
+    nameUseCount(f.name) !== null && f.source !== 'class' && featureToRewrite(c, { name: f.name, source: 'class' })?.id !== f.id;
   const reached = ruled.filter(
-    (f) => label(f) !== f.name && f.source !== 'transformation' && featureToRewrite(c, { name: f.name, source: f.source })?.id === f.id,
+    (f) =>
+      (label(f) !== f.name || passedBy(f)) &&
+      f.source !== 'transformation' &&
+      featureToRewrite(c, { name: f.name, source: f.source })?.id === f.id,
   );
   const call = (f: Feature) => `name "${f.name}", source "${f.source}"`;
   const how =

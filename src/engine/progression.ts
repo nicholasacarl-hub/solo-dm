@@ -320,16 +320,20 @@ function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: rea
     (f) => f !== 'Ability Score Improvement' && f !== 'Epic Boon' && f !== 'Subclass feature' && !f.endsWith(' Subclass'),
   );
   // A row the table names with a use count ("Indomitable (two uses)") is held when the sheet holds an entry of its
-  // family, bare or named with any count (the level-up grew it or folded the row into it, a ruled entry and a DM's
-  // higher count included: SRD 5.2.1 Fighter Features table, one Indomitable, "(two uses)" at 13), or a class feature
-  // of its name. An entry of its name under another source (a boon's "Indomitable (one use)", an item's "Action Surge
-  // (one use)") is neither, so the row is named, and the class's entry it asks for joins beside that one, as the
-  // level-up dialog adds it (SRD 5.2.1 Fighter Features table: "Indomitable (one use)" at 9). Any entry of its name
-  // holds a row without a count.
+  // family that has uses, bare or named with any count (the level-up grew it or folded the row into it, a ruled entry
+  // and a DM's higher count included: SRD 5.2.1 Fighter Features table, one Indomitable, "(two uses)" at 13), or a
+  // class feature of its name that has uses. An entry of its name under another source (a boon's "Indomitable (one
+  // use)", an item's "Action Surge (one use)") is neither, so the row is named, and the class's entry it asks for joins
+  // beside that one, as the level-up dialog adds it (SRD 5.2.1 Fighter Features table: "Indomitable (one use)" at 9).
+  // Nor is an entry without uses (the DM's "Action Surge (one use)" recorded without uses_max, which the later rows
+  // rename): the row is named, and the DM's features_add of it with its count gives that entry its uses (SRD 5.2.1
+  // Action Surge: "Starting at level 17, you can use it twice before a rest"). Any entry of its name holds a row
+  // without a count.
+  const counting = alreadyAdded.filter((x) => x.uses);
   const holds = (f: string) =>
     nameUseCount(f) === null
       ? hasFeatureNamed(alreadyAdded, f)
-      : holdsFamilyEntry(alreadyAdded, cl, f) || hasFeatureNamed(alreadyAdded.filter((x) => x.source === 'class'), f);
+      : holdsFamilyEntry(counting, cl, f) || hasFeatureNamed(counting.filter((x) => x.source === 'class'), f);
   const missing = named.filter((f) => !holds(f));
   if (missing.length) reminders.push(`New ${info.name} ${level} features to add to the sheet: ${missing.join(', ')}.`);
   for (const feature of named) {

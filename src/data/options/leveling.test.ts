@@ -7,7 +7,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
-import { applyLongRest, characterLevel, characterSheetText, computeArmorClass, levelUp, useFeature } from '@/engine';
+import { applyLongRest, characterLevel, characterSheetText, computeArmorClass, featureToRewrite, levelUp, useFeature } from '@/engine';
 import { nameKey } from '@/lib/id';
 import { sampleCharacter } from '@/test/fixtures';
 import { EXPECTED_MERGED, GLOAMWOOD_TITLE, SRD_BUILDER_DATA, TEXT } from '@/test/structuredFixtures';
@@ -781,5 +781,71 @@ describe('keptRulings: the numbers of uses the DM ruled, which level-ups keep', 
     const power: Feature = { id: 'power', name: 'Lantern Luck', source: 'transformation', sourceName: 'Moth Form', description: 'Invented.', uses: { max: 1, used: 0, recharge: 'long', ruled: true } };
     const trait: Feature = { id: 'trait', name: 'Lantern Luck', source: 'species', sourceName: 'Mothkin', description: 'Invented.', uses: { max: 2, used: 0, recharge: 'long' } };
     expect(keptRulings(sampleCharacter({ features: [trait, power] }))).toBe('kept your ruling: Lantern Luck (Moth Form) 1 use (a new uses_max in features_add changes it)');
+    // Both takings ruled: only the first, which features_add changes, gets a call; a call for the second would change the
+    // first.
+    expect(keptRulings(fighter13([taking('first', 4, true), { ...taking('second', 8, true), uses: { max: 2, used: 0, recharge: 'long', ruled: true } }]))).toBe(
+      'kept your rulings: Wick Tender (Ability Score Improvement (Fighter 4)) 1 use and Wick Tender (Ability Score Improvement (Fighter 8)) 2 uses (a new uses_max in features_add changes one; for Wick Tender (Ability Score Improvement (Fighter 4)): name "Wick Tender", source "feat")',
+    );
+  });
+
+  it("names the call for a ruled entry alone in a counted name under another source than the class's that a features_add of its name with source \"class\" passes by (from Fighter 17 the boon \"Indomitable (two uses)\" beside the class's \"Indomitable (three uses)\"); a lone class entry, a lone entry the class's call reaches and a transformation's power are named as before (srd:rule:fighter-indomitable; srd:rule:fighter-action-surge)", () => {
+    // srd:rule:fighter-indomitable: "You can use this feature twice before a Long Rest starting at level 13 and three times
+    // before a Long Rest starting at level 17." srd:rule:fighter-action-surge: "Starting at level 17, you can use it twice
+    // before a rest". At Fighter 17 the class's entry has grown past the name of a boon the DM ruled to 1.
+    const fighter = (level: number, features: Feature[]) =>
+      sampleCharacter({ classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level, hitDie: 10, casterType: 'none' }], spellcasting: undefined, features });
+    const feature = (id: string, name: string, source: Feature['source'], sourceName: string, max: number, ruled?: boolean): Feature => ({
+      id,
+      name,
+      source,
+      sourceName,
+      description: 'Invented.',
+      uses: { max, used: 0, recharge: name.startsWith('Action Surge') ? 'short' : 'long', ...(ruled ? { ruled } : {}) },
+    });
+    const boon = feature('boon', 'Indomitable (two uses)', 'boon', 'Granted in play', 1, true);
+    // The class's entry as the level-up dialog adds it ("Fighter 9") and as the DM records the reminder's row.
+    for (const sourceName of ['Fighter 9', 'Granted in play']) {
+      const c = fighter(17, [feature('ind', 'Indomitable (three uses)', 'class', sourceName, 3), boon]);
+      expect(keptRulings(c), sourceName).toBe(
+        'kept your ruling: Indomitable (two uses) 1 use (a new uses_max in features_add changes it: name "Indomitable (two uses)", source "boon")',
+      );
+      // The call named changes the boon; one with source "class" would change the class's entry.
+      expect(featureToRewrite(c, { name: 'Indomitable (two uses)', source: 'boon' })?.id, sourceName).toBe('boon');
+      expect(featureToRewrite(c, { name: 'Indomitable (two uses)', source: 'class' })?.id, sourceName).toBe('ind');
+    }
+    // An item's Action Surge the DM ruled, beside the class's grown one.
+    const charm = feature('charm', 'Action Surge (one use)', 'item', 'Granted in play', 2, true);
+    expect(keptRulings(fighter(17, [feature('surge', 'Action Surge (two uses)', 'class', 'Fighter 2', 2), charm]))).toBe(
+      'kept your ruling: Action Surge (one use) 2 uses (a new uses_max in features_add changes it: name "Action Surge (one use)", source "item")',
+    );
+    // No entry of the family yet (a boon from Fighter 5 at 9): the class's call would join beside it, so the boon's is named.
+    expect(keptRulings(fighter(9, [{ ...boon, name: 'Indomitable (one use)', uses: { max: 2, used: 0, recharge: 'long', ruled: true } }]))).toBe(
+      'kept your ruling: Indomitable (one use) 2 uses (a new uses_max in features_add changes it: name "Indomitable (one use)", source "boon")',
+    );
+    // Several ruled: the lone boon's call after "changes one", as a labelled one's.
+    const wind = feature('wind', 'Second Wind', 'class', 'Fighter 1', 4, true);
+    expect(keptRulings(fighter(17, [wind, feature('ind', 'Indomitable (three uses)', 'class', 'Fighter 9', 3), boon]))).toBe(
+      'kept your rulings: Second Wind 4 uses and Indomitable (two uses) 1 use (a new uses_max in features_add changes one; for Indomitable (two uses): name "Indomitable (two uses)", source "boon")',
+    );
+    // As before: the class's own ruled entry alone in its name (its call is the class's own), a Wizard's ruled boon (no
+    // one counts its family, so the class's call reaches it), a lone ruled feat named without a count, the second of two
+    // boons of one name (the boon's call changes the first) and a transformation's power named with a count.
+    expect(keptRulings(fighter(17, [feature('ind', 'Indomitable (three uses)', 'class', 'Fighter 9', 4, true)]))).toBe(
+      'kept your ruling: Indomitable (three uses) 4 uses (a new uses_max in features_add changes it)',
+    );
+    expect(keptRulings(sampleCharacter({ features: [boon] }))).toBe('kept your ruling: Indomitable (two uses) 1 use (a new uses_max in features_add changes it)');
+    expect(keptRulings(fighter(17, [feature('wick', 'Wick Tender', 'feat', 'Ability Score Improvement (Fighter 4)', 2, true)]))).toBe(
+      'kept your ruling: Wick Tender 2 uses (a new uses_max in features_add changes it)',
+    );
+    expect(keptRulings(fighter(17, [feature('ind', 'Indomitable (three uses)', 'class', 'Fighter 9', 3), feature('gift', 'Indomitable (two uses)', 'boon', 'Granted in play', 2), boon]))).toBe(
+      'kept your ruling: Indomitable (two uses) 1 use (a new uses_max in features_add changes it)',
+    );
+    const moth = feature('moth', 'Lantern Luck (two uses)', 'transformation', 'Moth Form', 1, true);
+    expect(keptRulings(fighter(17, [moth]))).toBe('kept your ruling: Lantern Luck (two uses) 1 use (a new uses_max in features_add changes it)');
+    // A feat named with a count is on the other side of the feat line from a class feature: the class's call never
+    // reaches it, so its own call is named.
+    expect(keptRulings(sampleCharacter({ features: [feature('lucky', 'Wick Tender (2 uses)', 'feat', 'Ability Score Improvement (Wizard 4)', 1, true)] }))).toBe(
+      'kept your ruling: Wick Tender (2 uses) 1 use (a new uses_max in features_add changes it: name "Wick Tender (2 uses)", source "feat")',
+    );
   });
 });
