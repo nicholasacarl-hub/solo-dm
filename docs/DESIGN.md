@@ -545,24 +545,28 @@ DM's `level_up` without `new_features` joins the SRD level's counted names to a 
 alone included, so the entry grows whether the DM lists it or not; the reminder names a row only when the sheet holds no
 entry of its family or class feature of its name that has uses (a ruled entry or the DM's higher count holds it; a
 boon's or an item's entry of its name doesn't, so beside a boon "Indomitable (one use)" `level_up` to Fighter 9 names
-that row, and the class's entry the DM records for it joins beside the boon, as the dialog's does; nor does an entry the
-DM recorded without `uses_max`, which the later rows rename with no uses to give it: `level_up` names the row,
-"Indomitable (two uses)" at Fighter 13 after an "Indomitable (one use)" so recorded at 9, and the DM's `features_add` of
-it with the row's count gives that entry its uses, no ruling). A lookup by an older counted name finds the family's
-entry, and `features_add` of a counted name the call records as a class feature (`source` "class") rewrites one entry of
-a counted family (the ruled one, else the class's counted one, its by-table one, the DM's counted one, the class's own,
-else the DM's bare one: an entry takes the name only given that name's count, as `uses_max` or filled in for one left
-out, and gets no ruling from it; given another `uses_max` it keeps its own name ("Action Surge (one use)" with 2 at
-Fighter 17 reads "Updated feature: Action Surge (two uses)", 2 to Fighter 20 on both paths), its uses judged as for a
-name without a count: the number it had keeps how it grows, and another is the DM's ruling; one that keeps its own name
-because it follows its table or is a 2024 book's bare entry, `readsItsTable`, gets none from its table's count and a
-ruling from any other number, and until its table counts it on the sheet (the book's data not on this device, or a table
-that counts nothing) any `uses_max` the DM gives it is the DM's ruling, the number it already holds included ("Action
-Surge (two uses)" with 2 on an older save's 2), so no later read takes it away, since a name the entry doesn't keep
-vouches for no number, while the count filled in for a `uses_max` left out is no ruling; a counted name's rewrite keeps
-the entry's recharge, and without `uses_max` it changes only the text of an entry that is ruled, follows its table or
-counts at least as many uses, and gives one counting fewer the name's count, no ruling); otherwise, and under any other
-source (a boon's "Indomitable (two uses)", an item's), it is added beside, as before ("Rage (3 uses)" beside a
+that row to add, and the class's entry the DM records for it joins beside the boon, as the dialog's does; nor does an
+entry of its family or class feature of its name without uses, the DM's recorded without `uses_max` (which the later
+rows rename with no uses to give it), one `level_up` lists in `new_features` without it, or the class's own, but as that
+entry is on the sheet the row isn't named to add: it gets a line of its own with the row's count, "Fighter 2: Action
+Surge (one use) is on the sheet without its 1 use." when `level_up` to Fighter 2 lists that row in `new_features`
+without `uses_max`, and "Fighter 13: Indomitable (two uses) is on the sheet without its 2 uses." after an "Indomitable
+(one use)" so recorded at 9; the DM's `features_add` of the row's exact name gives that entry its uses only with
+`uses_max`, the row's count, no ruling (without it, only the text changes)). A lookup by an older counted name finds the
+family's entry, and `features_add` of a counted name the call records as a class feature (`source` "class") rewrites one
+entry of a counted family (the ruled one, else the class's counted one, its by-table one, the DM's counted one, the
+class's own, else the DM's bare one: an entry takes the name only given that name's count, as `uses_max` or filled in
+for one left out, and gets no ruling from it; given another `uses_max` it keeps its own name ("Action Surge (one use)"
+with 2 at Fighter 17 reads "Updated feature: Action Surge (two uses)", 2 to Fighter 20 on both paths), its uses judged
+as for a name without a count: the number it had keeps how it grows, and another is the DM's ruling; one that keeps its
+own name because it follows its table or is a 2024 book's bare entry, `readsItsTable`, gets none from its table's count
+and a ruling from any other number, and until its table counts it on the sheet (the book's data not on this device, or a
+table that counts nothing) any `uses_max` the DM gives it is the DM's ruling, the number it already holds included
+("Action Surge (two uses)" with 2 on an older save's 2), so no later read takes it away, since a name the entry doesn't
+keep vouches for no number, while the count filled in for a `uses_max` left out is no ruling; a counted name's rewrite
+keeps the entry's recharge, and without `uses_max` it changes only the text of an entry that is ruled, follows its table
+or counts at least as many uses, and gives one counting fewer the name's count, no ruling); otherwise, and under any
+other source (a boon's "Indomitable (two uses)", an item's), it is added beside, as before ("Rage (3 uses)" beside a
 Barbarian's "Rage", a second label beside the first), and the class's entry keeps its source and text, so the table's
 rows go on growing that one entry on both paths. When the sheet holds several entries of the name a `features_add`
 gives, the call changes the one under its own source, else the first (of two under that source, the first); but no entry

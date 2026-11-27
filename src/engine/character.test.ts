@@ -1172,6 +1172,64 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     const older = { ...c, classes: [bookFighter(13, '2014')] };
     expect(addFeature(older, tableRow('Indomitable (two uses)', 2)).character.features.map((f) => f.name)).toEqual(['Indomitable', 'Indomitable (one use)', 'Indomitable (two uses)']);
   });
+
+  it.each(['Indomitable (two uses)', 'Indomitable (two uses) (Granted in play)'])(
+    "a use by %s on a Fighter 13 holding the class's \"Indomitable (two uses)\" and a boon of that name, both \"Granted in play\" as on the DM's level_up path, takes the first entry of that name on the sheet with enough uses left for the amount spent, in either sheet order, and names the other by its label: amount 2 passes by one with 1 left (srd:rule:fighter-indomitable: \"You can use this feature twice before a Long Rest starting at level 13\")",
+    (name) => {
+      const cls = (used: number) => indomitable('cls', 'Indomitable (two uses)', 2, used, { sourceName: 'Granted in play' });
+      const boon = (used: number) => indomitable('boon', 'Indomitable (two uses)', 2, used, { source: 'boon', sourceName: 'Granted in play', description: 'A gift of the Lantern-Saint.' });
+      const spent = (r: ReturnType<typeof useFeature>) => r.character.features.map((f) => [f.id, f.uses?.used]);
+      const used = (label: string, left: number, other: string, times = '') =>
+        `Used Indomitable (two uses) (${label})${times} (${left}/2 left; recharges on a Long Rest). Another Indomitable (two uses) is on the sheet: to use it, name it "Indomitable (two uses) (${other})".`;
+      // Neither spent: the first on the sheet, the class's or the boon's.
+      const classFirst = useFeature(fighter([cls(0), boon(0)]), name);
+      expect(spent(classFirst)).toEqual([['cls', 1], ['boon', 0]]);
+      expect(classFirst.events[0].message).toBe(used('class', 1, 'boon'));
+      const boonFirst = useFeature(fighter([boon(0), cls(0)]), name);
+      expect(spent(boonFirst)).toEqual([['boon', 1], ['cls', 0]]);
+      expect(boonFirst.events[0].message).toBe(used('boon', 1, 'class'));
+      // The first one spent: the next with a use left.
+      expect(spent(useFeature(fighter([boon(2), cls(0)]), name))).toEqual([['boon', 2], ['cls', 1]]);
+      // Amount 1 takes the first with a use left; amount 2 the first with 2 left, past one with 1 left, in either order.
+      expect(spent(useFeature(fighter([boon(1), cls(0)]), name))).toEqual([['boon', 2], ['cls', 0]]);
+      const pastBoon = useFeature(fighter([boon(1), cls(0)]), name, 2);
+      expect(spent(pastBoon)).toEqual([['boon', 1], ['cls', 2]]);
+      expect(pastBoon.events[0].message).toBe(used('class', 0, 'boon', ' ×2'));
+      expect(spent(useFeature(fighter([cls(1), boon(0)]), name, 2))).toEqual([['cls', 1], ['boon', 2]]);
+    },
+  );
+
+  it("an older-edition book Fighter's class call of a counted name takes an item's or \"other\" entry of that very name, as does one whose edition the sheet hasn't recorded, as only its own entries' names count; the SRD's Fighter and a 2024 book's add the class's entry beside it (srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\")", () => {
+    const emberfall = (format: ImportedRef['format'] | null) => ({
+      classId: 'lib:emberfall:class:fighter',
+      name: 'Fighter',
+      level: 2,
+      hitDie: 10 as const,
+      casterType: 'none' as const,
+      ...(format ? { ref: { sourceId: 'emberfall', sourceTitle: 'The Emberfall Primer', entryId: 'lib:emberfall:class:fighter', kind: 'class' as const, entryName: 'Fighter', format, textHash: '', textCopied: false } } : {}),
+    });
+    const srd = { classId: 'srd:class:fighter', name: 'Fighter', level: 2, hitDie: 10 as const, casterType: 'none' as const };
+    const call: Omit<Feature, 'id'> = { name: 'Action Surge (one use)', source: 'class', sourceName: 'Granted in play', description: 'As the table says.', uses: { max: 1, used: 0, recharge: 'short' } };
+    for (const source of ['item', 'other'] as const) {
+      const namesake: Feature = { id: 'namesake', name: 'Action Surge (one use)', source, sourceName: 'Granted in play', description: 'A charm of the second breath.', uses: { max: 1, used: 0, recharge: 'short' } };
+      const at = (cl: typeof srd) => mira({ classes: [cl], spellcasting: undefined, features: [namesake] });
+      // The SRD's Fighter and a 2024 book's, which stands in for it: the class's entry joins beside the namesake.
+      for (const [who, cl] of [['srd', srd], ['2024', bookFighter(2)]] as const) {
+        const r = addFeature(at(cl), call);
+        expect(r.events[0].message, `${source}, ${who}`).toBe(`Gained feature: Action Surge (one use) (1 use, recharges on a Short or Long Rest), beside Action Surge (one use) (${source})`);
+        expect(r.character.features.map((f) => [f.id === 'namesake', f.source, f.description]), `${source}, ${who}`).toEqual([
+          [true, source, namesake.description],
+          [false, 'class', call.description],
+        ]);
+      }
+      // A 2014 book's, or one with no edition recorded: the call takes the namesake, a class feature now in the call's words.
+      for (const [who, cl] of [['2014', emberfall('2014')], ['unrecorded', emberfall(null)]] as const) {
+        const r = addFeature(at(cl), call);
+        expect(r.events[0].message, `${source}, ${who}`).toBe('Updated feature: Action Surge (one use)');
+        expect(r.character.features, `${source}, ${who}`).toEqual([{ ...namesake, source: 'class', description: call.description }]);
+      }
+    }
+  });
 });
 
 describe("addFeature: what a feat joining the sheet brings (the DM's features_add)", () => {

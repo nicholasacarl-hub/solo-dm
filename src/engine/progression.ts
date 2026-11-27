@@ -323,19 +323,29 @@ function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: rea
   // family that has uses, bare or named with any count (the level-up grew it or folded the row into it, a ruled entry
   // and a DM's higher count included: SRD 5.2.1 Fighter Features table, one Indomitable, "(two uses)" at 13), or a
   // class feature of its name that has uses. An entry of its name under another source (a boon's "Indomitable (one
-  // use)", an item's "Action Surge (one use)") is neither, so the row is named, and the class's entry it asks for joins
-  // beside that one, as the level-up dialog adds it (SRD 5.2.1 Fighter Features table: "Indomitable (one use)" at 9).
-  // Nor is an entry without uses (the DM's "Action Surge (one use)" recorded without uses_max, which the later rows
-  // rename): the row is named, and the DM's features_add of it with its count gives that entry its uses (SRD 5.2.1
-  // Action Surge: "Starting at level 17, you can use it twice before a rest"). Any entry of its name holds a row
-  // without a count.
+  // use)", an item's "Action Surge (one use)") is neither, so the row is named to add, and the class's entry it asks for
+  // joins beside that one, as the level-up dialog adds it (SRD 5.2.1 Fighter Features table: "Indomitable (one use)" at
+  // 9). Nor does an entry of its family or a class feature of its name without uses hold it (the DM's level_up listing
+  // the row among its new features without uses_max, the DM's features_add of it without uses_max at an earlier level,
+  // which the later rows rename, or the class's own): that entry is on the sheet, so the row isn't named to add but
+  // gets a line of its own with the row's count ("Fighter 2: Action Surge (one use) is on the sheet without its 1
+  // use."), which the DM's features_add of the row's name with that uses_max gives it (SRD 5.2.1 Fighter Features
+  // table: "| 2 | +2 | Action Surge (one use), Tactical Mind |"; Action Surge: "Starting at level 17, you can use it
+  // twice before a rest"). Any entry of its name holds a row without a count.
   const counting = alreadyAdded.filter((x) => x.uses);
-  const holds = (f: string) =>
-    nameUseCount(f) === null
-      ? hasFeatureNamed(alreadyAdded, f)
-      : holdsFamilyEntry(counting, cl, f) || hasFeatureNamed(counting.filter((x) => x.source === 'class'), f);
+  const onSheet = (sheet: readonly Feature[], f: string) =>
+    holdsFamilyEntry(sheet, cl, f) || hasFeatureNamed(sheet.filter((x) => x.source === 'class'), f);
+  const holds = (f: string) => (nameUseCount(f) === null ? hasFeatureNamed(alreadyAdded, f) : onSheet(counting, f));
   const missing = named.filter((f) => !holds(f));
-  if (missing.length) reminders.push(`New ${info.name} ${level} features to add to the sheet: ${missing.join(', ')}.`);
+  const withoutUses = missing.flatMap((f) => {
+    const count = nameUseCount(f);
+    return count !== null && onSheet(alreadyAdded, f) ? [{ row: f, count }] : [];
+  });
+  const toAdd = missing.filter((f) => !withoutUses.some((x) => x.row === f));
+  if (toAdd.length) reminders.push(`New ${info.name} ${level} features to add to the sheet: ${toAdd.join(', ')}.`);
+  for (const { row, count } of withoutUses) {
+    reminders.push(`${info.name} ${level}: ${row} is on the sheet without its ${count} use${count === 1 ? '' : 's'}.`);
+  }
   for (const feature of named) {
     const hint = CHOICE_HINTS.find(([pattern]) => pattern.test(feature));
     if (hint) reminders.push(hint[1](info.name, level));

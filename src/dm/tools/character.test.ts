@@ -4127,12 +4127,17 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
     const featureCall = (name: string, source: string, description: string, usesMax?: number, recharge?: string) => ({
       features_add: [{ name, description, source, ...(usesMax ? { uses_max: usesMax } : {}), ...(recharge ? { recharge } : {}) }],
     });
+    /** The rows a level_up result names: those to add, and the counted rows whose entry is on the sheet without uses. */
+    const reminderRows = (out: string) => ({
+      toAdd: /\n- New Fighter \d+ features to add to the sheet: ([^\n]+)\.\n/.exec(out)?.[1].split(', ') ?? [],
+      withoutUses: [...out.matchAll(/\n- Fighter \d+: (.+) is on the sheet without its \d+ uses?\.(?=\n)/g)].map((m) => m[1]),
+    });
     /** The DM's level_up, each row its reminder names recorded as a class feature with the row's count, as the DM is told. */
     const levelUpFollowing = async (h: ReturnType<typeof setup>): Promise<{ out: string; added: string[] }> => {
       const out = (await h.run('level_up', { class_name: 'Fighter' })).content;
-      const rows = /\n- New Fighter \d+ features to add to the sheet: ([^\n]+)\.\n/.exec(out)?.[1].split(', ') ?? [];
+      const { toAdd, withoutUses } = reminderRows(out);
       const added: string[] = [];
-      for (const name of rows) {
+      for (const name of [...toAdd, ...withoutUses]) {
         const count = nameUseCount(name) ?? undefined;
         const r = await h.run('update_character', featureCall(name, 'class', 'As the table says.', count, count && name.startsWith('Action Surge') ? 'short' : undefined));
         added.push(r.content.split('\n')[0]);
@@ -4390,21 +4395,21 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
       expect(indomitable(dialogSteps(c, 20))).toEqual(AT_17);
     });
 
-    it("a counted row the DM recorded without uses_max holds none of the table's later rows: level_up to Fighter 13 names \"Indomitable (two uses)\" and the DM's features_add of it with its count gives the entry 2, no ruling; at 17 the row of each entry still without uses is named, and its count gives it its uses; the totals to Fighter 20 are the level-up dialog's (D1; srd:rule:fighter-indomitable: \"You can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17.\"; srd:rule:fighter-action-surge: \"Starting at level 17, you can use it twice before a rest\")", async () => {
+    it("a counted row the DM recorded without uses_max holds none of the table's later rows: level_up to Fighter 13 says \"Indomitable (two uses)\" is on the sheet without its 2 uses, not that it is to add, and the DM's features_add of it with that count gives the entry 2, no ruling; at 17 each entry still without uses gets that line, and its count gives it its uses; the totals to Fighter 20 are the level-up dialog's (D1; srd:rule:fighter-indomitable: \"You can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17.\"; srd:rule:fighter-action-surge: \"Starting at level 17, you can use it twice before a rest\")", async () => {
       const champion = { subclass: CHAMPION.name, subclassId: CHAMPION.id };
       const family = (c: Character) => c.features.filter((f) => /^(Action Surge|Indomitable)/.test(f.name)).map((f) => [f.name, f.source, f.uses]);
       const total = (c: Character, base: string) => c.features.filter((f) => f.name.startsWith(base)).reduce((n, f) => n + (f.uses?.max ?? 0), 0);
-      /** level_up, each row its reminder names recorded as a class feature: with the row's count, or without uses_max. */
+      /** level_up, each row its reminder names (to add, or on the sheet without uses) recorded as a class feature: with the row's count, or without uses_max. */
       const levelUpRecording = async (h: ReturnType<typeof setup>, withCount: boolean) => {
         const out = (await h.run('level_up', { class_name: 'Fighter' })).content;
-        const rows = /\n- New Fighter \d+ features to add to the sheet: ([^\n]+)\.\n/.exec(out)?.[1].split(', ') ?? [];
+        const { toAdd: rows, withoutUses } = reminderRows(out);
         const said: string[] = [];
-        for (const name of rows) {
+        for (const name of [...rows, ...withoutUses]) {
           const count = withCount ? (nameUseCount(name) ?? undefined) : undefined;
           const r = await h.run('update_character', featureCall(name, 'class', 'As the table says.', count, count && name.startsWith('Action Surge') ? 'short' : undefined));
           said.push(r.content.split('\n')[0]);
         }
-        return { out, rows, said };
+        return { out, rows, withoutUses, said };
       };
       const one = hero(srdEntry('Fighter', 1, champion));
       const AT_20 = [
@@ -4422,26 +4427,64 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
           seen[level] = await levelUpRecording(h, !bareAt.includes(level));
           if (level === 16) expect(family(h.sheet()).every(([, , uses]) => uses === undefined), why).toBe(bareAt.includes(13));
         }
-        expect([seen[2].rows, seen[2].said[0]], why).toEqual([['Action Surge (one use)', 'Tactical Mind'], 'Gained feature: Action Surge (one use)']);
-        expect([seen[9].rows, seen[9].said[0]], why).toEqual([['Indomitable (one use)', 'Tactical Master'], 'Gained feature: Indomitable (one use)']);
-        expect([seen[13].rows, seen[13].said[0]], why).toEqual([['Indomitable (two uses)', 'Studied Attacks'], 'Updated feature: Indomitable (two uses)']);
+        // No entry of the row yet at 2 and 9: the row is to add.
+        expect([seen[2].rows, seen[2].withoutUses, seen[2].said[0]], why).toEqual([['Action Surge (one use)', 'Tactical Mind'], [], 'Gained feature: Action Surge (one use)']);
+        expect([seen[9].rows, seen[9].withoutUses, seen[9].said[0]], why).toEqual([['Indomitable (one use)', 'Tactical Master'], [], 'Gained feature: Indomitable (one use)']);
+        // At 13 the entry recorded without uses_max is on the sheet, renamed by the row: its own line, right after the
+        // features to add.
+        expect(seen[13].out, why).toContain('\n- New Fighter 13 features to add to the sheet: Studied Attacks.\n- Fighter 13: Indomitable (two uses) is on the sheet without its 2 uses.\n');
+        expect([seen[13].rows, seen[13].withoutUses, seen[13].said], why).toEqual([['Studied Attacks'], ['Indomitable (two uses)'], ['Gained feature: Studied Attacks', 'Updated feature: Indomitable (two uses)']]);
+        expect(seen[17].out, why).not.toContain('features to add to the sheet');
         if (bareAt.includes(13)) {
-          expect([seen[17].rows, seen[17].said], why).toEqual([
+          expect(seen[17].out, why).toContain('\n- Fighter 17: Action Surge (two uses) is on the sheet without its 2 uses.\n- Fighter 17: Indomitable (three uses) is on the sheet without its 3 uses.\n');
+          expect([seen[17].withoutUses, seen[17].said], why).toEqual([
             ['Action Surge (two uses)', 'Indomitable (three uses)'],
             ['Updated feature: Action Surge (two uses)', 'Updated feature: Indomitable (three uses)'],
           ]);
         } else {
-          expect([seen[17].rows, seen[17].said], why).toEqual([['Action Surge (two uses)'], ['Updated feature: Action Surge (two uses)']]);
+          expect(seen[17].out, why).toContain('\n- Fighter 17: Action Surge (two uses) is on the sheet without its 2 uses.\n');
+          expect([seen[17].withoutUses, seen[17].said], why).toEqual([['Action Surge (two uses)'], ['Updated feature: Action Surge (two uses)']]);
           expect(seen[17].out, why).toContain('\nFeature uses now: Indomitable (three uses) 2 → 3.\n');
         }
         // Only those levels name a counted row, and no ruling is kept at any.
         for (let level = 2; level <= 20; level++) {
-          if (![2, 9, 13, 17].includes(level)) expect(seen[level].rows.filter((r) => nameUseCount(r) !== null), `${why}, ${level}`).toEqual([]);
+          if (![2, 9, 13, 17].includes(level)) expect([...seen[level].rows, ...seen[level].withoutUses].filter((r) => nameUseCount(r) !== null), `${why}, ${level}`).toEqual([]);
           expect(seen[level].out, `${why}, ${level}`).not.toContain('Kept your ruling');
         }
         expect(family(h.sheet()), why).toEqual(AT_20);
         expect([total(h.sheet(), 'Action Surge'), total(h.sheet(), 'Indomitable')], why).toEqual([total(dialog, 'Action Surge'), total(dialog, 'Indomitable')]);
       }
+    });
+
+    it("level_up to Fighter 2 listing the table's counted row among new_features without uses_max says that row is on the sheet without its 1 use, not that it is to add, in the result and the player's log; features_add of it with uses_max 1 and its recharge gives the entry its use, no ruling, and no later level names it until 17 grows it (srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\"; srd:rule:fighter-action-surge: \"Starting at level 17, you can use it twice before a rest\")", async () => {
+      const champion = { subclass: CHAMPION.name, subclassId: CHAMPION.id };
+      const surge = (c: Character) => c.features.filter((f) => f.name.startsWith('Action Surge')).map((f) => [f.name, f.sourceName, f.uses]);
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Fighter', 1, champion)) });
+      const NEW = [
+        { name: 'Action Surge (one use)', description: 'One more action on your turn.' },
+        { name: 'Tactical Mind', description: 'Second Wind for a failed ability check.' },
+      ];
+      const out = (await h.run('level_up', { class_name: 'Fighter', new_features: NEW })).content;
+      const line = 'Fighter 2: Action Surge (one use) is on the sheet without its 1 use.';
+      expect(out).toContain('\nNew features: Action Surge (one use), Tactical Mind.\n');
+      expect(out).toContain(`\nChoices the player still needs to make:\n- ${line}\n`);
+      expect(out).not.toMatch(/features to add to the sheet: [^\n]*Action Surge/);
+      expect(toolLog(h, 'level_up')?.detail?.split('\n')).toContain(line);
+      expect(surge(h.sheet())).toEqual([['Action Surge (one use)', 'Fighter 2', undefined]]);
+      // The DM gives it its count: the entry's own name, its use, no ruling.
+      const given = await h.run('update_character', featureCall('Action Surge (one use)', 'class', 'One more action on your turn.', 1, 'short'));
+      expect(given.content.split('\n')[0]).toBe('Updated feature: Action Surge (one use)');
+      expect(surge(h.sheet())).toEqual([['Action Surge (one use)', 'Fighter 2', { max: 1, used: 0, recharge: 'short' }]]);
+      // No later level names it, until the table's row at 17 grows the entry in place.
+      for (let level = 3; level <= 17; level++) {
+        const { out: up } = await levelUpFollowing(h);
+        expect(reminderRows(up).withoutUses, `level ${level}`).toEqual([]);
+        if (level < 17) expect(up, `level ${level}`).not.toContain('Action Surge');
+      }
+      const seventeen = toolLog(h, 'level_up')?.detail ?? '';
+      expect(seventeen).toContain('Feature uses now: Action Surge (two uses) 1 → 2 and Indomitable (three uses) 2 → 3.');
+      expect(seventeen).not.toContain('to add to the sheet: Action Surge');
+      expect(surge(h.sheet())).toEqual([['Action Surge (two uses)', 'Fighter 2', { max: 2, used: 0, recharge: 'short' }]]);
     });
 
     it("after a boon's call of the very name the class's lone entry holds has made that entry the boon's, the class's call of the name adds the class's entry beside it, not moving it back (srd:rule:fighter-indomitable: \"You can use this feature twice before a Long Rest starting at level 13\")", async () => {
