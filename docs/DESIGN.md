@@ -488,14 +488,14 @@ Each lineage spell the sheet then holds always prepared gets its free casting as
 named for the spell) or has ruled the trait's own uses, which the result names; the trait itself reads no use off the
 spells' free-casting sentence (read as a species trait, `UsesContext.speciesTrait`, its text leaves out the paragraph
 that says "learn a higher-level spell", however an import joined the compound (the PDF reader's "higherlevel" too), or
-that opens "When you reach character levels 3 and 5", with any two levels, and has the word "spell", and one right after
-it that opens "You can cast it once without a spell slot"; every feature, a class's, subclass's or feat's too, reads all
-of its text but its first line that opens, after any spaces or tabs, with those words and has the word "spell", as the
-SRD's lineage lines do; such a paragraph or line without the word ("When you reach character levels 5 and 9, the mark
-darkens") keeps its use, and the same words in mid-line take nothing away). The dialog's notice adds "free casting once
-per Long Rest: Faerie Fire (Drow)" and `level_up` a line on how to spend it. A hero already past character level 3 or 5
-catches up at its next level-up (nothing runs at load); a level whose spell edit doesn't run (a class the builder data
-lacks) adds neither the spells nor the castings, and a later one adds both.
+that opens "When you reach character levels 3 and 5", with any two levels, and has the word "spell", and each paragraph
+right after it that opens "You can cast it once without a spell slot"; every feature, a class's, subclass's or feat's
+too, reads all of its text but its first line that opens, after any spaces or tabs, with those words and has the word
+"spell", as the SRD's lineage lines do; such a paragraph or line without the word ("When you reach character levels 5
+and 9, the mark darkens") keeps its use, and the same words in mid-line take nothing away). The dialog's notice adds
+"free casting once per Long Rest: Faerie Fire (Drow)" and `level_up` a line on how to spend it. A hero already past
+character level 3 or 5 catches up at its next level-up (nothing runs at load); a level whose spell edit doesn't run (a
+class the builder data lacks) adds neither the spells nor the castings, and a later one adds both.
 
 **Speed from class features.** `Character.speed` stays the hero's own walking Speed (species or lineage, a
 transformation's change, a DM's ruling); the class features that raise it are worked out whenever it is read, never
@@ -538,28 +538,32 @@ higher count from another entry becoming the DM's ruling on it (its own older co
 the table's); and any other kept count above the class table's at the class level is the DM's ruling, so both paths keep
 it. An older sheet's duplicates merge at its next level-up ("Indomitable (one use) and Indomitable (two uses) merged
 into Indomitable (two uses): 2 uses, 1 left."), a lone grow reads "Feature uses now: Indomitable (two uses) 1 → 2.", and
-a folded feature is never listed as new or as grown. The DM's `level_up` without `new_features` joins the SRD level's
-counted names to a family the sheet holds, the DM's entries alone included, so the entry grows whether the DM lists it
-or not; the reminder names a row only when the sheet holds no entry of its family (a ruled entry or the DM's higher
-count holds it). A lookup by an older counted name finds the family's entry, and `features_add` of a counted name
-rewrites one entry of a counted family (the ruled one, else the class's counted one, its by-table one, the DM's counted
-one, the class's own, else the DM's bare one: an entry that takes the name gets no ruling from the name's count; one
-that keeps its own name, because it follows its table or is a 2024 book's bare entry, `readsItsTable`, gets none from
-its table's count and a ruling from any other number, and until its table counts it on the sheet (the book's data not on
-this device, or a table that counts nothing) any `uses_max` the DM gives it is the DM's ruling, the number it already
-holds included ("Action Surge (two uses)" with 2 on an older save's 2), so no later read takes it away, since a name the
-entry doesn't keep vouches for no number, while the count filled in for a `uses_max` left out is no ruling; a counted
-name's rewrite keeps the entry's recharge, and without `uses_max` it changes only the text of an entry that is ruled,
-follows its table or counts at least as many uses, and gives one counting fewer the name's count, no ruling); otherwise
-it is added beside, as before ("Rage (3 uses)" beside a Barbarian's "Rage", a second label beside the first). A book
-Fighter's bare "Action Surge" and "Indomitable" read their counts from the class table's features column ("Indomitable
-(two uses)" at 13; `usesFromCountedCells`), which the dialog and the DM's `level_up` read again before any level, and
-`update_character` before a call that adds, spends or restores features, for every book class the hero holds
-(`refreshBookTableCounts`; the dialog after the level too, as it reads every feature), so an older save's are right from
-its first level-up or features call on (until then the sheet's own use pips, a rest and `get_character_sheet` use the
-older count); `level_up` and `update_character` name what that read corrected, one line per class, first ("Uses read
-from the Fighter class table: Action Surge 2 → 1, Indomitable none → 2."; in `update_character`'s player log, an entry
-of its own before the call's), apart from what grew.
+a folded feature is never listed as new or as grown; nor is a new feature the merge renames (the class's "Action Surge
+(one use)" at Fighter 2 kept under the count of the DM's "Action Surge (two uses)"), which is named first among those
+merged ("Action Surge (one use) and Action Surge (two uses) merged into Action Surge (two uses): 2 uses, 2 left."). The
+DM's `level_up` without `new_features` joins the SRD level's counted names to a family the sheet holds, the DM's entries
+alone included, so the entry grows whether the DM lists it or not; the reminder names a row only when the sheet holds no
+entry of its family (a ruled entry or the DM's higher count holds it). A lookup by an older counted name finds the
+family's entry, and `features_add` of a counted name the call records as a class feature (`source` "class") rewrites one
+entry of a counted family (the ruled one, else the class's counted one, its by-table one, the DM's counted one, the
+class's own, else the DM's bare one: an entry that takes the name gets no ruling from the name's count; one that keeps
+its own name, because it follows its table or is a 2024 book's bare entry, `readsItsTable`, gets none from its table's
+count and a ruling from any other number, and until its table counts it on the sheet (the book's data not on this
+device, or a table that counts nothing) any `uses_max` the DM gives it is the DM's ruling, the number it already holds
+included ("Action Surge (two uses)" with 2 on an older save's 2), so no later read takes it away, since a name the entry
+doesn't keep vouches for no number, while the count filled in for a `uses_max` left out is no ruling; a counted name's
+rewrite keeps the entry's recharge, and without `uses_max` it changes only the text of an entry that is ruled, follows
+its table or counts at least as many uses, and gives one counting fewer the name's count, no ruling); otherwise, and
+under any other source (a boon's "Indomitable (two uses)", an item's), it is added beside, as before ("Rage (3 uses)"
+beside a Barbarian's "Rage", a second label beside the first), and the class's entry keeps its source and text, so the
+table's rows go on growing that one entry on both paths. A book Fighter's bare "Action Surge" and "Indomitable" read
+their counts from the class table's features column ("Indomitable (two uses)" at 13; `usesFromCountedCells`), which the
+dialog and the DM's `level_up` read again before any level, and `update_character` before a call that adds, spends or
+restores features, for every book class the hero holds (`refreshBookTableCounts`; the dialog after the level too, as it
+reads every feature), so an older save's are right from its first level-up or features call on (until then the sheet's
+own use pips, a rest and `get_character_sheet` use the older count); `level_up` and `update_character` name what that
+read corrected, one line per class, first ("Uses read from the Fighter class table: Action Surge 2 → 1, Indomitable none
+→ 2."; in `update_character`'s player log, an entry of its own before the call's), apart from what grew.
 
 ### Player-side controls that talk to the DM
 

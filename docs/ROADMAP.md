@@ -33,7 +33,7 @@ vibe-coding session.
   back), when its paragraph on the later spells neither says "learn a higher-level spell" (an en dash or another glyph
   between "higher" and "level" isn't read so) nor opens "When you reach character levels 3 and 5", with any two levels,
   and has the word "spell" (a list marker, emphasis or a bold label before those words counts as another opening), or
-  when that sentence stands anywhere but in that paragraph or at the opening of the paragraph right after it; a species
+  when that sentence stands anywhere but in that paragraph or at the opening of the paragraphs right after it; a species
   trait whose paragraphs are kept apart by single line breaks (a plain-text paste) also loses any use written in the
   same block as those words, and such a paragraph is no use of the trait whatever else it says (its "spell" may be only
   "without a spell slot"); any feature, species trait or not, reads no use off its first line that opens "When you reach
@@ -71,7 +71,13 @@ vibe-coding session.
   `level_up` `new_features` ("Indomitable (two uses)" with three) gives way to the name's count, which the result shows
   as growth (1 → 2), and the bare name with a higher `uses_max` ("Indomitable" with 3 uses at the Fighter 13 level-up)
   on a sheet that holds no Indomitable yet is no ruling: the level-up dialog's next level reads the table's 2 while
-  `level_up` keeps 3. Two classes of one name (an SRD Fighter beside a book's) count as one family.
+  `level_up` keeps 3. Two classes of one name (an SRD Fighter beside a book's) count as one family. A 2024 book Fighter
+  whose only Action Surge or Indomitable entries are the DM's own (recorded on levels without the book's data) gets no
+  growth from its table: each level-up says to check the class table, and the DM's `features_add` of the table's next
+  name grows the entry. A `features_add` under another source than the class's with the very name the class's entry
+  holds (a boon's "Indomitable (two uses)" on a Fighter 13) rewrites that entry, as a call of an entry's own name always
+  has, and moves it out of the family: the level-up dialog then adds the table's next row beside it, while `level_up`
+  names that row to add.
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
   DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
   Signature Spells, copying a spell into a spellbook and Evocation Savant's free spells (the DM records those as
