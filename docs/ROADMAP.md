@@ -75,9 +75,16 @@ vibe-coding session.
   whose only Action Surge or Indomitable entries are the DM's own (recorded on levels without the book's data) gets no
   growth from its table: each level-up says to check the class table, and the DM's `features_add` of the table's next
   name grows the entry. A `features_add` under another source than the class's with the very name the class's entry
-  holds (a boon's "Indomitable (two uses)" on a Fighter 13) rewrites that entry, as a call of an entry's own name always
-  has, and moves it out of the family: the level-up dialog then adds the table's next row beside it, while `level_up`
-  names that row to add.
+  holds, when no entry of that name is under the call's source (a boon's "Indomitable (two uses)" on a Fighter 13
+  holding only the class's), rewrites that entry, as a call of an entry's own name always has, and moves it out of the
+  family: the level-up dialog then adds the table's next row beside it, while `level_up` names that row to add.
+  `features_add` tells entries of one name apart only by their source: of two under one source (a feat taken twice) it
+  changes the first, and a name with a label added ("Indomitable (two uses) (boon)", as a use names it) adds a new
+  entry. On the DM's `level_up` path a boon beside the class's entry of its name is "Granted in play" as the class's is,
+  so `get_character_sheet` lists the two alike but for their words, and a use by "(Granted in play)" takes the class's
+  and names the boon "(boon)". The DM's `features_add` of an older counted name with that name's own count ("Action
+  Surge (one use)" with 1 at Fighter 17) renames the entry and gives it that count, no ruling: both paths keep 1, as the
+  name reads, and no kept-ruling line names it.
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
   DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
   Signature Spells, copying a spell into a spellbook and Evocation Savant's free spells (the DM records those as
