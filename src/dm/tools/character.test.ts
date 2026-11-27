@@ -3526,7 +3526,7 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
       }
     });
 
-    it("without the book's data on this device nothing is read, and a uses_max on the older book Fighter's bare entry is the DM's ruling under any name, kept when a later level reads the table; the name's count given for a uses_max left out is none (F1, D1; srd:rule:fighter-indomitable)", async () => {
+    it("without the book's data on this device nothing is read, and a uses_max on the older book Fighter's bare entry is the DM's ruling under any name, the number it held included, kept when a later level reads the table; the name's count given for a uses_max left out is none (F1, D1, D2; srd:rule:fighter-indomitable, srd:rule:fighter-action-surge)", async () => {
       for (const [name, max] of [
         ['Indomitable (three uses)', 3],
         ['Indomitable (one use)', 2],
@@ -3546,6 +3546,26 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
         expect(fourteen.content).toContain(`\nKept your ruling: Indomitable ${max} uses (a new uses_max in features_add changes it).\n`);
         for (let level = 15; level <= 17; level++) await back.run('level_up', { class_name: 'Fighter' });
         expect(back.sheet().features.find((f) => f.id === 'ind')?.uses).toEqual(uses);
+      }
+      // An older book Fighter 5's bare Action Surge holds the older reading's 2: the DM's 2 under the table's names or the
+      // entry's own is the DM's ruling all the same, which the next read keeps over the table's 1 (srd:class:fighter
+      // table: "| 2 | +2 | Action Surge (one use), Tactical Mind |"; srd:rule:fighter-action-surge: "Starting at level 17,
+      // you can use it twice before a rest"). The bare name is the entry's own, so the call gives its recharge.
+      for (const [name, recharge] of [
+        ['Action Surge (two uses)', undefined],
+        ['Action Surge (one use)', undefined],
+        ['Action Surge', 'short'],
+      ] as const) {
+        const five = setup({ builderData: null, character: olderBook(5) });
+        const add = await five.run('update_character', { features_add: [{ name, description: 'A second surge.', source: 'class', uses_max: 2, ...(recharge ? { recharge } : {}) }] });
+        expect(add.content.split('\n')[0], name).toBe('Updated feature: Action Surge');
+        const ruled = { max: 2, used: 2, recharge: 'short', ruled: true };
+        expect(five.sheet().features.find((f) => f.id === 'surge')?.uses, name).toEqual(ruled);
+        const back = setup({ builderData: bookData, character: five.sheet() });
+        const six = await back.run('level_up', { class_name: 'Fighter' });
+        expect(six.content, name).not.toContain('Uses read from');
+        expect(six.content, name).toContain('\nKept your ruling: Action Surge 2 uses (a new uses_max in features_add changes it).\n');
+        expect(back.sheet().features.find((f) => f.id === 'surge')?.uses, name).toEqual(ruled);
       }
       // Without uses_max the name's count stands in for the number left out: no ruling, so the table reads it at the next level.
       const away = setup({ builderData: null, character: olderBook(13) });

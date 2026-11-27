@@ -665,9 +665,11 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     const ruled = { ...c, features: [{ ...own, uses: { ...own.uses!, ruled: true } }, dm] };
     expect(addFeature(ruled, tableRow('Indomitable (two uses)', 2)).character.features[0].uses).toEqual(own.uses);
     expect(addFeature(c, tableRow('Indomitable (two uses)')).character.features[0]).toEqual(own);
+    // Its own bare name with the table's count, as any name without a count: the number it had, its scale kept, no ruling.
+    expect(addFeature(c, { ...tableRow('Indomitable', 2), description: 'Rewritten.' }).character.features[0]).toEqual({ ...own, description: 'Rewritten.' });
   });
 
-  it("a counted name routed onto a 2024 book Fighter's bare entry its table hasn't counted on the sheet keeps that entry's name, which the name routed onto it doesn't vouch for: the DM's uses are judged as under a name without a count (F1, D1; srd:rule:fighter-indomitable, srd:rule:fighter-action-surge)", () => {
+  it("a 2024 book Fighter's bare entry its table hasn't counted on the sheet keeps its name under a counted name routed onto it, and the uses the DM gives it there or under its own name are the DM's ruling, the number it had included (F1, D1, D2; srd:rule:fighter-indomitable, srd:rule:fighter-action-surge)", () => {
     // srd:rule:fighter-indomitable: "You can use this feature twice before a Long Rest starting at level 13 and three times
     // before a Long Rest starting at level 17." An older save of a 2024 book's Fighter 13, its features named as the
     // offline parser names them, its table not read (the book's data not on this device, or a table that counts
@@ -684,16 +686,31 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
       name: 'Indomitable',
       uses: { max: 3, used: 0, recharge: 'long', ruled: true },
     });
-    // Action Surge alike: "(one use)" with one use on the older reading's two is the DM's ruling, its spent use kept
-    // (srd:rule:fighter-action-surge: "Starting at level 17, you can use it twice before a rest"; a table that counts
-    // nothing reads the text's two again at the next level unless the DM rules it); the number it had stays as it was.
+    // Action Surge alike, its spent use kept: "(one use)" with one use on the older reading's two, and the older
+    // reading's own two under either of the table's names or the entry's own, are the DM's ruling, which no later read
+    // of the table takes back to its count (srd:class:fighter table: "| 2 | +2 | Action Surge (one use), Tactical Mind |";
+    // srd:rule:fighter-action-surge: "Starting at level 17, you can use it twice before a rest").
     const one = addFeature(c, { ...tableRow('Action Surge (one use)'), uses: { max: 1, used: 0, recharge: 'short' } });
     expect(one.events[0].message).toBe('Updated feature: Action Surge');
     expect(one.character.features[0]).toEqual({ ...surge, description: 'Reroll a failed saving throw.', uses: { max: 1, used: 1, recharge: 'short', ruled: true } });
-    expect(addFeature(c, { ...tableRow('Action Surge (two uses)'), uses: { max: 2, used: 0, recharge: 'short' } }).character.features[0].uses).toEqual(surge.uses);
+    for (const name of ['Action Surge (two uses)', 'Action Surge (one use)', 'Action Surge']) {
+      const same = addFeature(c, { ...tableRow(name), uses: { max: 2, used: 0, recharge: 'short' } });
+      expect(same.events[0].message, name).toBe('Updated feature: Action Surge');
+      expect(same.character.features[0], name).toEqual({ ...surge, description: 'Reroll a failed saving throw.', uses: { ...surge.uses!, ruled: true } });
+    }
     // The name's count in place of a number the DM left out (the DM's features_add without uses_max: usesFromName) is
-    // no ruling: a later read of the table goes on reading the entry.
+    // no ruling: a later read of the table goes on reading the entry. The DM's own number on an entry the name's count
+    // filled, the same number, is one (D2).
     expect(addFeature(c, tableRow('Indomitable (one use)', 1), { usesFromName: true }).character.features[1].uses).toEqual({ max: 1, used: 0, recharge: 'long' });
+    const held = addFeature(c, tableRow('Indomitable (two uses)', 2), { usesFromName: true }).character;
+    expect(held.features[1].uses).toEqual({ max: 2, used: 0, recharge: 'long' });
+    expect(addFeature(held, tableRow('Indomitable (two uses)', 2), { usesFromName: true }).character.features[1].uses).toEqual({ max: 2, used: 0, recharge: 'long' });
+    expect(addFeature(held, tableRow('Indomitable (two uses)', 2)).character.features[1].uses).toEqual({ max: 2, used: 0, recharge: 'long', ruled: true });
+    // The flag alone keeps uses from being the DM's number, whatever name the call gives: no ruling.
+    expect(addFeature(c, { ...tableRow('Action Surge'), uses: { max: 2, used: 0, recharge: 'short' } }, { usesFromName: true }).character.features[0].uses).toEqual(surge.uses);
+    // An entry the call moves off the class's features (another source) is no longer its table's to read: its uses are
+    // judged as any rewrite's, the number it had unruled.
+    expect(addFeature(c, { ...tableRow('Action Surge (two uses)'), source: 'subclass', uses: { max: 2, used: 0, recharge: 'short' } }).character.features[0].uses).toEqual(surge.uses);
     // The SRD Fighter's own bare entry (a hand-made sheet) is no book's: it takes the table's name and its count, no ruling,
     // as before (srd:class:fighter table: "| 13 | +5 | Indomitable (two uses), Studied Attacks |").
     expect(addFeature(fighter([bare]), tableRow('Indomitable (two uses)', 2)).character.features[0]).toEqual({ ...bare, name: 'Indomitable (two uses)', uses: { max: 2, used: 0, recharge: 'long' } });

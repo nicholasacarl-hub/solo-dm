@@ -1200,13 +1200,14 @@ export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | '
  * How the uses a rewrite gives (addFeature) grow: the number the feature had keeps its scale and any ruling; another
  * number is the DM's ruling (FeatureUses.ruled). A class feature named with a use count (`named`) given that number
  * ("Indomitable (two uses)" with 2) is the table's row under its name, no ruling, and clears one it had (SRD 5.2.1
- * Fighter Features table: "Indomitable (two uses)" at 13).
+ * Fighter Features table: "Indomitable (two uses)" at 13). With `rules`, the number the feature had is the DM's ruling
+ * too (addFeature: a 2024 book Fighter's bare entry no table counts on the sheet yet).
  */
-function rewrittenGrowth(old: FeatureUses | undefined, max: number, named: number | null): Pick<FeatureUses, 'scale' | 'ruled'> {
+function rewrittenGrowth(old: FeatureUses | undefined, max: number, named: number | null, rules = false): Pick<FeatureUses, 'scale' | 'ruled'> {
   const scale = old?.max === max && old.scale ? { scale: old.scale } : {};
   if (named === max) return scale;
   if (old?.max !== max) return { ruled: true };
-  return { ...scale, ...(old.ruled ? { ruled: true } : {}) };
+  return { ...scale, ...(rules || old.ruled ? { ruled: true } : {}) };
 }
 
 /**
@@ -1244,13 +1245,13 @@ function tableCountedUses(table: { uses: FeatureUses; count: number }, given: Fe
  * (two uses)"; an entry whose uses follow its class table's counts keeps its own name and its scale (tableCountedUses),
  * and so does a book class's entry its table's reader reads by its bare name (readsItsTable: a 2024 book's Fighter's
  * "Indomitable"), which takes the uses given under that name. Until its table counts it on the sheet (the book's data
- * not on this device, or a table that counts nothing), the name routed onto it, which it doesn't keep, vouches for no
- * number: the uses are judged as given under a name without a count, so the number it had stays as it was and any
- * other is the DM's ruling ("Action Surge (one use)" with 1 on the older reading's 2), unless they are the count the
- * name gives in place of a number the DM left out (`usesFromName`: the DM's features_add without uses_max), which is
- * no ruling. Given no uses (the DM's features_add gives the name's count only to an entry counting fewer), the entry
- * keeps its name and its uses, and only its text changes: an older "Indomitable (two uses)" at Fighter 17 reads
- * "Updated feature: Indomitable (three uses)".
+ * not on this device, or a table that counts nothing), any uses the DM gives such an entry are the DM's ruling, under a
+ * counted name routed onto it or its own bare name, the number it had included ("Action Surge (two uses)", "Action
+ * Surge (one use)" or "Action Surge" with 2 on the older reading's 2, or with 1): no later read of its table takes them
+ * away. The count the name gives in place of a number the DM left out (`usesFromName`: the DM's features_add without
+ * uses_max) is no ruling. Given no uses (the DM's features_add gives the name's count only to an entry counting fewer),
+ * the entry keeps its name and its uses, and only its text changes: an older "Indomitable (two uses)" at Fighter 17
+ * reads "Updated feature: Indomitable (three uses)".
  * Beside a namesake, the result names the feature as a use or restore takes it now (featureLabel). A feat and a species
  * trait or class feature never merge (featOrTrait):
  * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
@@ -1278,7 +1279,11 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
       // the DM's number (usesFromName); a counted name routed onto an entry that keeps its own (readsItsTable, no
       // by-table scale yet) vouches for none of the DM's numbers.
       const named = updated.source === 'class' && (!keepsName || opts.usesFromName) ? nameUseCount(name) : null;
-      const growth = rewrittenGrowth(old, feature.uses.max, named);
+      // The DM's number for an entry its table's reader reads by its bare name (as the call leaves it) and no table counts
+      // on the sheet yet, under a counted name routed onto it or its own: a ruling, the number it had included, so the
+      // next read of the table leaves it be.
+      const rules = !opts.usesFromName && old?.scale?.by !== 'table' && readsItsTable(updated, c.classes);
+      const growth = rewrittenGrowth(old, feature.uses.max, named, rules);
       updated.uses = { ...feature.uses, used: Math.min(old?.used ?? feature.uses.used, feature.uses.max), ...growth };
     }
     const character = replaceFeature(c, updated);

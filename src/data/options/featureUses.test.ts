@@ -280,6 +280,25 @@ describe("a lineage trait's later spells are no use of the trait, however a book
     for (let level = 1; level <= 20; level++) expect(traitUses(inkbound(own), level), `level ${level}`).toBeUndefined();
   });
 
+  it('knows "learn a higher-level spell" however the import joined it: the SRD Elf\'s and Tiefling\'s paragraph run into the one before it, with "higherlevel", a U+2010 hyphen or the other spellings, reads no use', () => {
+    // srd:species:elf: "You gain the level 1 benefit of that lineage." then "When you reach character levels 3 and 5, you
+    // learn a higher-level spell, as shown on the table. … You can cast it once without a spell slot, …"
+    // (srd:species:tiefling's Fiendish Legacy alike). The app's PDF reader joins a paragraph to the next when its last
+    // line runs long, and re-joins a word hyphenated across lines ("higher-" and "level": "higherlevel"); a text layer
+    // can give another hyphen (U+2010, U+2011), a copy a break or a space after the hyphen, or a space alone.
+    for (const compound of ['higherlevel', 'higher\u2010level', 'higher\u2011level', 'higher level', 'higher-\nlevel', 'higher- level']) {
+      const joined = (text: string) => text.replace('.\n\nWhen you reach character levels 3 and 5, you learn a higher-level spell', `. When you reach character levels 3 and 5, you learn a ${compound} spell`);
+      for (const species of data.species.filter((s) => s.name === 'Elf' || s.name === 'Tiefling')) {
+        const { lineageTrait, lineages } = speciesChoices(species);
+        const trait = { ...lineageTrait!, description: joined(lineageTrait!.description) };
+        expect(trait.description).toMatch(new RegExp(`(lineage|legacy)\\. When you reach character levels 3 and 5, you learn a ${compound} spell`));
+        for (const lineage of lineages) {
+          for (let level = 1; level <= 20; level++) expect(inferFeatureUses(trait.name, lineageFeatureText(trait, lineage), asTrait(level)), `${JSON.stringify(compound)}: ${lineage.name} at ${level}`).toBeUndefined();
+        }
+      }
+    }
+  });
+
   it('leaves out the free-casting sentence a blank line split from that paragraph, in the SRD Elf\'s and Tiefling\'s own words too', () => {
     // The SRD's paragraph (srd:species:elf) as an import broken at a page or column can give it: "You can cast it once
     // without a spell slot" opens a paragraph of its own, right after the one that teaches the spell.
@@ -378,7 +397,7 @@ describe("a lineage trait's later spells are no use of the trait, however a book
   });
 });
 
-describe("only a species trait leaves out the paragraph that teaches a higher-level spell: a class's, a subclass's or a feat's feature reads all of its text but a line that opens \"When you reach character levels 3 and 5\"", () => {
+describe("only a species trait leaves out the paragraph that teaches a higher-level spell: a class's, a subclass's or a feat's feature reads all of its text but a line that opens \"When you reach character levels 3 and 5\" and speaks of a spell", () => {
   // The paragraph left out is a lineage trait's (srd:species:elf, Elven Lineage: "When you reach character levels 3 and 5,
   // you learn a higher-level spell, as shown on the table."), whose spells' castings the level-up counts beside the trait.
   // Any other feature's free casting is its own use, as an SRD subclass feature's is
@@ -492,7 +511,7 @@ describe("the level-up's refresh reads a species trait as one (UsesContext.speci
   });
 });
 
-describe('a line that opens "When you reach character levels 3 and 5" is all any feature leaves out for those words: in mid-line they take nothing away', () => {
+describe('a line that opens "When you reach character levels 3 and 5" and speaks of a spell is all any feature leaves out for those words: about anything else, or in mid-line, they take nothing away', () => {
   // srd:species:elf opens its paragraph with them: "When you reach character levels 3 and 5, you learn a higher-level
   // spell". An invented book's lineage trait, feat and subclass feature have them in mid-line, before a use of their own
   // in the SRD's words: srd:species:dragonborn, Breath Weapon: "You can use this Breath Weapon a number of times equal to
@@ -590,27 +609,78 @@ describe('a line that opens "When you reach character levels 3 and 5" is all any
     expect(refreshFeatureUses(hero, data).features.find((f) => f.id === 'star')?.uses).toEqual(TWICE);
   });
 
-  it('the first line that opens with them goes, after spaces or a tab too, whole and alone: the next line, a second such line and a mid-line use stay', () => {
+  it('the first line that opens with them and speaks of a spell goes, after spaces or a tab too, whole and alone: the next line, a second such line and a mid-line use stay', () => {
     const USE = 'You can use this feature twice, and you regain all expended uses when you finish a Long Rest.';
     const read = (text: string) => inferFeatureUses('Falling Star', text, ctx(CLERIC, 7));
     for (const text of [
-      `When you reach character levels 7 and 11, your star burns brighter. ${USE}`,
-      `Your star guides you.\nWhen you reach character levels 7 and 11, your star burns brighter. ${USE}`,
-      `Your star guides you.\n  When you reach character levels 7 and 11, your star burns brighter. ${USE}`,
-      `Your star guides you.\n\tWhen you reach character levels 7 and 11, your star burns brighter. ${USE}`,
+      `When you reach character levels 7 and 11, you learn a spell of your choice. ${USE}`,
+      `Your star guides you.\nWhen you reach character levels 7 and 11, you learn a spell of your choice. ${USE}`,
+      `Your star guides you.\n  When you reach character levels 7 and 11, you learn a spell of your choice. ${USE}`,
+      `Your star guides you.\n\tWhen you reach character levels 7 and 11, you learn a spell of your choice. ${USE}`,
+      // The spell named later in the line, in capitals or as "spells".
+      `When you reach character levels 7 and 11, your star teaches you two Spells of your choice. ${USE}`,
       // An invented book subclass's feature on one line: its free casting goes with its line, as before.
       'When you reach character levels 3 and 5, you gain a spell of your choice from the Wizard list. You can cast it once without a spell slot, and you regain the ability to do so when you finish a Long Rest.',
     ]) {
       expect(read(text), text).toBeUndefined();
     }
-    expect(read(`When you reach character levels 7 and 11, your star burns brighter.\n${USE}`)).toEqual(TWICE);
-    expect(read(`When you reach character levels 7 and 11, your star burns brighter.\nWhen you reach character levels 15 and 19, it blazes. ${USE}`)).toEqual(TWICE);
-    expect(read(`Your star guides you. When you reach character levels 7 and 11, your star burns brighter. ${USE}`)).toEqual(TWICE);
+    expect(read(`When you reach character levels 7 and 11, you learn a spell of your choice.\n${USE}`)).toEqual(TWICE);
+    expect(read(`When you reach character levels 7 and 11, you learn a spell of your choice.\nWhen you reach character levels 15 and 19, you learn another spell. ${USE}`)).toEqual(TWICE);
+    expect(read(`Your star guides you. When you reach character levels 7 and 11, you learn a spell of your choice. ${USE}`)).toEqual(TWICE);
     // A species trait alike, within a paragraph that opens otherwise (one that opens with them it leaves out whole).
     const asTrait = (text: string) => inferFeatureUses('Inkbound Heritage', text, { ...ctx(undefined, 7), speciesTrait: true });
     const TRAIT_USE = 'You can use this trait twice, and you regain all expended uses when you finish a Long Rest.';
-    expect(asTrait(`Your heritage marks your shadow.\nWhen you reach character levels 5 and 9, the mark darkens. ${TRAIT_USE}`)).toBeUndefined();
-    expect(asTrait(`Your heritage marks your shadow. When you reach character levels 5 and 9, the mark darkens. ${TRAIT_USE}`)).toEqual(TWICE);
-    expect(asTrait(`Your heritage marks your shadow.\n\nWhen you reach character levels 5 and 9, the mark darkens.\n${TRAIT_USE}`)).toBeUndefined();
+    expect(asTrait(`Your heritage marks your shadow.\nWhen you reach character levels 5 and 9, you learn a spell of shadow. ${TRAIT_USE}`)).toBeUndefined();
+    expect(asTrait(`Your heritage marks your shadow. When you reach character levels 5 and 9, you learn a spell of shadow. ${TRAIT_USE}`)).toEqual(TWICE);
+    expect(asTrait(`Your heritage marks your shadow.\n\nWhen you reach character levels 5 and 9, you learn a spell of shadow.\n${TRAIT_USE}`)).toBeUndefined();
+  });
+
+  it('a line or a species paragraph that opens with them about anything but a spell stays, with its use: the first one that speaks of a spell is the line that goes (srd:species:elf; srd:species:dragonborn)', () => {
+    // srd:species:elf: "When you reach character levels 3 and 5, you learn a higher-level spell, as shown on the table."
+    // Both rules are for such words about spells. An invented book's trait and feat open a paragraph or a line with the
+    // same words about something else, then give a use in the SRD's words (srd:species:dragonborn, Breath Weapon: "You can
+    // use this Breath Weapon a number of times equal to your Proficiency Bonus, and you regain all expended uses when you
+    // finish a Long Rest.").
+    const pb = (level: number) => 2 + Math.floor((level - 1) / 4);
+    const asTrait = (level: number): UsesContext => ({ ...ctx(undefined, level), speciesTrait: true });
+    const TRAIT_PB = 'You can use this trait a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.';
+    const mark = (opening: string) => `Your heritage marks your shadow.\n\n${opening}\n${TRAIT_PB}`;
+    for (let level = 1; level <= 20; level++) {
+      // A species trait's paragraph that opens "When you reach character levels 5 and 9, the mark darkens": its use on
+      // its second line, or on its opening line, or after "spellcasting" (no spell), stays.
+      for (const text of [
+        mark('When you reach character levels 5 and 9, the mark darkens and spreads.'),
+        `Your heritage marks your shadow.\n\nWhen you reach character levels 5 and 9, the mark darkens and spreads. ${TRAIT_PB}`,
+        mark('When you reach character levels 5 and 9, your spellcasting focus darkens with the mark.'),
+      ]) {
+        expect(inferFeatureUses('Shadow Mark', text, asTrait(level)), `${text} at ${level}`).toEqual(byPb(pb(level)));
+      }
+      // So worded with a spell (or spells, in any case), the paragraph goes, as the SRD's does.
+      for (const spell of ['a spell', 'a Spell', 'two spells', 'two Spells']) {
+        expect(inferFeatureUses('Shadow Mark', mark(`When you reach character levels 5 and 9, the mark teaches you ${spell}.`), asTrait(level)), `${spell} at ${level}`).toBeUndefined();
+      }
+    }
+    // A feat whose line opens "When you reach character levels 4 and 8, your star brightens" keeps the use on it,
+    // opening the text or a later line, and so does one about spellcasting (no spell).
+    const STAR = 'When you reach character levels 4 and 8, your star brightens. You can use this feature a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.';
+    for (const text of [STAR, `You learn the Starlit tongue.\n${STAR}`, STAR.replace('your star brightens', 'your spellcasting focus brightens')]) {
+      expect([4, 8].map((level) => inferFeatureUses('Starlit Tongue', text, ctx(undefined, level))), text).toEqual([byPb(2), byPb(3)]);
+    }
+    // Such a line before one that speaks of a spell: the spell's line is the one that goes, its use with it.
+    expect(inferFeatureUses('Starlit Tongue', `When you reach character levels 4 and 8, your star brightens.\n${STAR.replace('your star brightens', 'you learn a spell')}`, ctx(undefined, 8))).toBeUndefined();
+    // The SRD Elf's and Tiefling's paragraph, as the SRD words it or with "gain", still reads none as a species trait,
+    // and without the flag loses its line (the round-3 and round-4 "gain a higher-level spell" wordings are above).
+    for (const species of data.species.filter((s) => s.name === 'Elf' || s.name === 'Tiefling')) {
+      const { lineageTrait, lineages } = speciesChoices(species);
+      for (const description of [lineageTrait!.description, lineageTrait!.description.replace('you learn a higher-level spell', 'you gain a higher-level spell')]) {
+        for (const lineage of lineages) {
+          const text = lineageFeatureText({ ...lineageTrait!, description }, lineage);
+          for (let level = 1; level <= 20; level++) {
+            expect(inferFeatureUses(lineageTrait!.name, text, asTrait(level)), `${lineage.name} at ${level}`).toBeUndefined();
+            expect(inferFeatureUses(lineageTrait!.name, text, ctx(undefined, level)), `${lineage.name} at ${level}, no flag`).toBeUndefined();
+          }
+        }
+      }
+    }
   });
 });

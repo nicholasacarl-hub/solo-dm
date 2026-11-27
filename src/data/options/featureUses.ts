@@ -35,8 +35,8 @@ export interface UsesContext {
    * The text is a species trait's (the builder's species step, refreshFeatureUses' species branch): its paragraph on
    * the spells it gives at later character levels, and a free-casting paragraph right after it, are no use of the trait
    * (withoutLaterSpells). A class's, a subclass's or a feat's feature reads all of its text but the first line that
-   * opens "When you reach character levels 3 and 5", which every reading leaves out (usesFromText); the same words
-   * later in a line take nothing away.
+   * opens "When you reach character levels 3 and 5" (any two levels) and speaks of a spell, which every reading
+   * leaves out (usesFromText); such a line about anything else, and the same words later in a line, take nothing away.
    */
   speciesTrait?: boolean;
 }
@@ -143,8 +143,19 @@ function usesFromTable(name: string, description: string, ctx: UsesContext): Use
   return null;
 }
 
-/** A paragraph that gives the hero a higher-level spell, in the SRD's words (once its line breaks are spaces). */
-const LATER_SPELL = /\blearn a higher-level spell/i;
+/**
+ * A paragraph that gives the hero a higher-level spell, in the SRD's words (once its line breaks are spaces), its
+ * compound joined however a book's text came in: the hyphen (or U+2010, U+2011), a hyphen and a line break, a space, or
+ * nothing ("higherlevel": the app's PDF reader re-joins a word hyphenated across lines).
+ */
+const LATER_SPELL = /\blearn a higher[-\u2010\u2011]?\s*level spell/i;
+
+/**
+ * A word for a spell: a species trait's paragraph that opens "When you reach character levels 3 and 5" (any two levels)
+ * is left out only with one (withoutLaterSpells), as the one-line strip takes such a line only with one (usesFromText);
+ * the SRD's have one (srd:species:elf: "…you learn a higher-level spell").
+ */
+const SPELL_WORD = /\bspells?\b/i;
 
 /**
  * A paragraph that opens with that spell's free casting, in the SRD's words (srd:species:elf): "You can cast it once
@@ -158,8 +169,10 @@ const FREE_CASTING_OPENING = /^You can cast it once without (?:expending )?a spe
  * the table. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability
  * to cast it in that way when you finish a Long Rest."; srd:species:tiefling's Fiendish Legacy alike): each such spell's
  * free casting is its own, counted beside it (spellPicks.ts withLineageCastings), never a use of the trait. Known by
- * "learn a higher-level spell" however a book words the paragraph's opening or wraps its lines, or by the SRD's opening
- * "When you reach character levels 3 and 5" whatever verb follows it ("gain" as well as "learn"); a paragraph runs to a
+ * "learn a higher-level spell" (LATER_SPELL) however a book words the paragraph's opening or wraps its lines, or by the
+ * SRD's opening "When you reach character levels 3 and 5" (any two levels) when the paragraph speaks of a spell,
+ * whatever verb gives it ("gain" as well as "learn"); a paragraph so opened about anything else (an invented trait's
+ * "When you reach character levels 5 and 9, the mark darkens") stays, with any use it gives. A paragraph runs to a
  * blank line. A paragraph right after a left-out one that opens with the free-casting sentence goes too (that
  * paragraph split by a blank line before "You can cast it once without a spell slot"); the rest of the text stays as it
  * was, so the sentence anywhere else is the trait's own use (Magic Initiate's "Level 1 Spell" is no such paragraph).
@@ -173,17 +186,18 @@ function withoutLaterSpells(text: string): string {
     .map((part, i) => {
       const flat = part.replace(/\s+/g, ' ').trim();
       if (i % 2 === 1 || !flat) return part;
-      leftOut = LATER_SPELL.test(flat) || laterLevelsOpening.test(flat) || (leftOut && FREE_CASTING_OPENING.test(flat));
+      leftOut = LATER_SPELL.test(flat) || (laterLevelsOpening.test(flat) && SPELL_WORD.test(flat)) || (leftOut && FREE_CASTING_OPENING.test(flat));
       return leftOut ? '' : part;
     })
     .join('');
 }
 
 function usesFromText(raw: string, ctx: UsesContext): UsesFound | null {
-  // Ignore the first line that opens, after any spaces or tabs, "When you reach character levels 3 and 5" (Elven
-  // Lineage, Fiendish Legacy), for every feature; the same words in mid-line cut nothing. A species trait also leaves out
-  // its paragraph about the spells learned at later levels, however it is worded or wrapped (withoutLaterSpells).
-  const text = (ctx.speciesTrait ? withoutLaterSpells(raw) : raw).replace(/^[ \t]*When you reach character levels \d+ and \d+[^\n]*(?:\n|$)/im, '');
+  // Ignore the first line that opens, after any spaces or tabs, "When you reach character levels 3 and 5" (any two levels)
+  // and speaks of a spell (Elven Lineage, Fiendish Legacy: "…3 and 5, you learn a higher-level spell"), for every
+  // feature; such a line about anything else, and the same words in mid-line, cut nothing. A species trait also leaves
+  // out its paragraph about the spells learned at later levels, however it is worded or wrapped (withoutLaterSpells).
+  const text = (ctx.speciesTrait ? withoutLaterSpells(raw) : raw).replace(/^[ \t]*When you reach character levels \d+ and \d+(?=[^\n]*\bspells?\b)[^\n]*(?:\n|$)/im, '');
   const pool = /total number of Hit Points equal to (\w+) times your (\w+) level/i.exec(text);
   if (pool) {
     const multiplier = wordNumber(pool[1]) ?? 1;
