@@ -33,8 +33,10 @@ export interface UsesContext {
   cls?: ClassOption;
   /**
    * The text is a species trait's (the builder's species step, refreshFeatureUses' species branch): its paragraph on
-   * the spells it gives at later character levels is no use of the trait (withoutLaterSpells). A class's, a
-   * subclass's or a feat's feature reads its whole text.
+   * the spells it gives at later character levels, and a free-casting paragraph right after it, are no use of the trait
+   * (withoutLaterSpells). A class's, a subclass's or a feat's feature reads all of its text but the first line that
+   * opens "When you reach character levels 3 and 5", which every reading leaves out (usesFromText); the same words
+   * later in a line take nothing away.
    */
   speciesTrait?: boolean;
 }
@@ -156,12 +158,14 @@ const FREE_CASTING_OPENING = /^You can cast it once without (?:expending )?a spe
  * the table. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability
  * to cast it in that way when you finish a Long Rest."; srd:species:tiefling's Fiendish Legacy alike): each such spell's
  * free casting is its own, counted beside it (spellPicks.ts withLineageCastings), never a use of the trait. Known by
- * "learn a higher-level spell" however a book words the paragraph's opening or wraps its lines; a paragraph runs to a
- * blank line. A paragraph right after a left-out one that opens with the free-casting sentence goes too (that paragraph
- * split by a blank line before "You can cast it once without a spell slot"); the rest of the text stays as it was, so
- * the sentence anywhere else is the trait's own use (Magic Initiate's "Level 1 Spell" is no such paragraph).
+ * "learn a higher-level spell" however a book words the paragraph's opening or wraps its lines, or by the SRD's opening
+ * "When you reach character levels 3 and 5" whatever verb follows it ("gain" as well as "learn"); a paragraph runs to a
+ * blank line. A paragraph right after a left-out one that opens with the free-casting sentence goes too (that
+ * paragraph split by a blank line before "You can cast it once without a spell slot"); the rest of the text stays as it
+ * was, so the sentence anywhere else is the trait's own use (Magic Initiate's "Level 1 Spell" is no such paragraph).
  */
 function withoutLaterSpells(text: string): string {
+  const laterLevelsOpening = /^When you reach character levels \d+ and \d+/i;
   let leftOut = false;
   // Split keeping the blank lines (odd places), so the text joins back exactly; blank lines alone are no paragraph.
   return text
@@ -169,17 +173,17 @@ function withoutLaterSpells(text: string): string {
     .map((part, i) => {
       const flat = part.replace(/\s+/g, ' ').trim();
       if (i % 2 === 1 || !flat) return part;
-      leftOut = LATER_SPELL.test(flat) || (leftOut && FREE_CASTING_OPENING.test(flat));
+      leftOut = LATER_SPELL.test(flat) || laterLevelsOpening.test(flat) || (leftOut && FREE_CASTING_OPENING.test(flat));
       return leftOut ? '' : part;
     })
     .join('');
 }
 
 function usesFromText(raw: string, ctx: UsesContext): UsesFound | null {
-  // Ignore the line that opens "When you reach character levels 3 and 5" (Elven Lineage, Fiendish Legacy), and a
-  // species trait's paragraph about the spells learned at later levels, however it is worded or wrapped
-  // (withoutLaterSpells).
-  const text = (ctx.speciesTrait ? withoutLaterSpells(raw) : raw).replace(/When you reach character levels \d+ and \d+[^\n]*(?:\n|$)/i, '');
+  // Ignore the first line that opens, after any spaces or tabs, "When you reach character levels 3 and 5" (Elven
+  // Lineage, Fiendish Legacy), for every feature; the same words in mid-line cut nothing. A species trait also leaves out
+  // its paragraph about the spells learned at later levels, however it is worded or wrapped (withoutLaterSpells).
+  const text = (ctx.speciesTrait ? withoutLaterSpells(raw) : raw).replace(/^[ \t]*When you reach character levels \d+ and \d+[^\n]*(?:\n|$)/im, '');
   const pool = /total number of Hit Points equal to (\w+) times your (\w+) level/i.exec(text);
   if (pool) {
     const multiplier = wordNumber(pool[1]) ?? 1;
