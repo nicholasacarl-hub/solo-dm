@@ -91,7 +91,7 @@ import { refreshBookTableCounts, type TableCountsRead } from '@/data/options/fea
 import { gainedFeatures, keptRulings } from '@/data/options/leveling';
 import { classRefOf, subclassCastingOf, subclassRefOf, spellEntryRef, spellHomebrewId } from '@/data/options/levelUpChoices';
 import { subclassesOf } from '@/data/options/replaced';
-import { classByName, classOptionFor, multiclassPrimariesFor, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
+import { classByName, classOptionFor, isImportedId, multiclassPrimariesFor, optionSourceLabel, subclassByName, subclassOptionFor } from '@/data/options/resolve';
 import {
   classSpellRules,
   freeCastingLines,
@@ -726,20 +726,25 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
       // A counted name routed onto its family's entry under another name ("Action Surge (two uses)" onto "Action Surge
       // (one use)"): what the call leaves out is the entry's, not the call's defaults. Its recharge stays (SRD 5.2.1
       // Action Surge: "until you finish a Short or Long Rest"). Without uses_max, an entry counting fewer uses than the
-      // name (by its name's count, else its uses), or none, takes the name's count; one the DM ruled, one that follows its
-      // class table or one counting at least as many keeps its own, and only its text changes (addFeature, given no uses).
+      // name (by its name's count, else its uses), or none, takes the name's count, which is no ruling even on an entry
+      // that keeps its own name (addFeature's usesFromName); one the DM ruled, one that follows its class table or one
+      // counting at least as many keeps its own, and only its text changes (addFeature, given no uses).
       const routed = rewritten && nameKey(rewritten.name) !== nameKey(f.name.trim()) ? rewritten : undefined;
       const count = nameUseCount(f.name);
       const holds = routed && (routed.uses?.ruled || routed.uses?.scale?.by === 'table' || (nameUseCount(routed.name) ?? routed.uses?.max ?? 0) >= (count ?? 0));
       const max = f.uses_max ?? (routed && !holds ? (count ?? undefined) : undefined);
-      return addFeature(c, {
-        name: f.name,
-        description: f.description,
-        source: f.source,
-        sourceName: 'Granted in play',
-        ...(max ? { uses: { max, used: 0, recharge: f.recharge ?? routed?.uses?.recharge ?? 'long' } } : {}),
-        ...(ref ? { ref } : {}),
-      });
+      return addFeature(
+        c,
+        {
+          name: f.name,
+          description: f.description,
+          source: f.source,
+          sourceName: 'Granted in play',
+          ...(max ? { uses: { max, used: 0, recharge: f.recharge ?? routed?.uses?.recharge ?? 'long' } } : {}),
+          ...(ref ? { ref } : {}),
+        },
+        { usesFromName: f.uses_max === undefined && max !== undefined },
+      );
     });
   });
   return steps;
@@ -1317,7 +1322,12 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
   // Spells recorded for a class whose spell choices are open settle them, as the level_up result says (the class data
   // counts what is still owed; without it the choices stay as they are).
   const recordsSpells = Boolean(input.spells_add?.length || input.spells_remove?.length);
-  const classData = recordsSpells && before.spellcasting?.spellPicks?.length ? await loadBuilderOrNull(ctx) : null;
+  const settles = recordsSpells && Boolean(before.spellcasting?.spellPicks?.length);
+  // A call that adds, spends or restores features reads the tables of the book classes the hero holds first, as level_up
+  // does (refreshBookTableCounts; without the book's data on this device, nothing is read).
+  const readsTables = Boolean(input.features_add?.length || input.features_use?.length || input.features_restore?.length) && before.classes.some((cl) => isImportedId(cl.classId));
+  const data = settles || readsTables ? await loadBuilderOrNull(ctx) : null;
+  const classData = settles ? data : null;
   let settled: SettledPicks[] = [];
   let startSheet = before;
   const change = await mutateCharacter(ctx, (start) => {
@@ -1326,6 +1336,17 @@ export async function updateCharacterTool(input: ToolInput<'update_character'>, 
     track.kept = [];
     startSheet = start;
     let current = start;
+    // Before the call's steps judge the entries: an older save's 2024 book Fighter's bare "Indomitable" without uses holds
+    // its table's count by the table, as after a level-up here, so a features_add of a counted name is measured by the
+    // table (srd:class:fighter, "| 13 | +5 | Indomitable (two uses), Studied Attacks |"). Told first with level_up's own
+    // line, one per class whose counts changed, and logged on its own.
+    if (readsTables && data) {
+      const pre = refreshBookTableCounts(start, data.classes);
+      const events = pre.reads.flatMap((x) => tableReadLine(x.className, x.before, x.after) ?? []).map((message): GameEvent => ({ type: 'feature-restored', message }));
+      const r = { character: pre.character, events };
+      if (events.length) results.push({ section: { icon: 'info', apply: () => r }, before: start, after: r.character, events });
+      current = r.character;
+    }
     for (const section of sections) {
       const r = section.apply(current);
       results.push({ section, before: current, after: r.character, events: r.events });

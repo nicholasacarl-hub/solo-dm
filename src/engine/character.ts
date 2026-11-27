@@ -1243,9 +1243,14 @@ function tableCountedUses(table: { uses: FeatureUses; count: number }, given: Fe
  * family's entry under another name (featureToRewrite) says so: "Updated feature: Indomitable (one use) → Indomitable
  * (two uses)"; an entry whose uses follow its class table's counts keeps its own name and its scale (tableCountedUses),
  * and so does a book class's entry its table's reader reads by its bare name (readsItsTable: a 2024 book's Fighter's
- * "Indomitable" without uses yet takes the uses given under its own name, the name's count no ruling). Given no uses (the
- * DM's features_add gives the name's count only to an entry counting fewer), the entry keeps its name and its uses, and
- * only its text changes: an older "Indomitable (two uses)" at Fighter 17 reads "Updated feature: Indomitable (three uses)".
+ * "Indomitable"), which takes the uses given under that name. Until its table counts it on the sheet (the book's data
+ * not on this device, or a table that counts nothing), the name routed onto it, which it doesn't keep, vouches for no
+ * number: the uses are judged as given under a name without a count, so the number it had stays as it was and any
+ * other is the DM's ruling ("Action Surge (one use)" with 1 on the older reading's 2), unless they are the count the
+ * name gives in place of a number the DM left out (`usesFromName`: the DM's features_add without uses_max), which is
+ * no ruling. Given no uses (the DM's features_add gives the name's count only to an entry counting fewer), the entry
+ * keeps its name and its uses, and only its text changes: an older "Indomitable (two uses)" at Fighter 17 reads
+ * "Updated feature: Indomitable (three uses)".
  * Beside a namesake, the result names the feature as a use or restore takes it now (featureLabel). A feat and a species
  * trait or class feature never merge (featOrTrait):
  * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
@@ -1254,7 +1259,7 @@ function tableCountedUses(table: { uses: FeatureUses; count: number }, given: Fe
  * numbers (joiningNumbers: Alert's Initiative bonus, Tough's Hit Points); a change that leaves it holding what it held
  * brings none.
  */
-export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: string }): EngineResult {
+export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: string }, opts: { usesFromName?: boolean } = {}): EngineResult {
   const name = feature.name?.trim();
   if (!name) return unchanged(c, 'A feature needs a name.');
   const existing = featureToRewrite(c, { name, source: feature.source });
@@ -1269,7 +1274,11 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
     const old = existing.uses;
     if (feature.uses && table) updated.uses = tableCountedUses(table, feature.uses);
     else if (feature.uses) {
-      const growth = rewrittenGrowth(old, feature.uses.max, updated.source === 'class' ? nameUseCount(name) : null);
+      // A name's count vouches for the uses given when the entry takes that name, or when they are its count in place of
+      // the DM's number (usesFromName); a counted name routed onto an entry that keeps its own (readsItsTable, no
+      // by-table scale yet) vouches for none of the DM's numbers.
+      const named = updated.source === 'class' && (!keepsName || opts.usesFromName) ? nameUseCount(name) : null;
+      const growth = rewrittenGrowth(old, feature.uses.max, named);
       updated.uses = { ...feature.uses, used: Math.min(old?.used ?? feature.uses.used, feature.uses.max), ...growth };
     }
     const character = replaceFeature(c, updated);

@@ -667,27 +667,46 @@ describe("counted families: the one entry a level-up keeps, by any of the table'
     expect(addFeature(c, tableRow('Indomitable (two uses)')).character.features[0]).toEqual(own);
   });
 
-  it("a counted name routed onto a 2024 book Fighter's bare entry its table hasn't counted yet keeps that entry's name, so the table's reader goes on reading it (F1; srd:rule:fighter-indomitable)", () => {
+  it("a counted name routed onto a 2024 book Fighter's bare entry its table hasn't counted on the sheet keeps that entry's name, which the name routed onto it doesn't vouch for: the DM's uses are judged as under a name without a count (F1, D1; srd:rule:fighter-indomitable, srd:rule:fighter-action-surge)", () => {
     // srd:rule:fighter-indomitable: "You can use this feature twice before a Long Rest starting at level 13 and three times
     // before a Long Rest starting at level 17." An older save of a 2024 book's Fighter 13, its features named as the
-    // offline parser names them: "Indomitable" without uses yet, "Action Surge" read as 2.
+    // offline parser names them, its table not read (the book's data not on this device, or a table that counts
+    // nothing): "Indomitable" without uses yet, "Action Surge" read as 2.
     const bare = indomitable('ind', 'Indomitable', 0, 0, { uses: undefined });
     const surge: Feature = { id: 'surge', name: 'Action Surge', source: 'class', sourceName: 'Fighter 2', description: 'One more action.', uses: { max: 2, used: 1, recharge: 'short' } };
     const c = mira({ classes: [bookFighter(13)], spellcasting: undefined, features: [surge, bare] });
+    // Uses where it had none are the DM's ruling, the table's name and count included: the name isn't kept, and nothing
+    // here reads the table that would vouch for the number.
     const two = addFeature(c, { ...tableRow('Indomitable (two uses)', 2), description: 'Rewritten.' });
     expect(two.events[0].message).toBe('Updated feature: Indomitable');
-    expect(two.character.features).toEqual([surge, { ...bare, description: 'Rewritten.', uses: { max: 2, used: 0, recharge: 'long' } }]);
-    // Another number is the DM's ruling, on the same entry under its own name.
+    expect(two.character.features).toEqual([surge, { ...bare, description: 'Rewritten.', uses: { max: 2, used: 0, recharge: 'long', ruled: true } }]);
     expect(addFeature(c, { ...tableRow('Indomitable (two uses)'), uses: { max: 3, used: 0, recharge: 'long' } }).character.features[1]).toMatchObject({
       name: 'Indomitable',
       uses: { max: 3, used: 0, recharge: 'long', ruled: true },
     });
-    // Action Surge alike: "(one use)" with one use on the older reading's two is no ruling, its spent use kept.
+    // Action Surge alike: "(one use)" with one use on the older reading's two is the DM's ruling, its spent use kept
+    // (srd:rule:fighter-action-surge: "Starting at level 17, you can use it twice before a rest"; a table that counts
+    // nothing reads the text's two again at the next level unless the DM rules it); the number it had stays as it was.
     const one = addFeature(c, { ...tableRow('Action Surge (one use)'), uses: { max: 1, used: 0, recharge: 'short' } });
     expect(one.events[0].message).toBe('Updated feature: Action Surge');
-    expect(one.character.features[0]).toEqual({ ...surge, description: 'Reroll a failed saving throw.', uses: { max: 1, used: 1, recharge: 'short' } });
-    // The SRD Fighter's own bare entry (a hand-made sheet) is no book's: it takes the table's name, as before.
-    expect(addFeature(fighter([bare]), tableRow('Indomitable (two uses)', 2)).character.features[0]).toMatchObject({ name: 'Indomitable (two uses)', uses: { max: 2 } });
+    expect(one.character.features[0]).toEqual({ ...surge, description: 'Reroll a failed saving throw.', uses: { max: 1, used: 1, recharge: 'short', ruled: true } });
+    expect(addFeature(c, { ...tableRow('Action Surge (two uses)'), uses: { max: 2, used: 0, recharge: 'short' } }).character.features[0].uses).toEqual(surge.uses);
+    // The name's count in place of a number the DM left out (the DM's features_add without uses_max: usesFromName) is
+    // no ruling: a later read of the table goes on reading the entry.
+    expect(addFeature(c, tableRow('Indomitable (one use)', 1), { usesFromName: true }).character.features[1].uses).toEqual({ max: 1, used: 0, recharge: 'long' });
+    // The SRD Fighter's own bare entry (a hand-made sheet) is no book's: it takes the table's name and its count, no ruling,
+    // as before (srd:class:fighter table: "| 13 | +5 | Indomitable (two uses), Studied Attacks |").
+    expect(addFeature(fighter([bare]), tableRow('Indomitable (two uses)', 2)).character.features[0]).toEqual({ ...bare, name: 'Indomitable (two uses)', uses: { max: 2, used: 0, recharge: 'long' } });
+  });
+
+  it("only a class feature's count in its name is its table's row: another feature named with a count, given that count over its own, is the DM's ruling as any rewrite is (srd:class:fighter table: \"| 13 | +5 | Indomitable (two uses), Studied Attacks |\")", () => {
+    // An invented species trait the DM named with a count: no class table names it, so its name vouches for no number.
+    const luck: Feature = { id: 'luck', name: 'Lantern Luck (2 uses)', source: 'species', sourceName: 'Mothkin', description: 'Luck of the lamp.', uses: { max: 1, used: 0, recharge: 'long' } };
+    const given = { name: 'Lantern Luck (2 uses)', source: 'species' as const, description: 'Twice now.', uses: { max: 2, used: 0, recharge: 'long' as const } };
+    expect(addFeature(mira({ features: [luck] }), given).character.features[0].uses).toEqual({ max: 2, used: 0, recharge: 'long', ruled: true });
+    // A class feature of that name given its name's count is the table's row: no ruling.
+    const own: Feature = { ...luck, source: 'class', sourceName: 'Fighter 9' };
+    expect(addFeature(fighter([own]), { ...given, source: 'class' }).character.features[0].uses).toEqual({ max: 2, used: 0, recharge: 'long' });
   });
 
   it('reads its table: a book class standing in for one that counts the base by name, its own entry, named with the base alone (readsItsTable)', () => {
