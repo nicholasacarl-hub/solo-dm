@@ -77,20 +77,23 @@ vibe-coding session.
   name grows the entry. A `features_add` under another source than the class's with the very name the class's entry
   holds, when no entry of that name is under the call's source (a boon's "Indomitable (two uses)" on a Fighter 13
   holding only the class's), rewrites that entry, as a call of an entry's own name always has, and moves it out of the
-  family: the level-up dialog then adds the table's next row beside it, while `level_up` names that row to add.
-  `features_add` tells entries of one name apart only by their source: of two under one source (a feat taken twice) it
-  changes the first, and a name with a label added ("Indomitable (two uses) (boon)", as a use names it) adds a new
-  entry: the kept-ruling line names a ruled entry so labelled with the call that changes it (its name and source; the
-  second of two under one source has none), but the results and the use texts still print labels `features_add` doesn't
-  take. On the DM's `level_up` path a boon beside the class's entry of its name is "Granted in play" as the class's is,
-  so `get_character_sheet` lists the two alike but for their words, and a use by "(Granted in play)" takes the class's
-  entry while it has a use left, naming the boon "(boon)", and then the boon, naming the class's "(class)". On the DM's
-  `level_up` path an entry of the DM's (a boon's, an item's) named like a row without a count that the class table gives
-  later ("Tactical Mind", a Fighter 2's) keeps that row out of the reminder, and a `features_add` of the name with
-  `source` "class" then rewrites the DM's entry, its words lost; the level-up dialog adds the class's entry beside it.
-  The DM's `features_add` of an older counted name with that name's own count ("Action Surge (one use)" with 1 at
-  Fighter 17) renames the entry and gives it that count, no ruling: both paths keep 1, as the name reads, and no
-  kept-ruling line names it.
+  family: the level-up dialog then adds the table's next row beside it, while `level_up` names that row to add, and a
+  later `features_add` of the name with `source` "class" adds the class's entry beside the moved one rather than moving
+  it back (the moved entry keeps its source name, "Fighter 9"). A use by an older counted name that an entry under
+  another source holds (a boon's "Indomitable (one use)" beside the class's "Indomitable (two uses)") spends that entry,
+  with no word of the class's. `features_add` tells entries of one name apart only by their source: of two under one
+  source (a feat taken twice) it changes the first, and a name with a label added ("Indomitable (two uses) (boon)", as a
+  use names it) adds a new entry: the kept-ruling line names a ruled entry so labelled with the call that changes it
+  (its name and source; the second of two under one source has none), but the results and the use texts still print
+  labels `features_add` doesn't take. On the DM's `level_up` path a boon beside the class's entry of its name is
+  "Granted in play" as the class's is, so `get_character_sheet` lists the two alike but for their words, and a use by
+  "(Granted in play)" takes the class's entry while it has a use left, naming the boon "(boon)", and then the boon,
+  naming the class's "(class)". On the DM's `level_up` path an entry of the DM's (a boon's, an item's) named like a row
+  without a count that the class table gives later ("Tactical Mind", a Fighter 2's) keeps that row out of the reminder,
+  and a `features_add` of the name with `source` "class" then rewrites the DM's entry, its words lost; the level-up
+  dialog adds the class's entry beside it. The DM's `features_add` of an older counted name with that name's own count
+  ("Action Surge (one use)" with 1 at Fighter 17) renames the entry and gives it that count, no ruling: both paths keep
+  1, as the name reads, and no kept-ruling line names it.
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
   DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
   Signature Spells, copying a spell into a spellbook and Evocation Savant's free spells (the DM records those as
