@@ -1158,23 +1158,25 @@ function joiningNumbers(before: Character, after: Character): EngineResult {
 const storesNumbers = (f: Pick<Feature, 'name' | 'source'>): boolean => isAlertFeat(f) || isToughFeat(f);
 
 /**
- * The feature addFeature rewrites for an entry of this name and source: the first of its name on the same side of the
- * feat line, or on either for an entry on neither (featOrTrait). Undefined when it would add one. A transformation's
- * power is the transformation's (transform_character changes it, and its end takes it): another entry of its name joins
- * beside it, as the level-up panel's feat does. A feat whose numbers the sheet stores (Alert, Tough) stays the feat: a
- * species trait or class feature of its name joins beside it too, so its numbers are never left without it, nor paid
- * again when the feat is recorded after. A name with a use count that no feature has ("Indomitable (two uses)", as the
- * level-up reminder names the table's row), recorded as a class feature (source "class"), rewrites an entry of its
- * counted family (countedFamily: one of the class's own entries named with a count, or a class whose table counts it by
- * name, SRD 5.2.1's Fighter) instead of adding a second one: the DM's ruling of its uses first, else the class's own
- * entry named with a count ("Fighter 9"), else the class's own entry whose uses follow its class table (tableCounted, a
- * 2024 book's "Indomitable": it keeps its name), else the DM's named with a count (isGrantedFamilyEntry), else the
- * class's own, as a level-up keeps one. Under any other source (a boon's "Indomitable (two uses)", an item's, a
- * subclass's or species' entry, a feat) it is added beside the family as any other name is, and the class's entry keeps
- * its source and text: it stays the one the class table's rows grow (SRD 5.2.1 Indomitable: "You can use this feature
- * twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17"). Beside a
- * class feature of a family no one counts ("Rage (3 uses)" beside a Barbarian's "Rage", or beside the DM's "Rage (2
- * uses)") it is added as any other name is.
+ * The feature addFeature rewrites for an entry of this name and source: of those of its name on the same side of the
+ * feat line, or on either for an entry on neither (featOrTrait), the one under the call's source, else the first (a
+ * boon's "Indomitable (two uses)" kept beside the class's entry, which comes to share its name when the class table
+ * grows it at Fighter 13, is the boon's call's to change, and the class's entry the class's). Undefined when it would
+ * add one. A transformation's power is the transformation's (transform_character changes it, and its end takes it):
+ * another entry of its name joins beside it, as the level-up panel's feat does. A feat whose numbers the sheet stores
+ * (Alert, Tough) stays the feat: a species trait or class feature of its name joins beside it too, so its numbers are
+ * never left without it, nor paid again when the feat is recorded after. A name with a use count that no feature has
+ * ("Indomitable (two uses)", as the level-up reminder names the table's row), recorded as a class feature (source
+ * "class"), rewrites an entry of its counted family (countedFamily: one of the class's own entries named with a count,
+ * or a class whose table counts it by name, SRD 5.2.1's Fighter) instead of adding a second one: the DM's ruling of its
+ * uses first, else the class's own entry named with a count ("Fighter 9"), else the class's own entry whose uses follow
+ * its class table (tableCounted, a 2024 book's "Indomitable": it keeps its name), else the DM's named with a count
+ * (isGrantedFamilyEntry), else the class's own, as a level-up keeps one. Under any other source (a boon's "Indomitable
+ * (two uses)", an item's, a subclass's or species' entry, a feat) it is added beside the family as any other name is,
+ * and the class's entry keeps its source and text: it stays the one the class table's rows grow (SRD 5.2.1 Indomitable:
+ * "You can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting
+ * at level 17"). Beside a class feature of a family no one counts ("Rage (3 uses)" beside a Barbarian's "Rage", or
+ * beside the DM's "Rage (2 uses)") it is added as any other name is.
  */
 export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | 'source'>): Feature | undefined {
   const name = feature.name.trim();
@@ -1185,7 +1187,9 @@ export function featureToRewrite(c: Character, feature: Pick<Feature, 'name' | '
     if (side === 'trait' && storesNumbers(f)) return false;
     return !side || !theirs || side === theirs;
   };
-  const exact = c.features.find((f) => nameKey(f.name) === nameKey(name) && fits(f));
+  // Of several of the name, the call's source picks (an entry of that source always fits), else the first as ever.
+  const named = c.features.filter((f) => nameKey(f.name) === nameKey(name) && fits(f));
+  const exact = named.find((f) => f.source === feature.source) ?? named[0];
   if (exact || nameUseCount(name) === null || feature.source !== 'class') return exact;
   // Every entry of a counted family is a class feature, the class's own or the DM's "Granted in play" (countedFamily): on
   // the call's side of the feat line, and neither a feat nor a transformation's power.
@@ -1257,9 +1261,13 @@ function tableCountedUses(table: { uses: FeatureUses; count: number }, given: Fe
  * away. The count the name gives in place of a number the DM left out (`usesFromName`: the DM's features_add without
  * uses_max) is no ruling. Given no uses (the DM's features_add gives the name's count only to an entry counting fewer),
  * the entry keeps its name and its uses, and only its text changes: an older "Indomitable (two uses)" at Fighter 17
- * reads "Updated feature: Indomitable (three uses)".
- * Beside a namesake, the result names the feature as a use or restore takes it now (featureLabel). A feat and a species
- * trait or class feature never merge (featOrTrait):
+ * reads "Updated feature: Indomitable (three uses)". Given uses that aren't the name's count (an older name restating
+ * today's number: "Action Surge (one use)" with 2 at Fighter 17), the entry keeps its name too, and its uses are judged
+ * as for a name without a count: the number it had keeps how it grows ("Updated feature: Action Surge (two uses)"),
+ * another is the DM's ruling.
+ * Beside a namesake (of several of the name, the call's source picks the one rewritten: featureToRewrite), the result
+ * names the feature as a use or restore takes it now (featureLabel: "Updated feature: Indomitable (two uses) (boon)"
+ * beside the class's entry of that name). A feat and a species trait or class feature never merge (featOrTrait):
  * a feat that shares its name with one (an older book's trait and a book's feat of one name) joins the sheet beside it,
  * and the trait keeps its text. A feature on neither side (the DM's entry for an Epic Boon as a boon, or an Origin feat
  * as its background's) updates the one of its name on either. The sheet coming to hold the Alert or Tough feat gets its
@@ -1273,17 +1281,21 @@ export function addFeature(c: Character, feature: Omit<Feature, 'id'> & { id?: s
   if (existing) {
     // A counted name routed onto its family's entry under another name (featureToRewrite). The entry keeps its name when
     // its uses follow the class table's counts, or the table's reader reads it by that name (a count in the name would
-    // pin it: SRD 5.2.1 Fighter Features table, "Indomitable (three uses)" at 17), or the call gives no uses (its text only).
+    // pin it: SRD 5.2.1 Fighter Features table, "Indomitable (three uses)" at 17), or the call gives no uses (its text
+    // only), or uses that aren't the name's count: an older name restating today's number ("Action Surge (one use)" with
+    // 2 at Fighter 17; SRD 5.2.1 Action Surge: "Starting at level 17, you can use it twice before a rest") can't vouch
+    // for it, so the uses are judged as for a name without a count.
     const routed = nameKey(existing.name) !== nameKey(name);
     const table = routed ? tableCounted(c, existing) : null;
-    const keepsName = routed && (table !== null || !feature.uses || readsItsTable(existing, c.classes));
+    const keepsName =
+      routed && (table !== null || !feature.uses || feature.uses.max !== nameUseCount(name) || readsItsTable(existing, c.classes));
     const updated: Feature = { ...existing, ...feature, id: existing.id, name: keepsName ? existing.name : name, ...(existing.sourceName ? { sourceName: existing.sourceName } : {}) };
     const old = existing.uses;
     if (feature.uses && table) updated.uses = tableCountedUses(table, feature.uses);
     else if (feature.uses) {
       // A name's count vouches for the uses given when the entry takes that name, or when they are its count in place of
       // the DM's number (usesFromName); a counted name routed onto an entry that keeps its own (readsItsTable, no
-      // by-table scale yet) vouches for none of the DM's numbers.
+      // by-table scale yet; a number not its count) vouches for none of the DM's numbers.
       const named = updated.source === 'class' && (!keepsName || opts.usesFromName) ? nameUseCount(name) : null;
       // The DM's number for an entry its table's reader reads by its bare name (as the call leaves it) and no table counts
       // on the sheet yet, under a counted name routed onto it or its own: a ruling, the number it had included, so the
