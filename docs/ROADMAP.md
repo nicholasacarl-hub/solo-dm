@@ -106,14 +106,18 @@ vibe-coding session.
   and a `features_add` of the name with `source` "class" then rewrites the DM's entry, its words lost; the level-up
   dialog adds the class's entry beside it. The DM's `features_add` of an older counted name with that name's own count
   ("Action Surge (one use)" with 1 at Fighter 17) renames the entry and gives it that count, no ruling: both paths keep
-  1, as the name reads, and no kept-ruling line names it. An entry the DM records under a counted name without
-  `uses_max` (by `features_add`, in `level_up` `new_features`, or following without it the line "Fighter 2: Action Surge
-  (one use) is on the sheet without its 1 use.") has no uses until a `features_add` of it with `uses_max`:
-  `features_use` warns "has no limited uses to spend", and `level_up` names it again only at the table's next counted
-  row (Action Surge at Fighter 17; Indomitable at 13 and 17). One the DM names with a higher count than the table's at
-  the class level ("Indomitable (two uses)" recorded without `uses_max` at Fighter 8) is the DM's ruling of that count
-  on the level-up dialog's path (2 uses from Fighter 9 on), while `level_up` names the table's row to add and the DM's
-  call of it with the row's count gives the table's (1 at Fighter 9, 2 at 13, 3 at 17).
+  1, as the name reads, and no kept-ruling line names it. On the DM's `level_up` path, an entry the DM records under a
+  counted name without `uses_max` (by `features_add`, in `level_up` `new_features`, or following without it the line
+  "Fighter 2: Action Surge (one use) is on the sheet without its 1 use.") has no uses until a `features_add` gives them
+  (with `uses_max`, or under a higher counted name, whose count is filled in): `features_use` warns "has no limited uses
+  to spend", and `level_up` names it again only at the table's next counted row (Action Surge at Fighter 17; Indomitable
+  at 13 and 17). The level-up dialog fills it in sooner: its next level re-reads the class's own entry that `level_up`
+  listed in `new_features` (1 Action Surge at Fighter 3), and its next counted row merges the DM's "Granted in play"
+  entry into the row it adds (2 Indomitable at Fighter 13). One the DM names with a higher count than the table's at the
+  class level ("Indomitable (two uses)" recorded without `uses_max` at Fighter 8) is the DM's ruling of that count on
+  the level-up dialog's path and on a `level_up` that lists the row in `new_features` with its `uses_max` (2 uses from
+  Fighter 9 on, the kept-ruling line naming it), while a `level_up` that doesn't list it names the table's row to add
+  and the DM's call of it with the row's count gives the table's (1 at Fighter 9, 2 at 13, 3 at 17).
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
   DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
   Signature Spells, copying a spell into a spellbook and Evocation Savant's free spells (the DM records those as

@@ -1590,6 +1590,16 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
       expect(names(r.character, 'Indomitable'), source).toEqual([['Indomitable (one use)', source, undefined]]);
       expect(counted(r), source).toEqual(['New Fighter 9 features to add to the sheet: Indomitable (one use), Tactical Master.']);
     }
+    // A boon of the row's very name, with its use and ahead of it on the sheet, beside the class's row a level-up lists
+    // without uses: the class's entry of that name is on the sheet, so the line, not "to add".
+    const gift: Feature = { ...entry('gift', 'Indomitable (one use)', 9, 1), source: 'boon', sourceName: 'Lantern-Saint', description: 'A gift of the Lantern-Saint.' };
+    expect(counted(up(fighterAt(8, [surge, gift]), [row('Indomitable (one use)', 9), row('Tactical Master', 9)]))).toEqual([
+      'Fighter 9: Indomitable (one use) is on the sheet without its 1 use.',
+    ]);
+    // The row's name in other letter case is the row's very name.
+    expect(counted(up(fighterAt(1, []), [{ ...row('Action Surge (One Use)', 2), description: SURGE }, row('Tactical Mind', 2)]))).toEqual([
+      'Fighter 2: Action Surge (one use) is on the sheet without its 1 use.',
+    ]);
   });
 
   it("a hero with no counted family levels up exactly as before: no merges, nothing folded", () => {
