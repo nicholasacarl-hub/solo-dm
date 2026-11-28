@@ -16,6 +16,7 @@ import {
   type GameEvent,
   type HitDie,
   type ImportedRef,
+  type RechargeOn,
   type RollResult,
 } from '@/types';
 import { newId, nameKey, slugify } from '@/lib/id';
@@ -60,6 +61,14 @@ export function xpToNextLevel(c: Character): number | null {
   return Math.max(0, XP_THRESHOLDS[level] - toInt(c.xp));
 }
 
+/**
+ * A feature a level-up adds (LevelUpOptions.newFeatures). Its uses may come without a recharge (the DM's level_up row
+ * given uses_max alone): folded with entries the sheet held (collapseCountedFamilies: the DM's Short Rest "Action Surge
+ * (one use)"), it takes the recharge of the first of those with uses when the merge keeps its uses; otherwise the
+ * default, a Long Rest.
+ */
+export type NewFeature = Omit<Feature, 'id' | 'uses'> & { uses?: Omit<FeatureUses, 'recharge'> & { recharge?: RechargeOn } };
+
 export interface LevelUpOptions {
   /** Class to gain a level in (existing class name, or a new class for multiclassing). */
   className: string;
@@ -83,7 +92,7 @@ export interface LevelUpOptions {
    * Minimum 1 HP. A character's very first level always gets the full hit die + CON.
    */
   hpMethod: 'average' | 'roll' | { fixed: number };
-  newFeatures?: Omit<Feature, 'id'>[];
+  newFeatures?: NewFeature[];
   /** Equipment catalog (BuilderData.equipment) for recomputing AC; without it the SRD armor table is used. */
   equipment?: readonly EquipmentOption[];
   /**
@@ -610,14 +619,17 @@ export function featureMergeText(kept: Pick<Feature, 'name' | 'uses'>, merged: r
  * - the first that holds the DM's ruling (FeatureUses.ruled), with its name and number; the others' spent uses join it,
  *   up to its number;
  * - else the class's first entry whole (id, place, source name, text, ref), or the DM's first when the class has none,
- *   under the newest member's name, the highest count ("Indomitable (three uses)"), with that count as its maximum; spent
- *   uses are all the members', at most the family's count before this level-up (an older sheet's duplicates allowed
- *   more), up to the new maximum. A book class's entry its table's reader reads by its bare name keeps that name
- *   (readsItsTable: a 2024 book's Fighter's "Indomitable" without uses yet, beside the DM's "Indomitable (one use)"), so
- *   the next read gives it the table's count. A maximum above the class's rules table at its class level
- *   (tableCountByName: the DM's "Indomitable" with 3 uses at Fighter 13, where the table gives two) is the DM's ruling,
- *   so the level-up dialog's re-read and the DM's level_up keep it alike; for an entry read by its bare name, only
- *   another member's count makes one (its own is an older reading the next read corrects);
+ *   under the newest member's name, the highest count ("Indomitable (three uses)"), with that count as its maximum;
+ *   spent uses are all the members', at most the family's count before this level-up (an older sheet's duplicates
+ *   allowed more), up to the new maximum. Its uses are that entry's, else the newest member's, else the first's with
+ *   uses; a new entry's listed without a recharge (`open`: the DM's level_up row given uses_max alone, the class's
+ *   first entry when the class held none) take the recharge of the first entry the sheet held with uses. A book class's
+ *   entry its table's reader reads by its bare name keeps that name (readsItsTable: a 2024 book's Fighter's
+ *   "Indomitable" without uses yet, beside the DM's "Indomitable (one use)"), so the next read gives it the table's
+ *   count. A maximum above the class's rules table at its class level (tableCountByName: the DM's "Indomitable" with 3
+ *   uses at Fighter 13, where the table gives two) is the DM's ruling, so the level-up dialog's re-read and the DM's
+ *   level_up keep it alike; for an entry read by its bare name, only another member's count makes one (its own is an
+ *   older reading the next read corrects);
  * - but an entry whose uses follow its class table's counts (a by-table scale: a 2024 book's Fighter as the offline
  *   parser names it, "Indomitable") keeps its own name and its scale, whose count at the class level is its maximum; a
  *   member counting more (the DM's "Indomitable (three uses)" at Fighter 13, where the table gives two) is the DM's
@@ -633,6 +645,7 @@ function collapseCountedFamilies(
   classes: readonly ClassLevel[],
   rows: readonly Feature[],
   levelled: Character,
+  open: ReadonlySet<Feature>,
 ): Collapsed {
   const features = [...held, ...added];
   const isNew = new Set(added);
@@ -695,7 +708,12 @@ function collapseCountedFamilies(
     } else {
       const newest = members.reduce((best, m) => newerMember(m, best));
       const count = memberCount(newest.f);
-      const template = keep.f.uses ?? newest.f.uses ?? real.find((m) => m.f.uses)?.f.uses;
+      const from = [keep, newest, ...real].find((m) => m.f.uses)?.f;
+      // A new entry's uses listed without a recharge (`open`: the DM's level_up row given uses_max alone) take that of the
+      // first entry the sheet held with uses: the DM's "Action Surge (one use)", recorded with a Short Rest at Fighter 2
+      // (SRD 5.2.1 Action Surge: "you can't do so again until you finish a Short or Long Rest").
+      const heldUses = real.find((m) => m.held && m.f.uses)?.f.uses;
+      const template = from?.uses && open.has(from) && heldUses ? { ...from.uses, recharge: heldUses.recharge } : from?.uses;
       // A book class's entry read by its bare name keeps it, and the next read gives it the table's count (its own count,
       // an older reading, is no ruling). A count above the class's rules table at its level is the DM's ruling (its
       // scale off), as for an entry that follows the table.
@@ -765,11 +783,20 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
   const newLevel = oldTotal + 1;
   const conMod = abilityModifier(c.abilityScores.con);
   const hp = rollHitPoints(gained.hitDie, conMod, opts.hpMethod, oldTotal === 0, opts.rng ?? cryptoRng);
-  const added = (opts.newFeatures ?? []).map((f): Feature => ({
-    ...f,
-    id: newId(),
-    sourceName: f.sourceName ?? `${gained.name} ${gained.level}`,
-  }));
+  // Uses listed without a recharge take the default, a Long Rest, unless the level's merge folds them with entries the
+  // sheet held (`open`; collapseCountedFamilies).
+  const open = new Set<Feature>();
+  const added = (opts.newFeatures ?? []).map((f): Feature => {
+    const { uses, ...rest } = f;
+    const feature: Feature = {
+      ...rest,
+      id: newId(),
+      sourceName: f.sourceName ?? `${gained.name} ${gained.level}`,
+      ...(uses ? { uses: { ...uses, recharge: uses.recharge ?? 'long' } } : {}),
+    };
+    if (uses && !uses.recharge) open.add(feature);
+    return feature;
+  });
   const bonuses = featureHpBonuses(c.features, added, gained, newLevel);
   const hpGained = hp.hp + bonuses.reduce((sum, b) => sum + b.amount, 0);
 
@@ -789,7 +816,7 @@ export function levelUp(c: Character, opts: LevelUpOptions): LevelUpResult {
         .filter((name) => nameUseCount(name) !== null && !added.some((f) => nameKey(f.name) === nameKey(name)))
         .map((name): Feature => ({ id: `row:${nameKey(name)}`, name, source: 'class', sourceName: `${gained.name} ${gained.level}`, description: '' }))
     : [];
-  const counted = collapseCountedFamilies(c.features, added, classes, rows, { ...c, classes });
+  const counted = collapseCountedFamilies(c.features, added, classes, rows, { ...c, classes }, open);
   let next: Character = {
     ...c,
     classes,

@@ -427,7 +427,11 @@ export const fakeEngine = {
     const hitDice = c.hitDice.some((h) => h.die === die)
       ? c.hitDice.map((h) => (h.die === die ? { ...h, total: h.total + 1 } : h))
       : [...c.hitDice, { die, total: 1, spent: 0 }];
-    const features = [...c.features, ...(opts.newFeatures ?? []).map((f) => ({ ...f, id: id() }))];
+    // Uses listed without a recharge take the default, a Long Rest, as the engine's do beside no entry they fold into.
+    const features = [
+      ...c.features,
+      ...(opts.newFeatures ?? []).map(({ uses, ...f }) => ({ ...f, id: id(), ...(uses ? { uses: { ...uses, recharge: uses.recharge ?? 'long' } } : {}) })),
+    ];
     return {
       character: bump({ ...c, classes, hitDice, features, hp: { ...c.hp, max: c.hp.max + hpGained, current: c.hp.current + hpGained } }),
       events: [evt('level-up', `Level ${newLevel}`)],

@@ -4785,4 +4785,54 @@ describe("level_up's new features by the class's own level, and a restated featu
     ]);
     expect(beside.sheet().features.find((f) => f.id === 'charm')?.uses?.recharge).toBe('none');
   });
+
+  it('only the entry the level\'s merge folds the row into lends its recharge: never another class\'s, and an older-edition Fighter\'s too (srd:rule:multiclassing-class-features: "When you gain a new level in a class, you get its features for that level.")', async () => {
+    const row = (name: string, uses_max: number) => ({ name, description: 'From the class.', uses_max });
+    // Another class's counted entry: the Cleric's Channel Divinity, or a Wizard's homebrew whose charges never come back.
+    // The new class's row is its own entry beside it, with the default, a Long Rest; the other class's entry is untouched.
+    const divinity: Feature = { id: 'cd', name: 'Channel Divinity (3 uses)', source: 'class', sourceName: 'Cleric 6', description: 'Divine power.', uses: { max: 3, used: 0, recharge: 'short' } };
+    for (const name of ['Channel Divinity', 'Channel Divinity (2 uses)']) {
+      const h = setup({ character: { ...multiCaster([srdEntry('Cleric', 6), srdEntry('Paladin', 2)], []), features: [divinity] } });
+      expect((await h.run('level_up', { class_name: 'Paladin', new_features: [row(name, 2)] })).isError, name).toBeUndefined();
+      expect(h.sheet().features.map((f) => [f.name, f.sourceName, f.uses?.recharge]), name).toEqual([
+        ['Channel Divinity (3 uses)', 'Cleric 6', 'short'],
+        [name, 'Paladin 3', 'long'],
+      ]);
+    }
+    const oath: Feature = { id: 'oath', name: 'Lantern Oath (2 uses)', source: 'class', sourceName: 'Wizard 4', description: 'Two charges.', uses: { max: 2, used: 0, recharge: 'none' } };
+    const sorcerer = setup({ character: { ...multiCaster([srdEntry('Wizard', 4), srdEntry('Sorcerer', 2)], []), features: [oath] } });
+    await sorcerer.run('level_up', { class_name: 'Sorcerer', new_features: [row('Lantern Oath', 1)] });
+    expect(sorcerer.sheet().features.map((f) => [f.name, f.sourceName, f.uses?.recharge])).toEqual([
+      ['Lantern Oath (2 uses)', 'Wizard 4', 'none'],
+      ['Lantern Oath', 'Sorcerer 3', 'long'],
+    ]);
+    // An older-edition book's Fighter, with no data or the SRD's only, or a Wizard the DM granted it: the row's own count
+    // folds the DM's Short Rest entry into it, which keeps its recharge (srd:rule:fighter-action-surge: "Once you use this
+    // feature, you can't do so again until you finish a Short or Long Rest.").
+    const granted: Feature = { id: 'surge', name: 'Action Surge (one use)', source: 'class', sourceName: 'Granted in play', description: 'One more action.', uses: { max: 1, used: 0, recharge: 'short' } };
+    const ref: ImportedRef = { sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:fighter', kind: 'class', entryName: 'Fighter', textHash: '', textCopied: false, format: '2014' };
+    const older: ClassLevel = { classId: 'lib:lamp:class:fighter', name: 'Fighter', level: 16, hitDie: 10, casterType: 'none', ref };
+    const runs = [
+      { cl: older, builderData: undefined },
+      { cl: older, builderData: SRD_BUILDER_DATA },
+      { cl: srdEntry('Wizard', 5), builderData: SRD_BUILDER_DATA },
+    ];
+    for (const { cl, builderData } of runs) {
+      const label = `${cl.name} ${builderData ? 'with' : 'without'} data`;
+      const h = setup({ ...(builderData ? { builderData } : {}), campaignSettings: { playerRollMode: 'auto' }, character: hero(cl, { features: [granted] }) });
+      expect((await h.run('level_up', { class_name: cl.name, new_features: [row('Action Surge (two uses)', 2)] })).isError, label).toBeUndefined();
+      const surges = h.sheet().features.filter((f) => f.name.startsWith('Action Surge'));
+      expect(surges.map((f) => [f.name, f.uses]), label).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
+      await h.run('update_character', { features_use: [{ name: 'Action Surge (two uses)', amount: 2 }] });
+      await h.run('take_rest', { kind: 'short' });
+      expect(h.sheet().features.find((f) => f.name.startsWith('Action Surge'))?.uses?.used, label).toBe(0);
+    }
+    // A recharge the row gives is the DM's, folded or not.
+    const given = setup({ character: hero(older, { features: [granted] }) });
+    await given.run('level_up', { class_name: 'Fighter', new_features: [{ ...row('Action Surge (two uses)', 2), recharge: 'long' }, { ...row('Lantern Oath', 1), recharge: 'dawn' }] });
+    expect(given.sheet().features.map((f) => [f.name, f.uses?.recharge])).toEqual([
+      ['Action Surge (two uses)', 'long'],
+      ['Lantern Oath', 'dawn'],
+    ]);
+  });
 });

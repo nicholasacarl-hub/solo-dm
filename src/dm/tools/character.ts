@@ -50,7 +50,6 @@ import {
   conditionKey,
   drainProblem,
   endHpMaxAdjustments,
-  familyEntryFor,
   featOrTrait,
   featureLabel,
   featureToRewrite,
@@ -83,6 +82,7 @@ import {
   xpToNextLevel,
   type EngineResult,
   type LevelUpOptions,
+  type NewFeature,
 } from '@/engine';
 import type { RulesIndex } from '@/data';
 import { withAdaptationNotes } from '@/data/options/adaptationNotes';
@@ -1655,7 +1655,7 @@ function dmFeatures(
   before: Character,
   data: BuilderData | null,
   index: RulesIndex | null,
-): { features: Omit<Feature, 'id'>[]; replaced: string[]; replacedBySrd: string[]; kept: string[] } {
+): { features: NewFeature[]; replaced: string[]; replacedBySrd: string[]; kept: string[] } {
   const have = before.features;
   // A copied feature on the sheet blocks a second copy only under a name the SRD doesn't print (an SRD class's own
   // "Spellcasting" is not the book's), and only with the data (a failure → today's behavior exactly).
@@ -1666,18 +1666,17 @@ function dmFeatures(
     const ref = featureRef({ name: f.name, description: f.description, source: 'class' }, data, index)?.ref;
     // No source name: levelUp names it by the class's own new level, "Fighter 2" for a Wizard 5 taking a second Fighter
     // level (SRD 5.2.1 Multiclassing, Class Features: "When you gain a new level in a class, you get its features for
-    // that level"). Given uses_max without a recharge, one the level's merge folds into its counted family's entry, under
-    // any name the family takes ("Action Surge", "Action Surge (two uses)"), takes that entry's recharge, as a
-    // features_add rewrite does (familyEntryFor; SRD 5.2.1 Action Surge: "until you finish a Short or Long Rest"); any
-    // other takes the default, a Long Rest, beside a namesake too (an item's charges, a boon).
-    const recharge = f.recharge ?? familyEntryFor(before, f.name)?.uses?.recharge ?? ('long' as const);
-    return {
+    // that level"). Uses given without a recharge get theirs from levelUp: folded by the level's merge with entries the
+    // sheet held (the DM's Short Rest "Action Surge (one use)" beside a new "Action Surge (two uses)"), the recharge of
+    // one of those, as a features_add rewrite keeps its entry's; else the default, a Long Rest (NewFeature).
+    const feature: NewFeature = {
       name: f.name,
       description: f.description,
-      source: 'class' as const,
-      ...(f.uses_max ? { uses: { max: f.uses_max, used: 0 as const, recharge } } : {}),
+      source: 'class',
+      ...(f.uses_max ? { uses: { max: f.uses_max, used: 0, ...(f.recharge ? { recharge: f.recharge } : {}) } } : {}),
       ...(ref ? { ref } : {}),
     };
+    return feature;
   });
   const replacedAll = all.filter((f) => fromData.has(nameKey(f.name)));
   // A part the data adds without a book's ref is the SRD's (an SRD subclass under a book's class).

@@ -11,6 +11,7 @@ import {
   levelForXp,
   levelUp,
   spendHitDie,
+  type NewFeature,
   startingFeatureHitPoints,
   XP_THRESHOLDS,
   xpSummary,
@@ -968,7 +969,7 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     mira({ classes: [asClass('Fighter', level)], hitDice: [{ die: 10, total: level, spent: 0 }], spellcasting: undefined, features });
   const family = (c: Character, base: string) => c.features.filter((f) => f.name.startsWith(base));
   const messages = (r: { events: { message: string }[] }) => r.events.map((e) => e.message);
-  const up = (c: Character, newFeatures?: Omit<Feature, 'id'>[]) => levelUp(c, { className: 'Fighter', hpMethod: 'average', ...(newFeatures ? { newFeatures } : {}) });
+  const up = (c: Character, newFeatures?: NewFeature[]) => levelUp(c, { className: 'Fighter', hpMethod: 'average', ...(newFeatures ? { newFeatures } : {}) });
 
   it('Fighter 2 and 9 add their rows as they always have, through the level-up dialog and the DM\'s level_up', () => {
     const two = up(fighterAt(1, []), [row('Action Surge (one use)', 2, 1), row('Tactical Mind', 2)]);
@@ -1599,6 +1600,37 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     // The row's name in other letter case is the row's very name.
     expect(counted(up(fighterAt(1, []), [{ ...row('Action Surge (One Use)', 2), description: SURGE }, row('Tactical Mind', 2)]))).toEqual([
       'Fighter 2: Action Surge (one use) is on the sheet without its 1 use.',
+    ]);
+  });
+
+  it('uses listed without a recharge (the DM\'s level_up row) take the recharge of the entry the sheet held that the merge folds them into, else a Long Rest (srd:rule:fighter-action-surge: "you can\'t do so again until you finish a Short or Long Rest. Starting at level 17, you can use it twice before a rest")', () => {
+    // The DM's Action Surge, recorded at Fighter 2 with its Short or Long Rest recharge.
+    const granted: Feature = { ...entry('dm', 'Action Surge (one use)', 2, 1), sourceName: 'Granted in play' };
+    const open = (name: string): NewFeature => ({ name, source: 'class', description: 'Twice before a rest.', uses: { max: 2, used: 0 } });
+    const surges = (r: { character: Character }) => family(r.character, 'Action Surge').map((f) => [f.name, f.uses]);
+    for (const name of ['Action Surge (two uses)', 'Action Surge']) {
+      expect(surges(up(fighterAt(16, [granted]), [open(name)])), name).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
+    }
+    // A recharge the row gives is its own.
+    const given: NewFeature = { ...open('Action Surge (two uses)'), uses: { max: 2, used: 0, recharge: 'long' } };
+    expect(surges(up(fighterAt(16, [granted]), [given]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'long' }]]);
+    // An older-edition book's Fighter, whose table no rule here counts by: the row's own count folds the two all the same.
+    const ref: ImportedRef = { sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:fighter', kind: 'class', entryName: 'Fighter', textHash: '', textCopied: false, format: '2014' };
+    const older = { ...fighterAt(16, [granted]), classes: [asClass('Fighter', 16, { classId: 'lib:lamp:class:fighter', ref })] };
+    expect(surges(up(older, [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
+    // A merge that keeps the class's own entry without uses takes the uses the row lists, and the recharge the DM's held.
+    const bare: Feature = { id: 'own', name: 'Action Surge', source: 'class', sourceName: 'Fighter 2', description: SURGE };
+    expect(surges(up(fighterAt(16, [bare, granted]), [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
+    // Nothing held to fold into, or another class's counted entry, which no merge folds a new class's feature into
+    // (srd:rule:multiclassing-class-features: "When you gain a new level in a class, you get its features for that
+    // level"): the default, a Long Rest.
+    expect(surges(up(fighterAt(16, []), [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'long' }]]);
+    const divinity: Feature = { id: 'cd', name: 'Channel Divinity (3 uses)', source: 'class', sourceName: 'Cleric 6', description: 'Divine power.', uses: { max: 3, used: 0, recharge: 'short' } };
+    const paladin = mira({ classes: [asClass('Cleric', 6), asClass('Paladin', 2)], hitDice: [{ die: 8, total: 6, spent: 0 }, { die: 10, total: 2, spent: 0 }], features: [divinity] });
+    const r = levelUp(paladin, { className: 'Paladin', hpMethod: 'average', newFeatures: [{ name: 'Channel Divinity', source: 'class', description: 'Twice.', uses: { max: 2, used: 0 } }] });
+    expect(family(r.character, 'Channel Divinity').map((f) => [f.name, f.sourceName, f.uses?.recharge])).toEqual([
+      ['Channel Divinity (3 uses)', 'Cleric 6', 'short'],
+      ['Channel Divinity', 'Paladin 3', 'long'],
     ]);
   });
 

@@ -26,7 +26,6 @@ import {
   concentrationSaveDC,
   createBlankCharacter,
   expireConcentration,
-  familyEntryFor,
   featureLabel,
   featureToRewrite,
   findFeature,
@@ -2699,27 +2698,5 @@ describe("a Concentration recorded under a sheet copy's noted name is that spell
       acSpells: ['Shield of Faith'],
     });
     expect(endAcSpell(slowed, 'Shield of Faith').events).toEqual([{ type: 'combat', message: 'Shield of Faith ends: AC 16 → 14' }]);
-  });
-});
-
-describe('familyEntryFor: the entry a level-up merge folds a new class feature into (srd:class:fighter table: "| 17 | +6 | Action Surge (two uses), Indomitable (three uses) |")', () => {
-  // srd:rule:fighter-action-surge: "Once you use this feature, you can't do so again until you finish a Short or Long
-  // Rest. Starting at level 17, you can use it twice before a rest".
-  const granted: Feature = { id: 'surge', name: 'Action Surge (one use)', source: 'class', sourceName: 'Granted in play', description: 'One more action.', uses: { max: 1, used: 0, recharge: 'short' } };
-  const charm: Feature = { id: 'charm', name: 'Lantern Oath', source: 'item', sourceName: 'Wick Lantern', description: 'Three charges.', uses: { max: 3, used: 0, recharge: 'none' } };
-  const wind: Feature = { id: 'wind', name: 'Second Wind', source: 'class', sourceName: 'Fighter 1', description: 'Regain Hit Points.', uses: { max: 2, used: 0, recharge: 'short' } };
-  const fighter = (level: number, features: Feature[]) =>
-    mira({ classes: [{ classId: 'srd:class:fighter', name: 'Fighter', level, hitDie: 10, casterType: 'none' }], spellcasting: undefined, features });
-
-  it('a name of a counted family, bare or with any count, finds the family\'s entry; any other name finds none', () => {
-    const c = fighter(16, [granted, charm, wind]);
-    for (const name of ['Action Surge', 'Action Surge (two uses)', 'Action Surge (one use)', 'action surge (2 uses)']) expect(familyEntryFor(c, name), name).toBe(granted);
-    // Another parenthetical is a feature of its own; a name no family takes, a namesake of another source, the class's own
-    // uncounted feature: none, so a level-up adds the new entry beside with its own uses.
-    for (const name of ['Action Surge (Bonus)', 'Lantern Oath', 'Second Wind', 'Indomitable (two uses)']) expect(familyEntryFor(c, name), name).toBeUndefined();
-    // A class that counts no family of the name: none, a boon of a counted name included.
-    const boon: Feature = { id: 'boon', name: 'Indomitable (two uses)', source: 'boon', sourceName: 'Granted in play', description: 'A boon.', uses: { max: 2, used: 0, recharge: 'dawn' } };
-    const wizard = mira({ classes: [{ classId: 'srd:class:wizard', name: 'Wizard', level: 5, hitDie: 6, casterType: 'full' }], features: [boon] });
-    expect(familyEntryFor(wizard, 'Indomitable (two uses)')).toBeUndefined();
   });
 });

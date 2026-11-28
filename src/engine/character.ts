@@ -976,22 +976,6 @@ function countedFamilyEntries(c: Character, name: string): Feature[] {
   return nameUseCount(name) === null ? [] : countedFamily(c, featureBaseName(name));
 }
 
-/**
- * The entry a level-up's merge folds a new class feature named `name` into (collapseCountedFamilies): its counted
- * family's entry, the one a features_add of the name would rewrite, else the family's first with uses, under any name
- * the family takes, bare or with a count ("Action Surge" or "Action Surge (two uses)" beside the DM's "Action Surge (one
- * use)"). Undefined for a name no counted family takes, which the level-up adds beside any namesake (an item's charges,
- * a boon, the class's own Second Wind).
- */
-export function familyEntryFor(c: Character, name: string): Feature | undefined {
-  const base = featureBaseName(name);
-  if (!familyNamed(name, base)) return undefined;
-  const family = countedFamily(c, base);
-  if (!family.length) return undefined;
-  const target = featureToRewrite(c, { name, source: 'class' });
-  return target && family.includes(target) ? target : (family.find((f) => f.uses) ?? family[0]);
-}
-
 /** Find a feature by (fuzzy, case-insensitive) name. */
 export function findFeature(c: Character, name: string): Feature | undefined {
   return matchByName(c.features, name, featureName).match;
