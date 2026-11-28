@@ -5,7 +5,7 @@ import { importedPlaceholder, redactImported, wrapImported } from '@/lib/importe
 import { sampleCharacter } from '@/test/fixtures';
 import { GLOAMWOOD_MARKERS, GLOAMWOOD_TITLE, importedRef, TEXT } from '@/test/structuredFixtures';
 import { addAcSpell, adjustHpMax, applyDamage } from './character';
-import { characterSheetText, characterStatusLine, SHEET_TEXT_MAX, sheetCutsText } from './summary';
+import { characterSheetText, characterStatusLine, SHEET_TEXT_MAX, sheetCutsText, sheetSpeedText } from './summary';
 import { beginTransformation, endTransformation } from './transform';
 
 const mira = (overrides: Partial<Character> = {}) => sampleCharacter(overrides);
@@ -60,6 +60,84 @@ describe('characterStatusLine', () => {
     });
     expect(characterStatusLine(c)).toContain('(Wizard 3 / Warlock 2)');
     expect(characterStatusLine(c)).toContain('Pact 1/2 (1st)');
+  });
+});
+
+/** Speed from class features in what the DM reads: spec §1.3 (class extras). The heroes wear nothing unless a test says so. */
+describe('Speed from class features on the status line and the sheet (SRD 5.2.1 srd:rule:monk-unarmored-movement, srd:rule:barbarian-fast-movement, srd:rule:ranger-roving)', () => {
+  const classed = (classes: Array<[string, number]>, extra: Partial<Character> = {}) =>
+    mira({
+      classes: classes.map(([name, level]) => ({ classId: `srd:class:${name.toLowerCase()}`, name, level, hitDie: 8, casterType: 'none' as const })),
+      inventory: [],
+      spellcasting: undefined,
+      ...extra,
+    });
+  const worn = (name: string) => [{ id: name, name, quantity: 1, category: 'armor' as const, equipped: true }];
+  /** The sheet text's Speed, other speeds included: what follows "**Speed** " on the vitals line. */
+  const speedPart = (c: Character) => /\*\*Speed\*\* (.*?) · \*\*Initiative\*\*/.exec(characterSheetText(c))?.[1];
+
+  it('the status line names the bonuses in force, so the DM never adds them again', () => {
+    expect(characterStatusLine(classed([['Monk', 6]]))).toBe(
+      'Mira Voss (Monk 6) · HP 12/17 · AC 12 · Speed 45 ft (Unarmored Movement) · Hit Dice 2/3 d6 · Heroic Inspiration',
+    );
+    expect(characterStatusLine(classed([['Monk', 14], ['Barbarian', 5]]))).toContain(' · AC 12 · Speed 65 ft (Unarmored Movement, Fast Movement) · ');
+    expect(characterStatusLine(classed([['Ranger', 6]], { exhaustion: 2 }))).toContain(' · AC 12 · Speed 30 ft (Roving) · ');
+    // A Speed the DM raised by hand gets the bonus on top, in front of the DM every turn (spec §1.4).
+    expect(characterStatusLine(classed([['Monk', 6]], { speed: 45 }))).toContain(' · AC 12 · Speed 60 ft (Unarmored Movement) · ');
+  });
+
+  it('the status line prints the number alone when every bonus is suspended or the Speed is 0 (srd:condition:grappled: "Your Speed is 0 and can\'t increase.")', () => {
+    expect(characterStatusLine(classed([['Monk', 6]], { inventory: worn('Leather Armor') }))).toContain(' · AC 12 · Speed 30 ft · ');
+    expect(characterStatusLine(classed([['Monk', 6]], { conditions: [{ id: 'grappled' }] }))).toContain(' · AC 12 · Speed 0 ft · ');
+    expect(characterStatusLine(classed([['Monk', 6]], { speed: 0 }))).toContain(' · AC 12 · Speed 0 ft · ');
+    // A bonus in force that the penalties outweigh names nothing: 5 + 10 − 25 ft, floored at 0.
+    expect(characterStatusLine(classed([['Monk', 2]], { speed: 5, exhaustion: 5 }))).toContain(' · AC 12 · Speed 0 ft · ');
+  });
+
+  it('the sheet shows the base, then the bonuses in force, what gear suspends and the penalties', () => {
+    expect(speedPart(classed([['Monk', 6]]))).toBe('45 ft (base 30 ft; Unarmored Movement: +15 ft)');
+    expect(speedPart(classed([['Monk', 6]], { inventory: worn('Leather Armor') }))).toBe(
+      '30 ft (base 30 ft; Unarmored Movement: no +15 ft in armor or with a Shield)',
+    );
+    expect(speedPart(classed([['Monk', 6]], { exhaustion: 2 }))).toBe('35 ft (base 30 ft; Unarmored Movement: +15 ft; Exhaustion 2: −10 ft)');
+    expect(speedPart(classed([['Monk', 6], ['Barbarian', 5]], { inventory: worn('Hide Armor') }))).toBe(
+      '40 ft (base 30 ft; Fast Movement: +10 ft; Unarmored Movement: no +15 ft in armor or with a Shield)',
+    );
+    // srd:rule:armor: Plate Armor "reduces the wearer's speed by 10 feet" below Strength 15, after the suspended bonus.
+    expect(speedPart(classed([['Barbarian', 5]], { inventory: worn('Plate Armor') }))).toBe(
+      '20 ft (base 30 ft; Fast Movement: no +10 ft in Heavy armor; Plate Armor needs Strength 15: −10 ft)',
+    );
+    expect(speedPart(classed([['Barbarian', 5]], { inventory: worn('Mithral Coat') }))).toBe(
+      '30 ft (base 30 ft; Fast Movement: no +10 ft (Mithral Coat: armor type unknown))',
+    );
+    expect(speedPart(classed([['Monk', 6]], { conditions: [{ id: 'grappled' }] }))).toBe('0 ft (base 30 ft; Grappled: Speed 0)');
+    expect(speedPart(classed([['Monk', 6]], { speed: 45 }))).toBe('60 ft (base 45 ft; Unarmored Movement: +15 ft)');
+    // The same text for the DM tools' results.
+    expect(sheetSpeedText(classed([['Monk', 6]]))).toBe('45 ft (base 30 ft; Unarmored Movement: +15 ft)');
+    expect(sheetSpeedText(mira())).toBe('30 ft');
+    expect(sheetSpeedText(mira({ exhaustion: 1 }))).toBe('25 ft (Exhaustion 1: −5 ft)');
+  });
+
+  it("the sheet lists Roving's Climb and Swim Speeds equal to Speed, other speeds in their stored order (srd:rule:ranger-roving: \"You also have a Climb Speed and a Swim Speed equal to your Speed.\")", () => {
+    expect(speedPart(classed([['Ranger', 6]]))).toBe('40 ft (base 30 ft; Roving: +10 ft), climb 40 ft, swim 40 ft');
+    expect(speedPart(classed([['Ranger', 6]], { otherSpeeds: { swim: 30, fly: 60 } }))).toBe('40 ft (base 30 ft; Roving: +10 ft), swim 40 ft, fly 60 ft, climb 40 ft');
+    expect(speedPart(classed([['Ranger', 6]], { exhaustion: 2 }))).toBe('30 ft (base 30 ft; Roving: +10 ft; Exhaustion 2: −10 ft), climb 30 ft, swim 30 ft');
+    expect(speedPart(classed([['Ranger', 6]], { conditions: [{ id: 'grappled' }] }))).toBe('0 ft (base 30 ft; Grappled: Speed 0)');
+    // Anyone else's other speeds as stored, in their stored order, as before.
+    expect(speedPart(mira({ otherSpeeds: { swim: 30, fly: 60 } }))).toBe('30 ft, swim 30 ft, fly 60 ft');
+    expect(speedPart(mira({ otherSpeeds: { fly: 60, swim: 30 } }))).toBe('30 ft, fly 60 ft, swim 30 ft');
+  });
+
+  it('a hero without one of the features at its level reads as before, a 2014 book Monk included (DESIGN: stand-in classes)', () => {
+    const ref: ImportedRef = { sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:monk', kind: 'class', entryName: 'Monk', textHash: '', textCopied: false, format: '2014' };
+    const olderMonk = mira({ classes: [{ classId: 'lib:lamp:class:monk', name: 'Monk', level: 6, hitDie: 8, casterType: 'none', ref }], inventory: [] });
+    const heroes = [mira(), classed([['Monk', 1]]), classed([['Barbarian', 4]]), classed([['Ranger', 5]]), classed([['Fighter', 5], ['Monk', 1]]), olderMonk];
+    for (const c of heroes) {
+      expect(speedPart(c)).toBe('30 ft');
+      expect(characterStatusLine(c)).not.toContain('Speed');
+    }
+    expect(speedPart(classed([['Monk', 1]], { exhaustion: 1 }))).toBe('25 ft (Exhaustion 1: −5 ft)');
+    expect(characterStatusLine(classed([['Barbarian', 4]], { exhaustion: 1 }))).toContain(' · AC 12 · Speed 25 ft · ');
   });
 });
 

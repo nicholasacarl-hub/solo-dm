@@ -7,6 +7,7 @@ import {
   rollRequestModifier,
   savingThrowModifier,
   skillModifier,
+  speedDetails,
 } from '@/engine';
 import { cn } from '@/lib/cn';
 import { ABILITIES, ABILITY_NAMES, SKILLS, SKILL_ABILITY, SKILL_NAMES, type Ability, type Character, type Skill } from '@/types';
@@ -87,7 +88,8 @@ const capitalized = (list: string[] | undefined) => (list ?? []).map((t) => t.ch
 
 export function ProficienciesList({ character: c }: { character: Character }) {
   const senses = [c.darkvision ? `Darkvision ${c.darkvision} ft.` : null, `Size ${c.size}`].filter((s): s is string => Boolean(s));
-  const otherSpeeds = Object.entries(c.otherSpeeds ?? {}).map(([kind, ft]) => `${kind} ${ft} ft.`);
+  // As the sheet has them, in their stored order, with Roving's Climb and Swim Speeds (equal to the Speed).
+  const otherSpeeds = Object.entries(speedDetails(c).other).map(([kind, ft]) => `${kind} ${ft} ft.`);
   return (
     <dl className="grid grid-cols-1 gap-2 @lg:grid-cols-2">
       <Line label="Armor training" items={c.armorTraining} />

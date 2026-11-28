@@ -59,6 +59,39 @@ describe('sheet gear changes keep AC in step', () => {
   });
 });
 
+describe('sheet gear changes name the Speed they change, beside the AC', () => {
+  const shield: InventoryItem = { id: 'shield', name: 'Shield', quantity: 1, category: 'shield' };
+  const plate: InventoryItem = { id: 'plate', name: 'Plate Armor', quantity: 1, category: 'armor' };
+
+  it("a Monk 6 taking up a Shield loses Unarmored Movement's +15 ft, and has it back when the Shield goes (srd:rule:monk-unarmored-movement)", () => {
+    // "Your speed increases by 10 feet while you aren't wearing armor or wielding a Shield" (+15 ft at Monk 6), as
+    // srd:rule:monk-unarmored-defense: "While you aren't wearing armor or wielding a Shield, your base Armor Class equals
+    // 10 plus your Dexterity and Wisdom modifiers."
+    const monk = sampleCharacter({
+      classes: [{ classId: 'srd:class:monk', name: 'Monk', level: 6, hitDie: 8, casterType: 'none' }],
+      spellcasting: undefined,
+      armorClass: 13,
+      acFormula: 'Unarmored Defense: 10 + DEX 2 + WIS 1',
+      inventory: [shield],
+    });
+    const taken = itemEquipChange(monk, 'shield', true, null);
+    expect(taken.notice).toBe('Player equipped Shield (AC 13 → 12; Speed 45 → 30 ft)');
+    expect(itemEquipChange(taken.character, 'shield', false, null).notice).toBe('Player unequipped Shield (AC 12 → 13; Speed 30 → 45 ft)');
+    expect(removeItemChange(taken.character, 'shield', null).notice).toBe('Player removed Shield from their inventory (AC 12 → 13; Speed 30 → 45 ft)');
+  });
+
+  it('heavy armor below its Strength costs any hero 10 ft, and the notice says so (srd:rule:armor)', () => {
+    // Plate Armor's Strength 15: "If the table shows a Strength score in the Strength column for an armor type, that armor
+    // reduces the wearer's speed by 10 feet unless the wearer has a Strength score equal to or higher than the listed
+    // score." Mira Voss has 8.
+    const r = itemEquipChange(sampleCharacter({ inventory: [plate], armorTraining: ['Heavy armor'] }), 'plate', true, null);
+    expect(r.notice).toBe('Player equipped Plate Armor (AC 12 → 18; Speed 30 → 20 ft)');
+    // A change that keeps the Speed is as before: the Shield on a Wizard.
+    const wizard = itemEquipChange(sampleCharacter({ armorTraining: ['Shields'], inventory: [shield] }), 'shield', true, null);
+    expect(wizard.notice).toBe('Player equipped Shield (AC 12 → 14)');
+  });
+});
+
 // The AC an equip, attune or removal can't settle on its own: the DM, whose ruling it is, reads why at the end of the
 // notice's one line (notices are parsed back line by line); the player, who can't set the AC, gets a plain toast.
 describe('sheet gear changes pass on what syncArmorClass warns', () => {

@@ -33,15 +33,17 @@ import {
   endHpMaxAdjustments,
   featOrTrait,
   featureLabel,
+  featureToRewrite,
   hpMaxAdjustmentLabel,
   hpMaxAdjustments,
   hpMaxEndsText,
+  nameUseCount,
   removeSpellById,
   setConcentration,
 } from '@/engine/character';
 import { conditionKey, matchStandardCondition } from '@/engine/conditions';
 import { spellReviewReminder } from '@/engine/progression';
-import { AC_SPELLS, acSpellNamed, acSpells, countedAcSpells, isFightingStyle } from '@/engine/rules';
+import { AC_SPELLS, acSpellNamed, acSpells, countedAcSpells, isFightingStyle, speedChangeText, speedDetails } from '@/engine/rules';
 import { classSpellLevelCap } from '@/engine/spellcasting';
 import { conditionsNaming } from '@/engine/spellEffects';
 
@@ -234,9 +236,17 @@ export const fakeEngine = {
     return m === 0 ? dice : `${dice}${m > 0 ? '+' : '-'}${Math.abs(m)}`;
   },
   effectiveSpeed: (c: Character) => Math.max(0, c.speed - 5 * c.exhaustion),
+  // Speed's details (the class features' bonuses, what gear suspends, Roving's Climb and Swim Speeds) and the level-up
+  // text for a change: the real rules (pure), so the sheet's Speed tile and lists show what the engine works out.
+  speedDetails,
+  speedChangeText,
   computeArmorClass,
   featOrTrait,
   featureLabel,
+  // The feature a features_add of a name and source changes, and the use count a name ends with: the real rules (pure),
+  // which the level-up notice's kept-ruling line reads (keptRulings).
+  featureToRewrite,
+  nameUseCount,
   isFightingStyle,
   adjustHpMax,
   endHpMaxAdjustments,

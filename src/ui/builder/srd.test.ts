@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import builderRaw from '../../../public/srd/builder.json?raw';
 import compendiumRaw from '../../../public/srd/compendium.json?raw';
 import type { Rng } from '@/engine';
-import type { BuilderData, Character, CompendiumEntry, EquipmentOption, Feature } from '@/types';
+import type { BuilderData, Character, CompendiumEntry, EquipmentOption, Feature, SpeciesOption } from '@/types';
 import { attackDamageExpression, isMonkWeapon } from '@/engine/rules';
 import { letDmBuildAll } from './autofill';
 import { weaponAttack } from './equipment';
@@ -111,6 +111,47 @@ describe('species traits', () => {
     const rock = build('Wizard', 'Gnome', { lineage: 'Rock Gnome', lineageAbility: 'int' });
     expect(named(rock, 'Gnomish Lineage (Rock Gnome)')).toBeDefined();
     expect(named(rock, 'Gnomish Lineage (Rock Gnome)')?.uses).toBeUndefined();
+  });
+
+  it("reads no use off a species trait's paragraph on its later spells, the lineage trait's or another's, however a book words it (srd:species:elf)", () => {
+    // srd:species:elf, Elven Lineage: "When you reach character levels 3 and 5, you learn a higher-level spell, as
+    // shown on the table. You always have that spell prepared. You can cast it once without a spell slot, and you
+    // regain the ability to cast it in that way when you finish a Long Rest." Each spell's casting is counted beside the
+    // trait at the level-up.
+    for (const [species, lineage] of [['Elf', 'Drow'], ['Tiefling', 'Infernal']] as const) {
+      expect(build('Fighter', species, { lineage, lineageAbility: 'wis' }).features.filter((f) => f.source === 'species' && f.uses), species).toEqual([]);
+    }
+    // An invented book's species: its lineage trait's paragraph opened otherwise, and another trait worded alike.
+    const later = (spells: string) =>
+      `At character level 3 and again at character level 5, you learn a higher-level spell, ${spells}. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest.`;
+    const quillfolk: SpeciesOption = {
+      id: 'lib:quill:species:quillfolk',
+      name: 'Quillfolk',
+      summary: 'Medium Humanoid',
+      creatureType: 'Humanoid',
+      sizes: ['Medium'],
+      speed: 30,
+      source: { sourceId: 'quill', title: 'The Quillfolk Primer', recordId: 'r-quill', format: '2024', adaptations: [] },
+      lineageTrait: 'Inkbound Heritage',
+      traits: [
+        {
+          name: 'Inkbound Heritage',
+          description: `You are marked by an inkbound heritage. Choose a heritage from the table.\n\n${later('as shown on the table')}\n\n| Heritage | Level 1 | Level 3 | Level 5 |\n|---|---|---|---|\n| Sepia | You know the Light cantrip. | Faerie Fire | Darkness |`,
+        },
+        { name: 'Inkwell Gift', description: later('which your inkwell names') },
+        { name: 'Blot Step', description: 'You can use this trait a number of times equal to your Proficiency Bonus, and you regain all expended uses when you finish a Long Rest.' },
+      ],
+      lineages: [{ name: 'Sepia', description: 'You know the Light cantrip. Level 3: Faerie Fire. Level 5: Darkness.' }],
+    };
+    const quill: BuilderContext = { data: { ...data, species: [...data.species, quillfolk] }, spells };
+    const draft = letDmBuildAll({ ...emptyDraft(), classId: cls('Fighter').id, speciesId: quillfolk.id, lineage: 'Sepia', lineageAbility: 'wis', name: 'Test' }, quill, rng);
+    const c = buildCharacter(draft, quill, { campaignId: 'camp-1' });
+    expect(c.features.filter((f) => f.source === 'species').map((f) => [f.name, f.uses ?? null])).toEqual([
+      ['Inkbound Heritage (Sepia)', null],
+      ['Sepia', null],
+      ['Inkwell Gift', null],
+      ['Blot Step', { max: 2, used: 0, recharge: 'long', scale: { by: 'proficiency-bonus' } }],
+    ]);
   });
 
   it('records species Resistances (Dwarf, Dragonborn ancestry, Tiefling legacy)', () => {

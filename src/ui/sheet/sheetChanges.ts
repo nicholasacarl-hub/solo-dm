@@ -15,6 +15,7 @@ import {
   conditionKey,
   conditionsNaming,
   countedAcSpells,
+  effectiveSpeed,
   endAcSpell,
   endHpMaxAdjustments,
   matchStandardCondition,
@@ -579,7 +580,8 @@ export function featureUseChange(c: Character, featureId: string, spend: boolean
  * or Bracers of Defense. syncArmorClass keeps an AC set by hand (Haste...) and falls back to the
  * SRD armor table when the catalog hasn't loaded. Its warning (an AC set by hand kept while gear now gives
  * another, or armor whose stats are unknown) is the player's toast and ends the DM's notice: nothing else
- * tells either of them the AC may now be wrong, and the ruling is the DM's.
+ * tells either of them the AC may now be wrong, and the ruling is the DM's. A Speed the change moved is named beside
+ * the AC ("AC 15 → 13; Speed 45 → 30 ft": a Shield stops Unarmored Movement; heavy armor below its Strength costs 10 ft).
  */
 function withAc(
   before: Character,
@@ -588,9 +590,15 @@ function withAc(
   also: (synced: Character) => string | null = () => null,
 ): { character: Character; acNote: string; warning?: string } {
   const { character, events } = syncArmorClass(before, after, catalog ?? []);
-  // And what every save includes (a Cloak of Protection, an item's bonus the app read), when that changed too.
+  // And what every save includes (a Cloak of Protection, an item's bonus the app read), when that changed too; and the
+  // Speed, when the gear changed it (a Shield or armor stopping Unarmored Movement, heavy armor below its Strength).
   const saves = saveSourcesChangeText(before, character);
-  const notes = [character.armorClass === before.armorClass ? '' : `AC ${before.armorClass} → ${character.armorClass}`, saves ? saves.replace(/^S/, 's') : ''].filter(Boolean);
+  const [was, now] = [effectiveSpeed(before), effectiveSpeed(character)];
+  const notes = [
+    character.armorClass === before.armorClass ? '' : `AC ${before.armorClass} → ${character.armorClass}`,
+    was === now ? '' : `Speed ${was} → ${now} ft`,
+    saves ? saves.replace(/^S/, 's') : '',
+  ].filter(Boolean);
   const warning = firstWarning(events);
   // The DM, whose call it is, reads the engine's words on the notice's one line (notices are parsed back line by line;
   // the AC formula it quotes names other items too), and then anything else it should know (`also`). The player can't

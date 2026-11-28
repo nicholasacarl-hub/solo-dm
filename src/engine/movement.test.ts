@@ -237,6 +237,64 @@ describe('moverStats (SRD 5.2.1 srd:rule:speed, srd:condition:exhaustion; app co
   });
 });
 
+/** Speed from class features on the map: spec §1.3 (class extras). The heroes wear nothing unless a test says so. */
+describe('the hero’s class features on the map (SRD 5.2.1 srd:rule:monk-unarmored-movement, srd:rule:ranger-roving, srd:rule:speed)', () => {
+  const classed = (classes: Array<[string, number]>, extra: Partial<Character> = {}) =>
+    sampleCharacter({
+      classes: classes.map(([name, level]) => ({ classId: `srd:class:${name.toLowerCase()}`, name, level, hitDie: 8, casterType: 'none' as const })),
+      inventory: [],
+      ...extra,
+    });
+  const stats = (sheet: Character, extra: Partial<Combatant> = {}) => moverStats(fight(battleMap(16, 12), [creature('h', 'player', 'A1', extra)]), sheet, 'h');
+  const plate = { id: 'plate', name: 'Plate Armor', quantity: 1, weight: 65, category: 'armor' as const, equipped: true };
+
+  it('a Monk 6 walks 45 ft; penalties come off the raised Speed; a walk granted for the feature counts once', () => {
+    expect(stats(classed([['Monk', 6]]))).toMatchObject({ walk: 45, climb: 0, swim: 0, notes: ['Unarmored Movement: +15 ft'] });
+    // srd:condition:exhaustion: "Your Speed is reduced by a number of feet equal to 5 times your Exhaustion level."
+    expect(stats(classed([['Monk', 6]], { exhaustion: 2 }))).toMatchObject({ walk: 35, notes: ['Unarmored Movement: +15 ft', 'Exhaustion 2: −10 ft'] });
+    expect(stats(classed([['Monk', 6]]), { speeds: { walk: 45 } })?.walk).toBe(45);
+    expect(stats(classed([['Monk', 6]], { exhaustion: 2 }), { speeds: { walk: 60 } })?.walk).toBe(50);
+    expect(stats(classed([['Monk', 6]], { inventory: [{ ...plate, name: 'Leather Armor', weight: 10 }] }))?.walk).toBe(30);
+    expect(stats(classed([['Monk', 6]], { conditions: [{ id: 'grappled' }] }))).toMatchObject({ walk: 0, speedZero: 'Grappled' });
+  });
+
+  it('the bonus raises walking Speed only; a penalty comes off every speed (the app’s ruling; M11; srd:rule:speed, Changes to Your Speeds)', () => {
+    const climber = classed([['Monk', 6]], { otherSpeeds: { climb: 30 } });
+    expect(stats(climber)).toMatchObject({ walk: 45, climb: 30 });
+    expect(stats({ ...climber, exhaustion: 2 })).toMatchObject({ walk: 35, climb: 20 });
+  });
+
+  it('Dash and standing up follow the raised Speed (srd:rule:dash: "The increase equals your Speed after applying any modifiers."; srd:condition:prone)', () => {
+    const state = fight(battleMap(16, 12), [creature('h', 'player', 'A1')]);
+    expect(turnBudget(state, classed([['Monk', 6]]), 'h')).toMatchObject({ speedFt: 45, leftFt: 45, dashAddsFt: 45, standCostFt: 22 });
+    expect(turnBudget(state, classed([['Monk', 6]], { exhaustion: 2 }), 'h')).toMatchObject({ speedFt: 35, leftFt: 35, dashAddsFt: 35, standCostFt: 17 });
+    expect(turnBudget(state, classed([['Barbarian', 5]]), 'h')).toMatchObject({ speedFt: 40, dashAddsFt: 40, standCostFt: 20 });
+    expect(moved(plan(state, 'h', 'P1', { dash: true }, classed([['Monk', 6]])))).toMatchObject({ costFt: 75, budget: { dashFt: 45, leftFt: 15 } });
+  });
+
+  it('Roving’s Climb and Swim Speeds are at least the walk, after penalties and a granted walk (srd:rule:ranger-roving: "You also have a Climb Speed and a Swim Speed equal to your Speed.")', () => {
+    expect(stats(classed([['Ranger', 6]]))).toMatchObject({ walk: 40, climb: 40, swim: 40, fly: 0, notes: ['Roving: +10 ft'] });
+    expect(stats(classed([['Ranger', 6]], { exhaustion: 2 }))).toMatchObject({ walk: 30, climb: 30, swim: 30 });
+    expect(stats(classed([['Ranger', 6]], { conditions: [{ id: 'grappled' }] }))).toMatchObject({ walk: 0, climb: 0, swim: 0, speedZero: 'Grappled' });
+    // Heavy armor withholds the +10 ft, not the speeds; below its Strength, 10 ft off each.
+    expect(stats(classed([['Ranger', 6]], { inventory: [plate] }))).toMatchObject({ walk: 20, climb: 20, swim: 20 });
+    expect(stats(classed([['Ranger', 6]]), { speeds: { walk: 60 } })).toMatchObject({ walk: 60, climb: 60, swim: 60 });
+    // A speed change (Haste +30) then moves walk, climb and swim alike.
+    expect(stats(classed([['Ranger', 6]]), { speedChangeFt: 30 })).toMatchObject({ walk: 70, climb: 70, swim: 70 });
+    // A faster Swim Speed of its own stays, less the same penalty.
+    expect(stats(classed([['Ranger', 6]], { otherSpeeds: { swim: 60 }, exhaustion: 1 }))).toMatchObject({ walk: 35, climb: 35, swim: 55 });
+    expect(stats(classed([['Ranger', 5]]))).toMatchObject({ walk: 30, climb: 0, swim: 0 });
+  });
+
+  it('a Ranger 6 swims deep water without the extra cost (srd:rule:swimming: "You ignore this extra cost if you have a Swim Speed and use it to swim.")', () => {
+    const state = fight(battleMap(16, 12, [terrain('deep-water', 'B1', 'D1'), wall('A2', 'P2')]), [creature('h', 'player', 'A1')]);
+    const swim = moved(plan(state, 'h', 'D1', {}, classed([['Ranger', 6]])));
+    expect(swim.costFt).toBe(15);
+    expect(swim.notes).toContainEqual({ kind: 'swam', squares: 3 });
+    expect(moved(plan(state, 'h', 'D1', {}, classed([['Ranger', 5]]))).costFt).toBe(30);
+  });
+});
+
 describe('heroReachFt (SRD 5.2.1 srd:rule:reach, srd:rule:weapons-properties-reach; app convention C15)', () => {
   const attack = { id: 'a', name: 'Glaive', ability: 'str' as const, proficient: true, damage: '1d10', damageType: 'slashing' };
   it('is 5 without a Reach weapon and 10 with one', () => {

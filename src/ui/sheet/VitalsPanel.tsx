@@ -10,7 +10,6 @@ import {
   acSpells,
   conditionName,
   countedAcSpells,
-  effectiveSpeed,
   formatModifier,
   hpMaxAdjustments,
   hpMaxEndsText,
@@ -18,6 +17,7 @@ import {
   passivePerception,
   proficiencyBonus,
   characterLevel,
+  speedDetails,
 } from '@/engine';
 import { cn } from '@/lib/cn';
 import type { AcSpellName, Character, HpMaxAdjustment } from '@/types';
@@ -411,7 +411,14 @@ function AcSpellChips({ character: c, spells, editable, onEnd }: { character: Ch
  */
 export function VitalsPanel(props: VitalsProps) {
   const { character: c, editable, onEdit } = props;
-  const speed = effectiveSpeed(c);
+  // The Speed with the class features' bonuses (Unarmored Movement, Fast Movement, Roving): "base" and the danger border
+  // only for what lowers it below that (a penalty, Speed 0). For a hero with such a feature, what explains it, as the
+  // sheet text orders it (the bonuses in force, those gear suspends, the penalties), on the tile's title and for a screen
+  // reader.
+  const speed = speedDetails(c);
+  const speedWhy = speed.classFeatures.length
+    ? [...speed.notes.slice(0, speed.bonuses.length), ...speed.off, ...speed.notes.slice(speed.bonuses.length)].join('; ')
+    : '';
   const hd = hitDiceText(c);
   const concentration = c.spellcasting?.concentratingOn;
   const recorded = acSpells(c);
@@ -458,10 +465,11 @@ export function VitalsPanel(props: VitalsProps) {
         <StatTile label="Init" value={formatModifier(initiativeModifier(c))} icon={<Zap className="size-3" aria-hidden />} title="Initiative" />
         <StatTile
           label="Speed"
-          value={speed}
+          value={speed.speed}
           icon={<Footprints className="size-3" aria-hidden />}
-          sub={speed !== c.speed ? `base ${c.speed}` : 'ft.'}
-          border={speed < c.speed ? 'border-danger/50' : undefined}
+          sub={speed.speed < speed.raised ? `base ${speed.raised}` : 'ft.'}
+          border={speed.speed < speed.raised ? 'border-danger/50' : undefined}
+          {...(speedWhy ? { title: speedWhy, detail: speedWhy } : {})}
         />
         <StatTile label="Prof" value={formatModifier(proficiencyBonus(characterLevel(c)))} title="Proficiency Bonus" />
         <StatTile label="Passive" value={passivePerception(c)} sub="Perception" title="Passive Perception" />

@@ -473,6 +473,141 @@ with open choices settle them as the sheet's form does (`settleSpellPicks`: clos
 level's swaps lapse), and `update_character` says so; `take_rest long` says which classes may change prepared spells,
 and that a book spell is prepared by name; a re-added spell keeps its source and prepared flag.
 
+**Lineage spells.** An Elf's Elven Lineage and a Tiefling's Fiendish Legacy give a spell at character levels 3 and 5
+(srd:species:elf: "When you reach character levels 3 and 5, you learn a higher-level spell"). At a level-up (the dialog
+or the DM's `level_up`), the lineage the species trait's feature names ("Elven Lineage (Drow)") gives the spells its
+option's own "Level 3:" and "Level 5:" tags name, up to the character level (`lineageSpellGrants`,
+src/data/options/spellPicks.ts). They join `levelSpellsEdit` as extra always-prepared grants, so the same count adds
+them, with the lineage as their source and its cantrip's spellcasting ability and the free casting in their notes, or
+turns one the sheet holds as a pick always prepared (a spellbook's keeps its source and stays in the book; a spell with
+notes of its own keeps them). Names come from the rules index: a cantrip tag is skipped, and one the index doesn't find
+is listed as missing, under its own name only when that reads like a name (otherwise by its column: "the Level 3 spell
+the app couldn't read from Drow's table"), so no more of a book's words than a name-like cell reaches the transcript.
+Each lineage spell the sheet then holds always prepared gets its free casting as a feature, "Faerie Fire (free casting)"
+(one use, regained on a Long Rest, spent with `features_use`), unless the DM already counts it (a feature with uses
+named for the spell) or has ruled the trait's own uses, which the result names; the trait itself reads no use off the
+spells' free-casting sentence (read as a species trait, `UsesContext.speciesTrait`, its text leaves out the paragraph
+that says "learn a higher-level spell", however an import joined the compound (the PDF reader's "higherlevel" too), or
+that opens "When you reach character levels 3 and 5", with any two levels, and has the word "spell", and each paragraph
+right after it that opens "You can cast it once without a spell slot"; every feature, a class's, subclass's or feat's
+too, reads all of its text but its first line that opens, after any spaces or tabs, with those words and has the word
+"spell", as the SRD's lineage lines do; such a paragraph or line without the word ("When you reach character levels 5
+and 9, the mark darkens") keeps its use, and the same words in mid-line take nothing away). The dialog's notice adds
+"free casting once per Long Rest: Faerie Fire (Drow)" and `level_up` a line on how to spend it. A hero already past
+character level 3 or 5 catches up at its next level-up (nothing runs at load); a level whose spell edit doesn't run (a
+class the builder data lacks) adds neither the spells nor the castings, and a later one adds both.
+
+**Speed from class features.** `Character.speed` stays the hero's own walking Speed (species or lineage, a
+transformation's change, a DM's ruling); the class features that raise it are worked out whenever it is read, never
+stored (`speedDetails`, src/engine/rules.ts). Unarmored Movement gives +10 ft at Monk 2, growing to +30 ft at 18 (the
+Monk Features table), while the Monk wears no armor and wields no Shield (the Martial Arts test: armor the app can't
+identify counts as armor); Fast Movement at Barbarian 5 and Roving at Ranger 6 give +10 ft each out of Heavy armor (a
+Shield doesn't stop them, and armor the app can't identify withholds them, saying so). Class levels count by
+`rulesClassFor` (a 2024 book's class stands in; an older-edition one gets none), and a multiclass hero's bonuses add up.
+Dead, a condition that makes the Speed 0 and a stored Speed of 0 stay 0 ("can't increase"); otherwise the bonuses come
+first, then heavy armor below its Strength and Exhaustion. The app's ruling, not SRD text: a standing bonus raises the
+walking Speed only, Roving's Climb and Swim Speeds equal the Speed after penalties (by their own words), and a penalty
+still reaches every speed on the map. Every reader takes these numbers: the map (`heroSpeeds`: the walk is the higher of
+the raised Speed and a granted walk, less the penalties, and Dash follows), the status line ("Speed 45 ft (Unarmored
+Movement)", printed for a hero with one of the features even while gear suspends it), the sheet text ("45 ft (base 30
+ft; Unarmored Movement: +15 ft)", or "(base 30 ft; Unarmored Movement: no +15 ft in armor or with a Shield)"), the Speed
+tile (the base and the danger border only below the raised Speed; its title and a screen reader get the notes), Senses &
+size (Roving's speeds), the gear notices ("AC 13 → 12; Speed 45 → 30 ft", for any hero whose Speed the change moves), a
+level-up ("Speed 40 ft → 45 ft (Unarmored Movement)": the engine's event, the dialog's notice and Summary, `level_up`'s
+result) and `update_character` speed and a transformation's change to it, whose results say the number set is the Speed
+before the features they name ("the Speed before Unarmored Movement, which the app adds") and quote the sheet's ("Mira
+Voss's Speed is now 55 ft (base 40 ft; Unarmored Movement: +15 ft)"); a transformation's climb or swim line names the
+speed the sheet shows ("Swim Speed stays 40 ft (Tidemark gives 35 ft)" for a Ranger 6). A Speed the DM raised by hand
+for one of these features before the app counted them now gets the bonus on top: the app keeps no record of why a Speed
+was set, so it leaves the number, and the sheet's base and the status line's bonus put it in front of the DM.
+
+**Counted features at a level-up.** A class feature named with its use count ("Indomitable (two uses)"; in SRD 5.2.1
+only the Fighter's Action Surge and Indomitable) is one entry that grows in place. A counted family is the entries of
+one base name (`baseFeatureName`) named bare or with a use count, the class's own and the DM's "Granted in play" ones,
+when the hero's class table names the base with a count (`classCountingByName`: the SRD Fighter's, and the SRD class a
+2024 book's Fighter stands in for) or the class names an entry with one (an entry it holds, a new feature at this level,
+or, on the DM's path, the SRD table's row). A DM's own counted label beside a class feature no table counts ("Wild Shape
+(2 uses)" beside the Druid's "Wild Shape") is no family, and an entry under another parenthetical ("Action Surge
+(Bonus)") is its own feature. Engine `levelUp` collapses each family after the level's features join
+(`collapseCountedFamilies`): the entry with the DM's ruled uses stays as it is (its name and ruling, the others' spent
+uses joining it), else the class's earliest entry, else the DM's earliest (an older DM-levelled Fighter's are all the
+DM's), whole (its id, place and text), under the newest name and count, keeping the uses spent (no more than the count
+before), and the others go; one whose uses follow its class table (a book Fighter's "Indomitable", by-table scale), or
+that reads its counts from a 2024 book's class table (named with the base alone, `readsItsTable`), keeps its own name, a
+higher count from another entry becoming the DM's ruling on it (its own older count is no ruling: the next read gives
+the table's); and any other kept count above the class table's at the class level is the DM's ruling, so both paths keep
+it when the entry has uses (one without them, the DM's "Indomitable (two uses)" recorded without `uses_max` at Fighter
+8, keeps nothing on a `level_up` whose `new_features` gives its family no `uses_max`, which names the table's row to
+add, below, while the level-up dialog's row, or an entry of its family a `level_up` lists in `new_features` with a
+`uses_max` (the row, the bare "Indomitable", a count in digits), brings uses and the merge makes that count the DM's
+ruling). An older sheet's duplicates merge at its next level-up ("Indomitable (one use) and Indomitable (two uses)
+merged into Indomitable (two uses): 2 uses, 1 left."), a lone grow reads "Feature uses now: Indomitable (two uses) 1 →
+2.", and a folded feature is never listed as new or as grown; nor is a new feature the merge renames (the class's
+"Action Surge (one use)" at Fighter 2 kept under the count of the DM's "Action Surge (two uses)"), which is named first
+among those merged ("Action Surge (one use) and Action Surge (two uses) merged into Action Surge (two uses): 2 uses, 2
+left."). The DM's `level_up` without `new_features` joins the SRD level's counted names to a family the sheet holds, the
+DM's entries alone included, so the entry grows whether the DM lists it or not; the reminder names a row only when the
+sheet holds no entry of its family or class feature of its name that has uses (a ruled entry or the DM's higher count
+holds it; a boon's or an item's entry of its name doesn't, so beside a boon "Indomitable (one use)" `level_up` to
+Fighter 9 names that row to add, and the class's entry the DM records for it joins beside the boon, as the dialog's
+does; nor does an entry of its family or class feature of its name without uses: one the level-up leaves under the row's
+very name is on the sheet, so the row isn't named to add but gets a line of its own with the row's count (one `level_up`
+lists in `new_features` under that name without `uses_max`; the DM's or the class's own without uses from an earlier
+level, which a later row renames to its name with no uses to give it unless it carries a higher count), "Fighter 2:
+Action Surge (one use) is on the sheet without its 1 use." when `level_up` to Fighter 2 lists that row in `new_features`
+without `uses_max`, and "Fighter 13: Indomitable (two uses) is on the sheet without its 2 uses." after an "Indomitable
+(one use)" so recorded at 9, and the DM's `features_add` of the row's exact name gives that entry its uses only with
+`uses_max`, the row's count, no ruling (without it, only the text changes); one of its family under another name (the
+bare "Action Surge" or a count in digits a `level_up` lists in `new_features`, or the DM's or the class's own under a
+higher count, which the fold keeps: the DM's "Indomitable (two uses)" recorded without `uses_max` at Fighter 8) leaves
+the row named to add, as the sheet holds no class feature of the row's name, and the class's `features_add` of the row's
+name goes to that entry, which, given the row's count as `uses_max`, takes the row's name and count, no ruling (without
+`uses_max`, one counting fewer by its name, as the bare one does, takes them too, and any other keeps its name and
+changes only its text)). A lookup by an older counted name finds the family's entry, and `features_add` of a counted
+name the call records as a class feature (`source` "class") rewrites one entry of a counted family (the ruled one, else
+the class's counted one, its by-table one, the DM's counted one, the class's own, else the DM's bare one: an entry takes
+the name only given that name's count, as `uses_max` or filled in for one left out, and gets no ruling from it; given
+another `uses_max` it keeps its own name ("Action Surge (one use)" with 2 at Fighter 17 reads "Updated feature: Action
+Surge (two uses)", 2 to Fighter 20 on both paths), its uses judged as for a name without a count: the number it had
+keeps how it grows, and another is the DM's ruling; one that keeps its own name because it follows its table or is a
+2024 book's bare entry, `readsItsTable`, gets none from its table's count and a ruling from any other number, and until
+its table counts it on the sheet (the book's data not on this device, or a table that counts nothing) any `uses_max` the
+DM gives it is the DM's ruling, the number it already holds included ("Action Surge (two uses)" with 2 on an older
+save's 2), so no later read takes it away, since a name the entry doesn't keep vouches for no number, while the count
+filled in for a `uses_max` left out is no ruling; a counted name's rewrite routed onto its family's entry under another
+name keeps that entry's recharge when the call gives none (an exact-name rewrite given `uses_max` without `recharge`
+takes `features_add`'s default, a Long Rest, as does a routed one onto an entry without uses), and without `uses_max` it
+changes only the text of an entry that is ruled, follows its table or counts at least as many uses, and gives one
+counting fewer the name's count, no ruling); otherwise, and under any other source (a boon's "Indomitable (two uses)",
+an item's), it is added beside, as before ("Rage (3 uses)" beside a Barbarian's "Rage", a second label beside the
+first), and the class's entry keeps its source and text, so the table's rows go on growing that one entry on both paths.
+When the sheet holds several entries of the name a `features_add` gives, the call changes the one under its own source,
+else the first (of two under that source, the first); but no entry under another source (a boon's, an item's) takes a
+class feature's counted name (`source` "class") whose family is counted: the call goes to the family's entry as above,
+or, with none, is added beside, as the level-up dialog adds the table's row (the class's "Indomitable (one use)" at
+Fighter 9 beside a boon of that name), so the boon or item keeps its source, words and uses ("Indomitable (two uses)"
+with 3 at Fighter 17 beside a boon of that name reads "Updated feature: Indomitable (three uses)", 3 + 2 to Fighter 20
+on both paths). Once the table grows the class's entry into the name of a boon kept beside it (an SRD Fighter 9's boon
+"Indomitable (two uses)", from Fighter 13), the boon's call changes the boon and a call with `source` "class" the
+class's entry, the result naming the one changed as a use does ("Updated feature: Indomitable (two uses) (Granted in
+play)" beside the dialog's "Fighter 9" entry; "(boon)" or "(class)" on the DM's `level_up` path, where both are "Granted
+in play"), and the kept-ruling line, which names a ruled entry by that label too, gives the call that changes it, as
+`features_add` takes no label ("kept your ruling: Indomitable (two uses) (boon) 1 use (a new uses_max in features_add
+changes it: name "Indomitable (two uses)", source "boon")"), and gives it too for a ruled entry under another source
+alone in a counted name that a call with `source` "class" passes by (a counted family's, or a feat's: from Fighter 17,
+where the class's entry has grown past the boon's name, "kept your ruling: Indomitable (two uses) 1 use (a new uses_max
+in features_add changes it: name "Indomitable (two uses)", source "boon")"), so the class's entry counts 3 uses at
+Fighter 17 beside the boon's 2 on both paths; a name no table counts goes the same way on the level-up dialog's path (a
+boon's "Tactical Mind" beside the class's own, which the dialog adds at Fighter 2). A book Fighter's bare "Action Surge"
+and "Indomitable" read their counts from the class table's features column ("Indomitable (two uses)" at 13;
+`usesFromCountedCells`), which the dialog and the DM's `level_up` read again before any level, and `update_character`
+before a call that adds, spends or restores features, for every book class the hero holds (`refreshBookTableCounts`; the
+dialog after the level too, as it reads every feature), so an older save's are right from its first level-up or features
+call on (until then the sheet's own use pips, a rest and `get_character_sheet` use the older count); `level_up` and
+`update_character` name what that read corrected, one line per class, first ("Uses read from the Fighter class table:
+Action Surge 2 → 1, Indomitable none → 2."; in `update_character`'s player log, an entry of its own before the call's),
+apart from what grew.
+
 ### Player-side controls that talk to the DM
 
 - **OOC:** messages starting with `OOC:` (or sent with the OOC toggle) are answered out of character
@@ -918,7 +1053,8 @@ for an SRD class of the same name for its numbers (hit die, level-up reminders).
 by the SRD class's rules (`rulesClassFor`): the Martial Arts die and a Monk's Dexterity for unarmed strikes and Monk
 weapons (`isMonkWeapon`: Simple Melee, or Martial Melee with Light, by the weapon category and type an attack records from
 the catalog, else by its SRD name; in armor or with a Shield the Dexterity and Unarmed Strike die the builder stored for
-Martial Arts go too, a 2014 book's Monk's included), Unarmored Defense, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
+Martial Arts go too, a 2014 book's Monk's included), Unarmored Defense, the Speed of Unarmored Movement, Fast
+Movement and Roving, Draconic Resilience's Hit Points, Aura of Protection and the rest. Its option-level ref records
 the edition (`ImportedRef.format`), set when the class is taken and kept in step with the book's record on load
 and after review (`withClassEditions`, `src/data/options/editions.ts`): by the class's id, and otherwise only filled,
 never changed, from a copy of the same text (the book's fingerprint), so another book's class of the name never lends

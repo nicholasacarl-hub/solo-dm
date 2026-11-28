@@ -28,8 +28,9 @@ export type DiceTerm = Engine.DiceTerm;
 
 // Transformations and ability score changes run the real engine: pure, and deterministic given ids.
 export { changeAbilityScore } from '@/engine/character';
-// Which side of the feat line a feature's source puts it on, which feature an entry rewrites and how a result names it, run the real rules (pure).
-export { featOrTrait, featureLabel, featureToRewrite, isAlertFeat, isToughFeat } from '@/engine/character';
+// Which side of the feat line a feature's source puts it on, which feature an entry rewrites, the use count a name gives
+// and how a result names it, run the real rules (pure).
+export { featOrTrait, featureLabel, featureToRewrite, isAlertFeat, isToughFeat, nameUseCount } from '@/engine/character';
 // Hit Point maximum adjustments and the Initiative bonus run the real rules (pure).
 export {
   adjustHpMax,
@@ -677,6 +678,19 @@ export const spellAttackBonus: typeof Engine.spellAttackBonus = () => null;
 export const attackAbilityModifier: typeof Engine.attackAbilityModifier = (c, a) => attackMod(c, a);
 export const attackBonus: typeof Engine.attackBonus = (c, a) => attackMod(c, a) + (a.proficient ? pb(c) : 0);
 export const effectiveSpeed: typeof Engine.effectiveSpeed = (c) => c.speed;
+/** No class feature raises Speed here and nothing lowers it: the sheet's speed and other speeds as stored. */
+export const speedDetails: typeof Engine.speedDetails = (c) => ({
+  speed: c.speed,
+  base: c.speed,
+  raised: c.speed,
+  bonuses: [],
+  off: [],
+  classFeatures: [],
+  other: c.otherSpeeds ?? {},
+  notes: [],
+});
+export const speedChangeText: typeof Engine.speedChangeText = () => '';
+export const sheetSpeedText: typeof Engine.sheetSpeedText = (c) => `${c.speed} ft`;
 /** The fake knows no armor's stats: any armor worn is unknown (computeArmorClass keeps the sheet's AC for it). */
 export const unknownWornArmor: typeof Engine.unknownWornArmor = (c) => c.inventory.find((i) => i.equipped && i.category === 'armor');
 /** Unarmored: 10 + DEX; with armor or a shield equipped the sheet's AC is kept (as the engine does for unknown armor). */

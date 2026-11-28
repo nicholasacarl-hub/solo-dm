@@ -1,13 +1,16 @@
 /**
  * Limited-use features: work out how many uses a class feature or species trait has, when it
  * recharges and how the number grows as the hero levels (FeatureUses.scale). Sources, in order: a
- * use count in the name ("Action Surge (one use)"), the class's level table (the column named like
- * the feature, "Rages", or the one its text points to, "the Focus Points column"), and the SRD's
- * standard phrasing ("You can use this feature twice", "a number of times equal to your
- * Proficiency Bonus", "five times your Paladin level").
+ * use count in the name ("Action Surge (one use)"), the class table's features column naming the
+ * feature with a use count ("Indomitable (two uses)" at 13, for a book's "Indomitable"), the class's
+ * level table (the column named like the feature, "Rages", or the one its text points to, "the Focus
+ * Points column"), and the SRD's standard phrasing ("You can use this feature twice", "a number of
+ * times equal to your Proficiency Bonus", "five times your Paladin level").
  */
-import type { Ability, AbilityScores, ClassOption, FeatureScale, FeatureUses, RechargeOn } from '@/types';
+import { nameKey } from '@/lib/id';
+import type { Ability, AbilityScores, Character, ClassLevel, ClassOption, FeatureScale, FeatureUses, RechargeOn } from '@/types';
 import { baseFeatureName, cellNumber, columnKey, levelRow, wordNumber } from './classFeatures';
+import { classOptionFor } from './resolve';
 
 const ABILITY_WORDS: Record<string, Ability> = {
   strength: 'str',
@@ -28,6 +31,14 @@ export interface UsesContext {
   scores: AbilityScores;
   /** The owning class (for level-table columns), if any. */
   cls?: ClassOption;
+  /**
+   * The text is a species trait's (the builder's species step, refreshFeatureUses' species branch): its paragraph on
+   * the spells it gives at later character levels, and a free-casting paragraph right after it, are no use of the trait
+   * (withoutLaterSpells). A class's, a subclass's or a feat's feature reads all of its text but the first line that
+   * opens "When you reach character levels 3 and 5" (any two levels) and speaks of a spell, which every reading
+   * leaves out (usesFromText); such a line about anything else, and the same words later in a line, take nothing away.
+   */
+  speciesTrait?: boolean;
 }
 
 interface UsesFound {
@@ -63,6 +74,47 @@ function usesFromName(name: string): UsesFound | null {
   return n !== null && n > 0 ? { max: n } : null;
 }
 
+/** A level-table row's features cell ("Action Surge (one use), Tactical Mind"), or "". */
+function featuresCell(row: Record<string, string | number>): string {
+  const key = Object.keys(row).find((k) => columnKey(k) === 'features' || columnKey(k) === 'classfeatures');
+  const cell = key === undefined ? undefined : row[key];
+  return typeof cell === 'string' ? cell : '';
+}
+
+/** One entry of a features cell named with a use count: "Indomitable (two uses)", "_Action Surge (2 uses)_". */
+const COUNTED_ENTRY = /^(.+?)\s*\((\w+) uses?\)$/i;
+
+/** The use count a features cell gives the feature whose name's key is `want` ("indomitable"), or null. */
+function cellCount(cell: string, want: string): number | null {
+  for (const part of cell.split(/[,;]/)) {
+    const match = COUNTED_ENTRY.exec(part.replace(/[*_`]/g, '').trim());
+    const n = match && columnKey(match[1]) === want ? wordNumber(match[2]) : null;
+    if (n !== null && n > 0) return n;
+  }
+  return null;
+}
+
+/**
+ * A feature named without a count that the class table's features column names with one, as a 2024 book's Fighter
+ * reads when the offline parser names its features by their headings ("Action Surge" at 2; the SRD 5.2.1 Fighter
+ * Features table's "Action Surge (one use)" at 2 and "Action Surge (two uses)" at 17): the count of the latest such
+ * cell at or below the class level, with the table's counts as its scale (0 before it's gained). Null when the table
+ * counts it at no level up to the class level: a book whose table counts nothing, a name it doesn't count, Warlock's
+ * "(level 6 spell)" or a "(2/rest)" cell.
+ */
+function usesFromCountedCells(name: string, cls: ClassOption | undefined, classLevel: number): UsesFound | null {
+  const want = columnKey(baseFeatureName(name));
+  if (!cls || !want) return null;
+  const top = Math.max(0, ...cls.levelTable.map((row) => Number(row.level) || 0));
+  const values: number[] = [];
+  for (let level = 1; level <= top; level++) {
+    const row = levelRow(cls, level);
+    values.push((row ? cellCount(featuresCell(row), want) : null) ?? values[level - 2] ?? 0);
+  }
+  const max = values[Math.min(classLevel, values.length) - 1] ?? 0;
+  return max > 0 ? { max, scale: { by: 'table', className: cls.name, values } } : null;
+}
+
 /** Columns a feature's text points to: "…as shown in the Focus Points column of the Monk Features table". */
 function namedColumns(text: string): string[] {
   return [...text.matchAll(/\bthe ([A-Z][A-Za-z' ]*?) column\b/g)].map((m) => columnKey(m[1]));
@@ -91,9 +143,61 @@ function usesFromTable(name: string, description: string, ctx: UsesContext): Use
   return null;
 }
 
+/**
+ * A paragraph that gives the hero a higher-level spell, in the SRD's words (once its line breaks are spaces), its
+ * compound joined however a book's text came in: the hyphen (or U+2010, U+2011), a hyphen and a line break, a space, or
+ * nothing ("higherlevel": the app's PDF reader re-joins a word hyphenated across lines).
+ */
+const LATER_SPELL = /\blearn a higher[-\u2010\u2011]?\s*level spell/i;
+
+/**
+ * A word for a spell: a species trait's paragraph that opens "When you reach character levels 3 and 5" (any two levels)
+ * is left out only with one (withoutLaterSpells), as the one-line strip takes such a line only with one (usesFromText);
+ * the SRD's have one (srd:species:elf: "…you learn a higher-level spell").
+ */
+const SPELL_WORD = /\bspells?\b/i;
+
+/**
+ * A paragraph that opens with that spell's free casting, in the SRD's words (srd:species:elf): "You can cast it once
+ * without a spell slot".
+ */
+const FREE_CASTING_OPENING = /^You can cast it once without (?:expending )?a spell slot/i;
+
+/**
+ * A species trait's text less its paragraph about the spells it gives at later character levels (SRD 5.2.1
+ * srd:species:elf, Elven Lineage: "When you reach character levels 3 and 5, you learn a higher-level spell, as shown on
+ * the table. You always have that spell prepared. You can cast it once without a spell slot, and you regain the ability
+ * to cast it in that way when you finish a Long Rest."; srd:species:tiefling's Fiendish Legacy alike): each such spell's
+ * free casting is its own, counted beside it (spellPicks.ts withLineageCastings), never a use of the trait. Known by
+ * "learn a higher-level spell" (LATER_SPELL) however a book words the paragraph's opening or wraps its lines, or by the
+ * SRD's opening "When you reach character levels 3 and 5" (any two levels) when the paragraph speaks of a spell,
+ * whatever verb gives it ("gain" as well as "learn"); a paragraph so opened about anything else (an invented trait's
+ * "When you reach character levels 5 and 9, the mark darkens") stays, with any use it gives. A paragraph runs to a
+ * blank line. A paragraph right after a left-out one that opens with the free-casting sentence goes too (that
+ * paragraph split by a blank line before "You can cast it once without a spell slot"); the rest of the text stays as it
+ * was, so the sentence anywhere else is the trait's own use (Magic Initiate's "Level 1 Spell" is no such paragraph).
+ */
+function withoutLaterSpells(text: string): string {
+  const laterLevelsOpening = /^When you reach character levels \d+ and \d+/i;
+  let leftOut = false;
+  // Split keeping the blank lines (odd places), so the text joins back exactly; blank lines alone are no paragraph.
+  return text
+    .split(/(\n[ \t]*\n)/)
+    .map((part, i) => {
+      const flat = part.replace(/\s+/g, ' ').trim();
+      if (i % 2 === 1 || !flat) return part;
+      leftOut = LATER_SPELL.test(flat) || (laterLevelsOpening.test(flat) && SPELL_WORD.test(flat)) || (leftOut && FREE_CASTING_OPENING.test(flat));
+      return leftOut ? '' : part;
+    })
+    .join('');
+}
+
 function usesFromText(raw: string, ctx: UsesContext): UsesFound | null {
-  // Ignore the paragraph about spells learned at later levels (Elven Lineage, Fiendish Legacy).
-  const text = raw.replace(/When you reach character levels \d+ and \d+[^\n]*(?:\n|$)/i, '');
+  // Ignore the first line that opens, after any spaces or tabs, "When you reach character levels 3 and 5" (any two levels)
+  // and speaks of a spell (Elven Lineage, Fiendish Legacy: "…3 and 5, you learn a higher-level spell"), for every
+  // feature; such a line about anything else, and the same words in mid-line, cut nothing. A species trait also leaves
+  // out its paragraph about the spells learned at later levels, however it is worded or wrapped (withoutLaterSpells).
+  const text = (ctx.speciesTrait ? withoutLaterSpells(raw) : raw).replace(/^[ \t]*When you reach character levels \d+ and \d+(?=[^\n]*\bspells?\b)[^\n]*(?:\n|$)/im, '');
   const pool = /total number of Hit Points equal to (\w+) times your (\w+) level/i.exec(text);
   if (pool) {
     const multiplier = wordNumber(pool[1]) ?? 1;
@@ -119,7 +223,62 @@ function usesFromText(raw: string, ctx: UsesContext): UsesFound | null {
 /** Uses for a feature or trait (with how they scale, when they do), or undefined when it isn't limited. */
 export function inferFeatureUses(name: string, description: string, ctx: UsesContext): FeatureUses | undefined {
   if (levelGate(description) > ctx.level) return undefined;
-  const found = usesFromName(name) ?? usesFromTable(name, description, ctx) ?? usesFromText(description, ctx);
+  const found = usesFromName(name) ?? usesFromCountedCells(name, ctx.cls, ctx.level) ?? usesFromTable(name, description, ctx) ?? usesFromText(description, ctx);
   if (!found) return undefined;
   return { max: found.max, used: 0, recharge: rechargeFromText(description), ...(found.scale ? { scale: found.scale } : {}) };
+}
+
+/**
+ * For the DM's level_up, which re-reads no uses (the level-up dialog runs refreshFeatureUses), and for the dialog before
+ * the level: a book class's own class features (source name "Fighter 9") named without a count whose base name its table
+ * counts by name (usesFromCountedCells: a 2024 book's Fighter as the offline parser names it, made before the app read
+ * the counts: "Action Surge" with 2 uses from level 2, "Indomitable" with none), re-read at the class's level with that
+ * reader. A ruling (FeatureUses.ruled) stays; spent uses stay, capped at the new maximum; the recharge stays. The same
+ * character when nothing changed.
+ */
+export function refreshTableCountedUses(c: Character, cls: ClassOption, cl: Pick<ClassLevel, 'name' | 'level'>): Character {
+  const owners = new Set([nameKey(cl.name), nameKey(cls.name)]);
+  let changed = false;
+  const features = c.features.map((f) => {
+    if (f.source !== 'class' || f.uses?.ruled || usesFromName(f.name)) return f;
+    if (!owners.has(nameKey((f.sourceName ?? '').replace(/\s+\d+$/, '')))) return f;
+    const found = usesFromCountedCells(f.name, cls, cl.level);
+    if (!found?.scale) return f;
+    const old = f.uses;
+    if (old && old.max === found.max && JSON.stringify(old.scale ?? null) === JSON.stringify(found.scale)) return f;
+    changed = true;
+    const uses: FeatureUses = old
+      ? { ...old, max: found.max, used: Math.min(old.used, found.max), scale: found.scale }
+      : { max: found.max, used: 0, recharge: rechargeFromText(f.description), scale: found.scale };
+    return { ...f, uses };
+  });
+  return changed ? { ...c, features } : c;
+}
+
+/** One class's read in refreshBookTableCounts: the hero before and after it. */
+export interface TableCountsRead {
+  /** The hero's class whose table was read ("Fighter"). */
+  className: string;
+  before: Character;
+  after: Character;
+}
+
+/**
+ * Before any level-up, whichever class the level is in (the level-up dialog's and the DM's level_up): each book class the
+ * hero holds whose option `classes` has re-reads its own entries by its table (refreshTableCountedUses), so an older
+ * save's book Fighter 13 levelling its Wizard holds the counts its table gives (SRD 5.2.1 Fighter Features table:
+ * "Action Surge (one use)" at 2, "Indomitable (two uses)" at 13) before the level-up folds or grows them. The reads that
+ * changed the sheet, in the hero's class order, and the hero after them all (the same character when none did).
+ */
+export function refreshBookTableCounts(c: Character, classes: readonly ClassOption[]): { character: Character; reads: TableCountsRead[] } {
+  const reads: TableCountsRead[] = [];
+  let character = c;
+  for (const cl of c.classes) {
+    const option = classOptionFor(cl, classes);
+    if (!option?.source) continue;
+    const after = refreshTableCountedUses(character, option, cl);
+    if (after !== character) reads.push({ className: cl.name, before: character, after });
+    character = after;
+  }
+  return { character, reads };
 }

@@ -4,17 +4,22 @@
  * Choose the class (or multiclass, with the 2024 13+ primary-ability prerequisite), the HP method, a
  * subclass at its level (chosen by id; a subclass chosen late catches up its earlier features), and —
  * at Ability Score Improvement, Epic Boon and (Additional) Fighting Style levels — a choice whose
- * default, "Decide with my DM", keeps today's level-up. Applied through the engine's levelUp, then every
+ * default, "Decide with my DM", keeps today's level-up. Applied through the engine's levelUp (every book class's entries
+ * its table counts by name re-read first, whichever class levels, as the DM's level_up does), then every
  * feature's uses are re-read at the new level (Rage, Lay on Hands, Breath Weapon…), the class's and
- * subclass's always-prepared spells up to the new level are added or turned always prepared, and the class's
+ * subclass's always-prepared spells up to the new level, and the lineage's up to the character level (each with its
+ * free casting, once per Long Rest), are added or turned always prepared, and the class's
  * spell choices are marked open (spellPicks.ts counts them live), with another class's whose pick was turned. The
- * Summary's "Choose spells" continues into the choices form in this same dialog.
+ * Summary's "Choose spells" continues into the choices form in this same dialog. The Summary and the DM's notice say
+ * what the level did to the Speed (Unarmored Movement, Fast Movement, Roving), and a counted family's entries merged
+ * into one (Action Surge, Indomitable) as the merge.
  */
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { ArrowBigUpDash, Check, Loader2, Sparkles, TriangleAlert } from 'lucide-react';
-import { XP_THRESHOLDS, abilityModifier, characterLevel, levelUp, type LevelUpOptions, type LevelUpResult } from '@/engine';
+import { XP_THRESHOLDS, abilityModifier, characterLevel, featureMergeText, levelUp, type LevelUpOptions, type LevelUpResult } from '@/engine';
 import { getRulesIndex, useBuilderData, useRulesIndexState } from '@/data';
 import { withAdaptationNotes } from '@/data/options/adaptationNotes';
+import { refreshBookTableCounts } from '@/data/options/featureUses';
 import { featureUseChanges, gainedFeatures, keptRulings, refreshFeatureUses } from '@/data/options/leveling';
 import {
   applyFeatChoice,
@@ -38,13 +43,16 @@ import { classOptionFor, multiclassPrimariesFor, primaryRuleOf, subclassOptionFo
 import {
   alwaysPreparedGained,
   applyAlwaysPrepared,
+  freeCastingNoticeParts,
   levelSpellsEdit,
+  lineageSpellGrants,
   openSpellPicks,
   owedSpells,
   owedSpellsSummary,
   recordingClause,
   spellPicksAfterLevel,
   swapsText,
+  withLineageCastings,
   withoutSpellReview,
   type AlwaysPreparedGain,
   type OpenSpellPicks,
@@ -208,7 +216,7 @@ function nextSpellPicks(c: Character, existing: ClassLevel | undefined, option: 
   return entry ? { owed, entry } : null;
 }
 
-function planLevel(c: Character, classes: readonly ClassOption[], choice: Choice, subclassId: string, findSpell: FindSpell): LevelPlan {
+function planLevel(c: Character, classes: readonly ClassOption[], choice: Choice, subclassId: string, findSpell: FindSpell, data: BuilderData | null): LevelPlan {
   const existing = choice.kind === 'existing' ? c.classes[choice.index] : undefined;
   const option = existing ? classOptionFor(existing, classes) : classes.find((o) => choice.kind === 'new' && o.id === choice.classId);
   const classLevel = (existing?.level ?? 0) + 1;
@@ -219,8 +227,12 @@ function planLevel(c: Character, classes: readonly ClassOption[], choice: Choice
   // A multiclass hero's other classes' subclasses: a feature of one of theirs isn't this subclass's.
   const otherSubclasses = c.classes.filter((cl) => cl !== existing).flatMap((cl) => (cl.subclass ? [cl.subclass] : []));
   const features = option ? gainedFeatures(option, classLevel, sub, ctx, { have: c.features, subclassChosenNow: needsSubclass, otherSubclasses }) : [];
-  // With the classes' data, a turned spell names the class whose list it leaves, and a spellbook keeps its own.
-  const spells = alwaysPreparedGained(c, option, sub, classLevel, findSpell, classes);
+  // With the classes' data, a turned spell names the class whose list it leaves, and a spellbook keeps its own. The
+  // lineage's spells at the character level this level reaches join the class's in one count (SRD 5.2.1
+  // srd:species:elf: "When you reach character levels 3 and 5, you learn a higher-level spell"), where the level-up
+  // applies them: with the class's data.
+  const lineage = option ? lineageSpellGrants(c, data, findSpell, characterLevel(c) + 1) : [];
+  const spells = alwaysPreparedGained(c, option, sub, classLevel, findSpell, classes, lineage);
   return {
     existing,
     option,
@@ -341,6 +353,17 @@ function missingText(missing: readonly { name: string; source: string }[]): stri
     .join('; ');
 }
 
+/** The names less those the level-up folded into an entry the sheet held (LevelUpResult.folded), each once. */
+function withoutFolded(names: readonly string[], folded: readonly string[]): string[] {
+  const left = [...folded];
+  return names.filter((name) => {
+    const at = left.findIndex((f) => nameKey(f) === nameKey(name));
+    if (at < 0) return true;
+    left.splice(at, 1);
+    return false;
+  });
+}
+
 /**
  * The DM notice (names only). With "Decide with my DM", no subclass spells and no uses the DM ruled it is exactly what it
  * always was; the uses it ruled, which the level-up left as they are, are named so the DM keeps them in mind.
@@ -452,6 +475,7 @@ function Summary({
         </div>
       </div>
       {choice && <p className="text-sm">{choice}</p>}
+      {result.speedChange && <p className="text-sm">{result.speedChange}</p>}
       {uses.length > 0 && (
         <Section title="Feature uses">
           <ul className="list-disc pl-5 text-sm">
@@ -774,7 +798,7 @@ function LevelUpForm({
 
   const classes = builder.data?.classes ?? [];
   const findSpell: FindSpell = (name) => index?.findByName(name, { kind: 'spell', campaignId });
-  const plan = planLevel(character, classes, choice, subclassId, findSpell);
+  const plan = planLevel(character, classes, choice, subclassId, findSpell, builder.data);
   const { existing, option, className, classLevel, hitDie } = plan;
   const conMod = abilityModifier(character.abilityScores.con);
   const average = Math.max(1, hitDie / 2 + 1 + conMod);
@@ -848,8 +872,13 @@ function LevelUpForm({
         : base;
     const outcome: { result: LevelUpResult | null; uses: string[]; choice: string | null; classIds: string[] } = { result: null, uses: [], choice: null, classIds: [] };
     const saved = await edit((c) => {
-      const r = levelUp(c, opts);
-      if (r.character === c) {
+      // Each book's class the hero holds whose table counts a feature by name ("Indomitable (two uses)" at 13), whichever
+      // class the level is in: its own entries named without a count (an older save's "Indomitable" without uses) are
+      // re-read by that table first, as the DM's level_up does (refreshBookTableCounts), so the level-up grows them by it
+      // and a counted family it folds keeps their name. Refused, the sheet stays as it was.
+      const start = refreshBookTableCounts(c, classes).character;
+      const r = levelUp(start, opts);
+      if (r.character === start) {
         return { character: c, notice: null, warning: r.events.find((e) => e.type === 'warning')?.message ?? 'Could not level up.' };
       }
       const before = new Set(c.features.map((f) => f.id));
@@ -865,17 +894,29 @@ function LevelUpForm({
       }
       // The older-edition notes of what this level brings (a 2014 subclass chosen now, a book's class or feat) join the sheet's (B6).
       next = withAdaptationNotes(next, [option, plan.sub, chosen.kind === 'feat' ? chosen.pick.feat : undefined]);
-      // Existing features grow too: Rage, Second Wind, Lay on Hands, Breath Weapon, Draconic Flight at 5…
+      // Existing features grow too: Rage, Second Wind, Lay on Hands, Breath Weapon, Draconic Flight at 5… A counted
+      // family's entries merged into one (an older sheet's "Indomitable (one use)" beside its "(two uses)") are told as
+      // the merge, not as the kept entry's growth.
       const refreshed = refreshFeatureUses(next, builder.data);
-      const uses = featureUseChanges(c, refreshed);
+      const merged = new Set((r.merges ?? []).map((m) => m.id));
+      // Each merge as the sheet stores the entry it kept, its uses re-read.
+      const merges = (r.merges ?? []).map((m) => {
+        const kept = refreshed.features.find((f) => f.id === m.id);
+        return kept ? featureMergeText(kept, m.merged) : m.text;
+      });
+      const uses = [...featureUseChanges({ ...c, features: c.features.filter((f) => !merged.has(f.id)) }, refreshed), ...merges];
       // The always-prepared spells up to the new level, on the sheet as it is now: added, or a pick turned always prepared
       // (it stops counting). Then the class's choices are marked open, counted with the places those free (SRD 5.2.1
       // srd:rule:gaining-spells: "a spell that you always have prepared doesn't count against the number of spells"), and
       // so are another class's whose pick was turned (levelSpellsEdit, on the levelled entry as the level-up left it).
+      // The lineage's spells up to the character level join the class's in that count (lineageSpellGrants), and each one
+      // the sheet then holds gets its free casting, once per Long Rest (withLineageCastings).
       const levelledId = plan.existing?.classId ?? option?.id;
       const levelled = refreshed.classes.find((cl) => (levelledId ? cl.classId === levelledId : nameKey(cl.name) === nameKey(className)));
-      const spells = option && levelled ? levelSpellsEdit(refreshed, levelled, option, plan.sub, findRuleSpell, classes) : null;
-      const final = spells?.character ?? refreshed;
+      const lineage = lineageSpellGrants(refreshed, builder.data, findRuleSpell);
+      const spells = option && levelled ? levelSpellsEdit(refreshed, levelled, option, plan.sub, findRuleSpell, classes, lineage) : null;
+      const cast = spells ? withLineageCastings(spells.character, builder.data, lineage) : null;
+      const final = cast?.character ?? spells?.character ?? refreshed;
       const gain = spells?.gain ?? { add: [], flip: [], missing: [] };
       const owed = spells?.owed ?? null;
       const others = spells?.others ?? [];
@@ -884,7 +925,13 @@ function LevelUpForm({
       const chose = featChoiceNotice(chosen, increases);
       const answered = plan.trigger ? dropChoiceReminder(r.reminders, plan.trigger.kind, chosen, increases) : r.reminders;
       const reminders = owed ? withoutSpellReview(answered, className, classLevel) : answered;
-      const added = chosen.kind === 'dm' ? plan.features.map((f) => f.name) : refreshed.features.filter((f) => !before.has(f.id)).map((f) => f.name);
+      // A new feature folded into an entry the sheet held (the table's "Indomitable (two uses)") is no new feature, nor is
+      // one a merge with entries the sheet held renamed (FeatureMerge.renamedNew: the merge names it).
+      const renamed = new Set((r.merges ?? []).filter((m) => m.renamedNew).map((m) => m.id));
+      const added =
+        chosen.kind === 'dm'
+          ? withoutFolded(plan.features.map((f) => f.name), r.folded ?? [])
+          : refreshed.features.filter((f) => !before.has(f.id) && !renamed.has(f.id)).map((f) => f.name);
       const hpGained = final.hp.max - c.hp.max;
       outcome.result = { ...r, character: final, hpGained, reminders };
       outcome.uses = uses;
@@ -904,12 +951,15 @@ function LevelUpForm({
             ...(chose ? [chose] : []),
             ...(gain.add.length ? [`always prepared: ${gain.add.map((s) => s.name).join(', ')}`] : []),
             ...(gain.flip.length ? [`now always prepared: ${gain.flip.map((s) => s.name).join(', ')}`] : []),
+            ...(cast ? freeCastingNoticeParts(cast) : []),
             // A granted spell the rules here lack (a book that isn't on this device): the DM can add it, under what grants it,
             // so no class counts it among its choices.
             ...(gain.missing.length ? [`not added (not in the rules here; add with the source named, not a class's name): ${missingText(gain.missing)}`] : []),
             ...(owed && spells?.entry ? [spellsToChooseNotice(owed, spells.entry)] : []),
             // Another class whose pick was turned always prepared has that place to fill again, recorded under its name.
             ...others.map((o) => `${o.cl.name} ${o.cl.level} ${spellsToChooseNotice(o.owed, o.entry)}`),
+            // A class feature that raises Speed at this level (Unarmored Movement, Fast Movement, Roving).
+            ...(r.speedChange ? [r.speedChange] : []),
           ],
           uses,
           rulings: keptRulings(final),

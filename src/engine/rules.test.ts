@@ -34,6 +34,7 @@ import {
   saveBonusSources,
   savingThrowModifier,
   skillModifier,
+  speedChangeText,
   speedDetails,
   spellAttackBonus,
   spellSaveDC,
@@ -193,6 +194,237 @@ describe('speed', () => {
     expect(effectiveSpeed(c)).toBe(20);
     expect(speedDetails(c).notes[0]).toMatch(/Chain Mail needs Strength 13/);
     expect(effectiveSpeed({ ...c, abilityScores: { ...c.abilityScores, str: 13 } })).toBe(30);
+  });
+
+  it('a hero without a Speed feature reads as before: the stored speed and other speeds, nothing raised', () => {
+    expect(speedDetails(mira())).toEqual({ speed: 30, base: 30, raised: 30, bonuses: [], off: [], classFeatures: [], other: {}, notes: [] });
+    expect(speedDetails(mira({ exhaustion: 1 }))).toMatchObject({ speed: 25, raised: 30, notes: ['Exhaustion 1: −5 ft'] });
+  });
+});
+
+/** Speed from class features: spec §1.1–1.2 (class extras). Heroes wear nothing unless a test says so. */
+describe('Speed from class features (SRD 5.2.1 srd:rule:monk-unarmored-movement, srd:rule:barbarian-fast-movement, srd:rule:ranger-roving)', () => {
+  type ClassEntry = Character['classes'][number];
+  type Gear = Partial<InventoryItem> & { name: string };
+  const cls = (name: string, level: number, extra: Partial<ClassEntry> = {}): ClassEntry => ({
+    classId: `srd:class:${name.toLowerCase()}`,
+    name,
+    level,
+    hitDie: 8,
+    casterType: 'none',
+    ...extra,
+  });
+  const hero = (classes: ClassEntry[], extra: Partial<Character> = {}) => mira({ classes, inventory: [], spellcasting: undefined, ...extra });
+  const monk = (level: number, extra: Partial<Character> = {}) => hero([cls('Monk', level)], extra);
+  const barbarian = (level: number, extra: Partial<Character> = {}) => hero([cls('Barbarian', level)], extra);
+  const ranger = (level: number, extra: Partial<Character> = {}) => hero([cls('Ranger', level)], extra);
+  /** STR 16: Plate Armor's Strength 15 costs no Speed. */
+  const strong = { ...mira().abilityScores, str: 16 };
+  const plate: Gear = { name: 'Plate Armor', category: 'armor' };
+  const leather: Gear = { name: 'Leather Armor', category: 'armor' };
+  /** Armor the app can't identify: category armor, no stats. */
+  const coat: Gear = { name: 'Mithral Coat', category: 'armor' };
+  /** A Shield as the builder copies it (srd:item:shield). */
+  const shield: Gear = { name: 'Shield', category: 'shield', armor: { kind: 'shield', baseAc: 2, dexCap: 0 } };
+
+  it('Unarmored Movement follows the Monk Features table: +10 ft at Monk 2, +15 at 6, +20 at 10, +25 at 14, +30 at 18 (srd:class:monk)', () => {
+    // srd:rule:monk-unarmored-movement: "This bonus increases when you reach certain Monk levels, as shown in the Monk Features table."
+    const levels = [1, 2, 5, 6, 9, 10, 13, 14, 17, 18, 20];
+    expect(levels.map((l) => effectiveSpeed(monk(l)))).toEqual([30, 40, 40, 45, 45, 50, 50, 55, 55, 60, 60]);
+    expect(speedDetails(monk(6))).toEqual({
+      speed: 45,
+      base: 30,
+      raised: 45,
+      bonuses: [{ name: 'Unarmored Movement', feet: 15 }],
+      off: [],
+      classFeatures: ['Unarmored Movement'],
+      other: {},
+      notes: ['Unarmored Movement: +15 ft'],
+    });
+    // Level 1's column reads "—": no feature yet, as any other hero.
+    expect(speedDetails(monk(1))).toEqual({ speed: 30, base: 30, raised: 30, bonuses: [], off: [], classFeatures: [], other: {}, notes: [] });
+  });
+
+  it('Unarmored Movement stops in armor or with a Shield, armor the app can\'t identify included (srd:rule:monk-unarmored-movement: "while you aren\'t wearing armor or wielding a Shield")', () => {
+    for (const gear of [leather, shield, coat]) {
+      expect(speedDetails(wearing(monk(6), gear))).toEqual({
+        speed: 30,
+        base: 30,
+        raised: 30,
+        bonuses: [],
+        off: ['Unarmored Movement: no +15 ft in armor or with a Shield'],
+        classFeatures: ['Unarmored Movement'],
+        other: {},
+        notes: [],
+      });
+    }
+    // A weapon is neither: the bonus stays.
+    expect(effectiveSpeed(wearing(monk(6), { name: 'Quarterstaff', category: 'weapon' }))).toBe(45);
+  });
+
+  it('Fast Movement at Barbarian 5 and Roving at Ranger 6 add 10 ft, a Shield and lighter armor kept (srd:rule:barbarian-fast-movement: "Your speed increases by 10 feet while you aren\'t wearing Heavy armor.")', () => {
+    expect([4, 5, 20].map((l) => effectiveSpeed(barbarian(l)))).toEqual([30, 40, 40]);
+    expect([5, 6, 20].map((l) => effectiveSpeed(ranger(l)))).toEqual([30, 40, 40]);
+    expect(speedDetails(barbarian(4)).classFeatures).toEqual([]);
+    expect(speedDetails(ranger(5)).classFeatures).toEqual([]);
+    expect(speedDetails(barbarian(5))).toMatchObject({ raised: 40, bonuses: [{ name: 'Fast Movement', feet: 10 }], classFeatures: ['Fast Movement'], notes: ['Fast Movement: +10 ft'] });
+    expect(speedDetails(ranger(6))).toMatchObject({ raised: 40, bonuses: [{ name: 'Roving', feet: 10 }], classFeatures: ['Roving'], notes: ['Roving: +10 ft'] });
+    // Neither feature mentions a Shield: a Barbarian's Hide Armor and Shield, a Ranger's Studded Leather and Shield.
+    expect(speedDetails(wearing(barbarian(5), { name: 'Hide Armor', category: 'armor' }, shield))).toMatchObject({ speed: 40, off: [] });
+    expect(speedDetails(wearing(ranger(6), { name: 'Studded Leather Armor', category: 'armor' }, shield))).toMatchObject({ speed: 40, off: [] });
+    expect(effectiveSpeed(wearing(barbarian(5), { name: 'Spiked Shield', category: 'shield' }))).toBe(40);
+  });
+
+  it('Heavy armor withholds Fast Movement and Roving: a heavy type, stored stats with no type and DEX cap 0, or armor the app can\'t identify (srd:rule:armor: "Every type of armor falls into a category: Light, Medium, or Heavy.")', () => {
+    expect(speedDetails(wearing(barbarian(5, { abilityScores: strong }), plate))).toMatchObject({
+      speed: 30,
+      raised: 30,
+      bonuses: [],
+      off: ['Fast Movement: no +10 ft in Heavy armor'],
+      classFeatures: ['Fast Movement'],
+      notes: [],
+    });
+    expect(speedDetails(wearing(ranger(6, { abilityScores: strong }), plate))).toMatchObject({ speed: 30, off: ['Roving: no +10 ft in Heavy armor'] });
+    // Stored numbers without a type: a DEX cap of 0 reads as Heavy; a stored type wins.
+    const mail = (armorType?: 'medium'): Gear => ({ name: 'Ironbark Mail', category: 'armor', armor: { kind: 'armor', baseAc: 16, dexCap: 0, ...(armorType ? { armorType } : {}) } });
+    expect(speedDetails(wearing(barbarian(5), mail()))).toMatchObject({ speed: 30, off: ['Fast Movement: no +10 ft in Heavy armor'] });
+    expect(effectiveSpeed(wearing(barbarian(5), mail('medium')))).toBe(40);
+    // Armor the app can't identify may be Heavy: withheld, by the item's name.
+    expect(speedDetails(wearing(barbarian(5), coat))).toMatchObject({ speed: 30, off: ['Fast Movement: no +10 ft (Mithral Coat: armor type unknown)'] });
+    expect(speedDetails(wearing(ranger(6), coat)).off).toEqual(['Roving: no +10 ft (Mithral Coat: armor type unknown)']);
+    // Below its Strength it also costs 10 ft ("that armor reduces the wearer's speed by 10 feet unless the wearer has a
+    // Strength score equal to or higher than the listed score"), after the bonuses: 30 − 10.
+    expect(speedDetails(wearing(barbarian(5), plate))).toMatchObject({
+      speed: 20,
+      raised: 30,
+      off: ['Fast Movement: no +10 ft in Heavy armor'],
+      notes: ['Plate Armor needs Strength 15: −10 ft'],
+    });
+  });
+
+  it('multiclass bonuses add up, each by its own class level (srd:rule:multiclassing-class-features: "When you gain a new level in a class, you get its features for that level.")', () => {
+    // Different features; the multiclass rules name special cases only for "Extra Attack, Spellcasting, and features (such
+    // as Unarmored Defense) that give you alternative ways to calculate your Armor Class".
+    const both = hero([cls('Monk', 2), cls('Barbarian', 5)]);
+    expect(speedDetails(both)).toMatchObject({
+      speed: 50,
+      raised: 50,
+      bonuses: [
+        { name: 'Unarmored Movement', feet: 10 },
+        { name: 'Fast Movement', feet: 10 },
+      ],
+      classFeatures: ['Unarmored Movement', 'Fast Movement'],
+      notes: ['Unarmored Movement: +10 ft', 'Fast Movement: +10 ft'],
+    });
+    // Medium armor stops Unarmored Movement only; Heavy armor stops both.
+    expect(speedDetails(wearing(both, { name: 'Hide Armor', category: 'armor' }))).toMatchObject({
+      speed: 40,
+      bonuses: [{ name: 'Fast Movement', feet: 10 }],
+      off: ['Unarmored Movement: no +10 ft in armor or with a Shield'],
+    });
+    expect(speedDetails(wearing({ ...both, abilityScores: strong }, plate))).toMatchObject({
+      speed: 30,
+      off: ['Unarmored Movement: no +10 ft in armor or with a Shield', 'Fast Movement: no +10 ft in Heavy armor'],
+    });
+    // Unarmored Movement comes at Monk level 2, whatever the character level.
+    expect(speedDetails(hero([cls('Fighter', 5), cls('Monk', 1)]))).toMatchObject({ speed: 30, classFeatures: [] });
+    expect(speedDetails(hero([cls('Fighter', 5), cls('Monk', 2)]))).toMatchObject({ speed: 40, bonuses: [{ name: 'Unarmored Movement', feet: 10 }] });
+    expect(effectiveSpeed(hero([cls('Barbarian', 5), cls('Ranger', 6)]))).toBe(50);
+  });
+
+  it('Speed 0 can\'t increase; a stored Speed of 0 gets no bonus; the penalties come after the bonuses (srd:condition:grappled: "Your Speed is 0 and can\'t increase."; srd:condition:exhaustion)', () => {
+    expect(speedDetails(monk(6, { conditions: [{ id: 'grappled' }] }))).toEqual({
+      speed: 0,
+      base: 30,
+      raised: 30,
+      bonuses: [],
+      off: [],
+      classFeatures: ['Unarmored Movement'],
+      other: {},
+      notes: ['Grappled: Speed 0'],
+    });
+    expect(speedDetails(monk(6, { deathSaves: { successes: 0, failures: 3, stable: false, dead: true } }))).toMatchObject({ speed: 0, raised: 30, bonuses: [], notes: ['Dead'] });
+    // Only a DM's ruling stores 0: no class feature raises it.
+    expect(speedDetails(monk(6, { speed: 0 }))).toEqual({ speed: 0, base: 0, raised: 0, bonuses: [], off: [], classFeatures: ['Unarmored Movement'], other: {}, notes: [] });
+    // "Your Speed is reduced by a number of feet equal to 5 times your Exhaustion level": off the raised Speed, 30 + 15 − 10.
+    expect(speedDetails(monk(6, { exhaustion: 2 }))).toMatchObject({ speed: 35, base: 30, raised: 45, notes: ['Unarmored Movement: +15 ft', 'Exhaustion 2: −10 ft'] });
+    expect(effectiveSpeed(monk(2, { speed: 5, exhaustion: 5 }))).toBe(0);
+    // A Speed the DM raised by hand gets the bonus on top: the app can't tell why it was raised (spec §1.4).
+    expect(speedDetails(monk(6, { speed: 45 }))).toMatchObject({ speed: 60, base: 45, raised: 60 });
+  });
+
+  it("a 2024 book's Monk and a DM's class named Monk get Unarmored Movement; an older book's Monk gets none (srd:class:monk; DESIGN: stand-in classes)", () => {
+    const ref = (format: '2024' | '2014'): ImportedRef => ({ sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:monk', kind: 'class', entryName: 'Monk', textHash: '', textCopied: false, format });
+    const book = (format: '2024' | '2014') => hero([cls('Monk', 6, { classId: 'lib:lamp:class:monk', ref: ref(format) })]);
+    expect(effectiveSpeed(book('2024'))).toBe(45);
+    // An older edition's Monk table can differ: the sheet's number stands.
+    expect(speedDetails(book('2014'))).toMatchObject({ speed: 30, raised: 30, classFeatures: [], notes: [] });
+    expect(effectiveSpeed(hero([cls('Monk', 6, { classId: 'monk' })]))).toBe(45);
+  });
+
+  it('Roving gives a Climb Speed and a Swim Speed equal to Speed, raised in place in the stored order (srd:rule:ranger-roving: "You also have a Climb Speed and a Swim Speed equal to your Speed.")', () => {
+    expect(Object.entries(speedDetails(ranger(6)).other)).toEqual([
+      ['climb', 40],
+      ['swim', 40],
+    ]);
+    // {swim, fly}: swim raised where it stands, climb appended.
+    expect(Object.entries(speedDetails(ranger(6, { otherSpeeds: { swim: 30, fly: 60 } })).other)).toEqual([
+      ['swim', 40],
+      ['fly', 60],
+      ['climb', 40],
+    ]);
+    // A faster one of its own stays.
+    expect(speedDetails(ranger(6, { otherSpeeds: { climb: 60 } })).other).toEqual({ climb: 60, swim: 40 });
+    // Equal to the Speed after penalties: Exhaustion 2 gives 30, Grappled 0.
+    expect(speedDetails(ranger(6, { exhaustion: 2 }))).toMatchObject({ speed: 30, other: { climb: 30, swim: 30 } });
+    expect(speedDetails(ranger(6, { conditions: [{ id: 'grappled' }] })).other).toEqual({ climb: 0, swim: 0 });
+    // The sentence has no armor condition: in Heavy armor (no +10 ft) the speeds still equal the Speed.
+    expect(speedDetails(wearing(ranger(6, { abilityScores: strong }), plate))).toMatchObject({ speed: 30, other: { climb: 30, swim: 30 } });
+    // Anyone else's other speeds as stored, in the stored order.
+    expect(speedDetails(ranger(5)).other).toEqual({});
+    expect(Object.entries(speedDetails(mira({ otherSpeeds: { swim: 30, fly: 60 } })).other)).toEqual([
+      ['swim', 30],
+      ['fly', 60],
+    ]);
+    expect(Object.entries(speedDetails(monk(6, { otherSpeeds: { fly: 60, swim: 30 } })).other)).toEqual([
+      ['fly', 60],
+      ['swim', 30],
+    ]);
+  });
+
+  describe('speedChangeText (spec §1.1: the level-up texts)', () => {
+    it('names the class bonuses that changed the walking Speed (srd:class:monk; srd:rule:barbarian-fast-movement)', () => {
+      expect(speedChangeText(monk(1), monk(2))).toBe('Speed 30 ft → 40 ft (Unarmored Movement)');
+      expect(speedChangeText(monk(5), monk(6))).toBe('Speed 40 ft → 45 ft (Unarmored Movement)');
+      expect(speedChangeText(monk(17), monk(18))).toBe('Speed 55 ft → 60 ft (Unarmored Movement)');
+      expect(speedChangeText(barbarian(4), barbarian(5))).toBe('Speed 30 ft → 40 ft (Fast Movement)');
+      expect(speedChangeText(hero([cls('Monk', 13), cls('Barbarian', 4)]), hero([cls('Monk', 14), cls('Barbarian', 5)]))).toBe(
+        'Speed 50 ft → 65 ft (Unarmored Movement, Fast Movement)',
+      );
+      // A change no class bonus made is the number alone.
+      expect(speedChangeText(mira(), mira({ exhaustion: 1 }))).toBe('Speed 30 ft → 25 ft');
+    });
+
+    it("adds Roving's Climb and Swim Speeds when they appear or change, alone when Heavy armor keeps the walking Speed (srd:rule:ranger-roving)", () => {
+      expect(speedChangeText(ranger(5), ranger(6))).toBe('Speed 30 ft → 40 ft (Roving), with a Climb Speed and a Swim Speed of 40 ft');
+      const armored = (level: number) => wearing(ranger(level, { abilityScores: strong }), plate);
+      expect(speedChangeText(armored(5), armored(6))).toBe('A Climb Speed and a Swim Speed of 30 ft (Roving)');
+      // A faster Swim Speed of its own stays: only the Climb Speed is new.
+      const swimmer = (level: number) => ranger(level, { otherSpeeds: { swim: 60 } });
+      expect(speedChangeText(swimmer(5), swimmer(6))).toBe('Speed 30 ft → 40 ft (Roving), with a Climb Speed of 40 ft');
+      // Roving's speeds follow a Speed that grows.
+      expect(speedChangeText(hero([cls('Ranger', 6), cls('Monk', 1)]), hero([cls('Ranger', 6), cls('Monk', 2)]))).toBe(
+        'Speed 40 ft → 50 ft (Unarmored Movement), with a Climb Speed and a Swim Speed of 50 ft',
+      );
+    });
+
+    it('is empty when neither the walking Speed nor the other speeds changed', () => {
+      expect(speedChangeText(monk(2), monk(3))).toBe('');
+      expect(speedChangeText(mira(), mira({ classes: [{ ...mira().classes[0], level: 4 }] }))).toBe('');
+      expect(speedChangeText(wearing(monk(1), leather), wearing(monk(2), leather))).toBe('');
+      const grappled = { conditions: [{ id: 'grappled' }] };
+      expect(speedChangeText(monk(1, grappled), monk(2, grappled))).toBe('');
+    });
   });
 });
 

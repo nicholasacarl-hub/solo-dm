@@ -474,7 +474,11 @@ export interface Character {
   acFormula?: string;
   /** Spells on the hero whose AC the app counts (absent when none). armorClass includes those the formula uses. */
   acSpells?: AcSpellName[];
-  /** Walking speed in feet (before exhaustion penalties). */
+  /**
+   * The hero's own walking speed in feet (species or lineage, a transformation's change, a DM's ruling): before the
+   * class features' bonuses (Unarmored Movement, Fast Movement, Roving), which the app works out when it reads the
+   * Speed (speedDetails), and before penalties (Exhaustion, heavy armor below its Strength, the Speed-0 conditions).
+   */
   speed: number;
   otherSpeeds?: Partial<Record<OtherSpeed, number>>;
   size: CreatureSize;

@@ -13,9 +13,21 @@
  * prepared (the book still contains them), and extras written "Wizard (copied)": spells copied into it or added free,
  * on top of the two each level adds, so they count only as prepared spells.
  */
-import { addSpell, classSpellLevelCap, spellReviewReminder } from '@/engine';
-import { nameKey } from '@/lib/id';
-import type { Character, ClassLevel, ClassOption, CompendiumEntry, KnownSpell, SpellPicksOwed, SubclassOption } from '@/types';
+import { addSpell, characterLevel, classSpellLevelCap, spellReviewReminder } from '@/engine';
+import { nameKey, newId } from '@/lib/id';
+import {
+  ABILITY_NAMES,
+  type BuilderData,
+  type Character,
+  type ClassLevel,
+  type ClassOption,
+  type CompendiumEntry,
+  type Feature,
+  type KnownSpell,
+  type SpeciesTrait,
+  type SpellPicksOwed,
+  type SubclassOption,
+} from '@/types';
 import {
   alwaysPreparedSpellNames,
   baseFeatureName,
@@ -28,8 +40,10 @@ import {
   spellbookSize,
   wordNumber,
 } from './classFeatures';
+import { chosenLineage } from './leveling';
 import { knownSpellFromEntry } from './levelUpChoices';
-import { classOptionFor } from './resolve';
+import { classOptionFor, speciesOptionFor } from './resolve';
+import { lineageSpellLabel, lineageSpellTags, speciesChoices, withoutEmphasis, type LineageOption } from './species';
 
 // ---------------------------------------------------------------------------
 // The class's rules, from its own level-1 Spellcasting / Pact Magic text
@@ -452,6 +466,20 @@ export interface TurnedSpell {
   inBook?: boolean;
   /** It was prepared, at a level that class has slots for, so it counted against that class's prepared spells: its place there is free now. */
   counted?: boolean;
+  /** The grant's notes, which it takes as it had none of its own (a lineage spell's ability and free casting). */
+  notes?: string;
+}
+
+/**
+ * A spell kept always prepared by something beyond the class and its subclass (a species' lineage spell,
+ * lineageSpellGrants), which joins the class's own grants in one count.
+ */
+export interface AlwaysPreparedGrant {
+  name: string;
+  /** What grants it, the spell's source on the sheet ("Drow"). */
+  source: string;
+  /** The notes an added spell takes, and a turned one without notes of its own. */
+  notes?: string;
 }
 
 export interface AlwaysPreparedGain {
@@ -491,6 +519,9 @@ function spellTableRows(text: string): { level: number; spells: string[] }[] {
  * then is a place free); one in a
  * spellbook (a class of `classes` with one) keeps its source, so the book still holds it (srd:rule:wizard-spellcasting:
  * "The book contains the level 1+ spells you know"). A name the rules lack comes with the feature or subclass granting it.
+ * The `extra` grants (a lineage's spells) join the class's own after them, in the same count; only a spell of level 1+
+ * is one of them, so a cantrip the rules find under such a name is left out. An added spell takes a grant's notes, and a
+ * turned one takes them only when it has none of its own.
  */
 export function alwaysPreparedGained(
   c: Character,
@@ -499,8 +530,9 @@ export function alwaysPreparedGained(
   classLevel: number,
   findSpell: (name: string) => CompendiumEntry | undefined,
   classes: readonly ClassOption[] = [],
+  extra: readonly AlwaysPreparedGrant[] = [],
 ): AlwaysPreparedGain {
-  const grants: { name: string; source: string }[] = [];
+  const grants: (AlwaysPreparedGrant & { extra?: true })[] = [];
   for (const def of cls?.features ?? []) {
     if (def.level > classLevel) continue;
     for (const name of alwaysPreparedSpellNames(def.description)) grants.push({ name, source: def.name });
@@ -515,6 +547,7 @@ export function alwaysPreparedGained(
       for (const name of alwaysPreparedSpellNames(def.description)) grants.push({ name, source: sub.name });
     }
   }
+  for (const grant of extra) grants.push({ ...grant, extra: true });
   const held = new Map((c.spellcasting?.spells ?? []).map((s) => [nameKey(s.name), s]));
   // Whether a class of the hero's keeps a spellbook, from its data on this device.
   const hasBook = (cl: ClassLevel) => {
@@ -555,11 +588,13 @@ export function alwaysPreparedGained(
         // one above it counted nowhere (srd:rule:multiclassing-class-features-spellcasting, "as if you were a
         // single-classed member of that class").
         ...(owner && have.prepared && have.level <= capOf(owner.cl) ? { counted: true } : {}),
+        ...(grant.notes && !have.notes?.trim() ? { notes: grant.notes } : {}),
       });
       continue;
     }
     const entry = findSpell(grant.name);
-    const spell = entry?.kind === 'spell' ? knownSpellFromEntry(entry, { alwaysPrepared: true, prepared: true, source: grant.source }) : null;
+    const spell = entry?.kind === 'spell' ? knownSpellFromEntry(entry, { alwaysPrepared: true, prepared: true, source: grant.source, ...(grant.notes ? { notes: grant.notes } : {}) }) : null;
+    if (spell && grant.extra && spell.level < 1) continue;
     if (spell) out.add.push(spell);
     else out.missing.push({ name: grant.name.trim(), source: grant.source });
   }
@@ -568,7 +603,8 @@ export function alwaysPreparedGained(
 
 /**
  * Put the gain on the sheet: the new spells (engine addSpell keeps the index ids) and the turned ones, with the feature
- * or subclass as their source; a spellbook's spell keeps its own, so the book still holds it.
+ * or subclass as their source; a spellbook's spell keeps its own, so the book still holds it. A turned spell without
+ * notes of its own takes the grant's.
  */
 export function applyAlwaysPrepared(c: Character, gain: AlwaysPreparedGain): Character {
   let next = c;
@@ -579,7 +615,8 @@ export function applyAlwaysPrepared(c: Character, gain: AlwaysPreparedGain): Cha
   const spells = sc.spells.map((s) => {
     const f = turned.get(s.id);
     if (!f) return s;
-    return f.inBook ? { ...s, alwaysPrepared: true, prepared: true } : { ...s, alwaysPrepared: true, prepared: true, source: f.source };
+    const notes = f.notes && !s.notes?.trim() ? { notes: f.notes } : {};
+    return f.inBook ? { ...s, alwaysPrepared: true, prepared: true, ...notes } : { ...s, alwaysPrepared: true, prepared: true, source: f.source, ...notes };
   });
   return { ...next, spellcasting: { ...sc, spells } };
 }
@@ -608,7 +645,9 @@ export interface LevelSpellsEdit {
  * prepared doesn't count against the number of spells on that list", so its place is free again), then the mark that its
  * choices are open, counted after them. Another of the hero's classes whose pick was turned owes that place now too: its
  * choices are marked open (without swaps: it gained no level), so the sheet offers it and the DM hears of it. `cl` is the
- * levelled entry as the level-up left it; `classes` are the merged builder data's.
+ * levelled entry as the level-up left it; `classes` are the merged builder data's. The `extra` grants (a lineage's
+ * spells at the character level, lineageSpellGrants) join the class's own in the same count, so the places they free
+ * are counted too.
  */
 export function levelSpellsEdit(
   c: Character,
@@ -617,8 +656,9 @@ export function levelSpellsEdit(
   sub: SubclassOption | undefined,
   findSpell: (name: string) => CompendiumEntry | undefined,
   classes: readonly ClassOption[],
+  extra: readonly AlwaysPreparedGrant[] = [],
 ): LevelSpellsEdit {
-  const gain = alwaysPreparedGained(c, cls, sub, cl.level, findSpell, classes);
+  const gain = alwaysPreparedGained(c, cls, sub, cl.level, findSpell, classes, extra);
   let next = spellPicksAfterLevel(applyAlwaysPrepared(c, gain), cl, cls);
   const others: LevelSpellsEdit['others'] = [];
   const owners = new Set(gain.flip.flatMap((f) => (f.owner ? [nameKey(f.owner)] : [])));
@@ -636,6 +676,177 @@ export function levelSpellsEdit(
   const owed = next.spellcasting ? owedSpells(next, cl, cls) : null;
   const entry = next.spellcasting?.spellPicks?.find((p) => p.classId === cl.classId) ?? null;
   return { character: next, gain, owed, entry, others };
+}
+
+// ---------------------------------------------------------------------------
+// A lineage's spells at character levels 3 and 5, and their free castings
+// ---------------------------------------------------------------------------
+
+type SpeciesData = Pick<BuilderData, 'species'> | null | undefined;
+
+interface HeroLineage {
+  lineage: LineageOption;
+  /** The trait that offers the lineages ("Elven Lineage"). */
+  trait: SpeciesTrait;
+  /** The sheet's species features of that trait ("Elven Lineage (Drow)"). */
+  traitFeatures: Feature[];
+}
+
+/** The hero's lineage, from its lineage trait's feature ("Elven Lineage (Drow)", chosenLineage) and the species data. */
+function heroLineage(c: Character, data: SpeciesData): HeroLineage | null {
+  const species = data ? speciesOptionFor(c, data.species) : undefined;
+  const lineage = chosenLineage(c, species);
+  const trait = lineage ? speciesChoices(species).lineageTrait : null;
+  if (!lineage || !trait) return null;
+  const key = nameKey(trait.name);
+  return { lineage, trait, traitFeatures: c.features.filter((f) => f.source === 'species' && nameKey(baseFeatureName(f.name)) === key) };
+}
+
+const ABILITY_NOTE = /\bSpellcasting ability: (Strength|Dexterity|Constitution|Intelligence|Wisdom|Charisma)\b/i;
+const FREE_CASTING_NOTE = 'Once per Long Rest without a spell slot';
+
+/**
+ * The lineage's spellcasting ability, chosen with it (SRD 5.2.1 srd:species:elf: "Intelligence, Wisdom, or Charisma is
+ * your spellcasting ability for the spells you cast with this trait"), as the builder notes it on the lineage's own
+ * cantrip: a sheet spell whose source is the lineage's name, noted "Spellcasting ability: Wisdom" (a cantrip first).
+ * Null when the sheet notes none.
+ */
+function lineageAbility(c: Character, lineage: string): string | null {
+  const key = nameKey(lineage);
+  const noted = (c.spellcasting?.spells ?? []).filter((s) => nameKey(s.source ?? '') === key && ABILITY_NOTE.test(s.notes ?? ''));
+  const word = ABILITY_NOTE.exec((noted.find((s) => s.level === 0) ?? noted[0])?.notes ?? '')?.[1];
+  return word ? (Object.values(ABILITY_NAMES).find((n) => nameKey(n) === nameKey(word)) ?? null) : null;
+}
+
+/**
+ * The spells the hero's lineage gives at its character level, as `extra` grants for levelSpellsEdit and
+ * alwaysPreparedGained (SRD 5.2.1 srd:species:elf, Elven Lineage, and srd:species:tiefling, Fiendish Legacy: "When you
+ * reach character levels 3 and 5, you learn a higher-level spell, as shown on the table. You always have that spell
+ * prepared."): each spell whose table column ("Level 3", "Level 5"; the spell's own level plays no part) is at or below
+ * `level`, the hero's character level (all its classes together) unless given, so a hero past 3 or 5 catches up at any
+ * level-up; the dialog's preview of the hero before the level-up passes the next level. The lineage is read from the
+ * lineage trait's feature (chosenLineage) and the species data: a hero without that feature (hand-made, an older sample)
+ * gets none, and so does a lineage written in paragraphs. With `findSpell` (the rules index) a cell is granted under the
+ * index entry's name, and one the index finds as a cantrip is left out (the book's table isn't laid out Level 1/3/5); a
+ * cell it can't find is granted under lineageSpellLabel's name, so the gain lists it among the spells the rules lack
+ * without quoting a book's sentence (an unreadable cell is named by its column, "the Level 5 spell the app couldn't read
+ * from Ashwing's table", so two such cells stay two). Without `findSpell` every cell goes as that name, and the gain's own
+ * lookup decides.
+ * Each grant's source is the lineage's name ("Drow"), and its notes "Spellcasting ability: Wisdom. Once per Long Rest
+ * without a spell slot" (the ability as the lineage's own cantrip notes it; without one, the second sentence alone).
+ */
+export function lineageSpellGrants(
+  c: Character,
+  data: SpeciesData,
+  findSpell?: (name: string) => CompendiumEntry | undefined,
+  level: number = characterLevel(c),
+): AlwaysPreparedGrant[] {
+  const found = heroLineage(c, data);
+  if (!found) return [];
+  const { lineage } = found;
+  const tags = lineageSpellTags(lineage.description).filter((t) => t.level <= level);
+  if (!tags.length) return [];
+  const ability = lineageAbility(c, lineage.name);
+  const notes = `${ability ? `Spellcasting ability: ${ability}. ` : ''}${FREE_CASTING_NOTE}`;
+  const grants: AlwaysPreparedGrant[] = [];
+  for (const tag of tags) {
+    const cell = withoutEmphasis(tag.cell);
+    const entry = cell ? findSpell?.(cell) : undefined;
+    const spell = entry?.kind === 'spell' ? knownSpellFromEntry(entry) : null;
+    if (spell && spell.level < 1) continue;
+    const name = spell?.name ?? lineageSpellLabel(tag.cell, lineage.name, tag.level);
+    if (!grants.some((g) => nameKey(g.name) === nameKey(name))) grants.push({ name, source: lineage.name, notes });
+  }
+  return grants;
+}
+
+/** What withLineageCastings did. */
+export interface LineageCastings {
+  character: Character;
+  /** The lineage's name, the spells' source and the counters' source name ("Drow"); '' without a lineage. */
+  lineage: string;
+  /** The spells whose free-casting counters it added, as the sheet names them, in the table's order. */
+  added: string[];
+  /** The lineage trait's feature whose uses the DM ruled (FeatureUses.ruled), which count the free castings: none were added. */
+  withheldBy: Feature | null;
+}
+
+/** "Faerie Fire (free casting)": never "<Trait> (…)", so chosenLineage and the uses refresh pass the counter by. */
+export const freeCastingName = (spell: string): string => `${spell} (free casting)`;
+
+/**
+ * The free castings of the lineage's spells, put on the sheet after the gain (SRD 5.2.1 srd:species:elf: "You can cast it
+ * once without a spell slot, and you regain the ability to cast it in that way when you finish a Long Rest. You can also
+ * cast the spell using any spell slots you have of the appropriate level."): one counter feature for each spell of
+ * `grants` (the ones the gain was given) that the sheet then holds always prepared at level 1+, added, turned or kept
+ * prepared already by another feature (a Magic Initiate copy keeps that feat's own free casting; this one is the
+ * lineage's). It is "<Spell> (free casting)", a species feature with the lineage as its source name and one use, which a
+ * Long Rest resets with every feature and features_use spends. A spell gets none when a feature with uses bears its name
+ * once a trailing parenthesis is off (baseFeatureName: the DM's "Faerie Fire (Drow, free casting)", an earlier
+ * level-up's counter) or a feature has the counter's own name; and none are added when the DM ruled the lineage trait's
+ * feature's uses (FeatureUses.ruled: the ruling counts them there, `withheldBy`). Uses the app read off a book trait's own
+ * words are no ruling: the SRD gives each spell its own casting ("You can cast it once without a spell slot"), so the
+ * counters are added beside them. The same character comes back when nothing is added.
+ */
+export function withLineageCastings(c: Character, data: SpeciesData, grants: readonly AlwaysPreparedGrant[]): LineageCastings {
+  const found = grants.length ? heroLineage(c, data) : null;
+  if (!found) return { character: c, lineage: '', added: [], withheldBy: null };
+  const { lineage, trait, traitFeatures } = found;
+  const none: LineageCastings = { character: c, lineage: lineage.name, added: [], withheldBy: null };
+  const counted = (spell: string) =>
+    c.features.some((f) => (f.uses && nameKey(baseFeatureName(f.name)) === nameKey(spell)) || nameKey(f.name) === nameKey(freeCastingName(spell)));
+  const due: KnownSpell[] = [];
+  for (const grant of grants) {
+    const held = c.spellcasting?.spells.find((s) => nameKey(s.name) === nameKey(grant.name));
+    if (held?.alwaysPrepared && held.level >= 1 && !counted(held.name) && !due.includes(held)) due.push(held);
+  }
+  if (!due.length) return none;
+  const ruled = traitFeatures.find((f) => f.uses?.ruled);
+  if (ruled) return { ...none, withheldBy: ruled };
+  const ability = lineageAbility(c, lineage.name);
+  const counters = due.map(
+    (s): Feature => ({
+      id: newId(),
+      name: freeCastingName(s.name),
+      source: 'species',
+      sourceName: lineage.name,
+      description: `${s.name} once without a spell slot${ability ? `, using ${ability}` : ''}; regained on a Long Rest (${trait.name}: ${lineage.name}). A spell slot of its level or higher also casts it.`,
+      uses: { max: 1, used: 0, recharge: 'long' },
+    }),
+  );
+  return { ...none, character: { ...c, features: [...c.features, ...counters] }, added: due.map((s) => s.name) };
+}
+
+/**
+ * Why no counter was added, for the DM (no final period: the level_up line adds one, the notice joins it as a part): the
+ * trait's feature the DM ruled (withLineageCastings' `withheldBy`), "Elven Lineage (Drow) already counts its free
+ * castings (your ruling: 2 uses): no free-casting counters added".
+ */
+export function freeCastingRuling(feature: Pick<Feature, 'name' | 'uses'>): string {
+  const max = feature.uses?.max ?? 0;
+  return `${feature.name} already counts its free castings (your ruling: ${max} use${max === 1 ? '' : 's'}): no free-casting counters added`;
+}
+
+/**
+ * The dialog's DM notice parts for withLineageCastings' result: "free casting once per Long Rest: Faerie Fire (Drow)"
+ * ("Faerie Fire, Darkness (Drow)" for two), or why none were added; none when nothing changed.
+ */
+export function freeCastingNoticeParts(r: LineageCastings): string[] {
+  if (r.withheldBy) return [freeCastingRuling(r.withheldBy)];
+  return r.added.length ? [`free casting once per Long Rest: ${r.added.join(', ')} (${r.lineage})`] : [];
+}
+
+/**
+ * The DM's level_up lines for the same: "Free casting now, once per Long Rest without a spell slot: Faerie Fire (Drow);
+ * spend it with update_character features_use "Faerie Fire (free casting)"." (two: "Free castings now, each …"), or why
+ * none were added; none when nothing changed.
+ */
+export function freeCastingLines(r: LineageCastings): string[] {
+  if (r.withheldBy) return [`${freeCastingRuling(r.withheldBy)}.`];
+  const [first, ...rest] = r.added;
+  if (!first) return [];
+  if (!rest.length) return [`Free casting now, once per Long Rest without a spell slot: ${first} (${r.lineage}); spend it with update_character features_use "${freeCastingName(first)}".`];
+  return [`Free castings now, each once per Long Rest without a spell slot: ${r.added.join(', ')} (${r.lineage}); spend one with update_character features_use and "${freeCastingName('<Spell>')}".`];
 }
 
 // ---------------------------------------------------------------------------

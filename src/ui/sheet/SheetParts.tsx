@@ -82,6 +82,7 @@ export function StatTile({
   icon,
   className,
   title,
+  detail,
   border = 'border-border',
 }: {
   label: string;
@@ -90,6 +91,8 @@ export function StatTile({
   icon?: ReactNode;
   className?: string;
   title?: string;
+  /** What explains the number, for a screen reader (a title reaches neither touch nor keyboard): read after it, unseen. */
+  detail?: string;
   /**
    * The border's colour class, in place of the plain one: a tile whose number something changed ("border-danger/50",
    * "border-arcane/50"). In place, not added: two colour classes on one element leave the winner to the stylesheet's order.
@@ -104,6 +107,7 @@ export function StatTile({
       </span>
       <span className="text-lg leading-tight font-semibold tabular-nums">{value}</span>
       {sub && <span className="truncate text-[11px] text-faint">{sub}</span>}
+      {detail && <span className="sr-only">{detail}</span>}
     </div>
   );
 }

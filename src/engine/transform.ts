@@ -29,7 +29,7 @@ import type {
 import { nameKey, newId as randomId } from '@/lib/id';
 import { ABILITY_SCORE_LIMIT, changeAbilityScore, removeCondition, type EngineResult } from './character';
 import { conditionKey, conditionName, matchStandardCondition } from './conditions';
-import { syncArmorClass } from './rules';
+import { speedDetails, syncArmorClass } from './rules';
 import { gameEvent, lookupProblem, matchByName, toInt, touch, warning } from './util';
 
 // ---------------------------------------------------------------------------
@@ -341,7 +341,10 @@ function removeDefenses(w: Working): Working {
 
 interface NumberTrait {
   label: string;
+  /** The value as stored, which the grant compares and records. */
   get: (c: Character) => number;
+  /** The value the sheet shows, which the events name, when it can differ from the stored one (other speeds). */
+  shown?: (c: Character) => number;
   set: (c: Character, value: number) => Character;
   grant: (g: TransformationGrants) => GrantedNumber | undefined;
   withGrant: (g: TransformationGrants, value: GrantedNumber | undefined) => Partial<TransformationGrants>;
@@ -355,10 +358,16 @@ const DARKVISION: NumberTrait = {
   withGrant: (_g, value) => ({ darkvision: value }),
 };
 
+/**
+ * A fly, swim, climb or burrow speed: stored in Character.otherSpeeds, shown as the sheet shows it (speedDetails' other:
+ * a Ranger 6+ has "a Climb Speed and a Swim Speed equal to your Speed", srd:rule:ranger-roving), so a grant the shown
+ * speed already beats "stays" at it.
+ */
 function otherSpeedTrait(kind: OtherSpeed): NumberTrait {
   return {
     label: `${kind.charAt(0).toUpperCase()}${kind.slice(1)} Speed`,
     get: (c) => Math.max(0, toInt(c.otherSpeeds?.[kind])),
+    shown: (c) => Math.max(0, toInt(speedDetails(c).other[kind])),
     set: (c, value) => {
       const speeds = { ...c.otherSpeeds };
       if (value > 0) speeds[kind] = value;
@@ -379,6 +388,14 @@ const feet = (n: number) => (n > 0 ? `${n} ft` : 'none');
 
 const activeOthers = (w: Working) => w.others.filter((o) => o.status === 'active');
 
+/** What the sheet shows for the trait (the stored value, unless the trait shows another). */
+const shownValue = (trait: NumberTrait, c: Character) => (trait.shown ?? trait.get)(c);
+
+/**
+ * Grant a value: the stored one becomes it when higher, recorded with the hero's own. The event names what the sheet
+ * shows before and after: "Swim Speed 30 ft → 40 ft", or "Swim Speed stays 40 ft (Tidemark gives 35 ft)" when that
+ * doesn't move (a longer one kept, or Roving's Swim Speed equal to the Speed).
+ */
 function grantNumber(w: Working, trait: NumberTrait, amount: number): Working {
   const value = Math.max(0, toInt(amount));
   if (value <= 0) return w;
@@ -389,8 +406,11 @@ function grantNumber(w: Working, trait: NumberTrait, amount: number): Working {
   const natural = mine?.natural ?? recorded?.natural ?? current;
   const granted: GrantedNumber = { value: Math.max(mine?.value ?? 0, value), natural };
   const next = withGrants(w, trait.withGrant(transformationGrants(w.record), granted));
-  if (value <= current) return note(next, gameEvent('transformation', `${trait.label} stays ${feet(current)} (${w.record.name} gives ${feet(value)})`));
-  return { ...next, character: trait.set(next.character, value), events: [...next.events, gameEvent('transformation', `${trait.label} ${feet(current)} → ${feet(value)}`)] };
+  const character = value > current ? trait.set(next.character, value) : next.character;
+  const before = shownValue(trait, w.character);
+  const after = shownValue(trait, character);
+  const message = after === before ? `${trait.label} stays ${feet(before)} (${w.record.name} gives ${feet(value)})` : `${trait.label} ${feet(before)} → ${feet(after)}`;
+  return { ...next, character, events: [...next.events, gameEvent('transformation', message)] };
 }
 
 function revertNumber(w: Working, trait: NumberTrait): Working {
@@ -404,7 +424,12 @@ function revertNumber(w: Working, trait: NumberTrait): Working {
   }
   const restored = Math.max(mine.natural, ...others);
   if (restored === current) return w;
-  return { ...w, character: trait.set(w.character, restored), events: [...w.events, gameEvent('transformation', `${trait.label} ${feet(current)} → ${feet(restored)}`)] };
+  // The stored value goes back; the event names what the sheet shows, and nothing when that doesn't move.
+  const character = trait.set(w.character, restored);
+  const before = shownValue(trait, w.character);
+  const after = shownValue(trait, character);
+  if (after === before) return { ...w, character };
+  return { ...w, character, events: [...w.events, gameEvent('transformation', `${trait.label} ${feet(before)} → ${feet(after)}`)] };
 }
 
 // -- walking speed, size, ability scores ---------------------------------------

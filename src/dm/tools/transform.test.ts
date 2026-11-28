@@ -4,7 +4,7 @@ vi.mock('@/engine', () => import('../testing/fakeEngine'));
 vi.mock('@/data', () => import('../testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('../testing/fakeGameStoreModule'));
 
-import { sampleMappedCombat } from '@/test/fixtures';
+import { sampleCharacter, sampleMappedCombat } from '@/test/fixtures';
 import type { LogEntry, ToolLogEntry, TransformationsMode } from '@/types';
 import { deps, resetDmDeps } from '../deps';
 import { setupHarness, type Harness } from '../testing/harness';
@@ -194,6 +194,28 @@ describe('transform_character: advance and end', () => {
     expect(unknown.content).toContain('no active transformation named "Lycanthropy" (active: Vampirism)');
     expect((await h.run({ action: 'advance', name: 'Vampirism', reason: 'x', player_chose_it: true })).content).toContain('advance needs the new stage');
     expect((await h.run({ ...ADVANCE, origin: 'imposed', player_chose_it: true })).content).toContain('The origin is set when a transformation begins.');
+  });
+});
+
+describe("transform_character: a Ranger's Roving speeds (srd:rule:ranger-roving)", () => {
+  // srd:rule:ranger-roving: "You also have a Climb Speed and a Swim Speed equal to your Speed." A Ranger 6 swims at its
+  // Speed (40 ft here) whatever is stored, so a smaller swim the transformation gives stays at it, in the DM's reply and
+  // the player's log alike, and its end says nothing about the swim.
+  it("names the Swim Speed the sheet shows, begun and ended, and keeps the stored grant", async () => {
+    const ranger = sampleCharacter({ classes: [{ classId: 'srd:class:ranger', name: 'Ranger', level: 6, hitDie: 10, casterType: 'half', spellcastingAbility: 'wis' }], inventory: [], otherSpeeds: { swim: 30 } });
+    const h = setupHarness({ withSession: true, character: ranger, campaignSettings: { playerRollMode: 'auto' } });
+    const ctx: ToolContext = { deps: deps(), signal: new AbortController().signal, status: vi.fn() };
+    const begin = { action: 'begin', name: 'Tidemark', summary: 'Salt in the blood.', origin: 'accepted', player_chose_it: true, other_speeds: { swim: 35 }, reason: 'Invented: a sea blessing' };
+    const out = await runTool('transform_character', begin, ctx);
+    expect(out.isError).toBeUndefined();
+    expect(out.content).toContain('\n- Swim Speed stays 40 ft (Tidemark gives 35 ft)\n');
+    expect(toolLines(h.s().log).at(-1)?.detail).toContain('**Changes:**\n- Swim Speed stays 40 ft (Tidemark gives 35 ft)');
+    expect(h.s().character?.otherSpeeds).toEqual({ swim: 35 });
+    const ended = await runTool('transform_character', { action: 'end', name: 'Tidemark', reason: 'Invented: it fades' }, ctx);
+    expect(ended.isError).toBeUndefined();
+    expect(ended.content).not.toContain('Swim Speed');
+    expect(toolLines(h.s().log).at(-1)?.detail).not.toContain('Swim Speed');
+    expect(h.s().character?.otherSpeeds).toEqual({ swim: 30 });
   });
 });
 
