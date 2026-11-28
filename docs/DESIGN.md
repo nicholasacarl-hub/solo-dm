@@ -537,32 +537,33 @@ that reads its counts from a 2024 book's class table (named with the base alone,
 higher count from another entry becoming the DM's ruling on it (its own older count is no ruling: the next read gives
 the table's); and any other kept count above the class table's at the class level is the DM's ruling, so both paths keep
 it when the entry has uses (one without them, the DM's "Indomitable (two uses)" recorded without `uses_max` at Fighter
-8, keeps nothing on a `level_up` that doesn't list the row with its `uses_max`, which names the table's row to add,
-below, while the level-up dialog's row, or a `new_features` row with its `uses_max`, brings uses and the merge makes
-that count the DM's ruling). An older sheet's duplicates merge at its next level-up ("Indomitable (one use) and
-Indomitable (two uses) merged into Indomitable (two uses): 2 uses, 1 left."), a lone grow reads "Feature uses now:
-Indomitable (two uses) 1 → 2.", and a folded feature is never listed as new or as grown; nor is a new feature the merge
-renames (the class's "Action Surge (one use)" at Fighter 2 kept under the count of the DM's "Action Surge (two uses)"),
-which is named first among those merged ("Action Surge (one use) and Action Surge (two uses) merged into Action Surge
-(two uses): 2 uses, 2 left."). The DM's `level_up` without `new_features` joins the SRD level's counted names to a
-family the sheet holds, the DM's entries alone included, so the entry grows whether the DM lists it or not; the reminder
-names a row only when the sheet holds no entry of its family or class feature of its name that has uses (a ruled entry
-or the DM's higher count holds it; a boon's or an item's entry of its name doesn't, so beside a boon "Indomitable (one
-use)" `level_up` to Fighter 9 names that row to add, and the class's entry the DM records for it joins beside the boon,
-as the dialog's does; nor does an entry of its family or class feature of its name without uses: one the level-up leaves
-under the row's very name is on the sheet, so the row isn't named to add but gets a line of its own with the row's count
-(one `level_up` lists in `new_features` under that name without `uses_max`; the DM's or the class's own without uses
-from an earlier level, which a later row renames to its name with no uses to give it unless it carries a higher count),
-"Fighter 2: Action Surge (one use) is on the sheet without its 1 use." when `level_up` to Fighter 2 lists that row in
-`new_features` without `uses_max`, and "Fighter 13: Indomitable (two uses) is on the sheet without its 2 uses." after an
-"Indomitable (one use)" so recorded at 9, and the DM's `features_add` of the row's exact name gives that entry its uses
-only with `uses_max`, the row's count, no ruling (without it, only the text changes); one of its family under another
-name (the bare "Action Surge" or a count in digits a `level_up` lists in `new_features`, or the DM's or the class's own
-under a higher count, which the fold keeps: the DM's "Indomitable (two uses)" recorded without `uses_max` at Fighter 8)
-leaves the row named to add, as the sheet holds no class feature of the row's name, and the class's `features_add` of
-the row's name goes to that entry, which, given the row's count as `uses_max`, takes the row's name and count, no ruling
-(without `uses_max`, one counting fewer by its name, as the bare one does, takes them too, and any other keeps its name
-and changes only its text)). A lookup by an older counted name finds the family's entry, and `features_add` of a counted
+8, keeps nothing on a `level_up` whose `new_features` gives its family no `uses_max`, which names the table's row to
+add, below, while the level-up dialog's row, or an entry of its family a `level_up` lists in `new_features` with a
+`uses_max` (the row, the bare "Indomitable", a count in digits), brings uses and the merge makes that count the DM's
+ruling). An older sheet's duplicates merge at its next level-up ("Indomitable (one use) and Indomitable (two uses)
+merged into Indomitable (two uses): 2 uses, 1 left."), a lone grow reads "Feature uses now: Indomitable (two uses) 1 →
+2.", and a folded feature is never listed as new or as grown; nor is a new feature the merge renames (the class's
+"Action Surge (one use)" at Fighter 2 kept under the count of the DM's "Action Surge (two uses)"), which is named first
+among those merged ("Action Surge (one use) and Action Surge (two uses) merged into Action Surge (two uses): 2 uses, 2
+left."). The DM's `level_up` without `new_features` joins the SRD level's counted names to a family the sheet holds, the
+DM's entries alone included, so the entry grows whether the DM lists it or not; the reminder names a row only when the
+sheet holds no entry of its family or class feature of its name that has uses (a ruled entry or the DM's higher count
+holds it; a boon's or an item's entry of its name doesn't, so beside a boon "Indomitable (one use)" `level_up` to
+Fighter 9 names that row to add, and the class's entry the DM records for it joins beside the boon, as the dialog's
+does; nor does an entry of its family or class feature of its name without uses: one the level-up leaves under the row's
+very name is on the sheet, so the row isn't named to add but gets a line of its own with the row's count (one `level_up`
+lists in `new_features` under that name without `uses_max`; the DM's or the class's own without uses from an earlier
+level, which a later row renames to its name with no uses to give it unless it carries a higher count), "Fighter 2:
+Action Surge (one use) is on the sheet without its 1 use." when `level_up` to Fighter 2 lists that row in `new_features`
+without `uses_max`, and "Fighter 13: Indomitable (two uses) is on the sheet without its 2 uses." after an "Indomitable
+(one use)" so recorded at 9, and the DM's `features_add` of the row's exact name gives that entry its uses only with
+`uses_max`, the row's count, no ruling (without it, only the text changes); one of its family under another name (the
+bare "Action Surge" or a count in digits a `level_up` lists in `new_features`, or the DM's or the class's own under a
+higher count, which the fold keeps: the DM's "Indomitable (two uses)" recorded without `uses_max` at Fighter 8) leaves
+the row named to add, as the sheet holds no class feature of the row's name, and the class's `features_add` of the row's
+name goes to that entry, which, given the row's count as `uses_max`, takes the row's name and count, no ruling (without
+`uses_max`, one counting fewer by its name, as the bare one does, takes them too, and any other keeps its name and
+changes only its text)). A lookup by an older counted name finds the family's entry, and `features_add` of a counted
 name the call records as a class feature (`source` "class") rewrites one entry of a counted family (the ruled one, else
 the class's counted one, its by-table one, the DM's counted one, the class's own, else the DM's bare one: an entry takes
 the name only given that name's count, as `uses_max` or filled in for one left out, and gets no ruling from it; given
