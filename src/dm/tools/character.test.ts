@@ -4827,12 +4827,36 @@ describe("level_up's new features by the class's own level, and a restated featu
       await h.run('take_rest', { kind: 'short' });
       expect(h.sheet().features.find((f) => f.name.startsWith('Action Surge'))?.uses?.used, label).toBe(0);
     }
-    // A recharge the row gives is the DM's, folded or not.
+    // A recharge the row gives is the DM's when the merge keeps the row's uses (the DM's entry folded into it) or folds
+    // nothing.
     const given = setup({ character: hero(older, { features: [granted] }) });
     await given.run('level_up', { class_name: 'Fighter', new_features: [{ ...row('Action Surge (two uses)', 2), recharge: 'long' }, { ...row('Lantern Oath', 1), recharge: 'dawn' }] });
     expect(given.sheet().features.map((f) => [f.name, f.uses?.recharge])).toEqual([
       ['Action Surge (two uses)', 'long'],
       ['Lantern Oath', 'dawn'],
     ]);
+  });
+
+  it("of two entries the sheet held with uses, the one the level_up row restates by name lends its recharge, in either order, as features_add restating it keeps that one's (srd:rule:multiclassing-class-features: \"When you gain a new level in a class, you get its features for that level.\")", async () => {
+    // A Wizard's homebrew the DM recorded twice with features_add, at dawn and then on a Short Rest: no class counts it,
+    // so the two stay side by side until a level's row of the class names it with a count.
+    const oath = {
+      one: { name: 'Lantern Oath (one use)', source: 'class', description: 'Once before dawn.', uses_max: 1, recharge: 'dawn' },
+      two: { name: 'Lantern Oath (two uses)', source: 'class', description: 'Twice before a rest.', uses_max: 2, recharge: 'short' },
+    };
+    for (const order of [['one', 'two'], ['two', 'one']] as const) {
+      const h = setup({ campaignSettings: { playerRollMode: 'auto' }, character: hero(srdEntry('Wizard', 5)) });
+      for (const key of order) expect((await h.run('update_character', { features_add: [oath[key]] })).isError, key).toBeUndefined();
+      expect(h.sheet().features.filter((f) => f.name.startsWith('Lantern Oath')), order[0]).toHaveLength(2);
+      const out = await h.run('level_up', { class_name: 'Wizard', new_features: [{ name: 'Lantern Oath (two uses)', description: 'From the class.', uses_max: 2 }] });
+      expect(out.isError, order[0]).toBeUndefined();
+      const oaths = () => h.sheet().features.filter((f) => f.name.startsWith('Lantern Oath'));
+      expect(oaths().map((f) => [f.name, f.uses]), order[0]).toEqual([['Lantern Oath (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
+      // A Short Rest gives both back.
+      await h.run('update_character', { features_use: [{ name: 'Lantern Oath (two uses)', amount: 2 }] });
+      expect(oaths()[0].uses?.used, order[0]).toBe(2);
+      await h.run('take_rest', { kind: 'short' });
+      expect(oaths()[0].uses?.used, order[0]).toBe(0);
+    }
   });
 });

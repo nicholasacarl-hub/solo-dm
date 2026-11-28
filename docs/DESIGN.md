@@ -1106,8 +1106,9 @@ gives uses without one (the default, a Long Rest, goes only to a feature that ha
 `uses_max` changes nothing unless features_add fills in a counted name's count for it; a level_up `new_features` entry
 given `uses_max` without a recharge that the level's merge folds with entries the sheet held of its class's counted
 family, Action Surge or Indomitable under any of their names or a feature of the class's named with a use count, leaves
-the merged entry the recharge of the held entry the merge keeps, or of the first held with uses when it keeps the new
-one, and otherwise takes the default) and the uses it has spent (a number of
+the merged entry the recharge of the held entry whose uses the merge keeps, or, when it keeps the new entry's (on the
+new entry, or on a held one that had none), that of the held entry of its name with uses, else of the first held with
+uses, and otherwise takes the default) and the uses it has spent (a number of
 uses it changes is the DM's ruling, `FeatureUses.ruled`, which level-ups leave as it is and name to the DM, in the
 level_up result and the dialog's notice alike, "Kept your ruling: Second Wind 4 uses" (`keptRulings`); the same number
 keeps the feature growing), but never merges a feat with a species trait or class feature (`featOrTrait`; a boon's, background's or homebrew entry updates

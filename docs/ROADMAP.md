@@ -102,7 +102,9 @@ vibe-coding session.
   other held feature (Second Wind, or another class's counted entry) is added beside it with a Long Rest, and a
   `transform_character` stage's `features_add` restating one of the transformation's own powers without `recharge` gives
   it a Long Rest, whatever it had. A `recharge` given without `uses_max` changes nothing, unless `features_add` fills in
-  a counted name's count for it. On the DM's `level_up` path a boon beside the class's entry of its name is "Granted in
+  a counted name's count for it. A `recharge` a `level_up` entry gives stands only when the level's merge keeps that
+  entry's uses; when it keeps a held entry's (the class's own Action Surge with uses), that one's recharge stays
+  (`features_add` changes it). On the DM's `level_up` path a boon beside the class's entry of its name is "Granted in
   play" as the class's is, so `get_character_sheet` lists the two alike but for their words, and a use by the name, or
   by "(Granted in play)", takes the first entry of that name on the sheet with enough uses left for the amount spent and
   names the other by its label ("(class)", "(boon)", "(item)"): the class's entry when the boon came after it, and the
