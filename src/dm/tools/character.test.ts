@@ -4487,6 +4487,70 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
       expect(surge(h.sheet())).toEqual([['Action Surge (two uses)', 'Fighter 2', { max: 2, used: 0, recharge: 'short' }]]);
     });
 
+    it("level_up to Fighter 2 listing the family's bare \"Action Surge\" among new_features without uses_max names the table's row to add, as no entry of the row's name is on the sheet; features_add of the row's name as a class feature, with uses_max 1 or without it, renames that entry and gives it the row's 1 use, no ruling, and the row at 17 grows it to 2 (srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\"; srd:rule:fighter-action-surge: \"Starting at level 17, you can use it twice before a rest\")", async () => {
+      const champion = { subclass: CHAMPION.name, subclassId: CHAMPION.id };
+      const surge = (c: Character) => c.features.filter((f) => f.name.startsWith('Action Surge')).map((f) => [f.name, f.sourceName, f.uses]);
+      const NEW = [
+        { name: 'Action Surge', description: 'One more action on your turn.' },
+        { name: 'Tactical Mind', description: 'Second Wind for a failed ability check.' },
+      ];
+      for (const usesMax of [1, undefined]) {
+        const why = usesMax ? 'with uses_max 1' : 'without uses_max';
+        const h = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Fighter', 1, champion)) });
+        const out = (await h.run('level_up', { class_name: 'Fighter', new_features: NEW })).content;
+        expect(out, why).toContain('\nNew features: Action Surge, Tactical Mind.\n');
+        expect(out, why).toContain('\nChoices the player still needs to make:\n- New Fighter 2 features to add to the sheet: Action Surge (one use).\n');
+        expect(reminderRows(out).withoutUses, why).toEqual([]);
+        expect(toolLog(h, 'level_up')?.detail?.split('\n'), why).toContain('New Fighter 2 features to add to the sheet: Action Surge (one use).');
+        expect(surge(h.sheet()), why).toEqual([['Action Surge', 'Fighter 2', undefined]]);
+        // The DM records the row as the reminder names it: the call goes to the family's entry, which takes the row's name.
+        const given = await h.run('update_character', featureCall('Action Surge (one use)', 'class', 'One more action on your turn.', usesMax, 'short'));
+        expect(given.content.split('\n')[0], why).toBe('Updated feature: Action Surge → Action Surge (one use)');
+        expect(surge(h.sheet()), why).toEqual([['Action Surge (one use)', 'Fighter 2', { max: 1, used: 0, recharge: 'short' }]]);
+        for (let level = 3; level <= 17; level++) {
+          const { out: up } = await levelUpFollowing(h);
+          expect(up, `${why}, level ${level}`).not.toContain('Kept your ruling');
+          if (level < 17) expect(up, `${why}, level ${level}`).not.toContain('Action Surge');
+        }
+        expect(toolLog(h, 'level_up')?.detail, why).toContain('Feature uses now: Action Surge (two uses) 1 → 2 and Indomitable (three uses) 2 → 3.');
+        expect(surge(h.sheet()), why).toEqual([['Action Surge (two uses)', 'Fighter 2', { max: 2, used: 0, recharge: 'short' }]]);
+      }
+    });
+
+    it("level_up from Fighter 8 holding the DM's \"Indomitable (two uses)\" recorded without uses_max names the table's row \"Indomitable (one use)\" to add, as no entry of the row's name is on the sheet; features_add of the row's name with uses_max 1 renames that entry and gives it 1 use, no ruling, which the table's rows grow to 2 at 13 and 3 at 17; the level-up dialog's steps keep the DM's 2 as a ruling from 9, so the two agree only from Fighter 13 to 16 (srd:class:fighter table: \"| 9 | +4 | Indomitable (one use), Tactical Master |\", \"| 13 | +5 | Indomitable (two uses), Studied Attacks |\"; srd:rule:fighter-indomitable: \"You can use this feature twice before a Long Rest starting at level 13 and three times before a Long Rest starting at level 17.\")", async () => {
+      const champion = { subclass: CHAMPION.name, subclassId: CHAMPION.id };
+      const dm: Feature = { id: 'ind', name: 'Indomitable (two uses)', source: 'class', sourceName: 'Granted in play', description: 'The DM recorded it.' };
+      const eight = hero(srdEntry('Fighter', 8, champion), { features: [own('surge', 'Action Surge (one use)', 2, 1), dm] });
+      const indomitable = (c: Character) => c.features.filter((f) => f.name.startsWith('Indomitable')).map((f) => [f.name, f.uses?.max, f.uses?.ruled === true]);
+      const tableName = (level: number) => (level < 13 ? 'Indomitable (one use)' : level < 17 ? 'Indomitable (two uses)' : 'Indomitable (three uses)');
+      const tableCount = (level: number) => (level < 13 ? 1 : level < 17 ? 2 : 3);
+      const h = setup({ builderData: SRD_BUILDER_DATA, character: eight });
+      const out = (await h.run('level_up', { class_name: 'Fighter' })).content;
+      expect(out).toContain('\n- New Fighter 9 features to add to the sheet: Indomitable (one use), Tactical Master.\n');
+      expect(reminderRows(out).withoutUses).toEqual([]);
+      expect(indomitable(h.sheet())).toEqual([['Indomitable (two uses)', undefined, false]]);
+      const given = await h.run('update_character', featureCall('Indomitable (one use)', 'class', 'As the table says.', 1));
+      expect(given.content.split('\n')[0]).toBe('Updated feature: Indomitable (two uses) → Indomitable (one use)');
+      const dmPath: Record<number, unknown[]> = { 9: indomitable(h.sheet()) };
+      for (let level = 10; level <= 20; level++) {
+        const { out: up } = await levelUpFollowing(h);
+        expect(up, `level ${level}`).not.toContain('Kept your ruling');
+        expect(reminderRows(up).withoutUses, `level ${level}`).toEqual([]);
+        dmPath[level] = indomitable(h.sheet());
+      }
+      // The level-up dialog's steps from the same sheet: its row carries the table's 1 use, so the merge keeps the DM's
+      // higher count, 2, as the DM's ruling (a kept count above the class table's at the class level), which no later
+      // row grows; the DM's level_up had no uses to merge, and the DM's call gave the entry the row's name and count.
+      let dialog = eight;
+      for (let level = 9; level <= 20; level++) {
+        dialog = dialogSteps(dialog, level);
+        expect(dmPath[level], `level_up, level ${level}`).toEqual([[tableName(level), tableCount(level), false]]);
+        expect(indomitable(dialog), `the dialog's steps, level ${level}`).toEqual([['Indomitable (two uses)', 2, true]]);
+      }
+      const totals = (level: number) => [dmPath[level][0], indomitable(dialogSteps(eight, level))[0]].map((x) => (x as unknown[])[1]);
+      expect([9, 12, 13, 16, 17, 20].map(totals)).toEqual([[1, 2], [1, 2], [2, 2], [2, 2], [3, 2], [3, 2]]);
+    });
+
     it("after a boon's call of the very name the class's lone entry holds has made that entry the boon's, the class's call of the name adds the class's entry beside it, not moving it back (srd:rule:fighter-indomitable: \"You can use this feature twice before a Long Rest starting at level 13\")", async () => {
       const champion = { subclass: CHAMPION.name, subclassId: CHAMPION.id };
       const thirteen = hero(srdEntry('Fighter', 13, champion), { features: [own('surge', 'Action Surge (one use)', 2, 1), own('ind', 'Indomitable (two uses)', 9, 2)] });

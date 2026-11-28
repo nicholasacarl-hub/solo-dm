@@ -546,54 +546,62 @@ alone included, so the entry grows whether the DM lists it or not; the reminder 
 entry of its family or class feature of its name that has uses (a ruled entry or the DM's higher count holds it; a
 boon's or an item's entry of its name doesn't, so beside a boon "Indomitable (one use)" `level_up` to Fighter 9 names
 that row to add, and the class's entry the DM records for it joins beside the boon, as the dialog's does; nor does an
-entry of its family or class feature of its name without uses, the DM's recorded without `uses_max` (which the later
-rows rename with no uses to give it), one `level_up` lists in `new_features` without it, or the class's own, but as that
-entry is on the sheet the row isn't named to add: it gets a line of its own with the row's count, "Fighter 2: Action
-Surge (one use) is on the sheet without its 1 use." when `level_up` to Fighter 2 lists that row in `new_features`
-without `uses_max`, and "Fighter 13: Indomitable (two uses) is on the sheet without its 2 uses." after an "Indomitable
-(one use)" so recorded at 9; the DM's `features_add` of the row's exact name gives that entry its uses only with
-`uses_max`, the row's count, no ruling (without it, only the text changes)). A lookup by an older counted name finds the
-family's entry, and `features_add` of a counted name the call records as a class feature (`source` "class") rewrites one
-entry of a counted family (the ruled one, else the class's counted one, its by-table one, the DM's counted one, the
-class's own, else the DM's bare one: an entry takes the name only given that name's count, as `uses_max` or filled in
-for one left out, and gets no ruling from it; given another `uses_max` it keeps its own name ("Action Surge (one use)"
-with 2 at Fighter 17 reads "Updated feature: Action Surge (two uses)", 2 to Fighter 20 on both paths), its uses judged
-as for a name without a count: the number it had keeps how it grows, and another is the DM's ruling; one that keeps its
-own name because it follows its table or is a 2024 book's bare entry, `readsItsTable`, gets none from its table's count
-and a ruling from any other number, and until its table counts it on the sheet (the book's data not on this device, or a
-table that counts nothing) any `uses_max` the DM gives it is the DM's ruling, the number it already holds included
-("Action Surge (two uses)" with 2 on an older save's 2), so no later read takes it away, since a name the entry doesn't
-keep vouches for no number, while the count filled in for a `uses_max` left out is no ruling; a counted name's rewrite
-keeps the entry's recharge, and without `uses_max` it changes only the text of an entry that is ruled, follows its table
-or counts at least as many uses, and gives one counting fewer the name's count, no ruling); otherwise, and under any
-other source (a boon's "Indomitable (two uses)", an item's), it is added beside, as before ("Rage (3 uses)" beside a
-Barbarian's "Rage", a second label beside the first), and the class's entry keeps its source and text, so the table's
-rows go on growing that one entry on both paths. When the sheet holds several entries of the name a `features_add`
-gives, the call changes the one under its own source, else the first (of two under that source, the first); but no entry
-under another source (a boon's, an item's) takes a class feature's counted name (`source` "class") whose family is
-counted: the call goes to the family's entry as above, or, with none, is added beside, as the level-up dialog adds the
-table's row (the class's "Indomitable (one use)" at Fighter 9 beside a boon of that name), so the boon or item keeps its
-source, words and uses ("Indomitable (two uses)" with 3 at Fighter 17 beside a boon of that name reads "Updated feature:
-Indomitable (three uses)", 3 + 2 to Fighter 20 on both paths). Once the table grows the class's entry into the name of a
-boon kept beside it (an SRD Fighter 9's boon "Indomitable (two uses)", from Fighter 13), the boon's call changes the
-boon and a call with `source` "class" the class's entry, the result naming the one changed as a use does ("Updated
-feature: Indomitable (two uses) (Granted in play)" beside the dialog's "Fighter 9" entry; "(boon)" or "(class)" on the
-DM's `level_up` path, where both are "Granted in play"), and the kept-ruling line, which names a ruled entry by that
-label too, gives the call that changes it, as `features_add` takes no label ("kept your ruling: Indomitable (two uses)
-(boon) 1 use (a new uses_max in features_add changes it: name "Indomitable (two uses)", source "boon")"), and gives it
-too for a ruled entry under another source alone in a counted name that a call with `source` "class" passes by (a
-counted family's, or a feat's: from Fighter 17, where the class's entry has grown past the boon's name, "kept your
-ruling: Indomitable (two uses) 1 use (a new uses_max in features_add changes it: name "Indomitable (two uses)", source
-"boon")"), so the class's entry counts 3 uses at Fighter 17 beside the boon's 2 on both paths; a name no table counts
-goes the same way on the level-up dialog's path (a boon's "Tactical Mind" beside the class's own, which the dialog adds
-at Fighter 2). A book Fighter's bare "Action Surge" and "Indomitable" read their counts from the class table's features
-column ("Indomitable (two uses)" at 13; `usesFromCountedCells`), which the dialog and the DM's `level_up` read again
-before any level, and `update_character` before a call that adds, spends or restores features, for every book class the
-hero holds (`refreshBookTableCounts`; the dialog after the level too, as it reads every feature), so an older save's are
-right from its first level-up or features call on (until then the sheet's own use pips, a rest and `get_character_sheet`
-use the older count); `level_up` and `update_character` name what that read corrected, one line per class, first ("Uses
-read from the Fighter class table: Action Surge 2 → 1, Indomitable none → 2."; in `update_character`'s player log, an
-entry of its own before the call's), apart from what grew.
+entry of its family or class feature of its name without uses: one the level-up leaves under the row's very name is on
+the sheet, so the row isn't named to add but gets a line of its own with the row's count (the DM's recorded without
+`uses_max`, which a later row renames with no uses to give it unless the DM named it with a higher count; one `level_up`
+lists in `new_features` under that name without it; the class's own), "Fighter 2: Action Surge (one use) is on the sheet
+without its 1 use." when `level_up` to Fighter 2 lists that row in `new_features` without `uses_max`, and "Fighter 13:
+Indomitable (two uses) is on the sheet without its 2 uses." after an "Indomitable (one use)" so recorded at 9, and the
+DM's `features_add` of the row's exact name gives that entry its uses only with `uses_max`, the row's count, no ruling
+(without it, only the text changes); one of its family under another name (the bare "Action Surge" a `level_up` lists in
+`new_features`, the DM's "Indomitable (two uses)" recorded without `uses_max` before Fighter 9, the class's own under
+another count) leaves the row named to add, as the sheet holds no class feature of the row's name, and the class's
+`features_add` of the row's name goes to that entry, which, given the row's count as `uses_max`, takes the row's name
+and count, no ruling (without `uses_max`, one counting fewer by its name, as the bare one does, takes them too, and any
+other keeps its name and changes only its text)). A lookup by an older counted name finds the family's entry, and
+`features_add` of a counted name the call records as a class feature (`source` "class") rewrites one entry of a counted
+family (the ruled one, else the class's counted one, its by-table one, the DM's counted one, the class's own, else the
+DM's bare one: an entry takes the name only given that name's count, as `uses_max` or filled in for one left out, and
+gets no ruling from it; given another `uses_max` it keeps its own name ("Action Surge (one use)" with 2 at Fighter 17
+reads "Updated feature: Action Surge (two uses)", 2 to Fighter 20 on both paths), its uses judged as for a name without
+a count: the number it had keeps how it grows, and another is the DM's ruling; one that keeps its own name because it
+follows its table or is a 2024 book's bare entry, `readsItsTable`, gets none from its table's count and a ruling from
+any other number, and until its table counts it on the sheet (the book's data not on this device, or a table that counts
+nothing) any `uses_max` the DM gives it is the DM's ruling, the number it already holds included ("Action Surge (two
+uses)" with 2 on an older save's 2), so no later read takes it away, since a name the entry doesn't keep vouches for no
+number, while the count filled in for a `uses_max` left out is no ruling; a counted name's rewrite routed onto its
+family's entry under another name keeps that entry's recharge when the call gives none (an exact-name rewrite given
+`uses_max` without `recharge` takes `features_add`'s default, a Long Rest, as does a routed one onto an entry without
+uses), and without `uses_max` it changes only the text of an entry that is ruled, follows its table or counts at least
+as many uses, and gives one counting fewer the name's count, no ruling); otherwise, and under any other source (a boon's
+"Indomitable (two uses)", an item's), it is added beside, as before ("Rage (3 uses)" beside a Barbarian's "Rage", a
+second label beside the first), and the class's entry keeps its source and text, so the table's rows go on growing that
+one entry on both paths. When the sheet holds several entries of the name a `features_add` gives, the call changes the
+one under its own source, else the first (of two under that source, the first); but no entry under another source (a
+boon's, an item's) takes a class feature's counted name (`source` "class") whose family is counted: the call goes to the
+family's entry as above, or, with none, is added beside, as the level-up dialog adds the table's row (the class's
+"Indomitable (one use)" at Fighter 9 beside a boon of that name), so the boon or item keeps its source, words and uses
+("Indomitable (two uses)" with 3 at Fighter 17 beside a boon of that name reads "Updated feature: Indomitable (three
+uses)", 3 + 2 to Fighter 20 on both paths). Once the table grows the class's entry into the name of a boon kept beside
+it (an SRD Fighter 9's boon "Indomitable (two uses)", from Fighter 13), the boon's call changes the boon and a call with
+`source` "class" the class's entry, the result naming the one changed as a use does ("Updated feature: Indomitable (two
+uses) (Granted in play)" beside the dialog's "Fighter 9" entry; "(boon)" or "(class)" on the DM's `level_up` path, where
+both are "Granted in play"), and the kept-ruling line, which names a ruled entry by that label too, gives the call that
+changes it, as `features_add` takes no label ("kept your ruling: Indomitable (two uses) (boon) 1 use (a new uses_max in
+features_add changes it: name "Indomitable (two uses)", source "boon")"), and gives it too for a ruled entry under
+another source alone in a counted name that a call with `source` "class" passes by (a counted family's, or a feat's:
+from Fighter 17, where the class's entry has grown past the boon's name, "kept your ruling: Indomitable (two uses) 1 use
+(a new uses_max in features_add changes it: name "Indomitable (two uses)", source "boon")"), so the class's entry counts
+3 uses at Fighter 17 beside the boon's 2 on both paths; a name no table counts goes the same way on the level-up
+dialog's path (a boon's "Tactical Mind" beside the class's own, which the dialog adds at Fighter 2). A book Fighter's
+bare "Action Surge" and "Indomitable" read their counts from the class table's features column ("Indomitable (two uses)"
+at 13; `usesFromCountedCells`), which the dialog and the DM's `level_up` read again before any level, and
+`update_character` before a call that adds, spends or restores features, for every book class the hero holds
+(`refreshBookTableCounts`; the dialog after the level too, as it reads every feature), so an older save's are right from
+its first level-up or features call on (until then the sheet's own use pips, a rest and `get_character_sheet` use the
+older count); `level_up` and `update_character` name what that read corrected, one line per class, first ("Uses read
+from the Fighter class table: Action Surge 2 → 1, Indomitable none → 2."; in `update_character`'s player log, an entry
+of its own before the call's), apart from what grew.
 
 ### Player-side controls that talk to the DM
 

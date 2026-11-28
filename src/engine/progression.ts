@@ -325,13 +325,19 @@ function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: rea
   // class feature of its name that has uses. An entry of its name under another source (a boon's "Indomitable (one
   // use)", an item's "Action Surge (one use)") is neither, so the row is named to add, and the class's entry it asks for
   // joins beside that one, as the level-up dialog adds it (SRD 5.2.1 Fighter Features table: "Indomitable (one use)" at
-  // 9). Nor does an entry of its family or a class feature of its name without uses hold it (the DM's level_up listing
-  // the row among its new features without uses_max, the DM's features_add of it without uses_max at an earlier level,
-  // which the later rows rename, or the class's own): that entry is on the sheet, so the row isn't named to add but
-  // gets a line of its own with the row's count ("Fighter 2: Action Surge (one use) is on the sheet without its 1
-  // use."), which the DM's features_add of the row's name with that uses_max gives it (SRD 5.2.1 Fighter Features
-  // table: "| 2 | +2 | Action Surge (one use), Tactical Mind |"; Action Surge: "Starting at level 17, you can use it
-  // twice before a rest"). Any entry of its name holds a row without a count.
+  // 9). Nor does an entry of its family or a class feature of its name without uses hold it. When that entry has the
+  // row's very name (the DM's level_up listing the row among its new features without uses_max, the DM's features_add
+  // of it without uses_max at an earlier level, which a later row renames, or the class's own), it is on the sheet, so
+  // the row isn't named to add but gets a line of its own with the row's count ("Fighter 2: Action Surge (one use) is
+  // on the sheet without its 1 use."), which the DM's features_add of the row's name with that uses_max gives it (SRD
+  // 5.2.1 Fighter Features table: "| 2 | +2 | Action Surge (one use), Tactical Mind |"; Action Surge: "Starting at
+  // level 17, you can use it twice before a rest"). An entry of its family under another name (the bare "Action Surge"
+  // a level_up lists among its new features, the DM's higher count "Indomitable (two uses)" recorded before Fighter 9,
+  // the class's own under another count) isn't the row the line would name, so the row is named to add, as before: the
+  // DM's features_add of the row's name as a class feature goes to that entry, which, given the row's count as
+  // uses_max, takes the row's name and count, no ruling (without uses_max, one counting fewer by its name, as the bare
+  // one does, takes them too, and any other changes only its text; SRD 5.2.1 Fighter Features table: "| 9 | +4 |
+  // Indomitable (one use), Tactical Master |"). Any entry of its name holds a row without a count.
   const counting = alreadyAdded.filter((x) => x.uses);
   const onSheet = (sheet: readonly Feature[], f: string) =>
     holdsFamilyEntry(sheet, cl, f) || hasFeatureNamed(sheet.filter((x) => x.source === 'class'), f);
@@ -339,7 +345,7 @@ function srdLevelReminders(info: SrdClassInfo, cl: ClassLevel, alreadyAdded: rea
   const missing = named.filter((f) => !holds(f));
   const withoutUses = missing.flatMap((f) => {
     const count = nameUseCount(f);
-    return count !== null && onSheet(alreadyAdded, f) ? [{ row: f, count }] : [];
+    return count !== null && onSheet(alreadyAdded.filter((x) => nameKey(x.name) === nameKey(f)), f) ? [{ row: f, count }] : [];
   });
   const toAdd = missing.filter((f) => !withoutUses.some((x) => x.row === f));
   if (toAdd.length) reminders.push(`New ${info.name} ${level} features to add to the sheet: ${toAdd.join(', ')}.`);

@@ -1506,7 +1506,7 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     expect(up(fighterAt(1, [mind])).reminders).toContain('New Fighter 2 features to add to the sheet: Action Surge (one use).');
   });
 
-  it("a counted row whose entry is on the sheet without uses isn't named to add: it gets a line of its own with the row's count, right after the features to add, whether the entry is this level's new feature listed without uses, the DM's from an earlier level that the row renames, or the class's own; an entry with uses gets none, a row with no entry is to add, and a row without a count is as before (srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\", \"| 13 | +5 | Indomitable (two uses), Studied Attacks |\", \"| 17 | +6 | Action Surge (two uses), Indomitable (three uses) |\")", () => {
+  it("a counted row whose entry of the row's very name is on the sheet without uses isn't named to add: it gets a line of its own with the row's count, right after the features to add, whether the entry is this level's new feature listed without uses, the DM's from an earlier level that the row renames, or the class's own; an entry with uses gets none, a row with no entry, or with only the DM's entry of its family named with a higher count, is to add, and a row without a count is as before (srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\", \"| 13 | +5 | Indomitable (two uses), Studied Attacks |\", \"| 17 | +6 | Action Surge (two uses), Indomitable (three uses) |\")", () => {
     const bare = (f: Feature): Feature => {
       const { uses: _uses, ...rest } = f;
       return rest;
@@ -1531,11 +1531,11 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     const counting = up(fighterAt(12, [entry('surge', 'Action Surge (one use)', 2, 1), entry('ind', 'Indomitable (one use)', 9, 1)]));
     expect(counted(counting)).toEqual(['New Fighter 13 features to add to the sheet: Studied Attacks.']);
     expect(messages(counting)).toContain('Feature uses now: Indomitable (two uses) 1 → 2.');
-    // The DM's entry named with a higher count than the row's, recorded without uses: it keeps its name, and the row is
-    // still its family's, so the row gets the line.
+    // The DM's entry named with a higher count than the row's, recorded without uses: it keeps its name, so no entry of
+    // the row's name is on the sheet, and the row is to add, its name the one the DM records.
     const higher = up(fighterAt(12, [entry('surge', 'Action Surge (one use)', 2, 1), granted(bare(entry('ind', 'Indomitable (three uses)', 9, 3)))]));
     expect(family(higher.character, 'Indomitable').map((f) => [f.name, f.uses])).toEqual([['Indomitable (three uses)', undefined]]);
-    expect(counted(higher)).toEqual(['New Fighter 13 features to add to the sheet: Studied Attacks.', 'Fighter 13: Indomitable (two uses) is on the sheet without its 2 uses.']);
+    expect(counted(higher)).toEqual(['New Fighter 13 features to add to the sheet: Indomitable (two uses), Studied Attacks.']);
     // No entry of the row at all: it is to add, as before.
     expect(counted(up(fighterAt(8, [entry('surge', 'Action Surge (one use)', 2, 1)])))).toEqual(['New Fighter 9 features to add to the sheet: Indomitable (one use), Tactical Master.']);
     // Two rows at 17, both on the sheet without uses: a line each in the table's order, and none to add.
@@ -1552,6 +1552,44 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     // A row without a count beside the DM's counted label of its name ("Tactical Mind (2 uses)") is to add, as before.
     const label: Feature = { id: 'mind', name: 'Tactical Mind (2 uses)', source: 'class', sourceName: 'Granted in play', description: 'The DM counts it.', uses: { max: 2, used: 0, recharge: 'long' } };
     expect(counted(up(fighterAt(1, [label])))).toEqual(['New Fighter 2 features to add to the sheet: Action Surge (one use), Tactical Mind.']);
+  });
+
+  it("the line is only for an entry of the row's very name: an entry of its family without uses under another name, the bare \"Action Surge\" or a count in digits among this level's new features, the class's own under another count, or the DM's higher count recorded before the row's level, keeps its name and leaves the row to add, and so does a boon's or an item's entry of the row's very name (srd:class:fighter table: \"| 2 | +2 | Action Surge (one use), Tactical Mind |\", \"| 9 | +4 | Indomitable (one use), Tactical Master |\", \"| 13 | +5 | Indomitable (two uses), Studied Attacks |\")", () => {
+    const bare = (f: Feature): Feature => {
+      const { uses: _uses, ...rest } = f;
+      return rest;
+    };
+    const counted = (r: { reminders: string[] }) => r.reminders.filter((m) => m.includes('features to add') || m.includes('is on the sheet without'));
+    const names = (c: Character, base: string) => family(c, base).map((f) => [f.name, f.source, f.uses]);
+    const surge = entry('surge', 'Action Surge (one use)', 2, 1);
+    // The row's very name among this level's new features without uses: on the sheet, so its line.
+    expect(counted(up(fighterAt(1, []), [{ ...row('Action Surge (one use)', 2), description: SURGE }, row('Tactical Mind', 2)]))).toEqual([
+      'Fighter 2: Action Surge (one use) is on the sheet without its 1 use.',
+    ]);
+    // The family's bare name (the SRD rule entry's own, "Action Surge"), or the row's count in digits: another name, so
+    // the row is to add.
+    for (const name of ['Action Surge', 'Action Surge (1 use)']) {
+      const two = up(fighterAt(1, []), [{ ...row(name, 2), description: SURGE }, row('Tactical Mind', 2)]);
+      expect(messages(two), name).toContain(`New features: ${name}, Tactical Mind.`);
+      expect(names(two.character, 'Action Surge'), name).toEqual([[name, 'class', undefined]]);
+      expect(counted(two), name).toEqual(['New Fighter 2 features to add to the sheet: Action Surge (one use).']);
+    }
+    // The class's own entry under another count than the row's.
+    const own = up(fighterAt(12, [surge, bare(entry('ind', 'Indomitable (three uses)', 9, 3))]));
+    expect(names(own.character, 'Indomitable')).toEqual([['Indomitable (three uses)', 'class', undefined]]);
+    expect(counted(own)).toEqual(['New Fighter 13 features to add to the sheet: Indomitable (two uses), Studied Attacks.']);
+    // The DM's "Indomitable (two uses)" recorded without uses_max before Fighter 9.
+    const dm: Feature = { ...bare(entry('ind', 'Indomitable (two uses)', 9, 2)), sourceName: 'Granted in play', description: 'The DM recorded it.' };
+    const nine = up(fighterAt(8, [surge, dm]));
+    expect(names(nine.character, 'Indomitable')).toEqual([['Indomitable (two uses)', 'class', undefined]]);
+    expect(counted(nine)).toEqual(['New Fighter 9 features to add to the sheet: Indomitable (one use), Tactical Master.']);
+    // A boon's or an item's entry of the row's very name without uses is no class feature: to add, as with uses.
+    for (const source of ['boon', 'item'] as const) {
+      const namesake: Feature = { ...bare(entry('gift', 'Indomitable (one use)', 9, 1)), source, sourceName: 'Lantern-Saint', description: 'A gift of the Lantern-Saint.' };
+      const r = up(fighterAt(8, [surge, namesake]));
+      expect(names(r.character, 'Indomitable'), source).toEqual([['Indomitable (one use)', source, undefined]]);
+      expect(counted(r), source).toEqual(['New Fighter 9 features to add to the sheet: Indomitable (one use), Tactical Master.']);
+    }
   });
 
   it("a hero with no counted family levels up exactly as before: no merges, nothing folded", () => {

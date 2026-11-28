@@ -86,26 +86,31 @@ vibe-coding session.
   corrected by the class's call: it adds the class's entry beside (Action Surge 2 uses at Fighter 2–16 and 3 from 17).
   An older-edition or edition-unrecorded book Fighter's class call does take a namesake of that very name, as only its
   own entries' names count: while none of them names a count (its bare "Action Surge"), that namesake (an item's, a
-  boon's, one recorded as "other") becomes a class feature in the call's words. A use by an older counted name that an
-  entry under another source holds (a boon's "Indomitable (one use)" beside the class's "Indomitable (two uses)") spends
-  that entry, with no word of the class's. `features_add` tells entries of one name apart only by their source: of two
-  under one source (a feat taken twice) it changes the first, and a name with a label added ("Indomitable (two uses)
-  (boon)", as a use names it) adds a new entry: the kept-ruling line names a ruled entry so labelled with the call that
-  changes it (its name and source; the second of two under one source has none), but the results and the use texts still
-  print labels `features_add` doesn't take. Nothing removes a feature: `update_character` has no `features_remove`
-  (`transform_character`'s takes away only a transformation's own features) and the sheet has no remove control, so an
-  entry added by mistake (a labelled name, a wrong source) keeps its uses on the sheet. On the DM's `level_up` path a
-  boon beside the class's entry of its name is "Granted in play" as the class's is, so `get_character_sheet` lists the
-  two alike but for their words, and a use by the name, or by "(Granted in play)", takes the first entry of that name on
-  the sheet with enough uses left for the amount spent and names the other by its label ("(class)", "(boon)", "(item)"):
-  the class's entry when the boon came after it, and the boon's or item's when the class's row was recorded beside an
-  earlier one (a boon "Indomitable (one use)" from Fighter 5, beside which `level_up` to Fighter 9 names the row). On
-  the DM's `level_up` path an entry of the DM's (a boon's, an item's) named like a row without a count that the class
-  table gives later ("Tactical Mind", a Fighter 2's) keeps that row out of the reminder, and a `features_add` of the
-  name with `source` "class" then rewrites the DM's entry, its words lost; the level-up dialog adds the class's entry
-  beside it. The DM's `features_add` of an older counted name with that name's own count ("Action Surge (one use)" with
-  1 at Fighter 17) renames the entry and gives it that count, no ruling: both paths keep 1, as the name reads, and no
-  kept-ruling line names it.
+  boon's, a background's, a species or subclass entry, or one recorded as "other" or "homebrew"; a feat's is kept
+  beside) becomes a class feature in the call's words and uses, keeping its source name. A use by an older counted name
+  that an entry under another source holds (a boon's "Indomitable (one use)" beside the class's "Indomitable (two
+  uses)") spends that entry, with no word of the class's. `features_add` tells entries of one name apart only by their
+  source: of two under one source (a feat taken twice) it changes the first, and a name with a label added ("Indomitable
+  (two uses) (boon)", as a use names it) adds a new entry: the kept-ruling line names a ruled entry so labelled with the
+  call that changes it (its name and source; the second of two under one source has none), but the results and the use
+  texts still print labels `features_add` doesn't take. Nothing removes a feature: `update_character` has no
+  `features_remove` (`transform_character`'s takes away only a transformation's own features) and the sheet has no
+  remove control, so an entry added by mistake (a labelled name, a wrong source) keeps its uses on the sheet. On the
+  DM's `level_up` path a boon beside the class's entry of its name is "Granted in play" as the class's is, so
+  `get_character_sheet` lists the two alike but for their words, and a use by the name, or by "(Granted in play)", takes
+  the first entry of that name on the sheet with enough uses left for the amount spent and names the other by its label
+  ("(class)", "(boon)", "(item)"): the class's entry when the boon came after it, and the boon's or item's when the
+  class's row was recorded beside an earlier one (a boon "Indomitable (one use)" from Fighter 5, beside which `level_up`
+  to Fighter 9 names the row). On the DM's `level_up` path an entry of the DM's (a boon's, an item's) named like a row
+  without a count that the class table gives later ("Tactical Mind", a Fighter 2's) keeps that row out of the reminder,
+  and a `features_add` of the name with `source` "class" then rewrites the DM's entry, its words lost; the level-up
+  dialog adds the class's entry beside it. The DM's `features_add` of an older counted name with that name's own count
+  ("Action Surge (one use)" with 1 at Fighter 17) renames the entry and gives it that count, no ruling: both paths keep
+  1, as the name reads, and no kept-ruling line names it. An entry the DM records under a counted name without
+  `uses_max` (by `features_add`, in `level_up` `new_features`, or following without it the line "Fighter 2: Action Surge
+  (one use) is on the sheet without its 1 use.") has no uses until a `features_add` of it with `uses_max`:
+  `features_use` warns "has no limited uses to spend", and `level_up` names it again only at the table's next counted
+  row (Action Surge at Fighter 17; Indomitable at 13 and 17).
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
   DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
   Signature Spells, copying a spell into a spellbook and Evocation Savant's free spells (the DM records those as
