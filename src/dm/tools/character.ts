@@ -1666,9 +1666,9 @@ function dmFeatures(
     const ref = featureRef({ name: f.name, description: f.description, source: 'class' }, data, index)?.ref;
     // No source name: levelUp names it by the class's own new level, "Fighter 2" for a Wizard 5 taking a second Fighter
     // level (SRD 5.2.1 Multiclassing, Class Features: "When you gain a new level in a class, you get its features for
-    // that level"). Uses given without a recharge get theirs from levelUp: folded by the level's merge with entries the
-    // sheet held that have uses (the DM's Short Rest "Action Surge (one use)" beside a new "Action Surge (two uses)"), the
-    // recharge of one of those, as a features_add rewrite keeps its entry's; else the default, a Long Rest (NewFeature).
+    // that level"). Uses given without a recharge get theirs from levelUp: kept by the level's merge for an entry
+    // folded with entries the sheet held that have uses (the DM's Short Rest "Action Surge (one use)" beside a new
+    // "Action Surge (two uses)"), the recharge of one of those; else the default, a Long Rest (NewFeature).
     const feature: NewFeature = {
       name: f.name,
       description: f.description,

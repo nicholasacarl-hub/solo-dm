@@ -64,7 +64,7 @@ export function xpToNextLevel(c: Character): number | null {
 /**
  * A feature a level-up adds (LevelUpOptions.newFeatures). Its uses may come without a recharge (the DM's level_up row
  * given uses_max alone): folded with entries the sheet held (collapseCountedFamilies: the DM's Short Rest "Action Surge
- * (one use)"), it takes the recharge of the one of those of its name with uses, else of the first with uses, when the
+ * (one use)"), it takes the recharge of the first of those of its name with uses, else of the first with uses, when the
  * merge keeps its uses; otherwise the default, a Long Rest.
  */
 export type NewFeature = Omit<Feature, 'id' | 'uses'> & { uses?: Omit<FeatureUses, 'recharge'> & { recharge?: RechargeOn } };
@@ -623,8 +623,8 @@ export function featureMergeText(kept: Pick<Feature, 'name' | 'uses'>, merged: r
  *   spent uses are all the members', at most the family's count before this level-up (an older sheet's duplicates
  *   allowed more), up to the new maximum. Its uses are that entry's, else the newest member's, else the first's with
  *   uses; a new entry's listed without a recharge (`open`: the DM's level_up row given uses_max alone, the class's
- *   first entry when the class held none) take the recharge of the entry the sheet held of its name with uses, else of
- *   the first the sheet held with uses (none: the default). A book class's
+ *   first entry when the class held none) take the recharge of the first member the sheet held of its name with uses,
+ *   else of the first it held with uses (none: the default). A book class's
  *   entry its table's reader reads by its bare name keeps that name (readsItsTable: a 2024 book's Fighter's
  *   "Indomitable" without uses yet, beside the DM's "Indomitable (one use)"), so the next read gives it the table's
  *   count. A maximum above the class's rules table at its class level (tableCountByName: the DM's "Indomitable" with 3
@@ -710,10 +710,12 @@ function collapseCountedFamilies(
       const newest = members.reduce((best, m) => newerMember(m, best));
       const count = memberCount(newest.f);
       const from = [keep, newest, ...real].find((m) => m.f.uses)?.f;
-      // A new entry's uses listed without a recharge (`open`: the DM's level_up row given uses_max alone) take that of an
-      // entry the sheet held with uses: the one of its name, as a features_add rewrite keeps its entry's
-      // (featureToRewrite), else the first. The DM's "Action Surge (one use)", recorded with a Short Rest at Fighter 2
-      // (SRD 5.2.1 Action Surge: "you can't do so again until you finish a Short or Long Rest"). With none, the default.
+      // A new entry's uses listed without a recharge (`open`: the DM's level_up row given uses_max alone) take the
+      // recharge of a member the sheet held with uses: the first of the entry's own name, else the first. The DM's
+      // "Action Surge (one use)", recorded with a Short Rest at Fighter 2 (SRD 5.2.1 Action Surge: "you can't do so
+      // again until you finish a Short or Long Rest"). With none, the default. A features_add of the name may rewrite
+      // another (featureToRewrite): the first entry of the name, with uses or not (an older save's without uses gets a
+      // Long Rest), or, when no class counts the name, a boon's or item's, which is no member here and lends nothing.
       const lenders = real.filter((m) => m.held && m.f.uses);
       const lender = from && (lenders.find((m) => nameKey(m.f.name) === nameKey(from.name)) ?? lenders[0])?.f.uses;
       const template = from?.uses && open.has(from) && lender ? { ...from.uses, recharge: lender.recharge } : from?.uses;

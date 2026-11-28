@@ -4837,7 +4837,7 @@ describe("level_up's new features by the class's own level, and a restated featu
     ]);
   });
 
-  it("of two entries the sheet held with uses, the one the level_up row restates by name lends its recharge, in either order, as features_add restating it keeps that one's (srd:rule:multiclassing-class-features: \"When you gain a new level in a class, you get its features for that level.\")", async () => {
+  it("of a family's class entries the sheet held with uses, the one the level_up row restates by name lends its recharge, in either order; a boon's entry of the name stays beside and lends none (srd:rule:multiclassing-class-features: \"When you gain a new level in a class, you get its features for that level.\")", async () => {
     // A Wizard's homebrew the DM recorded twice with features_add, at dawn and then on a Short Rest: no class counts it,
     // so the two stay side by side until a level's row of the class names it with a count.
     const oath = {
@@ -4858,5 +4858,28 @@ describe("level_up's new features by the class's own level, and a restated featu
       await h.run('take_rest', { kind: 'short' });
       expect(oaths()[0].uses?.used, order[0]).toBe(0);
     }
+    // A boon's "Lantern Oath (two uses)" is no entry of the family: it keeps its Short Rest, and the class's new one
+    // takes the dawn of the DM's "(one use)".
+    const boon = setup({ character: hero(srdEntry('Wizard', 5)) });
+    await boon.run('update_character', { features_add: [oath.one, { ...oath.two, source: 'boon' }] });
+    await boon.run('level_up', { class_name: 'Wizard', new_features: [{ name: 'Lantern Oath (two uses)', description: 'From the class.', uses_max: 2 }] });
+    expect(boon.sheet().features.map((f) => [f.name, f.source, f.sourceName, f.uses?.recharge])).toEqual([
+      ['Lantern Oath (two uses)', 'boon', 'Granted in play', 'short'],
+      ['Lantern Oath (two uses)', 'class', 'Wizard 6', 'dawn'],
+    ]);
+    // A Fighter's Action Surge recorded at dawn, then by its bare name on a Short Rest (no count, so added beside): a
+    // row of the bare name takes the bare entry's (srd:rule:fighter-action-surge: "you can't do so again until you
+    // finish a Short or Long Rest").
+    const champion = { subclass: 'Champion', subclassId: 'srd:subclass:champion' };
+    const fighter = setup({ builderData: SRD_BUILDER_DATA, campaignSettings: { playerRollMode: 'auto' }, character: hero(srdEntry('Fighter', 16, champion)) });
+    await fighter.run('update_character', { features_add: [{ name: 'Action Surge (one use)', source: 'class', description: 'Once before dawn.', uses_max: 1, recharge: 'dawn' }] });
+    await fighter.run('update_character', { features_add: [{ name: 'Action Surge', source: 'class', description: 'Once before a rest.', uses_max: 1, recharge: 'short' }] });
+    expect(fighter.sheet().features.filter((f) => f.name.startsWith('Action Surge'))).toHaveLength(2);
+    expect((await fighter.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Action Surge', description: 'Twice before a rest.', uses_max: 2 }] })).isError).toBeUndefined();
+    const surges = () => fighter.sheet().features.filter((f) => f.name.startsWith('Action Surge'));
+    expect(surges().map((f) => [f.name, f.uses])).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
+    await fighter.run('update_character', { features_use: [{ name: 'Action Surge (two uses)', amount: 2 }] });
+    await fighter.run('take_rest', { kind: 'short' });
+    expect(surges()[0].uses?.used).toBe(0);
   });
 });

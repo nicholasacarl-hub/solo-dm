@@ -96,10 +96,11 @@ vibe-coding session.
   texts still print labels `features_add` doesn't take. Nothing removes a feature: `update_character` has no
   `features_remove` (`transform_character`'s takes away only a transformation's own features) and the sheet has no
   remove control, so an entry added by mistake (a labelled name, a wrong source) keeps its uses on the sheet. A
-  `features_add` restating a feature's uses without `recharge` keeps the feature's own, as does a `level_up`
-  `new_features` entry the level's merge folds with the entries the sheet held of its class's counted family (Action
-  Surge or Indomitable, under any of their names, or a feature of the class's named with a use count); one restating any
-  other held feature (Second Wind, or another class's counted entry) is added beside it with a Long Rest, and a
+  `features_add` restating a feature's uses without `recharge` keeps the feature's own. A `level_up` `new_features`
+  entry's uses given without one take, when the level's merge keeps them for an entry folded with held entries of its
+  class's counted family (Action Surge or Indomitable, under any of their names, or a feature of the class's named with
+  a use count), the recharge of one of those with uses, else a Long Rest; one restating any other held feature (Second
+  Wind, a boon's or item's, another class's) and folded with none is added beside it with a Long Rest, and a
   `transform_character` stage's `features_add` restating one of the transformation's own powers without `recharge` gives
   it a Long Rest, whatever it had. A `recharge` given without `uses_max` changes nothing, unless `features_add` fills in
   a counted name's count for it. A `recharge` a `level_up` entry gives stands only when the level's merge keeps that
