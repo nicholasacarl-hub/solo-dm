@@ -1102,7 +1102,9 @@ transformation ends), or an earlier taking of a Repeatable feat, stays beside it
 holds (a feat, or the DM's boon's, background's, item's, homebrew or other entry of its name; a style as above) is
 taken unless Repeatable. The engine's `addFeature` (the DM's features_add too) updates a feature of the same name, keeping where it
 came from (its source name, which the DM's "Granted in play" never replaces), its recharge when the DM's call gives
-none (features_add's default, a Long Rest, goes only to a feature that had no uses) and the uses it has spent (a number of
+uses without one (features_add's, or a level_up `new_features` entry restating it; the default, a Long Rest, goes only
+to a feature that had no uses, and a `recharge` given without `uses_max` changes nothing unless a counted name's count is
+filled in for it) and the uses it has spent (a number of
 uses it changes is the DM's ruling, `FeatureUses.ruled`, which level-ups leave as it is and name to the DM, in the
 level_up result and the dialog's notice alike, "Kept your ruling: Second Wind 4 uses" (`keptRulings`); the same number
 keeps the feature growing), but never merges a feat with a species trait or class feature (`featOrTrait`; a boon's, background's or homebrew entry updates

@@ -4742,4 +4742,27 @@ describe("level_up's new features by the class's own level, and a restated featu
     await none.run('update_character', { features_add: [{ name: 'Lantern Oath', source: 'class', description: 'Now with uses.', uses_max: 1 }] });
     expect(none.sheet().features.find((f) => f.id === 'oath')?.uses).toMatchObject({ max: 1, recharge: 'long' });
   });
+
+  it("a level_up new_features row restating a held entry's uses without a recharge keeps the entry's, through the level's merge (srd:rule:fighter-action-surge: \"Starting at level 17, you can use it twice before a rest\")", async () => {
+    // The DM's Action Surge, recorded as the level-2 reminder asks, with its Short or Long Rest recharge.
+    const granted: Feature = { id: 'surge', name: 'Action Surge (one use)', source: 'class', sourceName: 'Granted in play', description: 'One more action.', uses: { max: 1, used: 0, recharge: 'short' } };
+    const champion = { subclass: 'Champion', subclassId: 'srd:subclass:champion' };
+    const heroes = [hero(srdEntry('Fighter', 16, champion), { features: [granted] }), { ...multiCaster([srdEntry('Wizard', 3), srdEntry('Fighter', 16, champion)], []), features: [granted] }];
+    for (const character of heroes) {
+      const h = setup({ builderData: SRD_BUILDER_DATA, campaignSettings: { playerRollMode: 'auto' }, character });
+      const out = await h.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Action Surge (two uses)', description: 'Twice before a rest.', uses_max: 2 }] });
+      expect(out.isError).toBeUndefined();
+      const surges = h.sheet().features.filter((f) => f.name.startsWith('Action Surge'));
+      expect(surges).toHaveLength(1);
+      expect(surges[0].uses).toMatchObject({ max: 2, recharge: 'short' });
+      // A Short Rest gives both back.
+      await h.run('update_character', { features_use: [{ name: 'Action Surge (two uses)', amount: 2 }] });
+      await h.run('take_rest', { kind: 'short' });
+      expect(h.sheet().features.find((f) => f.name.startsWith('Action Surge'))?.uses?.used).toBe(0);
+    }
+    // A new feature with uses and no recharge: the default, a Long Rest, as before.
+    const one = setup({ character: hero(srdEntry('Fighter', 2)) });
+    await one.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Lantern Oath', description: 'A boon.', uses_max: 1 }] });
+    expect(one.sheet().features.find((f) => f.name === 'Lantern Oath')?.uses?.recharge).toBe('long');
+  });
 });

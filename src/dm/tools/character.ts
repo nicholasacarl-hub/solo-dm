@@ -1651,10 +1651,11 @@ function planFromData(c: Character, data: BuilderData, input: ToolInput<'level_u
 function dmFeatures(
   input: ToolInput<'level_up'>,
   plan: DataLevel | null,
-  have: readonly Feature[],
+  before: Character,
   data: BuilderData | null,
   index: RulesIndex | null,
 ): { features: Omit<Feature, 'id'>[]; replaced: string[]; replacedBySrd: string[]; kept: string[] } {
+  const have = before.features;
   // A copied feature on the sheet blocks a second copy only under a name the SRD doesn't print (an SRD class's own
   // "Spellcasting" is not the book's), and only with the data (a failure → today's behavior exactly).
   const srd = srdNameKeys(data);
@@ -1664,12 +1665,15 @@ function dmFeatures(
     const ref = featureRef({ name: f.name, description: f.description, source: 'class' }, data, index)?.ref;
     // No source name: levelUp names it by the class's own new level, "Fighter 2" for a Wizard 5 taking a second Fighter
     // level (SRD 5.2.1 Multiclassing, Class Features: "When you gain a new level in a class, you get its features for
-    // that level").
+    // that level"). Given uses_max without a recharge, it takes the recharge of the entry it restates, as features_add's
+    // rewrite does (featureToRewrite: for a counted name, its family's entry, which the level's merge folds it into; SRD
+    // 5.2.1 Action Surge: "until you finish a Short or Long Rest"); a new feature takes the default, a Long Rest.
+    const recharge = f.recharge ?? featureToRewrite(before, { name: f.name, source: 'class' })?.uses?.recharge ?? ('long' as const);
     return {
       name: f.name,
       description: f.description,
       source: 'class' as const,
-      ...(f.uses_max ? { uses: { max: f.uses_max, used: 0 as const, recharge: f.recharge ?? ('long' as const) } } : {}),
+      ...(f.uses_max ? { uses: { max: f.uses_max, used: 0 as const, recharge } } : {}),
       ...(ref ? { ref } : {}),
     };
   });
@@ -1862,7 +1866,7 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   const bookFeat = (input.new_features ?? []).some((f) => data?.feats.some((o) => o.source && nameKey(o.name) === nameKey(f.name)));
   const index = plan || bookFeat ? await loadIndexOrNull(ctx) : null;
   const findSpell = (name: string) => exactEntry(index, campaign, name, 'spell') ?? undefined;
-  const { features: extra, replaced, replacedBySrd, kept } = dmFeatures(input, plan, before.features, data, index);
+  const { features: extra, replaced, replacedBySrd, kept } = dmFeatures(input, plan, before, data, index);
   const spells = noLevelSpells();
   // The sheet after the class tables' re-read and each read that changed it, when one did (filled inside the edit).
   const reread: { start: Character | null; reads: TableCountsRead[] } = { start: null, reads: [] };
