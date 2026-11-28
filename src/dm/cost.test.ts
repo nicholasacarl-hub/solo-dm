@@ -4,7 +4,8 @@ vi.mock('@/engine', () => import('./testing/fakeEngine'));
 vi.mock('@/data', () => import('./testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('./testing/fakeGameStoreModule'));
 
-import { contextTokensOf, estimateCostUsd, usageDelta } from './cost';
+import { MODELS } from '@/types';
+import { contextTokensOf, estimateCostUsd, pricingFor, usageDelta } from './cost';
 import { estimateCostUsd as contractEstimate } from './index';
 import { makeUsage } from './scripted';
 
@@ -12,11 +13,22 @@ const usage = { inputTokens: 1_000_000, outputTokens: 1_000_000, cacheReadTokens
 
 describe('estimateCostUsd', () => {
   it('prices each token class at the model rates (cache writes at 5m by default)', () => {
-    // Opus 5.5: $4 in, $20 out, $0.20 cache read, $5 5-minute write.
+    // Opus 5.5: $4 in, $20 out, $0.20 cache read, $5 5-minute write. Sonnet 5.5 reads its cache at $0.10 (0.05x input).
     expect(estimateCostUsd(usage, 'claude-opus-5-5')).toBeCloseTo(29.2, 10);
-    expect(estimateCostUsd(usage, 'claude-sonnet-5-5')).toBeCloseTo(2 + 10 + 0.2 + 2.5, 10);
+    expect(estimateCostUsd(usage, 'claude-sonnet-5-5')).toBeCloseTo(2 + 10 + 0.1 + 2.5, 10);
     expect(estimateCostUsd(usage, 'claude-haiku-5-5')).toBeCloseTo(0.1 + 0.5 + 0.01 + 0.125, 10);
     expect(contractEstimate(usage, 'claude-opus-5-5')).toBeCloseTo(29.2, 10);
+  });
+
+  it("carries the published per-MTok prices (Anthropic's pricing page, Model pricing table: base input, output, cache hit, 5-minute and 1-hour writes; Claude Haiku 5.5's row for prompts over 100,000 tokens)", () => {
+    expect(MODELS.map((m) => [m.id, m.pricing])).toEqual([
+      ['claude-opus-5-5', { input: 4, output: 20, cacheRead: 0.2, cacheWrite5m: 5, cacheWrite1h: 8 }],
+      ['claude-sonnet-5-5', { input: 2, output: 10, cacheRead: 0.1, cacheWrite5m: 2.5, cacheWrite1h: 4 }],
+      ['claude-haiku-5-5', { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite5m: 0.125, cacheWrite1h: 0.2 }],
+    ]);
+    // "A request's prompt length counts all of its input tokens, including cache reads and cache writes."
+    expect(pricingFor('claude-haiku-5-5', 100_000)).toEqual(MODELS[2].pricing);
+    expect(pricingFor('claude-haiku-5-5', 100_001)).toEqual({ input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite5m: 0.625, cacheWrite1h: 1 });
   });
 
   it('splits cache writes by TTL', () => {

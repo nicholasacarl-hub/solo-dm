@@ -4702,3 +4702,44 @@ describe('class extras through the DM tools: lineage spells, Speed and counted f
     });
   });
 });
+
+describe("level_up's new features by the class's own level, and a restated feature's recharge", () => {
+  it('labels the new features of a multiclass hero with the class\'s new level, not the character level (srd:rule:multiclassing-class-features: "When you gain a new level in a class, you get its features for that level.")', async () => {
+    const boon = { name: 'Lantern Oath', description: 'A homebrew boon from the story.' };
+    // A Wizard 5 / Fighter 1 taking a second Fighter level: "Fighter 2", not the character level's "Fighter 7".
+    const fighter = setup({ character: multiCaster([srdEntry('Wizard', 5), srdEntry('Fighter', 1)], []) });
+    expect((await fighter.run('level_up', { class_name: 'Fighter', new_features: [boon] })).isError).toBeUndefined();
+    expect(fighter.sheet().classes.map((cl) => [cl.name, cl.level])).toEqual([['Wizard', 5], ['Fighter', 2]]);
+    expect(fighter.sheet().features.find((f) => f.name === 'Lantern Oath')).toMatchObject({ source: 'class', sourceName: 'Fighter 2' });
+    // The class as the sheet names it, whatever case the call uses.
+    const lower = setup({ character: multiCaster([srdEntry('Wizard', 5), srdEntry('Fighter', 1)], []) });
+    await lower.run('level_up', { class_name: 'fighter', new_features: [boon] });
+    expect(lower.sheet().features.find((f) => f.name === 'Lantern Oath')?.sourceName).toBe('Fighter 2');
+    // A first level in a new class: "Rogue 1", not "Rogue 6".
+    const rogue = setup({ character: multiCaster([srdEntry('Wizard', 5)], []) });
+    expect((await rogue.run('level_up', { class_name: 'Rogue', new_features: [boon] })).isError).toBeUndefined();
+    expect(rogue.sheet().features.find((f) => f.name === 'Lantern Oath')?.sourceName).toBe('Rogue 1');
+    // One class: the class level is the character level, as before.
+    const one = setup({ character: hero(srdEntry('Fighter', 2)) });
+    await one.run('level_up', { class_name: 'Fighter', new_features: [boon] });
+    expect(one.sheet().features.find((f) => f.name === 'Lantern Oath')?.sourceName).toBe('Fighter 3');
+  });
+
+  it('a features_add restating an entry\'s uses without a recharge keeps the entry\'s (srd:rule:fighter-action-surge: "Once you use this feature, you can\'t do so again until you finish a Short or Long Rest.")', async () => {
+    const surge: Feature = { id: 'surge', name: 'Action Surge (one use)', source: 'class', sourceName: 'Fighter 2', description: 'One more action.', uses: { max: 1, used: 1, recharge: 'short' } };
+    const restate = (extra: Record<string, unknown>) => ({ features_add: [{ name: 'Action Surge (one use)', source: 'class', description: 'The DM restates it.', uses_max: 2, ...extra }] });
+    const h = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Fighter', 2), { features: [surge] }) });
+    expect((await h.run('update_character', restate({}))).isError).toBeUndefined();
+    expect(h.sheet().features.filter((f) => f.name.startsWith('Action Surge'))).toEqual([
+      expect.objectContaining({ id: 'surge', uses: expect.objectContaining({ max: 2, used: 1, recharge: 'short' }) }),
+    ]);
+    // A recharge the call gives is the DM's.
+    await h.run('update_character', restate({ recharge: 'long' }));
+    expect(h.sheet().features.find((f) => f.id === 'surge')?.uses?.recharge).toBe('long');
+    // An entry without uses has no recharge to keep: features_add's default, a Long Rest.
+    const bare: Feature = { id: 'oath', name: 'Lantern Oath', source: 'class', sourceName: 'Granted in play', description: 'A boon.' };
+    const none = setup({ builderData: SRD_BUILDER_DATA, character: hero(srdEntry('Fighter', 2), { features: [bare] }) });
+    await none.run('update_character', { features_add: [{ name: 'Lantern Oath', source: 'class', description: 'Now with uses.', uses_max: 1 }] });
+    expect(none.sheet().features.find((f) => f.id === 'oath')?.uses).toMatchObject({ max: 1, recharge: 'long' });
+  });
+});

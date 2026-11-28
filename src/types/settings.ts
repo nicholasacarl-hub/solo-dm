@@ -27,7 +27,7 @@ export const MODELS: readonly ModelInfo[] = [
     id: 'claude-sonnet-5-5',
     label: 'Claude Sonnet 5.5',
     blurb: 'Fast and capable at half the price of Opus.',
-    pricing: { input: 2, output: 10, cacheRead: 0.2, cacheWrite5m: 2.5, cacheWrite1h: 4 },
+    pricing: { input: 2, output: 10, cacheRead: 0.1, cacheWrite5m: 2.5, cacheWrite1h: 4 },
     supportsFallbacks: true,
   },
   {

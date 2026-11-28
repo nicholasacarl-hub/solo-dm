@@ -723,12 +723,14 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
       const match = links.feats[i];
       const own = rewritten?.ref?.textCopied ? runsIn(runsOf(f.description), rewritten.description) : 0;
       const ref = rewritten?.ref && own > 0 && own >= (match?.runs ?? 0) ? rewritten.ref : match?.ref;
-      // A counted name routed onto its family's entry under another name ("Action Surge (two uses)" onto "Action Surge
-      // (one use)"): what the call leaves out is the entry's, not the call's defaults. Its recharge stays (SRD 5.2.1
-      // Action Surge: "until you finish a Short or Long Rest"). Without uses_max, an entry counting fewer uses than the
-      // name (by its name's count, else its uses), or none, takes the name's count, which is no ruling even on an entry
-      // that keeps its own name (addFeature's usesFromName); one the DM ruled, one that follows its class table or one
-      // counting at least as many keeps its own, and only its text changes (addFeature, given no uses).
+      // A rewrite keeps the entry's recharge when the call gives none, under its own name or a counted name routed onto
+      // it (SRD 5.2.1 Action Surge: "until you finish a Short or Long Rest"); only an entry without uses takes the
+      // default, a Long Rest. A counted name routed onto its family's entry under another name ("Action Surge (two
+      // uses)" onto "Action Surge (one use)"): what the call leaves out is the entry's, not the call's defaults.
+      // Without uses_max, an entry counting fewer uses than the name (by its name's count, else its uses), or none,
+      // takes the name's count, which is no ruling even on an entry that keeps its own name (addFeature's
+      // usesFromName); one the DM ruled, one that follows its class table or one counting at least as many keeps its
+      // own, and only its text changes (addFeature, given no uses).
       const routed = rewritten && nameKey(rewritten.name) !== nameKey(f.name.trim()) ? rewritten : undefined;
       const count = nameUseCount(f.name);
       const holds = routed && (routed.uses?.ruled || routed.uses?.scale?.by === 'table' || (nameUseCount(routed.name) ?? routed.uses?.max ?? 0) >= (count ?? 0));
@@ -740,7 +742,7 @@ function featureSteps(input: ToolInput<'update_character'>, links: Links): ((c: 
           description: f.description,
           source: f.source,
           sourceName: 'Granted in play',
-          ...(max ? { uses: { max, used: 0, recharge: f.recharge ?? routed?.uses?.recharge ?? 'long' } } : {}),
+          ...(max ? { uses: { max, used: 0, recharge: f.recharge ?? rewritten?.uses?.recharge ?? 'long' } } : {}),
           ...(ref ? { ref } : {}),
         },
         { usesFromName: f.uses_max === undefined && max !== undefined },
@@ -1648,7 +1650,6 @@ function planFromData(c: Character, data: BuilderData, input: ToolInput<'level_u
  */
 function dmFeatures(
   input: ToolInput<'level_up'>,
-  level: number,
   plan: DataLevel | null,
   have: readonly Feature[],
   data: BuilderData | null,
@@ -1661,11 +1662,13 @@ function dmFeatures(
   const fromData = new Set((plan?.features ?? []).map((f) => nameKey(f.name)));
   const all = (input.new_features ?? []).map((f) => {
     const ref = featureRef({ name: f.name, description: f.description, source: 'class' }, data, index)?.ref;
+    // No source name: levelUp names it by the class's own new level, "Fighter 2" for a Wizard 5 taking a second Fighter
+    // level (SRD 5.2.1 Multiclassing, Class Features: "When you gain a new level in a class, you get its features for
+    // that level").
     return {
       name: f.name,
       description: f.description,
       source: 'class' as const,
-      sourceName: `${input.class_name} ${level + 1}`,
       ...(f.uses_max ? { uses: { max: f.uses_max, used: 0 as const, recharge: f.recharge ?? ('long' as const) } } : {}),
       ...(ref ? { ref } : {}),
     };
@@ -1859,7 +1862,7 @@ export async function levelUpTool(input: ToolInput<'level_up'>, ctx: ToolContext
   const bookFeat = (input.new_features ?? []).some((f) => data?.feats.some((o) => o.source && nameKey(o.name) === nameKey(f.name)));
   const index = plan || bookFeat ? await loadIndexOrNull(ctx) : null;
   const findSpell = (name: string) => exactEntry(index, campaign, name, 'spell') ?? undefined;
-  const { features: extra, replaced, replacedBySrd, kept } = dmFeatures(input, level, plan, before.features, data, index);
+  const { features: extra, replaced, replacedBySrd, kept } = dmFeatures(input, plan, before.features, data, index);
   const spells = noLevelSpells();
   // The sheet after the class tables' re-read and each read that changed it, when one did (filled inside the edit).
   const reread: { start: Character | null; reads: TableCountsRead[] } = { start: null, reads: [] };
