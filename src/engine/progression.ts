@@ -713,9 +713,9 @@ function collapseCountedFamilies(
       // A new entry's uses listed without a recharge (`open`: the DM's level_up row given uses_max alone) take the
       // recharge of a member the sheet held with uses: the first of the entry's own name, else the first. The DM's
       // "Action Surge (one use)", recorded with a Short Rest at Fighter 2 (SRD 5.2.1 Action Surge: "you can't do so
-      // again until you finish a Short or Long Rest"). With none, the default. A features_add of the name may rewrite
-      // another (featureToRewrite): the first entry of the name, with uses or not (an older save's without uses gets a
-      // Long Rest), or, when no class counts the name, a boon's or item's, which is no member here and lends nothing.
+      // again until you finish a Short or Long Rest"). With none, the default. A features_add of the name picks the
+      // entry it rewrites by its own rules (featureToRewrite), so it can rewrite another than the one lending here (one
+      // without uses gets a Long Rest), or a boon's or item's namesake, which is no member here and lends nothing.
       const lenders = real.filter((m) => m.held && m.f.uses);
       const lender = from && (lenders.find((m) => nameKey(m.f.name) === nameKey(from.name)) ?? lenders[0])?.f.uses;
       const template = from?.uses && open.has(from) && lender ? { ...from.uses, recharge: lender.recharge } : from?.uses;

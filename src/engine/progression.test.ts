@@ -1603,7 +1603,7 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     ]);
   });
 
-  it('uses listed without a recharge (the DM\'s level_up row) take, when the merge keeps them, the recharge of the first entry the sheet held of their name with uses, else of the first held with uses, else a Long Rest (srd:rule:fighter-action-surge: "you can\'t do so again until you finish a Short or Long Rest. Starting at level 17, you can use it twice before a rest")', () => {
+  it('uses listed without a recharge (the DM\'s level_up row) take, when the merge keeps them, the recharge of the first entry of their family the sheet held of their name with uses, else of the first of the family it held with uses, else a Long Rest (srd:rule:fighter-action-surge: "you can\'t do so again until you finish a Short or Long Rest. Starting at level 17, you can use it twice before a rest")', () => {
     // The DM's Action Surge, recorded at Fighter 2 with its Short or Long Rest recharge.
     const granted: Feature = { ...entry('dm', 'Action Surge (one use)', 2, 1), sourceName: 'Granted in play' };
     const open = (name: string): NewFeature => ({ name, source: 'class', description: 'Twice before a rest.', uses: { max: 2, used: 0 } });
@@ -1616,6 +1616,10 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     const given: NewFeature = { ...open('Action Surge (two uses)'), uses: { max: 2, used: 0, recharge: 'long' } };
     expect(surges(up(fighterAt(16, [granted]), [given]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'long' }]]);
     expect(surges(up(fighterAt(16, [entry('own', 'Action Surge (one use)', 2, 1)]), [given]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
+    // So too beside an earlier namesake with uses (an older save's DM entry on a Long Rest, ahead of the class's own):
+    // the kept entry's own recharge, not that namesake's.
+    const longer: Feature = { ...granted, uses: { max: 1, used: 0, recharge: 'long' } };
+    expect(surges(up(fighterAt(5, [longer, entry('own', 'Action Surge (one use)', 2, 1)])))).toEqual([['Action Surge (one use)', { max: 1, used: 0, recharge: 'short' }]]);
     // An older-edition book's Fighter, whose table no rule here counts by: the row's own count folds the two all the same.
     const ref: ImportedRef = { sourceId: 'lamp', sourceTitle: 'The Lamp Folio', entryId: 'lib:lamp:class:fighter', kind: 'class', entryName: 'Fighter', textHash: '', textCopied: false, format: '2014' };
     const older = { ...fighterAt(16, [granted]), classes: [asClass('Fighter', 16, { classId: 'lib:lamp:class:fighter', ref })] };
@@ -1640,32 +1644,54 @@ describe('levelUp: one entry for each counted family, Action Surge and Indomitab
     }
     const named: Feature = { ...bare, name: 'Action Surge (two uses)' };
     expect(surges(up(fighterAt(16, [named, dawn]), [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'dawn' }]]);
-    // Its own name, not the one the merge gives it: a row "(one use)" beside the DM's "(two uses)" takes the "(one use)"'s.
-    expect(surges(up(fighterAt(16, [two, dawn]), [{ ...open('Action Surge (one use)'), uses: { max: 1, used: 0 } }]))).toEqual([
-      ['Action Surge (two uses)', { max: 2, used: 0, recharge: 'dawn' }],
-    ]);
+    // Its own name, not the one the merge gives it: a row "(one use)" beside the DM's "(two uses)" takes the
+    // "(one use)"'s, at Fighter 17 (named after the table's row) and at Fighter 9, which has no Action Surge row (named
+    // after the DM's held "(two uses)", whose two uses are the DM's ruling there).
+    const once = { ...open('Action Surge (one use)'), uses: { max: 1, used: 0 } };
+    expect(surges(up(fighterAt(16, [two, dawn]), [once]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'dawn' }]]);
+    expect(surges(up(fighterAt(8, [dawn, two]), [once]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'dawn', ruled: true }]]);
     // Of a name none of them has, the first held with uses lends its recharge.
     expect(surges(up(fighterAt(16, [dawn, granted]), [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'dawn' }]]);
     expect(surges(up(fighterAt(16, [granted, dawn]), [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
     // The bare name restated: the DM's bare entry lends, whatever the counts.
     const plain: Feature = { ...granted, id: 'plain', name: 'Action Surge', uses: { max: 1, used: 0, recharge: 'short' } };
     expect(surges(up(fighterAt(16, [dawn, plain]), [open('Action Surge')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
-    // The name in other letter case is the row's very name; a count written otherwise is another name.
+    // The name in other letter case or punctuation is the row's very name (nameKey); a count written otherwise is
+    // another name, which lends only as the first held with uses.
     expect(surges(up(fighterAt(16, [dawn, two]), [open('Action Surge (Two Uses)')]))).toEqual([['Action Surge (Two Uses)', { max: 2, used: 0, recharge: 'short' }]]);
+    expect(surges(up(fighterAt(16, [dawn, { ...plain, name: 'Action-Surge' }]), [open('Action Surge')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
     const digits: Feature = { ...granted, id: 'digits', name: 'Action Surge (2 uses)', uses: { max: 2, used: 0, recharge: 'dawn' } };
     expect(surges(up(fighterAt(16, [digits, two]), [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
+    expect(surges(up(fighterAt(16, [granted, digits]), [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
     // Of two of the row's name with uses, the first; beside an earlier one without uses (an older save's), the later
     // one, where features_add restating the name rewrites the first, with a Long Rest.
-    const once = { ...open('Action Surge (one use)'), uses: { max: 1, used: 0 } };
     expect(surges(up(fighterAt(16, [dawn, { ...granted, id: 'second' }]), [once]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'dawn' }]]);
     const unused: Feature = { ...bare, id: 'unused', name: 'Action Surge (one use)' };
     expect(surges(up(fighterAt(8, [unused, plain, dawn]), [once]))).toEqual([['Action Surge (one use)', { max: 1, used: 0, recharge: 'dawn' }]]);
     // Beside the class's own entry without uses: the row's name, not the kept entry's; the class's own entry with uses
     // lends as the DM's do.
     expect(surges(up(fighterAt(16, [bare, dawn, plain]), [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'dawn' }]]);
-    expect(surges(up(fighterAt(16, [bare, entry('ownOne', 'Action Surge (one use)', 2, 1)]), [open('Action Surge (two uses)')]))).toEqual([
+    const ownOne = entry('ownOne', 'Action Surge (one use)', 2, 1);
+    expect(surges(up(fighterAt(16, [bare, ownOne]), [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }]]);
+    // Beside each other, the class's own and the DM's lend by one rule: the first of the row's name with uses, else the
+    // first with uses, whoever's it is.
+    expect(surges(up(fighterAt(16, [bare, dawn, ownOne]), [open('Action Surge (two uses)')]))).toEqual([['Action Surge (two uses)', { max: 2, used: 0, recharge: 'dawn' }]]);
+    expect(surges(up(fighterAt(8, [bare, ownOne, dawn]), [once]))).toEqual([['Action Surge (one use)', { max: 1, used: 0, recharge: 'short' }]]);
+    // Another family's held entry lends nothing, wherever it stands: the class's Indomitable before the DM's Action
+    // Surge, or the class's Action Surge before the DM's Indomitable, which keeps its Long Rest
+    // (srd:rule:fighter-indomitable: "You can use this feature twice before a Long Rest starting at level 13").
+    expect(surges(up(fighterAt(16, [entry('ownInd', 'Indomitable (one use)', 9, 1), granted]), [open('Action Surge (two uses)')]))).toEqual([
       ['Action Surge (two uses)', { max: 2, used: 0, recharge: 'short' }],
     ]);
+    const indomitable: Feature = { ...entry('dmInd', 'Indomitable (one use)', 9, 1), sourceName: 'Granted in play' };
+    const twice = up(fighterAt(12, [ownOne, indomitable]), [open('Indomitable (two uses)')]);
+    expect(family(twice.character, 'Indomitable').map((f) => [f.name, f.uses])).toEqual([['Indomitable (two uses)', { max: 2, used: 0, recharge: 'long' }]]);
+    // Two rows of the family listed without a recharge: the name of the one whose uses the merge keeps (the newest, the
+    // kept entry having none) decides, in either order.
+    const thrice: NewFeature = { ...open('Action Surge (three uses)'), uses: { max: 3, used: 0 } };
+    for (const rows of [[open('Action Surge (two uses)'), thrice], [thrice, open('Action Surge (two uses)')]]) {
+      expect(surges(up(fighterAt(16, [bare, dawn, two]), rows)), rows[0].name).toEqual([['Action Surge (three uses)', { max: 3, used: 0, recharge: 'dawn', ruled: true }]]);
+    }
     // Nothing held to fold into, or another class's counted entry, which no merge folds a new class's feature into
     // (srd:rule:multiclassing-class-features: "When you gain a new level in a class, you get its features for that
     // level"): the default, a Long Rest.

@@ -4858,6 +4858,11 @@ describe("level_up's new features by the class's own level, and a restated featu
       await h.run('take_rest', { kind: 'short' });
       expect(oaths()[0].uses?.used, order[0]).toBe(0);
     }
+    // The row "(one use)": that entry's recharge, though the merge names the entry after the held "(two uses)".
+    const once = setup({ character: hero(srdEntry('Wizard', 5)) });
+    await once.run('update_character', { features_add: [oath.one, oath.two] });
+    await once.run('level_up', { class_name: 'Wizard', new_features: [{ name: 'Lantern Oath (one use)', description: 'From the class.', uses_max: 1 }] });
+    expect(once.sheet().features.map((f) => [f.name, f.uses])).toEqual([['Lantern Oath (two uses)', { max: 2, used: 0, recharge: 'dawn' }]]);
     // A boon's "Lantern Oath (two uses)" is no entry of the family: it keeps its Short Rest, and the class's new one
     // takes the dawn of the DM's "(one use)".
     const boon = setup({ character: hero(srdEntry('Wizard', 5)) });
@@ -4881,5 +4886,20 @@ describe("level_up's new features by the class's own level, and a restated featu
     await fighter.run('update_character', { features_use: [{ name: 'Action Surge (two uses)', amount: 2 }] });
     await fighter.run('take_rest', { kind: 'short' });
     expect(surges()[0].uses?.used).toBe(0);
+  });
+
+  it("a held entry whose uses the level's merge keeps keeps its own recharge, beside an earlier namesake with uses (srd:rule:multiclassing-class-features: \"When you gain a new level in a class, you get its features for that level.\")", async () => {
+    // The DM's "Lantern Oath" at dawn, then the class's own from a level_up on a Short Rest: no count, so both stay.
+    const h = setup({ campaignSettings: { playerRollMode: 'auto' }, character: hero(srdEntry('Wizard', 5)) });
+    await h.run('update_character', { features_add: [{ name: 'Lantern Oath', source: 'class', description: 'Once before dawn.', uses_max: 1, recharge: 'dawn' }] });
+    await h.run('level_up', { class_name: 'Wizard', new_features: [{ name: 'Lantern Oath', description: 'From the class.', uses_max: 1, recharge: 'short' }] });
+    const oaths = () => h.sheet().features.filter((f) => f.name.startsWith('Lantern Oath'));
+    expect(oaths().map((f) => [f.sourceName, f.uses?.recharge])).toEqual([['Granted in play', 'dawn'], ['Wizard 6', 'short']]);
+    // The next row names a count: the merge keeps the class's entry, uses and all, with its Short Rest.
+    await h.run('level_up', { class_name: 'Wizard', new_features: [{ name: 'Lantern Oath (two uses)', description: 'Twice before a rest.', uses_max: 2 }] });
+    expect(oaths().map((f) => [f.name, f.sourceName, f.uses])).toEqual([['Lantern Oath (two uses)', 'Wizard 6', { max: 2, used: 0, recharge: 'short' }]]);
+    await h.run('update_character', { features_use: [{ name: 'Lantern Oath (two uses)', amount: 2 }] });
+    await h.run('take_rest', { kind: 'short' });
+    expect(oaths()[0].uses?.used).toBe(0);
   });
 });

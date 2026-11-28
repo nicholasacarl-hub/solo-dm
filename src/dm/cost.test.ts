@@ -5,7 +5,7 @@ vi.mock('@/data', () => import('./testing/fakeData'));
 vi.mock('@/state/gameStore', () => import('./testing/fakeGameStoreModule'));
 
 import { MODELS } from '@/types';
-import { contextTokensOf, estimateCostUsd, pricingFor, usageDelta } from './cost';
+import { contextTokensOf, estimateCostUsd, FALLBACK_MODEL_PRICING, pricingFor, usageDelta } from './cost';
 import { estimateCostUsd as contractEstimate } from './index';
 import { makeUsage } from './scripted';
 
@@ -20,7 +20,7 @@ describe('estimateCostUsd', () => {
     expect(contractEstimate(usage, 'claude-opus-5-5')).toBeCloseTo(29.2, 10);
   });
 
-  it("carries the published per-MTok prices (Anthropic's pricing page, Model pricing table: base input, output, cache hit, 5-minute and 1-hour writes; Claude Haiku 5.5's row for prompts over 100,000 tokens)", () => {
+  it("carries the published per-MTok prices (Anthropic's pricing page, Model pricing table: base input, output, cache hit, 5-minute and 1-hour writes; Claude Haiku 5.5's row for prompts over 100,000 tokens; the rows of the models a refusal fallback answers with)", () => {
     expect(MODELS.map((m) => [m.id, m.pricing])).toEqual([
       ['claude-opus-5-5', { input: 4, output: 20, cacheRead: 0.2, cacheWrite5m: 5, cacheWrite1h: 8 }],
       ['claude-sonnet-5-5', { input: 2, output: 10, cacheRead: 0.1, cacheWrite5m: 2.5, cacheWrite1h: 4 }],
@@ -29,6 +29,13 @@ describe('estimateCostUsd', () => {
     // "A request's prompt length counts all of its input tokens, including cache reads and cache writes."
     expect(pricingFor('claude-haiku-5-5', 100_000)).toEqual(MODELS[2].pricing);
     expect(pricingFor('claude-haiku-5-5', 100_001)).toEqual({ input: 0.5, output: 2.5, cacheRead: 0.05, cacheWrite5m: 0.625, cacheWrite1h: 1 });
+    // A server-side refusal fallback answers Opus 5.5 turns with Claude Opus 5 or Opus 4.8, and Sonnet 5.5 turns with
+    // Claude Sonnet 5, each billed at its own rates.
+    expect(FALLBACK_MODEL_PRICING).toEqual({
+      'claude-opus-5': { input: 5, output: 25, cacheRead: 0.5, cacheWrite5m: 6.25, cacheWrite1h: 10 },
+      'claude-opus-4-8': { input: 5, output: 25, cacheRead: 0.5, cacheWrite5m: 6.25, cacheWrite1h: 10 },
+      'claude-sonnet-5': { input: 2, output: 10, cacheRead: 0.2, cacheWrite5m: 2.5, cacheWrite1h: 4 },
+    });
   });
 
   it('splits cache writes by TTL', () => {
