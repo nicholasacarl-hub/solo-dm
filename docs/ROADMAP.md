@@ -110,7 +110,10 @@ vibe-coding session.
   `uses_max` (by `features_add`, in `level_up` `new_features`, or following without it the line "Fighter 2: Action Surge
   (one use) is on the sheet without its 1 use.") has no uses until a `features_add` of it with `uses_max`:
   `features_use` warns "has no limited uses to spend", and `level_up` names it again only at the table's next counted
-  row (Action Surge at Fighter 17; Indomitable at 13 and 17).
+  row (Action Surge at Fighter 17; Indomitable at 13 and 17). One the DM names with a higher count than the table's at
+  the class level ("Indomitable (two uses)" recorded without `uses_max` at Fighter 8) is the DM's ruling of that count
+  on the level-up dialog's path (2 uses from Fighter 9 on), while `level_up` names the table's row to add and the DM's
+  call of it with the row's count gives the table's (1 at Fighter 9, 2 at 13, 3 at 17).
 - **Spell choices the app doesn't offer yet**: Magical Secrets' other lists (the choices say to pick those with the
   DM), College of Lore's Magical Discoveries, Mystic Arcanum, Pact of the Tome, Memorize Spell, Spell Mastery,
   Signature Spells, copying a spell into a spellbook and Evocation Savant's free spells (the DM records those as
