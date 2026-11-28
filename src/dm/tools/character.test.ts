@@ -4748,9 +4748,11 @@ describe("level_up's new features by the class's own level, and a restated featu
     const granted: Feature = { id: 'surge', name: 'Action Surge (one use)', source: 'class', sourceName: 'Granted in play', description: 'One more action.', uses: { max: 1, used: 0, recharge: 'short' } };
     const champion = { subclass: 'Champion', subclassId: 'srd:subclass:champion' };
     const heroes = [hero(srdEntry('Fighter', 16, champion), { features: [granted] }), { ...multiCaster([srdEntry('Wizard', 3), srdEntry('Fighter', 16, champion)], []), features: [granted] }];
-    for (const character of heroes) {
+    // The row's name, or the SRD rule entry's own bare "Action Surge": the level's merge folds either into the DM's entry.
+    const runs = [...heroes.map((character) => ({ character, name: 'Action Surge (two uses)' })), { character: heroes[0], name: 'Action Surge' }];
+    for (const { character, name } of runs) {
       const h = setup({ builderData: SRD_BUILDER_DATA, campaignSettings: { playerRollMode: 'auto' }, character });
-      const out = await h.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Action Surge (two uses)', description: 'Twice before a rest.', uses_max: 2 }] });
+      const out = await h.run('level_up', { class_name: 'Fighter', new_features: [{ name, description: 'Twice before a rest.', uses_max: 2 }] });
       expect(out.isError).toBeUndefined();
       const surges = h.sheet().features.filter((f) => f.name.startsWith('Action Surge'));
       expect(surges).toHaveLength(1);
@@ -4764,5 +4766,23 @@ describe("level_up's new features by the class's own level, and a restated featu
     const one = setup({ character: hero(srdEntry('Fighter', 2)) });
     await one.run('level_up', { class_name: 'Fighter', new_features: [{ name: 'Lantern Oath', description: 'A boon.', uses_max: 1 }] });
     expect(one.sheet().features.find((f) => f.name === 'Lantern Oath')?.uses?.recharge).toBe('long');
+    // No merge folds it into a namesake: beside an item's charges that never come back, or the class's own Second Wind, the
+    // new entry takes the default too, never that entry's recharge.
+    const charm: Feature = { id: 'charm', name: 'Lantern Oath', source: 'item', sourceName: 'Wick Lantern', description: 'Three charges.', uses: { max: 3, used: 0, recharge: 'none' } };
+    const wind: Feature = { id: 'wind', name: 'Second Wind', source: 'class', sourceName: 'Fighter 1', description: 'Regain Hit Points.', uses: { max: 2, used: 0, recharge: 'short' } };
+    const beside = setup({ character: hero(srdEntry('Fighter', 3), { features: [charm, wind] }) });
+    await beside.run('level_up', {
+      class_name: 'Fighter',
+      new_features: [
+        { name: 'Lantern Oath', description: 'A class oath.', uses_max: 1 },
+        { name: 'Second Wind', description: 'Restated.', uses_max: 3 },
+      ],
+    });
+    const added = beside.sheet().features.filter((f) => f.id !== 'charm' && f.id !== 'wind');
+    expect(added.map((f) => [f.name, f.uses?.recharge])).toEqual([
+      ['Lantern Oath', 'long'],
+      ['Second Wind', 'long'],
+    ]);
+    expect(beside.sheet().features.find((f) => f.id === 'charm')?.uses?.recharge).toBe('none');
   });
 });

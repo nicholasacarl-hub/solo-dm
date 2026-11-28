@@ -50,6 +50,7 @@ import {
   conditionKey,
   drainProblem,
   endHpMaxAdjustments,
+  familyEntryFor,
   featOrTrait,
   featureLabel,
   featureToRewrite,
@@ -1665,10 +1666,11 @@ function dmFeatures(
     const ref = featureRef({ name: f.name, description: f.description, source: 'class' }, data, index)?.ref;
     // No source name: levelUp names it by the class's own new level, "Fighter 2" for a Wizard 5 taking a second Fighter
     // level (SRD 5.2.1 Multiclassing, Class Features: "When you gain a new level in a class, you get its features for
-    // that level"). Given uses_max without a recharge, it takes the recharge of the entry it restates, as features_add's
-    // rewrite does (featureToRewrite: for a counted name, its family's entry, which the level's merge folds it into; SRD
-    // 5.2.1 Action Surge: "until you finish a Short or Long Rest"); a new feature takes the default, a Long Rest.
-    const recharge = f.recharge ?? featureToRewrite(before, { name: f.name, source: 'class' })?.uses?.recharge ?? ('long' as const);
+    // that level"). Given uses_max without a recharge, one the level's merge folds into its counted family's entry, under
+    // any name the family takes ("Action Surge", "Action Surge (two uses)"), takes that entry's recharge, as a
+    // features_add rewrite does (familyEntryFor; SRD 5.2.1 Action Surge: "until you finish a Short or Long Rest"); any
+    // other takes the default, a Long Rest, beside a namesake too (an item's charges, a boon).
+    const recharge = f.recharge ?? familyEntryFor(before, f.name)?.uses?.recharge ?? ('long' as const);
     return {
       name: f.name,
       description: f.description,
